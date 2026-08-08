@@ -20,6 +20,7 @@ import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageFont
 import random
+import torch
 try:
     import arabic_reshaper
     from bidi.algorithm import get_display
@@ -114,6 +115,7 @@ class MangaTranslator:
         random.shuffle(keys)
         if not keys:
             raise ValueError("حداقل یک کلید Gemini API لازم است.")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
         self._api_keys: List[str] = keys
         self._key_index: int = 0
         self._ocr_lock = threading.Lock()
@@ -136,7 +138,7 @@ class MangaTranslator:
         self.translation_temperature = translation_temperature
         self.two_pass_ocr = two_pass_ocr
         self.max_output_width = max_output_width
-        self.lama = SimpleLama()
+        self.lama = SimpleLama(device=device)
         self._name_glossary: Dict[str, str] = {}
 
         if not font_path or not os.path.isfile(font_path):
