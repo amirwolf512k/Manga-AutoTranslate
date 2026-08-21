@@ -336,11 +336,12 @@ class MangaTranslator:
         max_retries: int = 4,
         request_delay: float = 0.0,
         img_format: str = "jpg",
-        img_quality: int = 80,
+        img_quality: int = 95,
         max_workers: int = 1,
         translation_temperature: float = 0.85,
         max_output_width: Optional[int] = None,
-        stitch_max_height: int = 16000,
+        max_output_height: Optional[int] = None,
+        stitch_max_height: int = 12000,
         stitch_short_threshold: int = 6000,
         stitch_keep_first: bool = True,
         debug: bool = False,
@@ -387,6 +388,8 @@ class MangaTranslator:
         self.img_quality = img_quality
         self.max_workers = max(1, int(max_workers))
         self.translation_temperature = translation_temperature
+        self.max_output_width = max_output_width
+        self.max_output_height = max_output_height
         self.stitch_max_height = int(stitch_max_height) if stitch_max_height else 0
         self.stitch_short_threshold = int(stitch_short_threshold) if stitch_short_threshold else 0
         self.stitch_keep_first = bool(stitch_keep_first)
@@ -2571,64 +2574,54 @@ class MangaTranslator:
             files.append(out_file)
         doc.close()
         return files
+
     @staticmethod
     def _save_as_pdf(image_paths_in_order: List[str], out_path: str) -> None:
-      MAX_SIDE = 12000
-      loaded = []
-      max_w = 0
-
-      for p in image_paths_in_order:
-        try:
-            im = Image.open(p).convert("RGB")
-            w, h = im.size
-            if max(w, h) > MAX_SIDE:
-                scale = MAX_SIDE / float(max(w, h))
-                im = im.resize(
-                    (max(1, int(w * scale)), max(1, int(h * scale))),
-                    Image.Resampling.LANCZOS
-                )
-            loaded.append(im)
-            max_w = max(max_w, im.size[0])
-        except Exception as e:
-            print(f"    [!] رد تصویر برای PDF ({os.path.basename(p)}): {e}", file=sys.stderr)
-
-      if not loaded:
-        raise ValueError("هیچ تصویر معتبری برای ساخت PDF وجود نداره.")
-
-      images = []
-      for im in loaded:
-        w, h = im.size
-        if w < max_w:
-            new_im = Image.new("RGB", (max_w, h), (0, 0, 0))
-            new_im.paste(im, ((max_w - w) // 2, 0))
-            images.append(new_im)
-        else:
-            images.append(im)
-
-      os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-      tmp_path = out_path + ".tmp.pdf"
-      try:
-        images[0].save(
-            tmp_path,
-            save_all=True,
-            append_images=images[1:],
-            format="PDF",
-            resolution=100.0,
-        )
-        os.replace(tmp_path, out_path)
-      except Exception:
-        try:
-            if os.path.isfile(tmp_path):
-                os.remove(tmp_path)
-        except OSError:
-            pass
-        raise
-      finally:
-        for im in images:
+        
+        MAX_SIDE = 12000
+        images = []
+        for p in image_paths_in_order:
             try:
-                im.close()
-            except Exception:
+                im = Image.open(p)
+                im = im.convert("RGB")
+                w, h = im.size
+                if max(w, h) > MAX_SIDE:
+                    scale = MAX_SIDE / float(max(w, h))
+                    nw = max(1, int(w * scale))
+                    nh = max(1, int(h * scale))
+                    im = im.resize((nw, nh), Image.Resampling.LANCZOS)
+                images.append(im)
+            except Exception as e:
+                print(f"    [!] رد تصویر برای PDF ({os.path.basename(p)}): {e}", file=sys.stderr)
+                continue
+        if not images:
+            raise ValueError("هیچ تصویر معتبری برای ساخت PDF وجود نداره.")
+        os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        
+        tmp_path = out_path + ".tmp.pdf"
+        try:
+            images[0].save(
+                tmp_path,
+                save_all=True,
+                append_images=images[1:],
+                format="PDF",
+                resolution=100.0,
+            )
+            os.replace(tmp_path, out_path)
+        except Exception:
+            try:
+                if os.path.isfile(tmp_path):
+                    os.remove(tmp_path)
+            except OSError:
                 pass
+            raise
+        finally:
+            for im in images:
+                try:
+                    im.close()
+                except Exception:
+                    pass
+
     @staticmethod
     def _save_as_zip(folder: str, out_path: str) -> None:
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -2637,37 +2630,38 @@ class MangaTranslator:
                 zf.write(os.path.join(folder, name), arcname=name)
 
     def _write_image(self, image: np.ndarray, path: str) -> None:
-      ext = os.path.splitext(path)[1].lower()
-      out_image = image
+        ext = os.path.splitext(path)[1].lower()
+        out_image = image
+        h0, w0 = out_image.shape[:2]
+        scale = 1.0
 
-      os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        if self.max_output_width and self.max_output_width > 0 and w0 > self.max_output_width:
+            scale = min(scale, self.max_output_width / float(w0))
+        if self.max_output_height and self.max_output_height > 0 and h0 > self.max_output_height:
+            scale = min(scale, self.max_output_height / float(h0))
 
-      if ext == ".webp":
-        rgb = cv2.cvtColor(out_image, cv2.COLOR_BGR2RGB)
-        Image.fromarray(rgb).save(path, format="WEBP", quality=self.img_quality, method=6)
-      elif ext in (".jpg", ".jpeg"):
-        cv2.imwrite(path, out_image, [cv2.IMWRITE_JPEG_QUALITY, self.img_quality, cv2.IMWRITE_JPEG_OPTIMIZE, 1])
-      elif ext == ".png":
-        cv2.imwrite(path, out_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
-      else:
-        cv2.imwrite(path, out_image)
-    @staticmethod
-    def _normalize_to_width(image: np.ndarray, target_w: int, fill_color=(0, 0, 0)) -> np.ndarray:
-      h, w = image.shape[:2]
-      if w == target_w:
-        return image
-      if w > target_w:
-        scale = target_w / float(w)
-        new_h = max(1, int(round(h * scale)))
-        return cv2.resize(image, (target_w, new_h), interpolation=cv2.INTER_AREA)
+        if scale < 0.999:
+            new_w = max(1, int(round(w0 * scale)))
+            new_h = max(1, int(round(h0 * scale)))
+            
+            out_image = cv2.resize(out_image, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            print(f"    [*] مقیاس خروجی: {w0}×{h0} → {new_w}×{new_h} (بدون افت کیفیت متن)")
 
-      pad_total = target_w - w
-      pad_left = pad_total // 2
-      pad_right = pad_total - pad_left
-      return cv2.copyMakeBorder(
-        image, 0, 0, pad_left, pad_right,
-        borderType=cv2.BORDER_CONSTANT, value=fill_color
-      )
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+
+        if ext == ".webp":
+            rgb = cv2.cvtColor(out_image, cv2.COLOR_BGR2RGB)
+            Image.fromarray(rgb).save(path, format="WEBP", quality=self.img_quality, method=6)
+        elif ext in (".jpg", ".jpeg"):
+            cv2.imwrite(
+                path, out_image,
+                [cv2.IMWRITE_JPEG_QUALITY, self.img_quality, cv2.IMWRITE_JPEG_OPTIMIZE, 1]
+            )
+        elif ext == ".png":
+            cv2.imwrite(path, out_image, [cv2.IMWRITE_PNG_COMPRESSION, 9])
+        else:
+            cv2.imwrite(path, out_image)
+
     @staticmethod
     def _save_as_html(image_paths: List[str], out_path: str, title: str = "مانهوا ترجمه شده") -> None:
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
@@ -2855,96 +2849,101 @@ html, body { background: #0a0a0b; }
 
         return int(best_y)
 
+    def _normalize_page_width(self, im: np.ndarray) -> np.ndarray:
+        if im is None or im.size == 0:
+            return im
+        target_w = self.max_output_width
+        if not target_w or target_w <= 0:
+            return im
+        wide_threshold = target_w + 200
+        h, w = im.shape[:2]
+        if w == target_w:
+            return im
+        scale = target_w / float(w)
+        new_w = target_w
+        new_h = max(1, int(round(h * scale)))
+        if w > wide_threshold:
+            interp = cv2.INTER_AREA
+        else:
+            interp = cv2.INTER_LINEAR
+        return cv2.resize(im, (new_w, new_h), interpolation=interp)
+
     def _stitch_pages_for_efficiency(self, image_files: List[str], work_dir: str) -> List[str]:
-      if self.stitch_max_height <= 0 or len(image_files) <= 1:
-        return image_files
+        if self.stitch_max_height <= 0 or len(image_files) <= 1:
+            return image_files
 
-      max_h = self.stitch_max_height
-      os.makedirs(work_dir, exist_ok=True)
-      result: List[str] = []
-      start_idx = 0
+        max_h = self.stitch_max_height
+        os.makedirs(work_dir, exist_ok=True)
+        result: List[str] = []
+        start_idx = 0
 
-      if self.stitch_keep_first and len(image_files) >= 1:
-        first_out = os.path.join(work_dir, "strip_000_cover" + os.path.splitext(image_files[0])[1])
-        if not os.path.isfile(first_out):
-            shutil.copy2(image_files[0], first_out)
-        result.append(first_out)
-        start_idx = 1
-        if start_idx >= len(image_files):
-            return result
+        if self.stitch_keep_first and len(image_files) >= 1:
+            first_out = os.path.join(work_dir, "strip_000_cover.jpg")
+            if not os.path.isfile(first_out):
+                shutil.copy2(image_files[0], first_out)
+            result.append(first_out)
+            start_idx = 1
+            if start_idx >= len(image_files):
+                return result
 
-      raw_pages: List[np.ndarray] = []
-      widths = []
-      for f in image_files[start_idx:]:
-        im = cv2.imread(f)
-        if im is None:
-            print(f"    [!] خواندن نشد، رد شد: {os.path.basename(f)}")
-            continue
-        widths.append(im.shape[1])
-        raw_pages.append(im)
+        
+        sample_widths = []
+        for f in image_files[start_idx:start_idx + min(8, len(image_files) - start_idx)]:
+            im = cv2.imread(f)
+            if im is not None:
+                sample_widths.append(im.shape[1])
+        if not sample_widths:
+            return image_files
+        sample_widths.sort()
+        target_w = sample_widths[len(sample_widths) // 2]
 
-      if not raw_pages:
-        return image_files
+        strip_i = 0
+        current_pages: List[np.ndarray] = []
+        current_h = 0
+        min_strip = max(1800, int(max_h * 0.30))
 
-      target_w = max(widths)
-      print(f"    [*] عرض هدف برای یکسان‌سازی: {target_w}px (عریض‌ترین صفحه)")
+        def emit_current(label: str = "") -> None:
+            nonlocal strip_i, current_pages, current_h
+            if not current_pages:
+                return
+            strip = np.vstack(current_pages) if len(current_pages) > 1 else current_pages[0]
+            out_path = os.path.join(work_dir, f"strip_{strip_i + 1:03d}.jpg")
+            self._write_image(strip, out_path)
+            result.append(out_path)
+            print(f"    [+] نوار {strip_i + 1}: {label or f'{len(current_pages)} صفحه'} ({strip.shape[0]}px)")
+            strip_i += 1
+            current_pages = []
+            current_h = 0
+            del strip
 
-      normalized: List[np.ndarray] = []
-      for im in raw_pages:
-        im = self._normalize_to_width(im, target_w, fill_color=(0, 0, 0))
-        normalized.append(im)
+        for f in image_files[start_idx:]:
+            im = cv2.imread(f)
+            if im is None:
+                print(f"    [!] خواندن نشد، رد شد: {os.path.basename(f)}")
+                continue
 
-      long_img = np.vstack(normalized)
-      n_pages = len(normalized)
-      total_h = long_img.shape[0]
-      print(f"    [*] چسباندن {n_pages} صفحه → نوار یکپارچه {total_h}px")
+            h, w = im.shape[:2]
+            if w != target_w:
+                im = cv2.resize(im, (target_w, h), interpolation=cv2.INTER_AREA)
 
-      strip_i = 0
+            if current_pages and (current_h + h) > max_h:
+                if current_h >= min_strip:
+                    emit_current(f"{len(current_pages)} صفحه (قبل از صفحه‌ی جدید)")
 
-      def emit_image(img: np.ndarray, label: str) -> None:
-        nonlocal strip_i
-        out_path = os.path.join(work_dir, f"strip_{strip_i + 1:03d}.jpg")
-        self._write_image(img, out_path)
-        result.append(out_path)
-        print(f"    [+] نوار {strip_i + 1}: {label} ({img.shape[0]}px)")
-        strip_i += 1
+            current_pages.append(im)
+            current_h += h
 
-      if total_h <= max_h:
-        emit_image(long_img, f"نوار کامل ({n_pages} صفحه، {total_h}px)")
-      else:
-        y = 0
-        part = 0
-        min_strip = max(2000, int(max_h * 0.35))
-        while y < total_h:
-            remaining = total_h - y
-            if remaining <= max_h:
-                y2 = total_h
-            else:
-                ideal = y + max_h
-                if (total_h - ideal) < int(max_h * 0.12):
-                    y2 = total_h
-                else:
-                    y2 = self._find_safe_cut_y(
-                        long_img,
-                        target_y=ideal,
-                        search_up=min(1200, max_h // 3),
-                        search_down=min(300, remaining - max_h if remaining > max_h else 200),
-                        band=14,
-                    )
-                    if y2 - y < min_strip:
-                        y2 = min(total_h, y + max_h)
+            if current_h >= max_h:
+                emit_current(f"{len(current_pages)} صفحه (رسید به سقف {max_h}px)")
 
-            chunk = long_img[y:y2]
-            part += 1
-            cut_note = f"برش امن@{y2}" if y2 != min(y + max_h, total_h) else f"برش {y}:{y2}"
-            emit_image(chunk, f"تکه {part} از نوار ({n_pages} صفحه، {cut_note})")
-            y = y2
+        if current_pages:
+            emit_current(f"{len(current_pages)} صفحه (آخرین نوار)")
 
-      print(
-        f"[*] چسباندن صفحات: {len(image_files)} صفحه → {len(result)} نوار "
-        f"(سقف برش={max_h}px{'، صفحهٔ اول جدا' if self.stitch_keep_first else ''})"
-      )
-      return result if result else image_files
+        print(
+            f"[*] چسباندن صفحات: {len(image_files)} صفحه → {len(result)} نوار "
+            f"(سقف برش={max_h}px{'، صفحهٔ اول جدا' if self.stitch_keep_first else ''})"
+        )
+        return result if result else image_files
 
     def run(self, input_path: str, output_path: str, resume: bool = True, clean_old: bool = True) -> None:
         if clean_old:
@@ -3007,6 +3006,29 @@ html, body { background: #0a0a0b; }
         if not image_files:
             print("[!] هیچ تصویری برای پردازش پیدا نشد.", file=sys.stderr)
             return
+
+        
+        if len(image_files) >= 1 and self.max_output_width and self.max_output_width > 0:
+            norm_dir = os.path.join(cache_dir, "normalized")
+            os.makedirs(norm_dir, exist_ok=True)
+            normalized_files = []
+            changed = 0
+            target_w = self.max_output_width
+            for i, f in enumerate(image_files):
+                im = cv2.imread(f)
+                if im is None:
+                    continue
+                orig_w = im.shape[1]
+                im = self._normalize_page_width(im)
+                if im.shape[1] != orig_w:
+                    changed += 1
+                out_n = os.path.join(norm_dir, f"page_{i+1:03d}.jpg")
+                self._write_image(im, out_n)
+                normalized_files.append(out_n)
+            if normalized_files:
+                image_files = normalized_files
+                print(f"[*] نرمال‌سازی عرض: {changed}/{len(normalized_files)} صفحه به عرض {target_w}px "
+                      f"(>{target_w + 200} → کیفیت بالا | ≤{target_w + 200} → کیفیت عادی) — قبل از چسباندن انجام شد.")
 
         if self.stitch_max_height > 0 and len(image_files) > 1:
             stitch_dir = os.path.join(cache_dir, "stitched")
@@ -3181,13 +3203,20 @@ def build_arg_parser():
     p.add_argument("--det-iou", type=float, default=0.45,
                    help="آستانه‌ی IoU برای NMS باکس‌های تشخیص‌داده‌شده (پیش‌فرض 0.45)")
     p.add_argument("--stitch-max-height", type=int, default=12000,
-                   help="سقف ارتفاع هر نوار چسبانده‌شده (پیش‌فرض ۸۰۰۰). ۰ = خاموش.")
+                   help="سقف ارتفاع هر نوار چسبانده‌شده (پیش‌فرض ۱۲۰۰۰). ۰ = خاموش. "
+                        "مقدار کمتر = نوارهای کوتاه‌تر و مصرف حافظه کمتر.")
     p.add_argument("--stitch-short-threshold", type=int, default=6000,
                    help="صفحاتی کوتاه‌تر از این ارتفاع (پیش‌فرض ۶۰۰۰px) با هم چسبانده می‌شوند.")
     p.add_argument("--no-stitch-keep-first", action="store_true",
                    help="صفحهٔ اول را هم داخل نوارها بگذار (پیش‌فرض: صفحهٔ اول جدا می‌ماند)")
     p.add_argument("--img-format", choices=["webp", "png", "jpg"], default="jpg")
-    p.add_argument("--quality", type=int, default=80)
+    p.add_argument("--quality", type=int, default=95,
+               help="کیفیت JPEG/WebP خروجی (پیش‌فرض ۹۵ — کیفیت بالا)")
+    p.add_argument("--max-width", type=int, default=1200,
+               help="حداکثر عرض خروجی به پیکسل (پیش‌فرض ۱۲۰۰۰ = تقریباً بدون کوچک‌کردن)")
+    p.add_argument("--max-height", type=int, default=0,
+               help="حداکثر ارتفاع خروجی به پیکسل (۰ = بدون محدودیت). "
+                    "اگر نوار از این ارتفاع بلندتر باشد، با کیفیت بالا کوچک می‌شود تا متن خوانا بماند.")
     p.add_argument("--min-confidence", type=float, default=0.12,
                    help="آستانه‌ی اطمینان PaddleOCR برای هر خط متن (پیش‌فرض 0.12)")
     p.add_argument("--workers", type=int, default=1)
@@ -3262,6 +3291,8 @@ def main():
         pad_ratio=args.pad_ratio,
         inpaint_radius=args.inpaint_radius,
         translation_temperature=args.temperature,
+        max_output_width=(args.max_width or None),
+        max_output_height=(args.max_height if args.max_height and args.max_height > 0 else None),
         stitch_max_height=args.stitch_max_height,
         stitch_short_threshold=args.stitch_short_threshold,
         stitch_keep_first=not args.no_stitch_keep_first,
