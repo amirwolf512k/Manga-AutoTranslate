@@ -232,17 +232,27 @@ esac
 echo "خروجی: $OUTPUT"
 echo ""
 
-FONT_PATH="fonts/Vazirmatn-Bold.ttf"
+FONT_DIR="fonts"
+mkdir -p "$FONT_DIR"
+BASE_URL="https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf"
+for w in Regular Medium SemiBold Bold ExtraBold Black Light; do
+  if [ ! -f "$FONT_DIR/Vazirmatn-${w}.ttf" ]; then
+    echo "دانلود Vazirmatn-${w}.ttf ..."
+    curl -fsSL -o "$FONT_DIR/Vazirmatn-${w}.ttf" "${BASE_URL}/Vazirmatn-${w}.ttf" || true
+  fi
+done
+FONT_PATH="$FONT_DIR/Vazirmatn-Regular.ttf"
+FONT_SHOUT="$FONT_DIR/Vazirmatn-ExtraBold.ttf"
+FONT_EXPLOSION="$FONT_DIR/Vazirmatn-Black.ttf"
+FONT_SFX="$FONT_DIR/Vazirmatn-Black.ttf"
+FONT_BLACK="$FONT_DIR/Vazirmatn-Bold.ttf"
+FONT_THOUGHT="$FONT_DIR/Vazirmatn-Light.ttf"
+FONT_WHISPER="$FONT_DIR/Vazirmatn-Light.ttf"
 if [ ! -f "$FONT_PATH" ]; then
-    echo "فونت پیدا نشد. در حال دانلود Vazirmatn Bold..."
-    mkdir -p fonts
-    curl -L -o "$FONT_PATH" \
-      "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Bold.ttf" || {
-        echo "دانلود فونت شکست خورد. لطفاً دستی فونت را در fonts/ بگذارید."
-        exit 1
-    }
+  echo "دانلود فونت شکست خورد. لطفاً دستی فونت را در fonts/ بگذارید."
+  exit 1
 fi
-echo "فونت: $FONT_PATH"
+echo "فونت‌ها: Regular / ExtraBold / Black / Light آماده شد."
 echo ""
 
 echo "========================================"
@@ -254,6 +264,12 @@ CMD=(python3 manga_translator.py
   -i "$INPUT_PATH"
   -o "$OUTPUT"
   --font "$FONT_PATH"
+  --font-shout "$FONT_SHOUT"
+  --font-explosion "$FONT_EXPLOSION"
+  --font-sfx "$FONT_SFX"
+  --font-black "$FONT_BLACK"
+  --font-thought "$FONT_THOUGHT"
+  --font-whisper "$FONT_WHISPER"
   --ocr-lang $OCR_LANG
   --reading-order "$READING_ORDER"
   --provider "$PROVIDER"

@@ -90,12 +90,21 @@ jobs:
             pip install --no-cache-dir openai
           fi
 
-      - name: Download font
+      - name: Download fonts (Vazirmatn multi-weight)
         run: |
           mkdir -p fonts
-          curl -L -o fonts/Vazirmatn-Bold.ttf \
-            "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Bold.ttf"
-          echo "FONT_PATH=fonts/Vazirmatn-Bold.ttf" >> $GITHUB_ENV
+          BASE="https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf"
+          for w in Regular Medium SemiBold Bold ExtraBold Black Light; do
+            curl -fsSL -o "fonts/Vazirmatn-${w}.ttf" "${BASE}/Vazirmatn-${w}.ttf"
+          done
+          echo "FONT_PATH=fonts/Vazirmatn-Regular.ttf" >> $GITHUB_ENV
+          echo "FONT_SHOUT=fonts/Vazirmatn-ExtraBold.ttf" >> $GITHUB_ENV
+          echo "FONT_EXPLOSION=fonts/Vazirmatn-Black.ttf" >> $GITHUB_ENV
+          echo "FONT_SFX=fonts/Vazirmatn-Black.ttf" >> $GITHUB_ENV
+          echo "FONT_BLACK=fonts/Vazirmatn-Bold.ttf" >> $GITHUB_ENV
+          echo "FONT_THOUGHT=fonts/Vazirmatn-Light.ttf" >> $GITHUB_ENV
+          echo "FONT_WHISPER=fonts/Vazirmatn-Light.ttf" >> $GITHUB_ENV
+          ls -la fonts/
 
       - name: Resolve API key from secrets
         id: api
@@ -146,6 +155,12 @@ jobs:
             -i "${{ inputs.input_url }}" \
             -o "$OUT_EXT" \
             --font "$FONT_PATH" \
+            --font-shout "$FONT_SHOUT" \
+            --font-explosion "$FONT_EXPLOSION" \
+            --font-sfx "$FONT_SFX" \
+            --font-black "$FONT_BLACK" \
+            --font-thought "$FONT_THOUGHT" \
+            --font-whisper "$FONT_WHISPER" \
             --ocr-lang ${{ inputs.ocr_lang }} \
             --reading-order ${{ inputs.reading_order }} \
             --provider "$PROVIDER" \
