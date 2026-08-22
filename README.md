@@ -45,7 +45,7 @@
 | **Fallback مدل (Gemini)** | اگر مدل در دسترس نبود، فوری مدل بعدی را امتحان می‌کند |
 | **چند کلید API** | جابه‌جایی خودکار روی سهمیه / خطا |
 | **پاک‌سازی متن** | LaMa (GPU) یا OpenCV inpaint (CPU) |
-| **رندر فارسی** | reshaper + bidi + یک فونت TTF فارسی |
+| **رندر فارسی** | reshaper + bidi + **چند فونت** بر اساس سبک بالن (normal / shout / thought / whisper / explosion / sfx / black) |
 | **ورودی** | پوشه، تصویر، ZIP، PDF، URL تصویر یا صفحهٔ فصل |
 | **چندفصل** | با `*` همه فصل‌ها؛ با `,` فقط فصل‌های مشخص — هر فصل خروجی جدا |
 | **خروجی** | پوشه تصویر / ZIP / PDF / HTML — نام فایل از روی لینک فصل ساخته می‌شود |
@@ -80,7 +80,13 @@
 |--------|--------|---------|
 | `-i` / `--input` | پوشه، تصویر، ZIP، PDF یا URL (`*` برای همه فصل‌ها، `,` برای چند لینک مشخص) | **اجباری** |
 | `-o` / `--output` | مسیر خروجی (`.pdf` / `.zip` / `.html` / پوشه) یا فقط پسوند | **اجباری** |
-| `--font` | مسیر فونت TTF فارسی | **اجباری** |
+| `--font` | فونت پیش‌فرض فارسی (normal + fallback) | **اجباری** |
+| `--font-shout` | فونت بالن فریاد/خاردار | همان `--font` |
+| `--font-thought` | فونت بالن فکر/ابری | همان `--font` |
+| `--font-whisper` | فونت بالن نجوا/خط‌چین | همان `--font` |
+| `--font-explosion` | فونت بالن انفجاری | همان `--font` |
+| `--font-sfx` | فونت SFX و افکت | همان `--font` |
+| `--font-black` | فونت بالن پرسیاه | همان `--font` |
 | `--provider` | ارائه‌دهنده AI (جدول بالا) | `gemini` |
 | `--api-key` | کلید API (قابل تکرار یا با کاما) | یا env مربوطه |
 | `--api-base` | آدرس پایه API (اختیاری) | پیش‌فرض provider |
@@ -127,10 +133,34 @@
   `nan-hao-shang-feng-chapter-2.pdf` و `nan-hao-shang-feng-chapter-3.pdf`
 - **`--output`**: اگر `.pdf` بگذاری خروجی یک PDF می‌شود؛ `.zip` → آرشیو تصاویر؛ `.html` → صفحهٔ وب؛ بدون پسوند → پوشهٔ تصاویر. فقط پسوند (مثل `.pdf`) هم کافی است؛ نام از روی لینک ساخته می‌شود.
 
-### فونت
+### فونت (چندوزنی)
 
-- **`--font`**: فقط **یک** فونت برای همهٔ متن‌ها استفاده می‌شود.
-- پیشنهاد: `Vazirmatn-Regular.ttf` (خوانا و پایدار).
+- **`--font`**: فونت پیش‌فرض (برای بالن معمولی و fallback).
+- اختیاری برای هر سبک بالن:
+  - `--font-shout` / `--font-explosion` / `--font-sfx` / `--font-black` / `--font-thought` / `--font-whisper`
+- اگر ندهی، همان `--font` برای همه استفاده می‌شود.
+- پیشنهاد (Vazirmatn):
+
+```bash
+--font fonts/Vazirmatn-Regular.ttf \
+--font-shout fonts/Vazirmatn-ExtraBold.ttf \
+--font-explosion fonts/Vazirmatn-Black.ttf \
+--font-sfx fonts/Vazirmatn-Black.ttf \
+--font-black fonts/Vazirmatn-Bold.ttf \
+--font-thought fonts/Vazirmatn-Light.ttf \
+--font-whisper fonts/Vazirmatn-Light.ttf
+```
+
+| سبک بالن | معنی تقریبی | فونت پیشنهادی |
+|----------|-------------|---------------|
+| normal | بیضی/گرد معمولی | Regular |
+| shout | خاردار / فریاد | ExtraBold |
+| explosion | شعاعی / انفجاری | Black |
+| sfx / sfx_shape | افکت صدا | Black |
+| black | بالن پرسیاه | Bold |
+| thought | ابری / فکر | Light |
+| whisper | خط‌چین / نجوا | Light |
+
 
 ### مدل و API
 
@@ -178,7 +208,7 @@
 روی هر مربع برچسب `[id]` و نوع و بخشی از متن منبع نوشته می‌شود.
 
 ```bash
-python manga_translator.py -i "..." -o aa.pdf --font Vazirmatn.ttf --debug
+python manga_translator.py -i "..." -o aa.pdf --font fonts/Vazirmatn-Regular.ttf --font-shout fonts/Vazirmatn-ExtraBold.ttf --font-sfx fonts/Vazirmatn-Black.ttf --debug
 # → aa.pdf + aa-debug.pdf
 ```
 
