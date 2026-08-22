@@ -207,18 +207,28 @@ if not defined OUTPUT set OUTPUT=.pdf
 echo خروجی: !OUTPUT!
 echo.
 
-set FONT_PATH=fonts\Vazirmatn-Bold.ttf
-if not exist "!FONT_PATH!" (
-    echo فونت پیدا نشد. در حال دانلود Vazirmatn Bold...
-    if not exist fonts mkdir fonts
-    curl -L -o "!FONT_PATH!" "https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf/Vazirmatn-Bold.ttf"
-    if errorlevel 1 (
-        echo دانلود فونت شکست خورد. لطفاً دستی فونت را در fonts\ بگذارید.
-        pause
-        exit /b 1
+set FONT_DIR=fonts
+if not exist "!FONT_DIR!" mkdir "!FONT_DIR!"
+set BASE_URL=https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf
+for %%W in (Regular Medium SemiBold Bold ExtraBold Black Light) do (
+    if not exist "!FONT_DIR!\Vazirmatn-%%W.ttf" (
+        echo دانلود Vazirmatn-%%W.ttf ...
+        curl -L -o "!FONT_DIR!\Vazirmatn-%%W.ttf" "!BASE_URL!/Vazirmatn-%%W.ttf"
     )
 )
-echo فونت: !FONT_PATH!
+set FONT_PATH=!FONT_DIR!\Vazirmatn-Regular.ttf
+set FONT_SHOUT=!FONT_DIR!\Vazirmatn-ExtraBold.ttf
+set FONT_EXPLOSION=!FONT_DIR!\Vazirmatn-Black.ttf
+set FONT_SFX=!FONT_DIR!\Vazirmatn-Black.ttf
+set FONT_BLACK=!FONT_DIR!\Vazirmatn-Bold.ttf
+set FONT_THOUGHT=!FONT_DIR!\Vazirmatn-Light.ttf
+set FONT_WHISPER=!FONT_DIR!\Vazirmatn-Light.ttf
+if not exist "!FONT_PATH!" (
+    echo دانلود فونت شکست خورد. لطفاً دستی فونت را در fonts\ بگذارید.
+    pause
+    exit /b 1
+)
+echo فونت‌ها: Regular/ExtraBold/Black/Light آماده شد.
 echo.
 
 echo ========================================
@@ -226,7 +236,7 @@ echo شروع ترجمه با !PROVIDER! ...
 echo ========================================
 echo.
 
-set "CMD=python manga_translator.py -i "!INPUT_PATH!" -o "!OUTPUT!" --font "!FONT_PATH!" --ocr-lang !OCR_LANG! --reading-order "!READING_ORDER!" --provider "!PROVIDER!""
+set "CMD=python manga_translator.py -i "!INPUT_PATH!" -o "!OUTPUT!" --font "!FONT_PATH!" --font-shout "!FONT_SHOUT!" --font-explosion "!FONT_EXPLOSION!" --font-sfx "!FONT_SFX!" --font-black "!FONT_BLACK!" --font-thought "!FONT_THOUGHT!" --font-whisper "!FONT_WHISPER!" --ocr-lang !OCR_LANG! --reading-order "!READING_ORDER!" --provider "!PROVIDER!""
 if defined API_KEYS set "CMD=!CMD! --api-key "!API_KEYS!""
 if defined MODEL_NAME set "CMD=!CMD! --model "!MODEL_NAME!""
 
