@@ -95,14 +95,16 @@ class GeminiQuotaExhausted(Exception):
 @dataclass
 class TextRegion:
     id: int
-    boxes: List[np.ndarray]              
+    boxes: List[np.ndarray]
     source_text: str = ""
     translated_text: str = ""
-    rect: Tuple[int, int, int, int] = field(default=(0, 0, 0, 0))  
+    rect: Tuple[int, int, int, int] = field(default=(0, 0, 0, 0))
     angle: float = 0.0
     kind: str = "dialogue"
-    det_class: str = "text_bubble"       
+    det_class: str = "text_bubble"
     det_confidence: float = 0.0
+    
+    bubble_style: str = "normal"
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -345,6 +347,12 @@ class MangaTranslator:
         stitch_short_threshold: int = 6000,
         stitch_keep_first: bool = True,
         debug: bool = False,
+        font_shout: Optional[str] = None,
+        font_thought: Optional[str] = None,
+        font_whisper: Optional[str] = None,
+        font_explosion: Optional[str] = None,
+        font_sfx: Optional[str] = None,
+        font_black: Optional[str] = None,
     ):
         provider = (provider or "gemini").lower().strip()
         if provider not in PROVIDER_PRESETS:
@@ -375,6 +383,21 @@ class MangaTranslator:
         self.api_base = api_base or self.provider_cfg.get("base_url")
 
         self.font_path = font_path
+        
+        self.font_by_style: Dict[str, str] = {
+            "normal": font_path,
+            "shout": font_shout or font_path,
+            "thought": font_thought or font_path,
+            "whisper": font_whisper or font_path,
+            "explosion": font_explosion or font_path,
+            "sfx_shape": font_sfx or font_path,
+            "black": font_black or font_path,
+            "sfx": font_sfx or font_path,  
+        }
+        for style_name, fpath in list(self.font_by_style.items()):
+            if fpath and not os.path.isfile(fpath):
+                print(f"[!] فونت سبک «{style_name}» پیدا نشد ({fpath}) → fallback به فونت اصلی.")
+                self.font_by_style[style_name] = font_path
         self.reading_order = reading_order
         self.inpaint_radius = inpaint_radius
         self.mask_padding = mask_padding
@@ -826,7 +849,107 @@ class MangaTranslator:
             pool = [b for b in pool if iou(best["rect"], b["rect"]) < iou_thresh]
         return keep
 
-    
+    def _classify_bubble_style(
+        self,
+        image_bgr: np.ndarray,
+        rect: List[int],
+        polys: List[np.ndarray],
+        kind: str = "dialogue",
+        det_class: str = "text_bubble",
+    ) -> str:
+        if kind == "sfx":
+            return "sfx_shape"
+
+        x1, y1, x2, y2 = rect
+        h_img, w_img = image_bgr.shape[:2]
+        
+        pad = max(4, int(0.08 * max(x2 - x1, y2 - y1)))
+        cx1 = max(0, x1 - pad)
+        cy1 = max(0, y1 - pad)
+        cx2 = min(w_img, x2 + pad)
+        cy2 = min(h_img, y2 + pad)
+        roi = image_bgr[cy1:cy2, cx1:cx2]
+        if roi.size == 0:
+            return "normal"
+
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        h, w = gray.shape[:2]
+        area_box = float(max(1, w * h))
+
+        
+        dark_ratio = float(np.mean(gray < 45))
+        bright_ratio = float(np.mean(gray > 210))
+        if dark_ratio > 0.55 and bright_ratio < 0.25:
+            return "black"
+
+        
+        blur = cv2.GaussianBlur(gray, (3, 3), 0)
+        edges = cv2.Canny(blur, 40, 140)
+        
+        edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            
+            if det_class == "text_free":
+                return "sfx_shape"
+            return "normal"
+
+        cnt = max(contours, key=cv2.contourArea)
+        area = float(cv2.contourArea(cnt))
+        peri = float(cv2.arcLength(cnt, True))
+        if peri < 8 or area < 20:
+            return "normal"
+
+        circularity = float(4.0 * np.pi * area / (peri * peri + 1e-6))
+        hull = cv2.convexHull(cnt)
+        hull_area = float(cv2.contourArea(hull)) + 1e-6
+        solidity = area / hull_area
+        hull_peri = float(cv2.arcLength(hull, True)) + 1e-6
+        roughness = peri / hull_peri  
+
+        
+        eps = 0.02 * peri
+        approx = cv2.approxPolyDP(cnt, eps, True)
+        n_verts = len(approx)
+
+        
+        fill_ratio = area / area_box
+
+        
+        
+        n_labels, _ = cv2.connectedComponents(edges)
+        edge_fragments = max(0, n_labels - 1)
+        is_fragmented = edge_fragments > max(8, int(peri / 25))
+
+        
+        if roughness > 1.55 and solidity < 0.72 and n_verts >= 10:
+            return "explosion"
+        if roughness > 1.35 and solidity < 0.78 and circularity < 0.45:
+            return "shout"
+        if n_verts >= 12 and solidity < 0.80 and circularity < 0.55:
+            return "shout"
+
+        
+        if is_fragmented and circularity > 0.35 and solidity > 0.55:
+            
+            if bright_ratio > 0.4:
+                return "thought"
+            return "whisper"
+
+        
+        if is_fragmented and 0.45 < circularity < 0.9:
+            return "whisper"
+
+        
+        if dark_ratio > 0.40 and fill_ratio > 0.35:
+            return "black"
+
+        
+        if det_class == "text_free" and circularity < 0.35 and fill_ratio < 0.25:
+            return "sfx_shape"
+
+        return "normal"
+
     def _ocr_crop(self, image_bgr: np.ndarray, rect: List[int], y_offset: int = 0,
                   pad_ratio: float = 0.04) -> Tuple[str, List[np.ndarray]]:
 
@@ -1571,8 +1694,14 @@ class MangaTranslator:
         reshaped = arabic_reshaper.reshape(text)
         return get_display(reshaped)
 
-    def _load_font(self, size: int) -> ImageFont.FreeTypeFont:
-        return ImageFont.truetype(self.font_path, size, layout_engine=ImageFont.Layout.BASIC)
+    def _load_font(self, size: int, style: Optional[str] = None) -> ImageFont.FreeTypeFont:
+        path = self.font_path
+        if style:
+            path = self.font_by_style.get(style) or self.font_path
+        try:
+            return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
+        except Exception:
+            return ImageFont.truetype(self.font_path, size, layout_engine=ImageFont.Layout.BASIC)
 
     @staticmethod
     def _stroke_width_for(size: int) -> int:
@@ -1582,13 +1711,20 @@ class MangaTranslator:
             return 2
         return max(2, size // 16)
 
-    def _wrap_and_fit(self, draw: ImageDraw.ImageDraw, text: str, max_w: int, max_h: int) -> Tuple[ImageFont.FreeTypeFont, List[str], int]:
+    def _wrap_and_fit(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        max_w: int,
+        max_h: int,
+        style: Optional[str] = None,
+    ) -> Tuple[ImageFont.FreeTypeFont, List[str], int]:
         words = text.split()
         if not words:
             words = [""]
 
         def wrap_at(size: int, line_gap: int):
-            font = self._load_font(size)
+            font = self._load_font(size, style=style)
             sw = self._stroke_width_for(size)
             usable_w = max(8, max_w - 2 * sw)
             lines: List[str] = []
@@ -1635,7 +1771,7 @@ class MangaTranslator:
                 return font, lines, sw
 
         if smallest_attempt is None:
-            font = self._load_font(11)
+            font = self._load_font(11, style=style)
             sw = self._stroke_width_for(11)
             return font, [" ".join(words)], sw
         return smallest_attempt[0], smallest_attempt[1], smallest_attempt[2]
@@ -1715,7 +1851,13 @@ class MangaTranslator:
             box_w = max(14, w - 2 * pad)
             box_h = max(14, h - 2 * pad)
 
-            font, lines, sw = self._wrap_and_fit(draw, region.translated_text, box_w, box_h)
+            
+            style = getattr(region, "bubble_style", None) or "normal"
+            if region.kind == "sfx" and style == "normal":
+                style = "sfx"
+            font, lines, sw = self._wrap_and_fit(
+                draw, region.translated_text, box_w, box_h, style=style
+            )
             text_rgb, stroke_rgb = self._pick_text_and_stroke(image, original_image, region)
 
             angle = getattr(region, "angle", 0.0)
@@ -1788,10 +1930,17 @@ class MangaTranslator:
             kind = self._classify_text(text)
             x1, y1b, x2, y2b = det["rect"]
             rect_full = (x1, y1b + y0, x2 - x1, y2b - y1b)
+            style = self._classify_bubble_style(
+                piece,
+                det["rect"],
+                polys,
+                kind=kind,
+                det_class=det["class_name"],
+            )
 
             regions.append(
                 TextRegion(
-                    id=0,  
+                    id=0,
                     boxes=polys,
                     source_text=text,
                     rect=rect_full,
@@ -1799,27 +1948,55 @@ class MangaTranslator:
                     kind=kind,
                     det_class=det["class_name"],
                     det_confidence=det["confidence"],
+                    bubble_style=style,
                 )
             )
         return regions
 
     def _draw_debug_regions(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         vis = image.copy()
-        colors = {"dialogue": (0, 0, 255), "promo": (0, 165, 255), "sfx": (255, 255, 0), "junk": (128, 128, 128)}
+        
+        kind_colors = {
+            "dialogue": (0, 0, 255),
+            "promo": (0, 165, 255),
+            "sfx": (255, 255, 0),
+            "junk": (128, 128, 128),
+        }
+        
+        style_colors = {
+            "normal": (0, 200, 0),
+            "shout": (0, 0, 255),
+            "thought": (255, 128, 0),
+            "whisper": (200, 200, 0),
+            "explosion": (255, 0, 255),
+            "black": (40, 40, 40),
+            "sfx_shape": (0, 255, 255),
+        }
 
         for r in regions:
             x, y, w, h = r.rect
-            color = colors.get(r.kind, (0, 0, 255))
-            cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
+            color = kind_colors.get(r.kind, (0, 0, 255))
+            style = getattr(r, "bubble_style", "normal") or "normal"
+            scolor = style_colors.get(style, (0, 200, 0))
 
-            label = f"[{r.id}] {r.kind[:3].upper()} ({r.det_confidence:.2f})"
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
-            cv2.rectangle(vis, (x, y - th - 6), (x + tw + 4, y), color, -1)
-            cv2.putText(vis, label, (x + 2, y - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
+            
+            cv2.rectangle(vis, (x + 2, y + 2), (x + w - 2, y + h - 2), scolor, 1)
+
+            label = f"[{r.id}] {r.kind}/{style} ({r.det_confidence:.2f})"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
+            cv2.rectangle(vis, (x, max(0, y - th - 8)), (x + tw + 6, y), color, -1)
+            cv2.putText(
+                vis, label, (x + 2, max(12, y - 4)),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
+            )
 
             short = (r.source_text or "")[:28]
             if short:
-                cv2.putText(vis, short, (x, y + h + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 0), 1, cv2.LINE_AA)
+                cv2.putText(
+                    vis, short, (x, y + h + 14),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 0), 1, cv2.LINE_AA,
+                )
         return vis
 
     def process_core(self, image: np.ndarray) -> np.ndarray:
@@ -1885,12 +2062,23 @@ class MangaTranslator:
         sfx_regions = [r for r in unique_regions if r.kind == "sfx"]
         junk_regions = [r for r in unique_regions if r.kind == "junk"]
 
+        style_counts: Dict[str, int] = {}
+        for r in unique_regions:
+            st = getattr(r, "bubble_style", "normal") or "normal"
+            style_counts[st] = style_counts.get(st, 0) + 1
+        style_summary = " | ".join(f"{k}={v}" for k, v in sorted(style_counts.items()))
+
         print(f"[فاز ۱ - تشخیص حباب + OCR] انجام شد. مجموع {len(unique_regions)} حباب "
               f"(دیالوگ={len(dialogue_regions)} | تبلیغ={len(promo_regions)} | "
               f"SFX={len(sfx_regions)} | junk={len(junk_regions)})")
+        print(f"    سبک بالن: {style_summary}")
         for r in unique_regions:
             tag = {"dialogue": "متن", "promo": "تبلیغ", "sfx": "SFX", "junk": "junk"}.get(r.kind, r.kind)
-            print(f"  [{r.id}] ({tag}, det={r.det_class}/{r.det_confidence:.2f}) {r.source_text}")
+            st = getattr(r, "bubble_style", "normal") or "normal"
+            print(
+                f"  [{r.id}] ({tag}/{st}, det={r.det_class}/{r.det_confidence:.2f}) "
+                f"{r.source_text}"
+            )
 
         if self.debug:
             debug_vis = self._draw_debug_regions(image, unique_regions)
@@ -3188,7 +3376,20 @@ def build_arg_parser():
     p.add_argument("--api-key", action="append", default=None,
                    help="کلید API. چندبار یا با کاما. env متناظر هم خوانده می‌شود")
     p.add_argument("--api-base", default=None, help="آدرس پایه API (اختیاری)")
-    p.add_argument("--font", required=True)
+    p.add_argument("--font", required=True,
+                   help="فونت پیش‌فرض فارسی (برای بالن normal و fallback)")
+    p.add_argument("--font-shout", default=None,
+                   help="فونت مخصوص بالن فریاد/خاردار (shout)")
+    p.add_argument("--font-thought", default=None,
+                   help="فونت مخصوص بالن فکر/ابری (thought)")
+    p.add_argument("--font-whisper", default=None,
+                   help="فونت مخصوص بالن نجوا/خط‌چین (whisper)")
+    p.add_argument("--font-explosion", default=None,
+                   help="فونت مخصوص بالن انفجاری/شعاعی (explosion)")
+    p.add_argument("--font-sfx", default=None,
+                   help="فونت مخصوص SFX و شکل‌های افکت")
+    p.add_argument("--font-black", default=None,
+                   help="فونت مخصوص بالن پرسیاه (black)")
     p.add_argument("--ocr-lang", nargs="+", default=["en"], help="زبان‌های OCR. en | ko en | ja en")
     p.add_argument("--model", default=None, help="نام مدل. اگر ندهی از پیش‌فرض provider استفاده می‌شود")
     p.add_argument("--reading-order", choices=["rtl", "ltr"], default="rtl")
@@ -3277,6 +3478,12 @@ def main():
         model_name=args.model,
         api_base=args.api_base,
         font_path=args.font,
+        font_shout=getattr(args, "font_shout", None),
+        font_thought=getattr(args, "font_thought", None),
+        font_whisper=getattr(args, "font_whisper", None),
+        font_explosion=getattr(args, "font_explosion", None),
+        font_sfx=getattr(args, "font_sfx", None),
+        font_black=getattr(args, "font_black", None),
         reading_order=args.reading_order,
         gpu=args.gpu,
         max_retries=args.max_retries,
