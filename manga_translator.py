@@ -60,10 +60,18 @@ except ImportError:
 
 try:
     import torch
-    from transformers import RTDetrImageProcessor, RTDetrV2ForObjectDetection
 except ImportError:
-    print("خطا: torch و transformers لازم است.\n"
-          "دستور: pip install torch transformers", file=sys.stderr)
+    print("خطا: torch لازم است.\n"
+          "دستور: pip install torch", file=sys.stderr)
+    raise
+
+_HAS_YOLO = False
+try:
+    from ultralytics import YOLO
+    _HAS_YOLO = True
+except ImportError:
+    print("خطا: ultralytics (YOLOv8) نصب نیست.\n"
+          "دستور: pip install ultralytics", file=sys.stderr)
     raise
 
 _HAS_LAMA = False
@@ -103,8 +111,10 @@ class TextRegion:
     kind: str = "dialogue"
     det_class: str = "text_bubble"
     det_confidence: float = 0.0
-    
-    bubble_style: str = "normal"
+    # ماسک باینری شکل بالن (هم‌اندازه صفحه) یا None
+    bubble_mask: Optional[np.ndarray] = None
+    # چندضلعی کانتور شکل بالن [[x,y], ...]
+    shape_poly: Optional[np.ndarray] = None
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -196,6 +206,93 @@ SFX_WORD_RE = re.compile(
 HANGUL_RE = re.compile(r"[\uac00-\ud7a3]+")
 
 
+def collapse_repeated_ocr_phrases(text: str) -> str:
+    """حذف تکرار جمله/عبارت که OCR گاهی دو بار پشت‌سرهم می‌خواند."""
+    if not text or len(text) < 8:
+        return text
+    t = re.sub(r"\s{2,}", " ", text).strip()
+
+    # "HAN( HAN (" / "HAN( HAN"
+    t = re.sub(r"\b([A-Za-z]{2,10})\(\s+\1\s*\(", r"\1 (", t, flags=re.IGNORECASE)
+    t = re.sub(r"\b([A-Za-z]{2,10})\(\s+\1\b", r"\1", t, flags=re.IGNORECASE)
+
+    # نقطهٔ چسبیده vs فاصله: "HUHAHAHAHA.HOW HUHAHAHAHA. HOW"
+    t = re.sub(
+        r"\b([A-Za-z0-9*]+)\.([A-Za-z0-9*]+)\s+\1\.\s*\2\b",
+        r"\1.\2",
+        t,
+        flags=re.IGNORECASE,
+    )
+    # "HAS (****) HAS (****)" / "HAS (****) HAS "
+    t = re.sub(
+        r"\b([A-Za-z]{2,15})\s*(\([*]+\))\s+\1\s*\2",
+        r"\1 \2",
+        t,
+        flags=re.IGNORECASE,
+    )
+    t = re.sub(
+        r"\b([A-Za-z]{2,15})\s*(\([*]+\))\s+\1\b",
+        r"\1 \2",
+        t,
+        flags=re.IGNORECASE,
+    )
+    # "HAN (****) HAS (****) ENTERED" → "HAN (****) HAS ENTERED"
+    t = re.sub(
+        r"(\([*]+\))\s+([A-Za-z]{2,15})\s+\1\s+",
+        r"\1 \2 ",
+        t,
+        flags=re.IGNORECASE,
+    )
+    # انتهای زائد: "! (****) HAS"
+    t = re.sub(r"([!.?])\s*\([*]+\)\s*[A-Za-z]{0,15}\s*$", r"\1", t)
+    # "ONE WITH ME!! ONE WITH ME?!"
+    t = re.sub(
+        r"\b((?:ONE|WITH|ME|THIS|POWER|FROM|BEING)(?:\s+(?:ONE|WITH|ME|THIS|POWER|FROM|BEING)){1,5})[!?.]*\s+\1\b",
+        r"\1",
+        t,
+        flags=re.IGNORECASE,
+    )
+
+    # تکرار توکن/عبارت پشت‌سرهم (چند دور)
+    for _ in range(4):
+        prev = t
+        t = re.sub(
+            r"\b([A-Za-z0-9*]+(?:[.\-!][A-Za-z0-9*]*)*)\s+\1\b",
+            r"\1",
+            t,
+            flags=re.IGNORECASE,
+        )
+        # "ONE WITH ME!! ONE WITH ME?!"
+        t = re.sub(
+            r"\b((?:[A-Za-z0-9*]+[\s,!.?]*){1,6}?)\s+\1",
+            r"\1",
+            t,
+            flags=re.IGNORECASE,
+        )
+        if t == prev:
+            break
+
+    # نیمهٔ اول == نیمهٔ دوم
+    m = re.match(r"^(.{6,}?)\s+\1([!.?…]*)$", t, flags=re.IGNORECASE)
+    if m:
+        t = (m.group(1) + (m.group(2) or "")).strip()
+
+    n = len(t)
+    for cut in range(max(6, n // 3), n // 2 + 1):
+        a, b = t[:cut].strip(" .,"), t[cut:].strip(" .,")
+        na = re.sub(r"[^a-z0-9*]+", "", a.lower())
+        nb = re.sub(r"[^a-z0-9*]+", "", b.lower())
+        if len(na) >= 6 and (na == nb or nb.startswith(na)):
+            t = a
+            break
+
+    # دنبالهٔ زائد انتها مثل ") HAS" تکراری
+    t = re.sub(r"(\([*]+\))\s+\1", r"\1", t)
+    t = re.sub(r"\(\s*\(", "(", t)
+    t = re.sub(r"\s{2,}", " ", t).strip(" ,.")
+    return t
+
+
 def uncensor_swears(text: str) -> str:
     if not text:
         return text
@@ -250,9 +347,13 @@ def uncensor_swears(text: str) -> str:
 class MangaTranslator:
     _LAMA_MIN_VRAM_GB = 3.5
 
-    
-    DET_REPO = "ogkalu/comic-text-and-bubble-detector"
-    DET_CLASS_NAMES = {0: "bubble", 1: "text_bubble", 2: "text_free"}
+    # YOLOv8-seg: تشخیص + ماسک شکل واقعی بالن (بیضی / ابر / دندانه)
+    YOLO_SEG_HF_REPO = "kitsumed/yolov8m_seg-speech-bubble"
+    YOLO_SEG_HF_FILE = "model.pt"
+    # تشخیص فقط (بدون ماسک) — پشتیبان
+    YOLO_DET_HF_REPO = "ogkalu/comic-speech-bubble-detector-yolov8m"
+    YOLO_DET_HF_FILE = "comic-speech-bubble-detector.pt"
+    YOLO_NANO_FALLBACK = "yolov8n-seg.pt"
 
     
     @staticmethod
@@ -293,6 +394,7 @@ class MangaTranslator:
         return ""
 
     def _decide_lama(self, force_gpu: Optional[bool]) -> bool:
+        """با استراتژی Crop-Inpaint-Paste، LaMa حتی روی CPU هم سبک و سریع است."""
         if not _HAS_LAMA:
             return False
         has_cuda = self._detect_torch_cuda()
@@ -300,24 +402,68 @@ class MangaTranslator:
         name = self._cuda_device_name()
 
         if force_gpu is False:
-            print("[*] --cpu زده شده → پاک‌سازی با OpenCV inpaint.")
-            return False
-        if force_gpu is True:
-            if not has_cuda:
-                print("[!] --gpu زده شده ولی torch CUDA در دسترس نیست → OpenCV.")
-                return False
-            print(f"[*] --gpu زده شده → LaMa فعال ({name or 'CUDA'}, {vram:.1f} GB).")
+            # حتی با --cpu هم LaMa را فعال می‌کنیم چون فقط روی کراپ‌های کوچک کار می‌کند
+            print("[*] --cpu زده شده → LaMa با Crop-Inpaint-Paste روی CPU فعال.")
             return True
-        if not has_cuda:
-            print("[*] CUDA پیدا نشد → پاک‌سازی با OpenCV inpaint.")
-            return False
-        if vram > 0 and vram < self._LAMA_MIN_VRAM_GB:
-            print(f"[*] GPU هست ({name}, {vram:.1f} GB) ولی VRAM کم‌تر از "
-                  f"{self._LAMA_MIN_VRAM_GB} GB → OpenCV (LaMa سنگین می‌شه).")
-            return False
-        print(f"[*] GPU مناسب برای LaMa پیدا شد ({name or 'CUDA'}, "
-              f"{vram:.1f} GB) → LaMa inpainting فعال.")
+        if force_gpu is True:
+            if has_cuda:
+                print(f"[*] --gpu زده شده → LaMa فعال ({name or 'CUDA'}, {vram:.1f} GB).")
+            else:
+                print("[*] --gpu زده شده ولی CUDA نیست → LaMa روی CPU (Crop).")
+            return True
+        # حالت خودکار: همیشه LaMa را ترجیح بده (چون crop سبک است)
+        if has_cuda and vram >= self._LAMA_MIN_VRAM_GB:
+            print(f"[*] GPU مناسب ({name}, {vram:.1f} GB) → LaMa فعال.")
+        else:
+            print("[*] LaMa با Crop-Inpaint-Paste روی CPU فعال (سریع و کم‌رم).")
         return True
+
+    def _load_yolo_detector(self, device: str = "cpu") -> None:
+        """بارگذاری YOLOv8-seg برای تشخیص + ماسک شکل بالن."""
+        if not _HAS_YOLO:
+            raise ImportError("ultralytics نصب نیست. pip install ultralytics")
+
+        self._yolo_is_seg = False
+        model_path = getattr(self, "_yolo_model_path", None)
+        if model_path and os.path.isfile(model_path):
+            print(f"[*] بارگذاری YOLO از مسیر محلی: {model_path}")
+            self.yolo_model = YOLO(model_path)
+            self._yolo_is_seg = "seg" in os.path.basename(model_path).lower() or getattr(
+                self.yolo_model, "task", ""
+            ) == "segment"
+        else:
+            from huggingface_hub import hf_hub_download
+            # اول مدل seg (ماسک شکل)
+            try:
+                print(f"[*] دانلود مدل YOLO-seg حباب از {self.YOLO_SEG_HF_REPO} ...")
+                pt_path = hf_hub_download(
+                    repo_id=self.YOLO_SEG_HF_REPO,
+                    filename=self.YOLO_SEG_HF_FILE,
+                )
+                self.yolo_model = YOLO(pt_path)
+                self._yolo_is_seg = True
+                print(f"[+] YOLOv8-seg (ماسک شکل بالن) آماده شد (device={device}).")
+            except Exception as e1:
+                print(f"[!] مدل seg ناموفق ({e1}) → مدل تشخیص ساده.")
+                try:
+                    pt_path = hf_hub_download(
+                        repo_id=self.YOLO_DET_HF_REPO,
+                        filename=self.YOLO_DET_HF_FILE,
+                    )
+                    self.yolo_model = YOLO(pt_path)
+                    self._yolo_is_seg = False
+                    print(f"[+] YOLOv8 detect (بدون ماسک) آماده شد.")
+                except Exception as e2:
+                    print(f"[!] دانلود ناموفق ({e2}) → YOLOv8n-seg عمومی.")
+                    self.yolo_model = YOLO(self.YOLO_NANO_FALLBACK)
+                    self._yolo_is_seg = True
+                    print("[+] YOLOv8n-seg آماده شد.")
+
+        self._det_device = device
+        try:
+            self.yolo_model.to(device)
+        except Exception:
+            pass
 
     def __init__(
         self,
@@ -333,7 +479,7 @@ class MangaTranslator:
         mask_padding: int = 3,
         pad_ratio: float = 0.06,
         min_confidence: float = 0.12,
-        det_confidence: float = 0.35,
+        det_confidence: float = 0.25,
         det_iou_threshold: float = 0.45,
         max_retries: int = 4,
         request_delay: float = 0.0,
@@ -341,19 +487,15 @@ class MangaTranslator:
         img_quality: int = 95,
         max_workers: int = 1,
         translation_temperature: float = 0.85,
-        max_output_width: Optional[int] = None,
         max_output_height: Optional[int] = None,
-        stitch_max_height: int = 12000,
+        stitch_max_height: int = 0,  # پیش‌فرض خاموش — صفحات جدا می‌مانند
         stitch_short_threshold: int = 6000,
         stitch_keep_first: bool = True,
+        width_group_tol: float = 0.18,  # عرض‌های نزدیک (مثلاً 900 و 1000) → یک گروه
         debug: bool = False,
-        font_shout: Optional[str] = None,
-        font_thought: Optional[str] = None,
-        font_whisper: Optional[str] = None,
-        font_explosion: Optional[str] = None,
-        font_sfx: Optional[str] = None,
-        font_black: Optional[str] = None,
+        yolo_model_path: Optional[str] = None,
     ):
+        self._yolo_model_path = yolo_model_path
         provider = (provider or "gemini").lower().strip()
         if provider not in PROVIDER_PRESETS:
             raise ValueError(
@@ -383,21 +525,6 @@ class MangaTranslator:
         self.api_base = api_base or self.provider_cfg.get("base_url")
 
         self.font_path = font_path
-        
-        self.font_by_style: Dict[str, str] = {
-            "normal": font_path,
-            "shout": font_shout or font_path,
-            "thought": font_thought or font_path,
-            "whisper": font_whisper or font_path,
-            "explosion": font_explosion or font_path,
-            "sfx_shape": font_sfx or font_path,
-            "black": font_black or font_path,
-            "sfx": font_sfx or font_path,  
-        }
-        for style_name, fpath in list(self.font_by_style.items()):
-            if fpath and not os.path.isfile(fpath):
-                print(f"[!] فونت سبک «{style_name}» پیدا نشد ({fpath}) → fallback به فونت اصلی.")
-                self.font_by_style[style_name] = font_path
         self.reading_order = reading_order
         self.inpaint_radius = inpaint_radius
         self.mask_padding = mask_padding
@@ -411,13 +538,14 @@ class MangaTranslator:
         self.img_quality = img_quality
         self.max_workers = max(1, int(max_workers))
         self.translation_temperature = translation_temperature
-        self.max_output_width = max_output_width
         self.max_output_height = max_output_height
         self.stitch_max_height = int(stitch_max_height) if stitch_max_height else 0
         self.stitch_short_threshold = int(stitch_short_threshold) if stitch_short_threshold else 0
         self.stitch_keep_first = bool(stitch_keep_first)
+        self.width_group_tol = float(width_group_tol) if width_group_tol else 0.18
         self.debug = bool(debug)
         self._last_debug_image = None
+        self._last_debug_log: Optional[str] = None
 
         self._name_glossary: Dict[str, str] = {}
         self._lama = None
@@ -426,11 +554,10 @@ class MangaTranslator:
         self.client = None
         self.openai_client = None
 
-        if not font_path or not os.path.isfile(font_path):
-            raise FileNotFoundError(
-                "یک فونت معتبر فارسی (ttf) با --font مشخص کنید. "
-                "پیشنهاد: فونت Vazirmatn (رایگان و متن‌باز)."
-            )
+        # پشتیبانی چند فونت: مسیر تکی، لیست، یا دیکشنری style→path
+        self.font_paths: Dict[str, str] = {}
+        self.font_path = None  # فونت پیش‌فرض (dialogue)
+        self._init_fonts(font_path)
 
         
         if gpu is None:
@@ -458,12 +585,8 @@ class MangaTranslator:
         
         det_device = "cuda" if (ocr_gpu and self._detect_torch_cuda()) else "cpu"
         self._det_device = det_device
-        print(f"[*] در حال بارگذاری مدل تشخیص حباب RT-DETR ({self.DET_REPO}) روی {det_device} ...")
-        self.det_processor = RTDetrImageProcessor.from_pretrained(self.DET_REPO)
-        self.det_model = RTDetrV2ForObjectDetection.from_pretrained(self.DET_REPO)
-        self.det_model.to(det_device)
-        self.det_model.eval()
-        print("[+] RT-DETR آماده شد.")
+        self.yolo_model = None
+        self._load_yolo_detector(det_device)
 
         
         self.ocr_langs = ocr_langs or ["en"]
@@ -579,20 +702,29 @@ class MangaTranslator:
 
     @staticmethod
     def _static_fallback_models(primary: str) -> List[str]:
+        # primary → 3.x → 2.x → 1.x
         preferred = [
-            "gemini-2.5-flash", "gemini-flash-latest", "gemini-2.5-flash-lite",
-            "gemini-flash-lite-latest", "gemini-3.7-flash", "gemini-3.6-flash",
-            "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
-            "gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash",
+            "gemini-3.0-flash",
+            "gemini-3-flash",
+            "gemini-3.0-flash-lite",
+            "gemini-2.5-flash",
+            "gemini-flash-latest",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-001",
+            "gemini-2.0-flash-lite",
+            "gemini-1.5-flash",
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash-8b",
         ]
         cascade = [primary] if primary else []
         for m in preferred:
-            if m not in cascade:
+            if m and m not in cascade:
                 cascade.append(m)
         return cascade or preferred
 
     @staticmethod
     def _model_sort_key(name: str) -> tuple:
+        """اولویت: نسخه ۳ → ۲ → ۱ ؛ داخل هر خانواده flash قبل lite قبل pro."""
         n = name.lower().replace("models/", "")
         ver_m = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
         major_minor = 0.0
@@ -605,31 +737,24 @@ class MangaTranslator:
         is_flash = "flash" in n
         is_pro = "pro" in n and "flash" not in n
 
-        if n == "gemini-2.5-flash" or (abs(major_minor - 2.5) < 0.01 and not is_lite and is_flash):
-            family_rank = 0
-        elif n == "gemini-flash-latest":
-            family_rank = 1
-        elif n == "gemini-2.5-flash-lite" or (abs(major_minor - 2.5) < 0.01 and is_lite):
-            family_rank = 2
-        elif n == "gemini-flash-lite-latest":
-            family_rank = 3
-        elif major_minor >= 2.5 and major_minor < 3.0:
-            family_rank = 4
-        elif major_minor >= 3.0:
-            family_rank = 5
-        elif n.endswith("-latest") and "flash" in n:
-            family_rank = 6
+        # generation band: 3 → 2.5 → 2.0 → 1.x → unknown
+        if major_minor >= 3.0:
+            band = 0
+        elif n in ("gemini-flash-latest",) or (major_minor >= 2.5 and major_minor < 3.0):
+            band = 1
         elif major_minor >= 2.0:
-            family_rank = 7
+            band = 2
         elif major_minor >= 1.0:
-            family_rank = 8
+            band = 3
+        elif "latest" in n and "flash" in n:
+            band = 1
         else:
-            family_rank = 9
+            band = 4
 
-        version_rank = -major_minor
+        version_rank = -major_minor  # داخل باند، نسخهٔ بالاتر اول
         lite_rank = 1 if is_lite else 0
         type_rank = 0 if is_flash else (2 if is_pro else 1)
-        return (family_rank, version_rank, lite_rank, type_rank, n)
+        return (band, version_rank, lite_rank, type_rank, n)
 
     def _discover_models_from_api(self, client) -> List[str]:
         names: List[str] = []
@@ -663,21 +788,48 @@ class MangaTranslator:
         return uniq
 
     def _build_model_cascade(self, primary: str, client=None) -> List[str]:
-        primary = (primary or "gemini-2.5-flash").strip().replace("models/", "")
+        """
+        ترتیب اجباری:
+          ۱) مدلی که کاربر داده
+          ۲) نسخه ۳.x (جدیدترین‌ها)
+          ۳) نسخه ۲.x
+          ۴) نسخه ۱.x
+        فقط مدل‌های موجود در list API (در صورت کشف).
+        """
+        primary = (primary or "gemini-flash-latest").strip().replace("models/", "")
         discovered: List[str] = []
         if client is not None:
             discovered = self._discover_models_from_api(client)
+
+        dead_hints = {
+            "gemini-2.5-flash-lite",
+            "gemini-flash-lite-latest",
+            "gemini-2.5-flash-lite-preview",
+        }
+
+        cascade: List[str] = []
+
+        def add(m: str) -> None:
+            if m and m not in cascade:
+                cascade.append(m)
+
+        add(primary)
+
+        pool = list(discovered) if discovered else self._static_fallback_models(primary)
+        # مرتب‌سازی: 3 → 2 → 1
+        pool = sorted(
+            [m for m in pool if m not in dead_hints or m == primary],
+            key=self._model_sort_key,
+        )
         if discovered:
-            print(f"[*] {len(discovered)} مدل flash از API پیدا شد؛ مرتب‌سازی بر اساس اولویت ۲.۵ → ۳.x")
-            cascade = []
-            if primary:
-                cascade.append(primary)
-            for m in discovered:
-                if m not in cascade:
-                    cascade.append(m)
-            return cascade
-        print("[*] کشف API ممکن نشد → استفاده از لیست ثابت fallback.")
-        return self._static_fallback_models(primary)
+            print(f"[*] {len(discovered)} مدل از API — ترتیب: primary → 3.x → 2.x → 1.x")
+        else:
+            print("[*] کشف API ممکن نشد → fallback با ترتیب 3 → 2 → 1")
+
+        for m in pool:
+            add(m)
+
+        return cascade
 
     def _drop_current_model_and_switch(self, reason: str = "") -> bool:
         if not self._model_cascade:
@@ -757,72 +909,306 @@ class MangaTranslator:
         enhanced = cv2.merge((l2, a, b))
         return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
 
-    
-    def _detect_bubbles_single(self, image_bgr: np.ndarray, threshold: float) -> List[dict]:
-        
-        image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-        pil_image = Image.fromarray(image_rgb)
+    def detect_bubbles(self, image_bgr: np.ndarray) -> List[dict]:
+        """تشخیص حباب/بالن متن با YOLOv8 (مدل تخصصی مانهوا)."""
+        if self.yolo_model is None:
+            return []
+
         h, w = image_bgr.shape[:2]
+        conf = max(0.15, float(self.det_confidence))
+        iou = float(self.det_iou_threshold)
+        imgsz = 1024 if max(h, w) > 1200 else 640
 
-        inputs = self.det_processor(images=pil_image, return_tensors="pt")
-        inputs = {k: v.to(self._det_device) for k, v in inputs.items()}
+        results = self.yolo_model.predict(
+            source=image_bgr,
+            conf=conf,
+            iou=iou,
+            imgsz=imgsz,
+            device=self._det_device,
+            verbose=False,
+            max_det=150,
+            retina_masks=True,
+        )
 
-        with torch.no_grad():
-            outputs = self.det_model(**inputs)
+        raw: List[dict] = []
+        if not results:
+            return raw
 
-        target_sizes = torch.tensor([[h, w]])
-        results = self.det_processor.post_process_object_detection(
-            outputs, target_sizes=target_sizes, threshold=threshold
-        )[0]
+        r0 = results[0]
+        if r0.boxes is None or len(r0.boxes) == 0:
+            return raw
 
-        raw = []
-        for score, label, box in zip(results["scores"], results["labels"], results["boxes"]):
-            score = float(score)
-            label = int(label)
-            x1, y1, x2, y2 = map(int, box.tolist())
+        boxes_xyxy = r0.boxes.xyxy.cpu().numpy()
+        scores = r0.boxes.conf.cpu().numpy()
+        clss = r0.boxes.cls.cpu().numpy().astype(int) if r0.boxes.cls is not None else np.zeros(len(scores), dtype=int)
+
+        masks_data = None
+        if getattr(r0, "masks", None) is not None and r0.masks is not None:
+            try:
+                masks_data = r0.masks.data.cpu().numpy()  # (N, mh, mw)
+            except Exception:
+                masks_data = None
+
+        for i in range(len(scores)):
+            x1, y1, x2, y2 = map(int, boxes_xyxy[i])
             x1, y1 = max(0, x1), max(0, y1)
             x2, y2 = min(w, x2), min(h, y2)
             if x2 <= x1 or y2 <= y1:
                 continue
+
+            shape_poly = None
+            bubble_mask = None
+            if masks_data is not None and i < len(masks_data):
+                m = masks_data[i]
+                if m.shape[0] != h or m.shape[1] != w:
+                    m = cv2.resize(m.astype(np.float32), (w, h), interpolation=cv2.INTER_LINEAR)
+                bubble_mask = (m > 0.5).astype(np.uint8) * 255
+                # کانتور اصلی شکل بالن
+                cnts, _ = cv2.findContours(bubble_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if cnts:
+                    largest = max(cnts, key=cv2.contourArea)
+                    if cv2.contourArea(largest) > 20:
+                        shape_poly = largest.reshape(-1, 2).astype(np.int32)
+
             raw.append({
-                "class_id": label,
-                "class_name": self.DET_CLASS_NAMES.get(label, "unknown"),
-                "confidence": score,
+                "class_id": int(clss[i]),
+                "class_name": "text_bubble",
+                "confidence": float(scores[i]),
                 "rect": [x1, y1, x2, y2],
+                "bubble_mask": bubble_mask,
+                "shape_poly": shape_poly,
             })
-        return [b for b in raw if b["class_name"] in ("text_bubble", "text_free")]
 
-    def detect_bubbles(self, image_bgr: np.ndarray) -> List[dict]:
-        h, w = image_bgr.shape[:2]
-        all_boxes: List[dict] = []
+        # جدا کردن حباب‌های چسبیده که مدل به‌اشتباه یکی کرده
+        raw = self._split_touching_bubbles(raw, h, w)
+        return self._nms_boxes(raw, self.det_iou_threshold)
 
-        
-        all_boxes.extend(self._detect_bubbles_single(image_bgr, self.det_confidence))
+    @staticmethod
+    def _split_touching_bubbles(boxes: List[dict], img_h: int, img_w: int) -> List[dict]:
+        """
+        اگر یک detection دو (یا چند) حباب چسبیده باشد، از روی ماسک/شکل جداشان می‌کند.
+        روش: فرسایش ماسک → اجزای متصل؛ یا دره در projection افقی/عمودی.
+        """
+        if not boxes:
+            return boxes
 
-        
-        if h >= 800 and w >= 400:
-            for scale, th_factor in ((0.5, 0.65), (0.35, 0.55)):
-                small_w = max(1, int(w * scale))
-                small_h = max(1, int(h * scale))
-                if small_w < 200 or small_h < 200:
+        out: List[dict] = []
+        for b in boxes:
+            mask = b.get("bubble_mask")
+            rect = b["rect"]
+            x1, y1, x2, y2 = rect
+            bw, bh = x2 - x1, y2 - y1
+
+            # کاندیدای مشکوک: پهن، دوقلو، یا بزرگ
+            if mask is None or bw * bh < 500:
+                out.append(b)
+                continue
+
+            mx1, my1 = max(0, x1), max(0, y1)
+            mx2, my2 = min(img_w, x2), min(img_h, y2)
+            if mx2 <= mx1 or my2 <= my1:
+                out.append(b)
+                continue
+            local = mask[my1:my2, mx1:mx2]
+            if local.size == 0 or not np.any(local):
+                out.append(b)
+                continue
+
+            bin_m = (local > 0).astype(np.uint8)
+            # فرسایش قوی برای باز کردن تماس دو حباب
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            eroded = cv2.erode(bin_m, k, iterations=4)
+            # اگر هنوز یکی است، با کرنل بزرگ‌تر
+            n_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(eroded, connectivity=8)
+            if n_labels <= 2:
+                k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+                eroded2 = cv2.erode(bin_m, k2, iterations=3)
+                n2, lab2, st2, _ = cv2.connectedComponentsWithStats(eroded2, connectivity=8)
+                if n2 > n_labels:
+                    n_labels, labels, stats = n2, lab2, st2
+
+            comps = []
+            min_area = max(40, int(bw * bh * 0.03))
+            for lab in range(1, n_labels):
+                area = int(stats[lab, cv2.CC_STAT_AREA])
+                if area >= min_area:
+                    comps.append(lab)
+
+            # همیشه projection را هم برای عرض/ارتفاع زیاد امتحان کن
+            if len(comps) < 2:
+                split_list = MangaTranslator._split_by_projection(bin_m, b, mx1, my1)
+                if split_list and len(split_list) >= 2:
+                    out.extend(split_list)
+                else:
+                    out.append(b)
+                continue
+
+            # هر component → یک detection جدا
+            for lab in comps:
+                comp_mask_full = np.zeros_like(mask)
+                comp_local = (labels == lab).astype(np.uint8) * 255
+                # کمی dilate برای جبران erode
+                comp_local = cv2.dilate(comp_local, k, iterations=2)
+                comp_mask_full[my1:my2, mx1:mx2] = comp_local
+
+                ys, xs = np.where(comp_local > 0)
+                if len(xs) < 10:
                     continue
-                small = cv2.resize(image_bgr, (small_w, small_h), interpolation=cv2.INTER_AREA)
-                low_th = max(0.12, self.det_confidence * th_factor)
-                small_boxes = self._detect_bubbles_single(small, low_th)
-                inv = 1.0 / scale
-                for b in small_boxes:
-                    x1, y1, x2, y2 = b["rect"]
-                    b["rect"] = [
-                        int(x1 * inv), int(y1 * inv),
-                        int(x2 * inv), int(y2 * inv),
-                    ]
-                    bw = b["rect"][2] - b["rect"][0]
-                    bh = b["rect"][3] - b["rect"][1]
-                    
-                    if b["class_name"] == "text_free" or (bw * bh) >= (w * h * 0.012):
-                        all_boxes.append(b)
+                cx1 = int(xs.min()) + mx1
+                cy1 = int(ys.min()) + my1
+                cx2 = int(xs.max()) + mx1 + 1
+                cy2 = int(ys.max()) + my1 + 1
 
-        return self._nms_boxes(all_boxes, self.det_iou_threshold)
+                cnts, _ = cv2.findContours(comp_local, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                shape_poly = None
+                if cnts:
+                    largest = max(cnts, key=cv2.contourArea)
+                    sp = largest.reshape(-1, 2).astype(np.int32)
+                    sp[:, 0] += mx1
+                    sp[:, 1] += my1
+                    shape_poly = sp
+
+                out.append({
+                    "class_id": b.get("class_id", 0),
+                    "class_name": b.get("class_name", "text_bubble"),
+                    "confidence": b.get("confidence", 0.5),
+                    "rect": [cx1, cy1, cx2, cy2],
+                    "bubble_mask": comp_mask_full,
+                    "shape_poly": shape_poly,
+                })
+
+        return out if out else boxes
+
+    @staticmethod
+    def _split_by_projection(bin_m: np.ndarray, parent: dict, ox: int, oy: int) -> List[dict]:
+        """جدا کردن دو حباب افقی/عمودی چسبیده با پیدا کردن دره در مجموع ستون/سطر."""
+        h, w = bin_m.shape[:2]
+        if w < 60 and h < 60:
+            return []
+
+        results = []
+        # افقی (دو حباب کنار هم) — رایج‌تر
+        col_sum = bin_m.sum(axis=0).astype(np.float32)
+        if col_sum.max() > 0:
+            # نرمال + میانگین متحرک
+            sm = np.convolve(col_sum, np.ones(5) / 5.0, mode="same")
+            peak = float(sm.max())
+            # دره در یک‌سوم میانی
+            mid0, mid1 = int(w * 0.25), int(w * 0.75)
+            if mid1 > mid0 + 5:
+                valley_idx = mid0 + int(np.argmin(sm[mid0:mid1]))
+                valley_val = float(sm[valley_idx])
+                left_peak = float(sm[:valley_idx].max()) if valley_idx > 5 else 0
+                right_peak = float(sm[valley_idx:].max()) if valley_idx < w - 5 else 0
+                # دره بین دو قله — آستانه نرم برای حباب‌های تقریباً چسبیده
+                if (
+                    left_peak > peak * 0.18
+                    and right_peak > peak * 0.18
+                    and valley_val < min(left_peak, right_peak) * 0.70
+                    and valley_val < peak * 0.55
+                    and valley_idx > w * 0.12
+                    and valley_idx < w * 0.88
+                ):
+                    for side, (a, b) in enumerate(((0, valley_idx), (valley_idx, w))):
+                        if b - a < 15:
+                            continue
+                        part = bin_m[:, a:b].copy()
+                        if not np.any(part):
+                            continue
+                        pm = parent.get("bubble_mask")
+                        if pm is not None:
+                            part_full = np.zeros_like(pm)
+                            part_full[oy:oy + h, ox + a:ox + b] = part * 255
+                        else:
+                            part_full = np.zeros_like(bin_m)
+                        ys, xs = np.where(part > 0)
+                        if len(xs) < 10:
+                            continue
+                        cx1 = int(xs.min()) + ox + a
+                        cy1 = int(ys.min()) + oy
+                        cx2 = int(xs.max()) + ox + a + 1
+                        cy2 = int(ys.max()) + oy + 1
+                        cnts, _ = cv2.findContours(
+                            (part * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                        )
+                        shape_poly = None
+                        if cnts:
+                            largest = max(cnts, key=cv2.contourArea)
+                            sp = largest.reshape(-1, 2).astype(np.int32)
+                            sp[:, 0] += ox + a
+                            sp[:, 1] += oy
+                            shape_poly = sp
+                        results.append({
+                            "class_id": parent.get("class_id", 0),
+                            "class_name": parent.get("class_name", "text_bubble"),
+                            "confidence": parent.get("confidence", 0.5),
+                            "rect": [cx1, cy1, cx2, cy2],
+                            "bubble_mask": part_full if pm is not None else None,
+                            "shape_poly": shape_poly,
+                        })
+                    if len(results) >= 2:
+                        return results
+
+        # عمودی: دو حباب روی هم
+        results = []
+        row_sum = bin_m.sum(axis=1).astype(np.float32)
+        if row_sum.max() > 0 and h >= 60:
+            sm = np.convolve(row_sum, np.ones(5) / 5.0, mode="same")
+            peak = float(sm.max())
+            mid0, mid1 = int(h * 0.25), int(h * 0.75)
+            if mid1 > mid0 + 5:
+                valley_idx = mid0 + int(np.argmin(sm[mid0:mid1]))
+                valley_val = float(sm[valley_idx])
+                top_peak = float(sm[:valley_idx].max()) if valley_idx > 5 else 0
+                bot_peak = float(sm[valley_idx:].max()) if valley_idx < h - 5 else 0
+                if (
+                    top_peak > peak * 0.18
+                    and bot_peak > peak * 0.18
+                    and valley_val < min(top_peak, bot_peak) * 0.70
+                    and valley_val < peak * 0.55
+                    and valley_idx > h * 0.12
+                    and valley_idx < h * 0.88
+                ):
+                    for a, b in ((0, valley_idx), (valley_idx, h)):
+                        if b - a < 15:
+                            continue
+                        part = bin_m[a:b, :].copy()
+                        if not np.any(part):
+                            continue
+                        pm = parent.get("bubble_mask")
+                        if pm is not None:
+                            part_full = np.zeros_like(pm)
+                            part_full[oy + a:oy + b, ox:ox + w] = part * 255
+                        else:
+                            part_full = np.zeros_like(bin_m)
+                        ys, xs = np.where(part > 0)
+                        if len(xs) < 10:
+                            continue
+                        cx1 = int(xs.min()) + ox
+                        cy1 = int(ys.min()) + oy + a
+                        cx2 = int(xs.max()) + ox + 1
+                        cy2 = int(ys.max()) + oy + a + 1
+                        cnts, _ = cv2.findContours(
+                            (part * 255).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                        )
+                        shape_poly = None
+                        if cnts:
+                            largest = max(cnts, key=cv2.contourArea)
+                            sp = largest.reshape(-1, 2).astype(np.int32)
+                            sp[:, 0] += ox
+                            sp[:, 1] += oy + a
+                            shape_poly = sp
+                        results.append({
+                            "class_id": parent.get("class_id", 0),
+                            "class_name": parent.get("class_name", "text_bubble"),
+                            "confidence": parent.get("confidence", 0.5),
+                            "rect": [cx1, cy1, cx2, cy2],
+                            "bubble_mask": part_full if pm is not None else None,
+                            "shape_poly": shape_poly,
+                        })
+                    if len(results) >= 2:
+                        return results
+        return []
 
     @staticmethod
     def _nms_boxes(boxes: List[dict], iou_thresh: float) -> List[dict]:
@@ -849,114 +1235,65 @@ class MangaTranslator:
             pool = [b for b in pool if iou(best["rect"], b["rect"]) < iou_thresh]
         return keep
 
-    def _classify_bubble_style(
-        self,
-        image_bgr: np.ndarray,
-        rect: List[int],
-        polys: List[np.ndarray],
-        kind: str = "dialogue",
-        det_class: str = "text_bubble",
-    ) -> str:
-        if kind == "sfx":
-            return "sfx_shape"
+    @staticmethod
+    def _safe_text_rect_from_mask(
+        mask: Optional[np.ndarray],
+        fallback_rect: Tuple[int, int, int, int],
+        inset: float = 0.14,
+        shape_poly: Optional[np.ndarray] = None,
+    ) -> Tuple[int, int, int, int]:
+        """بزرگ‌ترین مستطیل امن داخل شکل بالن برای جایگذاری متن."""
+        x, y, w, h = fallback_rect
 
-        x1, y1, x2, y2 = rect
-        h_img, w_img = image_bgr.shape[:2]
-        
-        pad = max(4, int(0.08 * max(x2 - x1, y2 - y1)))
-        cx1 = max(0, x1 - pad)
-        cy1 = max(0, y1 - pad)
-        cx2 = min(w_img, x2 + pad)
-        cy2 = min(h_img, y2 + pad)
-        roi = image_bgr[cy1:cy2, cx1:cx2]
-        if roi.size == 0:
-            return "normal"
+        work_mask = None
+        if mask is not None and np.any(mask):
+            work_mask = (mask > 0).astype(np.uint8)
+        elif shape_poly is not None and len(shape_poly) >= 3:
+            work_mask = np.zeros((max(y + h + 2, 1), max(x + w + 2, 1)), dtype=np.uint8)
+            # ممکن است مختصات بزرگ‌تر از این باشد
+            xs = shape_poly[:, 0]
+            ys = shape_poly[:, 1]
+            max_x, max_y = int(xs.max()) + 2, int(ys.max()) + 2
+            work_mask = np.zeros((max(max_y, y + h) + 2, max(max_x, x + w) + 2), dtype=np.uint8)
+            cv2.fillPoly(work_mask, [shape_poly.reshape(-1, 1, 2)], 1)
 
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-        h, w = gray.shape[:2]
-        area_box = float(max(1, w * h))
+        if work_mask is None or not np.any(work_mask):
+            dx, dy = max(3, int(w * inset)), max(3, int(h * inset))
+            return (x + dx, y + dy, max(8, w - 2 * dx), max(8, h - 2 * dy))
 
-        
-        dark_ratio = float(np.mean(gray < 45))
-        bright_ratio = float(np.mean(gray > 210))
-        if dark_ratio > 0.55 and bright_ratio < 0.25:
-            return "black"
+        dist = cv2.distanceTransform(work_mask, cv2.DIST_L2, 5)
+        max_d = float(dist.max()) if dist.size else 0
+        if max_d < 3:
+            dx, dy = max(3, int(w * inset)), max(3, int(h * inset))
+            return (x + dx, y + dy, max(8, w - 2 * dx), max(8, h - 2 * dy))
 
-        
-        blur = cv2.GaussianBlur(gray, (3, 3), 0)
-        edges = cv2.Canny(blur, 40, 140)
-        
-        edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            
-            if det_class == "text_free":
-                return "sfx_shape"
-            return "normal"
+        # inset قوی برای دندانه/باریک — thr بالاتر = ناحیهٔ متن کوچک‌تر و امن‌تر
+        aspect = max(w, h) / max(1, min(w, h))
+        local_inset = max(inset, 0.18) + (0.10 if aspect > 1.6 else 0.0)
+        thr = max(4.0, max_d * min(0.55, local_inset))
+        safe = (dist >= thr).astype(np.uint8)
+        ys, xs = np.where(safe > 0)
+        if len(xs) < 10:
+            dx, dy = max(3, int(w * inset)), max(3, int(h * inset))
+            return (x + dx, y + dy, max(8, w - 2 * dx), max(8, h - 2 * dy))
 
-        cnt = max(contours, key=cv2.contourArea)
-        area = float(cv2.contourArea(cnt))
-        peri = float(cv2.arcLength(cnt, True))
-        if peri < 8 or area < 20:
-            return "normal"
+        x0, x1 = int(xs.min()), int(xs.max())
+        y0, y1 = int(ys.min()), int(ys.max())
+        # محدود به داخل bbox اصلی با کمی حاشیه
+        x0 = max(x0, x + 2)
+        y0 = max(y0, y + 2)
+        x1 = min(x1, x + w - 2)
+        y1 = min(y1, y + h - 2)
+        return (x0, y0, max(8, x1 - x0 + 1), max(8, y1 - y0 + 1))
 
-        circularity = float(4.0 * np.pi * area / (peri * peri + 1e-6))
-        hull = cv2.convexHull(cnt)
-        hull_area = float(cv2.contourArea(hull)) + 1e-6
-        solidity = area / hull_area
-        hull_peri = float(cv2.arcLength(hull, True)) + 1e-6
-        roughness = peri / hull_peri  
-
-        
-        eps = 0.02 * peri
-        approx = cv2.approxPolyDP(cnt, eps, True)
-        n_verts = len(approx)
-
-        
-        fill_ratio = area / area_box
-
-        
-        
-        n_labels, _ = cv2.connectedComponents(edges)
-        edge_fragments = max(0, n_labels - 1)
-        is_fragmented = edge_fragments > max(8, int(peri / 25))
-
-        
-        if roughness > 1.55 and solidity < 0.72 and n_verts >= 10:
-            return "explosion"
-        if roughness > 1.35 and solidity < 0.78 and circularity < 0.45:
-            return "shout"
-        if n_verts >= 12 and solidity < 0.80 and circularity < 0.55:
-            return "shout"
-
-        
-        if is_fragmented and circularity > 0.35 and solidity > 0.55:
-            
-            if bright_ratio > 0.4:
-                return "thought"
-            return "whisper"
-
-        
-        if is_fragmented and 0.45 < circularity < 0.9:
-            return "whisper"
-
-        
-        if dark_ratio > 0.40 and fill_ratio > 0.35:
-            return "black"
-
-        
-        if det_class == "text_free" and circularity < 0.35 and fill_ratio < 0.25:
-            return "sfx_shape"
-
-        return "normal"
-
+    
     def _ocr_crop(self, image_bgr: np.ndarray, rect: List[int], y_offset: int = 0,
-                  pad_ratio: float = 0.04) -> Tuple[str, List[np.ndarray]]:
-
+                  pad_ratio: float = 0.06) -> Tuple[str, List[np.ndarray], List[Tuple[str, np.ndarray]]]:
+        """برمی‌گرداند: (متن کامل، لیست polys، لیست (text, poly) به ازای هر خط)."""
         x1, y1, x2, y2 = rect
         h_img, w_img = image_bgr.shape[:2]
-        pad_x = max(2, int((x2 - x1) * pad_ratio))
-        pad_y = max(2, int((y2 - y1) * pad_ratio))
+        pad_x = max(4, int((x2 - x1) * pad_ratio))
+        pad_y = max(4, int((y2 - y1) * pad_ratio))
         cx1 = max(0, x1 - pad_x)
         cy1 = max(0, y1 - pad_y)
         cx2 = min(w_img, x2 + pad_x)
@@ -964,56 +1301,234 @@ class MangaTranslator:
 
         crop = image_bgr[cy1:cy2, cx1:cx2]
         if crop.size == 0:
-            return "", []
+            return "", [], []
 
-        
         ch, cw = crop.shape[:2]
         scale = 1.0
-        if max(ch, cw) < 200:
-            scale = max(200 / max(ch, cw), 1.6)
+        target = 360
+        if max(ch, cw) < target:
+            scale = min(target / max(ch, cw), 3.5)
             crop_up = cv2.resize(crop, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
         else:
             crop_up = crop
 
-        with self._ocr_lock:
-            try:
-                result = self.ocr.ocr(crop_up)
-            except RuntimeError as e:
-                msg = str(e).lower()
-                if "could not execute a primitive" in msg or "could not create a primitive" in msg:
-                    time.sleep(0.3)
-                    result = self.ocr.ocr(crop_up)
-                else:
+        def _run_ocr(img):
+            with self._ocr_lock:
+                try:
+                    return self.ocr.ocr(img)
+                except RuntimeError as e:
+                    msg = str(e).lower()
+                    if "could not execute a primitive" in msg or "could not create a primitive" in msg:
+                        time.sleep(0.3)
+                        return self.ocr.ocr(img)
                     raise
 
-        lines = []
-        polys = []
-        if result and result[0]:
-            
+        def _parse(result, sc, conf_floor=None):
+            floor = conf_floor if conf_floor is not None else self.min_confidence
             items = []
+            if not result or not result[0]:
+                return items
             for line in result[0]:
                 poly = np.array(line[0], dtype=np.float32)
                 text = (line[1][0] or "").strip()
-                conf = line[1][1]
-                if not text or conf < self.min_confidence:
+                conf = float(line[1][1])
+                if not text or conf < floor:
                     continue
                 if set(text).issubset(PUNCTUATION_SET):
                     continue
-                items.append((poly, text, conf))
+                poly[:, 0] = poly[:, 0] / sc + cx1
+                poly[:, 1] = poly[:, 1] / sc + cy1 + y_offset
+                items.append((text, poly.astype(np.int32), conf))
+            return items
 
-            items.sort(key=lambda it: (it[0][:, 1].min(), it[0][:, 0].min()))
+        def _score(its):
+            return sum(len(t) + int(c * 8) for t, _, c in its)
 
-            for poly, text, conf in items:
-                lines.append(text)
-                
-                poly_full = poly.copy()
-                poly_full[:, 0] = poly_full[:, 0] / scale + cx1
-                poly_full[:, 1] = poly_full[:, 1] / scale + cy1 + y_offset
-                polys.append(poly_full.astype(np.int32))
+        gray = cv2.cvtColor(crop_up, cv2.COLOR_BGR2GRAY)
+        med = float(np.median(gray))
+        soft = max(0.05, self.min_confidence * 0.5)
+        candidates = []
 
-        full_text = " ".join(lines).strip()
-        full_text = re.sub(r"\s{2,}", " ", full_text)
-        return full_text, polys
+        # ۱) اصلی
+        candidates.append(_parse(_run_ocr(crop_up), scale))
+
+        # ۲) پس‌زمینه تیره / متن رنگی (قرمز روی مشکی)
+        if med < 130:
+            inv = cv2.cvtColor(255 - gray, cv2.COLOR_GRAY2BGR)
+            candidates.append(_parse(_run_ocr(inv), scale, soft))
+
+            # جدا کردن پیکسل‌های روشن/رنگی از زمینه مشکی
+            b, g, r = cv2.split(crop_up)
+            vivid = cv2.max(cv2.max(r, g), b)
+            vivid = cv2.subtract(vivid, np.clip(gray // 3, 0, 80).astype(np.uint8))
+            _, th_v = cv2.threshold(vivid, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            # متن سیاه روی سفید
+            tw = cv2.cvtColor(255 - th_v, cv2.COLOR_GRAY2BGR)
+            candidates.append(_parse(_run_ocr(tw), scale, soft))
+
+            # نسخه بزرگ‌تر
+            if scale < 2.8:
+                sc2 = min(scale * 2.0, 4.0)
+                big = cv2.resize(crop_up, None, fx=sc2 / scale, fy=sc2 / scale, interpolation=cv2.INTER_CUBIC)
+                big_g = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
+                candidates.append(_parse(_run_ocr(cv2.cvtColor(255 - big_g, cv2.COLOR_GRAY2BGR)), sc2, soft))
+                # vivid روی big
+                bb, bg, br = cv2.split(big)
+                bv = cv2.max(cv2.max(br, bg), bb)
+                bv = cv2.subtract(bv, np.clip(big_g // 3, 0, 80).astype(np.uint8))
+                _, bt = cv2.threshold(bv, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                candidates.append(_parse(_run_ocr(cv2.cvtColor(255 - bt, cv2.COLOR_GRAY2BGR)), sc2, soft))
+
+        # ۳) CLAHE
+        clahe = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8))
+        enh = clahe.apply(gray)
+        candidates.append(_parse(_run_ocr(cv2.cvtColor(enh, cv2.COLOR_GRAY2BGR)), scale, soft))
+        if med < 130:
+            candidates.append(_parse(_run_ocr(cv2.cvtColor(255 - enh, cv2.COLOR_GRAY2BGR)), scale, soft))
+
+        raw_items = max(candidates, key=_score) if candidates else []
+
+        # ادغام مکمل از رتبهٔ دوم
+        if len(candidates) >= 2:
+            ranked = sorted(candidates, key=_score, reverse=True)
+            best, second = ranked[0], ranked[1]
+            if _score(second) >= _score(best) * 0.4:
+                best_txt = " ".join(t for t, _, _ in best).upper()
+                extra = [(t, p, c) for t, p, c in second
+                         if t.upper() not in best_txt and sum(1 for ch in t if ch.isalpha()) >= 2]
+                if extra:
+                    merged = list(best) + extra
+                    raw_items = merged
+
+        line_items = [(t, p) for t, p, _ in raw_items]
+        line_items = MangaTranslator._order_ocr_lines(line_items)
+        lines = [t for t, _ in line_items]
+        polys = [p for _, p in line_items]
+        full_text = re.sub(r"\s{2,}", " ", " ".join(lines)).strip()
+        return full_text, polys, line_items
+
+    @staticmethod
+    def _order_ocr_lines(
+        items: List[Tuple[str, np.ndarray]],
+    ) -> List[Tuple[str, np.ndarray]]:
+        """
+        ترتیب خواندن طبیعی: بالا→پایین، در صورت هم‌ارتفاع چپ→راست.
+        (برای مانگای انگلیسی افقی)
+        """
+        if len(items) <= 1:
+            return items
+        infos = []
+        for text, poly in items:
+            ys = poly[:, 1]
+            xs = poly[:, 0]
+            infos.append({
+                "text": text, "poly": poly,
+                "y1": float(ys.min()), "cy": float(ys.mean()),
+                "x1": float(xs.min()), "cx": float(xs.mean()),
+                "h": float(ys.max() - ys.min() + 1),
+            })
+        avg_h = max(8.0, float(np.median([i["h"] for i in infos])))
+        # مرتب‌سازی با سطل‌های ردیف
+        infos.sort(key=lambda i: (round(i["cy"] / (avg_h * 0.7)), i["cx"]))
+        return [(i["text"], i["poly"]) for i in infos]
+
+    @staticmethod
+    def _cluster_ocr_lines(
+        line_items: List[Tuple[str, np.ndarray]],
+        gap_ratio: float = 0.12,
+    ) -> List[List[Tuple[str, np.ndarray]]]:
+        """
+        خطوط OCR را جدا می‌کند.
+        اولویت: دو ستون افقی (حباب‌های چسبیده کنار هم) با بزرگ‌ترین شکاف بین مراکز x.
+        """
+        if len(line_items) <= 1:
+            return [line_items] if line_items else []
+
+        infos = []
+        for text, poly in line_items:
+            xs = poly[:, 0]
+            ys = poly[:, 1]
+            infos.append({
+                "text": text,
+                "poly": poly,
+                "cx": float(xs.mean()),
+                "cy": float(ys.mean()),
+                "x1": float(xs.min()),
+                "x2": float(xs.max()),
+                "y1": float(ys.min()),
+                "y2": float(ys.max()),
+                "w": float(xs.max() - xs.min()),
+                "h": float(ys.max() - ys.min()),
+            })
+
+        all_x1 = min(i["x1"] for i in infos)
+        all_x2 = max(i["x2"] for i in infos)
+        all_y1 = min(i["y1"] for i in infos)
+        all_y2 = max(i["y2"] for i in infos)
+        total_w = max(1.0, all_x2 - all_x1)
+        total_h = max(1.0, all_y2 - all_y1)
+
+        # --- جداسازی افقی فقط اگر دو ستون کنار هم باشند (نه خطوط عمودی یک حباب) ---
+        by_cx = sorted(infos, key=lambda i: i["cx"])
+        if len(by_cx) >= 2:
+            best_gap = -1.0
+            best_i = -1
+            for i in range(len(by_cx) - 1):
+                left_max_x2 = max(c["x2"] for c in by_cx[: i + 1])
+                right_min_x1 = min(c["x1"] for c in by_cx[i + 1 :])
+                gap = right_min_x1 - left_max_x2
+                cx_gap = by_cx[i + 1]["cx"] - by_cx[i]["cx"]
+                score = max(gap, cx_gap * 0.5)
+                if score > best_gap:
+                    best_gap = score
+                    best_i = i
+
+            x_thresh = max(14.0, total_w * 0.12)
+            if best_i >= 0 and best_gap >= x_thresh:
+                left = by_cx[: best_i + 1]
+                right = by_cx[best_i + 1 :]
+                left_txt = "".join(c["text"] for c in left)
+                right_txt = "".join(c["text"] for c in right)
+                # هر دو طرف باید متن واقعی داشته باشند
+                left_letters = sum(1 for c in left_txt if c.isalpha())
+                right_letters = sum(1 for c in right_txt if c.isalpha())
+                if left_letters >= 3 and right_letters >= 3:
+                    # باید هم‌پوشانی عمودی داشته باشند (کنار هم، نه بالا/پایین)
+                    left_y1 = min(c["y1"] for c in left)
+                    left_y2 = max(c["y2"] for c in left)
+                    right_y1 = min(c["y1"] for c in right)
+                    right_y2 = max(c["y2"] for c in right)
+                    ov = max(0.0, min(left_y2, right_y2) - max(left_y1, right_y1))
+                    min_h = max(1.0, min(left_y2 - left_y1, right_y2 - right_y1))
+                    if ov / min_h >= 0.25:
+                        return [
+                            [(c["text"], c["poly"]) for c in left],
+                            [(c["text"], c["poly"]) for c in right],
+                        ]
+
+        # --- جداسازی عمودی (بالا/پایین) ---
+        by_cy = sorted(infos, key=lambda i: i["cy"])
+        if len(by_cy) >= 2:
+            best_gap = -1.0
+            best_i = -1
+            for i in range(len(by_cy) - 1):
+                left_max_y2 = max(c["y2"] for c in by_cy[: i + 1])
+                right_min_y1 = min(c["y1"] for c in by_cy[i + 1 :])
+                gap = right_min_y1 - left_max_y2
+                if gap > best_gap:
+                    best_gap = gap
+                    best_i = i
+            y_thresh = max(10.0, total_h * gap_ratio)
+            if best_i >= 0 and best_gap >= y_thresh:
+                top = by_cy[: best_i + 1]
+                bot = by_cy[best_i + 1 :]
+                if top and bot:
+                    return [
+                        [(c["text"], c["poly"]) for c in top],
+                        [(c["text"], c["poly"]) for c in bot],
+                    ]
+
+        return [line_items]
 
     @staticmethod
     def _classify_text(text: str) -> str:
@@ -1283,29 +1798,146 @@ class MangaTranslator:
         return dilated
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        mask = self._build_text_mask(image, regions)
-        if not np.any(mask):
+        """
+        پاک‌سازی متن با استراتژی Crop → Inpaint → Paste.
+        هر حباب جداگانه بریده می‌شود، LaMa (یا OpenCV) فقط روی همان تکه کار می‌کند
+        و نتیجه سر جای اول چسبانده می‌شود. این روش روی CPU خیلی سریع‌تر و کم‌رم‌تر است.
+        """
+        if not regions:
             return image.copy()
 
-        if self.use_lama:
-            lama = self._get_lama()
-            if lama is not None:
-                try:
-                    rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                    result_pil = lama(rgb, mask)
-                    result_bgr = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
-                    print("  - پاکسازی با LaMa (simple-lama-inpainting) انجام شد.")
-                    return result_bgr
-                except Exception as e:
-                    print(f"  [!] LaMa خطا داد ({e})؛ به OpenCV برمی‌گردیم.")
-
+        h_img, w_img = image.shape[:2]
         cleaned = image.copy()
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        dilated = cv2.dilate(mask, kernel, iterations=2)
-        cleaned = cv2.inpaint(cleaned, dilated, inpaintRadius=max(5, self.inpaint_radius + 2), flags=cv2.INPAINT_TELEA)
-        residual = cv2.dilate(dilated, np.ones((3, 3), np.uint8), iterations=1)
-        cleaned = cv2.inpaint(cleaned, residual, inpaintRadius=3, flags=cv2.INPAINT_NS)
-        print("  - پاکسازی با OpenCV inpaint (دو پاس) انجام شد.")
+        pad = max(4, int(getattr(self, "mask_padding", 3) or 3) + 2)
+
+        use_lama_now = self.use_lama
+        lama = None
+        if use_lama_now:
+            lama = self._get_lama()
+            if lama is None:
+                use_lama_now = False
+
+        lama_ok = 0
+        opencv_ok = 0
+
+        for region in regions:
+            x, y, bw, bh = region.rect
+            x0 = max(0, int(x) - pad)
+            y0 = max(0, int(y) - pad)
+            x1 = min(w_img, int(x + bw) + pad)
+            y1 = min(h_img, int(y + bh) + pad)
+            if x1 <= x0 or y1 <= y0:
+                continue
+
+            crop = cleaned[y0:y1, x0:x1].copy()
+            ch, cw = crop.shape[:2]
+            if ch < 8 or cw < 8:
+                continue
+
+            # ماسک inpaint: فقط ناحیهٔ متن (OCR)، نه کل شکل بالن
+            # تا خط دور حباب پاره نشود
+            local_mask = np.zeros((ch, cw), dtype=np.uint8)
+            filled = False
+            for poly in (region.boxes or []):
+                pts = np.array(poly, np.int32).reshape((-1, 1, 2))
+                pts[:, 0, 0] -= x0
+                pts[:, 0, 1] -= y0
+                if np.any((pts[:, 0, 0] >= -5) & (pts[:, 0, 0] < cw + 5) &
+                          (pts[:, 0, 1] >= -5) & (pts[:, 0, 1] < ch + 5)):
+                    cv2.fillPoly(local_mask, [pts], 255)
+                    filled = True
+
+            if not filled:
+                # fallback: داخل شکل بالن، اما با فاصله از لبه (حفظ کادر حباب)
+                shape_poly = getattr(region, "shape_poly", None)
+                if shape_poly is not None and len(shape_poly) >= 3:
+                    pts = shape_poly.copy().astype(np.int32)
+                    pts[:, 0] -= x0
+                    pts[:, 1] -= y0
+                    cv2.fillPoly(local_mask, [pts.reshape(-1, 1, 2)], 255)
+                    # erode تا حاشیهٔ مشکی حباب نماند داخل ماسک
+                    er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+                    local_mask = cv2.erode(local_mask, er, iterations=2)
+                    filled = np.any(local_mask)
+                elif getattr(region, "bubble_mask", None) is not None:
+                    bm = region.bubble_mask
+                    by0, by1 = max(0, y0), min(y1, bm.shape[0])
+                    bx0, bx1 = max(0, x0), min(x1, bm.shape[1])
+                    if by1 > by0 and bx1 > bx0:
+                        sub = bm[by0:by1, bx0:bx1]
+                        sh, sw = sub.shape[:2]
+                        th, tw = min(sh, ch), min(sw, cw)
+                        local_mask[:th, :tw] = (sub[:th, :tw] > 0).astype(np.uint8) * 255
+                        er = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+                        local_mask = cv2.erode(local_mask, er, iterations=2)
+                        filled = np.any(local_mask)
+
+            if not filled:
+                mx = max(4, pad)
+                local_mask[mx:ch - mx, mx:cw - mx] = 255
+
+            # فقط کمی گشاد کردن روی حروف (نه تا لبهٔ حباب)
+            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            local_mask = cv2.dilate(local_mask, k, iterations=1)
+
+            if not np.any(local_mask):
+                continue
+
+            inpainted_crop = None
+            if use_lama_now and lama is not None:
+                try:
+                    if local_mask.shape[:2] != (ch, cw):
+                        local_mask = cv2.resize(local_mask, (cw, ch), interpolation=cv2.INTER_NEAREST)
+                    # CPU: کوچک‌کردن کراپ (سقف ~384px) → LaMa سریع → برگرداندن اندازه
+                    lama_max = 384
+                    scale_l = 1.0
+                    work_rgb = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+                    work_mask = local_mask
+                    ms = max(ch, cw)
+                    if ms > lama_max:
+                        scale_l = lama_max / float(ms)
+                        nw = max(32, int(round(cw * scale_l)))
+                        nh = max(32, int(round(ch * scale_l)))
+                        work_rgb = cv2.resize(work_rgb, (nw, nh), interpolation=cv2.INTER_AREA)
+                        work_mask = cv2.resize(local_mask, (nw, nh), interpolation=cv2.INTER_NEAREST)
+                    # کراپ خیلی کوچک → OpenCV کافی است
+                    if max(work_rgb.shape[:2]) < 48:
+                        raise RuntimeError("crop too small for LaMa")
+                    result_pil = lama(work_rgb, work_mask)
+                    out = np.array(result_pil)
+                    if out.ndim == 2:
+                        out = cv2.cvtColor(out, cv2.COLOR_GRAY2BGR)
+                    else:
+                        out = cv2.cvtColor(out, cv2.COLOR_RGB2BGR)
+                    if out.shape[0] != ch or out.shape[1] != cw:
+                        out = cv2.resize(out, (cw, ch), interpolation=cv2.INTER_LINEAR)
+                    inpainted_crop = out
+                    lama_ok += 1
+                except Exception as e:
+                    print(f"    [!] LaMa روی یک حباب خطا: {e}")
+                    inpainted_crop = None
+
+            if inpainted_crop is None:
+                dil = cv2.dilate(local_mask, k, iterations=1)
+                tmp = cv2.inpaint(crop, dil, inpaintRadius=max(4, self.inpaint_radius + 1),
+                                 flags=cv2.INPAINT_TELEA)
+                residual = cv2.dilate(dil, np.ones((3, 3), np.uint8), iterations=1)
+                inpainted_crop = cv2.inpaint(tmp, residual, inpaintRadius=2, flags=cv2.INPAINT_NS)
+                opencv_ok += 1
+
+            # اطمینان از هم‌اندازه بودن قبل از paste
+            if inpainted_crop is not None:
+                if inpainted_crop.shape[0] != ch or inpainted_crop.shape[1] != cw:
+                    inpainted_crop = cv2.resize(inpainted_crop, (cw, ch), interpolation=cv2.INTER_LINEAR)
+                if inpainted_crop.ndim == 2:
+                    inpainted_crop = cv2.cvtColor(inpainted_crop, cv2.COLOR_GRAY2BGR)
+                cleaned[y0:y1, x0:x1] = inpainted_crop
+
+        if lama_ok:
+            print(f"  - پاکسازی Crop-Inpaint-Paste با LaMa: {lama_ok} حباب"
+                  + (f" + OpenCV: {opencv_ok}" if opencv_ok else "") + ".")
+        else:
+            print(f"  - پاکسازی Crop-Inpaint-Paste با OpenCV: {opencv_ok} حباب.")
         return cleaned
 
     @staticmethod
@@ -1660,16 +2292,18 @@ class MangaTranslator:
                             raise GeminiQuotaExhausted("همه کلیدها نامعتبر/بن شدند.") from e
 
                     if self._is_model_unavailable_error(e):
-                        if self._is_model_permanently_gone(e):
-                            if self._drop_current_model_and_switch(reason="404"):
-                                time.sleep(0.2)
-                                continue
-                        else:
-                            if self._switch_to_next_model(reason="UNAVAILABLE"):
-                                time.sleep(0.3)
-                                continue
+                        # 404 → حذف از cascade (دیگر امتحان نشود)
+                        # UNAVAILABLE/503 → حذف موقت از این run (همین مدل دوباره نه)
+                        if self._drop_current_model_and_switch(
+                            reason="404" if self._is_model_permanently_gone(e) else "UNAVAILABLE"
+                        ):
+                            time.sleep(0.12)
+                            continue
                         if self._switch_to_next_key(reason="model unavailable", cycle=True):
-                            time.sleep(min(delay, 3))
+                            if self._model_cascade:
+                                self._model_index = 0
+                                self.model_name = self._model_cascade[0]
+                            time.sleep(min(delay, 2))
                             continue
 
                 if any(x in err_str for x in ("rate limit", "429", "quota", "insufficient_quota")):
@@ -1694,10 +2328,118 @@ class MangaTranslator:
         reshaped = arabic_reshaper.reshape(text)
         return get_display(reshaped)
 
-    def _load_font(self, size: int, style: Optional[str] = None) -> ImageFont.FreeTypeFont:
-        path = self.font_path
-        if style:
-            path = self.font_by_style.get(style) or self.font_path
+    def _init_fonts(self, font_path) -> None:
+        """
+        فونت‌ها را مقداردهی می‌کند.
+        فرمت‌های مجاز:
+          - یک مسیر: "Vazir.ttf"
+          - چند مسیر با کاما: "Vazir.ttf,Impact.ttf,Comic.ttf"
+          - نگاشت style=path با کاما:
+              "dialogue=Vazir.ttf,shout=Impact.ttf,thought=Comic.ttf,sfx=Bangers.ttf,narration=Nazanin.ttf,soft=Vazir.ttf"
+        استایل‌های شناخته‌شده: dialogue, shout, thought, sfx, narration, soft, default
+        """
+        styles_order = ["dialogue", "shout", "thought", "sfx", "narration", "soft", "default"]
+        paths: Dict[str, str] = {}
+
+        if isinstance(font_path, dict):
+            for k, v in font_path.items():
+                if v and os.path.isfile(str(v)):
+                    paths[str(k).lower().strip()] = str(v)
+        elif isinstance(font_path, (list, tuple)):
+            for i, p in enumerate(font_path):
+                p = str(p).strip()
+                if p and os.path.isfile(p):
+                    key = styles_order[i] if i < len(styles_order) else f"extra{i}"
+                    paths[key] = p
+        else:
+            raw = str(font_path or "").strip()
+            if not raw:
+                raise FileNotFoundError("حداقل یک فونت با --font لازم است.")
+            # style=path یا فقط path
+            parts = [p.strip() for p in raw.replace(";", ",").split(",") if p.strip()]
+            plain_idx = 0
+            for part in parts:
+                if "=" in part:
+                    style, path = part.split("=", 1)
+                    style, path = style.strip().lower(), path.strip()
+                    if path and os.path.isfile(path):
+                        paths[style] = path
+                else:
+                    if os.path.isfile(part):
+                        key = styles_order[plain_idx] if plain_idx < len(styles_order) else f"extra{plain_idx}"
+                        paths[key] = part
+                        plain_idx += 1
+
+        if not paths:
+            raise FileNotFoundError(
+                "هیچ فونت معتبری پیدا نشد. مثال:\n"
+                "  --font Vazir.ttf\n"
+                "  --font dialogue=Vazir.ttf,shout=Impact.ttf,thought=Comic.ttf"
+            )
+
+        # پیش‌فرض
+        default = paths.get("dialogue") or paths.get("default") or next(iter(paths.values()))
+        self.font_path = default
+        for s in styles_order:
+            if s not in paths:
+                paths[s] = default
+        self.font_paths = paths
+
+        print("[*] فونت‌ها:")
+        shown = set()
+        for s in styles_order:
+            p = paths[s]
+            if p not in shown:
+                print(f"    {s}: {os.path.basename(p)}")
+                shown.add(p)
+            else:
+                print(f"    {s}: (همان {os.path.basename(default)})")
+
+    @staticmethod
+    def _classify_bubble_style(region: "TextRegion") -> str:
+        """
+        استایل فونت از روی شکل هندسی + متن:
+          dialogue | shout | thought | narration | sfx | soft
+        """
+        kind = (getattr(region, "kind", "") or "").lower()
+        if kind == "sfx":
+            return "sfx"
+        if kind in ("promo", "junk"):
+            return "narration"
+
+        # اولویت با شکل تشخیص‌داده‌شده
+        st = getattr(region, "shape_type", None)
+        if not st:
+            st = self._classify_shape_type(getattr(region, "shape_poly", None))
+            region.shape_type = st  # type: ignore
+
+        shape_to_style = {
+            "shout": "shout",
+            "thought": "thought",
+            "rect": "narration",
+            "circle": "dialogue",
+            "round": "dialogue",
+            "soft": "soft",
+        }
+        style = shape_to_style.get(st, "dialogue")
+
+        text = (region.source_text or region.translated_text or "").strip()
+        if text:
+            letters = [c for c in text if c.isalpha()]
+            if letters:
+                upper_ratio = sum(1 for c in letters if c.isupper()) / len(letters)
+                if upper_ratio > 0.75 and len(text) >= 3 and style == "dialogue":
+                    style = "shout"
+            if (text.count("!") >= 2 or "!!" in text) and style == "dialogue":
+                style = "shout"
+
+        x, y, w, h = region.rect
+        if style == "dialogue" and h > 0 and w / max(h, 1) > 2.8:
+            style = "narration"
+        return style
+
+    def _load_font(self, size: int, style: str = "dialogue") -> ImageFont.FreeTypeFont:
+        path = self.font_paths.get(style) or self.font_path
         try:
             return ImageFont.truetype(path, size, layout_engine=ImageFont.Layout.BASIC)
         except Exception:
@@ -1717,34 +2459,61 @@ class MangaTranslator:
         text: str,
         max_w: int,
         max_h: int,
-        style: Optional[str] = None,
+        style: str = "dialogue",
     ) -> Tuple[ImageFont.FreeTypeFont, List[str], int]:
+        text = (text or "").strip()
+        # فریادهای کوتاه با چند ! → هر تکه یک خط (مثل GOLD DUST! GOLD FLAKES!)
+        bang_parts = [p.strip() for p in re.split(r"(?<=[!？?])\s*", text) if p.strip()]
+        prefer_bang_lines = (
+            style in ("shout", "sfx")
+            and len(bang_parts) >= 2
+            and all(len(p) <= 28 for p in bang_parts)
+        )
+
         words = text.split()
         if not words:
             words = [""]
 
-        def wrap_at(size: int, line_gap: int):
+        def wrap_at(size: int, line_gap: int, force_parts: Optional[List[str]] = None):
             font = self._load_font(size, style=style)
             sw = self._stroke_width_for(size)
             usable_w = max(8, max_w - 2 * sw)
             lines: List[str] = []
-            current = ""
-            for word in words:
-                candidate = f"{current} {word}".strip()
-                w = draw.textbbox((0, 0), self._shape_farsi(candidate), font=font, stroke_width=sw)[2]
-                if w <= usable_w or not current:
-                    current = candidate
-                else:
+            if force_parts:
+                for part in force_parts:
+                    # اگر یک تکه هنوز پهن است، داخلش wrap کن
+                    pw = draw.textbbox((0, 0), self._shape_farsi(part), font=font, stroke_width=sw)[2]
+                    if pw <= usable_w:
+                        lines.append(part)
+                    else:
+                        cur = ""
+                        for word in part.split():
+                            cand = f"{cur} {word}".strip()
+                            w = draw.textbbox((0, 0), self._shape_farsi(cand), font=font, stroke_width=sw)[2]
+                            if w <= usable_w or not cur:
+                                cur = cand
+                            else:
+                                lines.append(cur)
+                                cur = word
+                        if cur:
+                            lines.append(cur)
+            else:
+                current = ""
+                for word in words:
+                    candidate = f"{current} {word}".strip()
+                    w = draw.textbbox((0, 0), self._shape_farsi(candidate), font=font, stroke_width=sw)[2]
+                    if w <= usable_w or not current:
+                        current = candidate
+                    else:
+                        lines.append(current)
+                        current = word
+                if current:
                     lines.append(current)
-                    current = word
-            if current:
-                lines.append(current)
 
             bb = font.getbbox("آیگچ", stroke_width=sw)
             glyph_h = bb[3] - bb[1]
             line_h = glyph_h + line_gap
-            total_h = line_h * len(lines) if lines else line_h
-            total_h += 2 * sw
+            total_h = (line_h * len(lines) if lines else line_h) + 2 * sw
             widest = max(
                 (draw.textbbox((0, 0), self._shape_farsi(l), font=font, stroke_width=sw)[2] for l in lines),
                 default=0,
@@ -1753,28 +2522,35 @@ class MangaTranslator:
 
         n_words = len(words)
         short_text = n_words <= 2 and sum(len(w) for w in words) <= 12
-        min_size = 14 if short_text else 11
-        max_size = 48
+        min_size = 12 if short_text else 9
+        max_size = 40 if style == "shout" else 42
 
-        smallest_attempt = None
-        for line_gap in (4, 2, 1, 0):
-            for size in range(max_size, min_size - 1, -1):
-                font, lines, sw, total_h, widest, line_h = wrap_at(size, line_gap)
-                smallest_attempt = (font, lines, sw, line_h)
-                if total_h <= max_h and widest <= max_w:
-                    return font, lines, sw
+        last_ok = None
+        # اول: اگر فریاد چندقسمتی است، هر ! یک خط
+        attempts = []
+        if prefer_bang_lines:
+            attempts.append(bang_parts)
+        attempts.append(None)  # wrap عادی
 
-        for size in range(min_size - 1, 9, -1):
-            font, lines, sw, total_h, widest, line_h = wrap_at(size, 0)
-            smallest_attempt = (font, lines, sw, line_h)
+        for force in attempts:
+            for line_gap in (3, 2, 1, 0):
+                for size in range(max_size, min_size - 1, -1):
+                    font, lines, sw, total_h, widest, line_h = wrap_at(size, line_gap, force)
+                    if total_h <= max_h and widest <= max_w:
+                        return font, lines, sw
+                    last_ok = (font, lines, sw)
+
+        for size in range(min_size - 1, 7, -1):
+            font, lines, sw, total_h, widest, line_h = wrap_at(size, 0, bang_parts if prefer_bang_lines else None)
             if total_h <= max_h and widest <= max_w:
                 return font, lines, sw
+            last_ok = (font, lines, sw)
 
-        if smallest_attempt is None:
-            font = self._load_font(11, style=style)
-            sw = self._stroke_width_for(11)
-            return font, [" ".join(words)], sw
-        return smallest_attempt[0], smallest_attempt[1], smallest_attempt[2]
+        if last_ok is not None:
+            return last_ok[0], last_ok[1], last_ok[2]
+        font = self._load_font(9, style=style)
+        sw = self._stroke_width_for(9)
+        return font, bang_parts if prefer_bang_lines else [" ".join(words)], sw
 
     @staticmethod
     def _pick_text_and_stroke(cleaned: np.ndarray, original: np.ndarray, region: TextRegion) -> Tuple[Tuple[int, int, int], Tuple[int, int, int]]:
@@ -1838,25 +2614,37 @@ class MangaTranslator:
             if not region.translated_text:
                 continue
 
-            x, y, w, h = region.rect
-            short = len((region.translated_text or "").split()) <= 2
-            if short and (w < 90 or h < 50):
-                expand = max(6, int(max(w, h) * 0.15))
-                x = max(0, x - expand // 2)
-                y = max(0, y - expand // 2)
-                w = w + expand
-                h = h + expand
+            font_style = self._classify_bubble_style(region)
+            # فریاد/دندانه: inset خیلی بیشتر تا از نوک دندانه بیرون نزند
+            inset = 0.30 if font_style == "shout" else (0.20 if font_style == "thought" else 0.16)
+            sx, sy, sw_, sh_ = self._safe_text_rect_from_mask(
+                getattr(region, "bubble_mask", None),
+                region.rect,
+                inset=inset,
+                shape_poly=getattr(region, "shape_poly", None),
+            )
+            x, y, w, h = sx, sy, sw_, sh_
 
-            pad = max(3, int(min(w, h) * (0.05 if short else 0.08)))
-            box_w = max(14, w - 2 * pad)
-            box_h = max(14, h - 2 * pad)
+            # مرکز جرم ناحیهٔ امن ماسک → متن وسط شکل واقعی
+            bm = getattr(region, "bubble_mask", None)
+            if bm is not None and np.any(bm):
+                dist = cv2.distanceTransform((bm > 0).astype(np.uint8), cv2.DIST_L2, 5)
+                # فقط پیکسل‌های امن داخل bbox متن
+                sub = dist[y:y + h, x:x + w] if y + h <= dist.shape[0] and x + w <= dist.shape[1] else None
+                if sub is not None and sub.size and float(sub.max()) > 2:
+                    cy_l, cx_l = np.unravel_index(int(np.argmax(sub)), sub.shape)
+                    # مرکز را کمی به سمت عمیق‌ترین نقطه بکش
+                    cx_abs = x + int(cx_l)
+                    cy_abs = y + int(cy_l)
+                    # نگه داشتن اندازهٔ باکس، فقط جابه‌جایی ملایم مرکز
+                    pass  # باکس همان safe rect می‌ماند؛ رسم از مرکز باکس
 
-            
-            style = getattr(region, "bubble_style", None) or "normal"
-            if region.kind == "sfx" and style == "normal":
-                style = "sfx"
+            pad = max(5, int(min(w, h) * (0.12 if font_style == "shout" else 0.08)))
+            box_w = max(10, w - 2 * pad)
+            box_h = max(10, h - 2 * pad)
+
             font, lines, sw = self._wrap_and_fit(
-                draw, region.translated_text, box_w, box_h, style=style
+                draw, region.translated_text, box_w, box_h, style=font_style
             )
             text_rgb, stroke_rgb = self._pick_text_and_stroke(image, original_image, region)
 
@@ -1864,24 +2652,34 @@ class MangaTranslator:
 
             if abs(angle) < 8:
                 bb = font.getbbox("آیگچ", stroke_width=sw)
-                glyph_h = bb[3] - bb[1]
+                glyph_h = max(1, bb[3] - bb[1])
                 n = max(1, len(lines))
-                avail = max(glyph_h, box_h - 2 * sw)
-                line_h = max(glyph_h + 1, avail // n) if n else glyph_h + 2
-                if line_h * n + 2 * sw > box_h:
-                    line_h = max(glyph_h, (box_h - 2 * sw) // n)
+                # فاصلهٔ خطوط فشرده تا داخل باکس بماند
+                max_total = max(glyph_h, box_h - 2 * sw)
+                line_h = max(glyph_h, max_total // n)
+                if line_h * n > max_total:
+                    line_h = max(glyph_h - 1, max_total // n)
                 total_h = line_h * n
                 start_y = y + pad + max(0, (box_h - total_h) // 2)
                 bottom_limit = y + pad + box_h
+                left_limit = x + pad
+                right_limit = x + pad + box_w
 
                 for i, line in enumerate(lines):
                     shaped = self._shape_farsi(line)
-                    line_w = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
-                    line_x = x + pad + max(0, (box_w - line_w) // 2)
+                    bbox = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)
+                    line_w = bbox[2] - bbox[0]
+                    line_x = left_limit + max(0, (box_w - line_w) // 2)
                     line_y = start_y + i * line_h
-                    if line_y + glyph_h > bottom_limit + sw:
+                    if line_y + glyph_h > bottom_limit:
                         break
-                    draw.text((line_x, line_y), shaped, font=font, fill=text_rgb, stroke_width=sw, stroke_fill=stroke_rgb)
+                    # اگر هنوز پهن‌تر از باکس است، خط را رد نکن — فونت کوچک‌تر باید گرفته شده باشد
+                    if line_w > box_w + 2 * sw:
+                        line_x = left_limit
+                    draw.text(
+                        (line_x, line_y), shaped, font=font,
+                        fill=text_rgb, stroke_width=sw, stroke_fill=stroke_rgb,
+                    )
             else:
                 line_h = font.getbbox("آی", stroke_width=sw)[3] + 6
                 tmp_h = line_h * len(lines) + 30
@@ -1913,90 +2711,686 @@ class MangaTranslator:
         return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
     
-    def _process_chunk_worker(self, args_tuple) -> List[TextRegion]:
+    def _ocr_full_piece(
+        self, image_bgr: np.ndarray, y_offset: int = 0
+    ) -> List[Tuple[str, np.ndarray, float]]:
+        """اول متن را از کل تکه می‌خواند (قبل از حباب)."""
+        if image_bgr is None or image_bgr.size == 0:
+            return []
+        ch, cw = image_bgr.shape[:2]
+        scale = 1.0
+        work = image_bgr
+        max_side = max(ch, cw)
+        if max_side > 2000:
+            scale = 2000.0 / max_side
+            work = cv2.resize(image_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+        elif max_side < 400:
+            scale = 400.0 / max_side
+            work = cv2.resize(image_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
 
+        with self._ocr_lock:
+            try:
+                result = self.ocr.ocr(work)
+            except RuntimeError as e:
+                msg = str(e).lower()
+                if "could not execute a primitive" in msg or "could not create a primitive" in msg:
+                    time.sleep(0.3)
+                    result = self.ocr.ocr(work)
+                else:
+                    raise
+
+        items: List[Tuple[str, np.ndarray, float]] = []
+        if not result or not result[0]:
+            return items
+        for line in result[0]:
+            poly = np.array(line[0], dtype=np.float32)
+            text = (line[1][0] or "").strip()
+            conf = float(line[1][1])
+            if not text or conf < self.min_confidence:
+                continue
+            if set(text).issubset(PUNCTUATION_SET):
+                continue
+            poly[:, 0] = poly[:, 0] / scale
+            poly[:, 1] = poly[:, 1] / scale + y_offset
+            items.append((text, poly.astype(np.int32), conf))
+        items.sort(key=lambda it: (it[1][:, 1].min(), it[1][:, 0].min()))
+        return items
+
+    def _recover_shape_from_image(
+        self, piece: np.ndarray, rect: List[int], y_offset: int = 0
+    ) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], str]:
+        """
+        وقتی ماسک YOLO ضعیف است (حباب مشکی/رنگی)، شکل را از خود تصویر استخراج می‌کند.
+        برمی‌گرداند: (mask_full, shape_poly, shape_type)
+        """
+        x1, y1, x2, y2 = [int(v) for v in rect]
+        h, w = piece.shape[:2]
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(w, x2), min(h, y2)
+        if x2 - x1 < 16 or y2 - y1 < 16:
+            return None, None, "unknown"
+
+        crop = piece[y1:y2, x1:x2]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        med = float(np.median(gray))
+
+        candidates_th = []
+        # حباب مشکی پر: آستانه ثابت + Otsu
+        if med < 110:
+            _, th1 = cv2.threshold(gray, 40, 255, cv2.THRESH_BINARY_INV)
+            candidates_th.append(th1)
+            _, th2 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+            candidates_th.append(th2)
+            # لبه برای شکل نوک‌تیز
+            edges = cv2.Canny(gray, 40, 120)
+            edges = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
+            candidates_th.append(edges)
+        else:
+            _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            if np.mean(th) < 127:
+                th = 255 - th
+            candidates_th.append(th)
+
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        best_cnt, best_area = None, 0
+        crop_area = gray.shape[0] * gray.shape[1]
+        for th in candidates_th:
+            th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k, iterations=2)
+            th = cv2.morphologyEx(th, cv2.MORPH_OPEN, k, iterations=1)
+            cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if not cnts:
+                continue
+            largest = max(cnts, key=cv2.contourArea)
+            a = cv2.contourArea(largest)
+            # کانتور باید بخش قابل‌توجهی از کراپ باشد ولی نه کل
+            if 80 < a < crop_area * 0.95 and a > best_area:
+                best_area = a
+                best_cnt = largest
+
+        if best_cnt is None:
+            return None, None, "unknown"
+        largest = best_cnt
+
+        local_mask = np.zeros(gray.shape[:2], dtype=np.uint8)
+        cv2.drawContours(local_mask, [largest], -1, 255, -1)
+
+        mask_piece = np.zeros((h, w), dtype=np.uint8)
+        mask_piece[y1:y2, x1:x2] = local_mask
+
+        poly = largest.reshape(-1, 2).astype(np.int32)
+        poly[:, 0] += x1
+        poly[:, 1] += y1 + y_offset
+
+        st = self._classify_shape_type(poly)
+        return mask_piece, poly, st
+
+    @staticmethod
+    def _point_in_mask(cx: float, cy: float, mask: Optional[np.ndarray], rect, y_offset: int = 0) -> bool:
+        x1, y1, x2, y2 = rect
+        cy_local = cy - y_offset
+        if mask is not None:
+            h, w = mask.shape[:2]
+            ix, iy = int(round(cx)), int(round(cy_local))
+            if 0 <= iy < h and 0 <= ix < w and mask[iy, ix] > 0:
+                return True
+        return (x1 - 6) <= cx <= (x2 + 6) and (y1 - 6) <= cy_local <= (y2 + 6)
+
+    @staticmethod
+    def _classify_shape_type(shape_poly: Optional[np.ndarray]) -> str:
+        """
+        تشخیص نوع شکل بالن از روی کانتور:
+          circle  — دایره/بیضی صاف (دیالوگ عادی)
+          round   — گرد با دم (دیالوگ)
+          rect    — مستطیل/کپشن (روایت)
+          thought — ابر موج‌دار (فکر)
+          shout   — نوک‌تیز / ستاره‌ای (فریاد، ترس، شوک)
+          soft    — نرم/موج‌دار ملایم
+          unknown — نامشخص
+        """
+        if shape_poly is None or len(shape_poly) < 5:
+            return "unknown"
+        try:
+            pts = shape_poly.reshape(-1, 1, 2).astype(np.float32)
+            area = float(cv2.contourArea(pts))
+            peri = float(cv2.arcLength(pts, True))
+            if area < 40 or peri < 1:
+                return "unknown"
+
+            circ = 4.0 * np.pi * area / (peri * peri + 1e-6)
+            hull = cv2.convexHull(pts)
+            hull_area = float(cv2.contourArea(hull)) + 1e-6
+            solidity = area / hull_area  # پایین = فرورفتگی زیاد (ابر/نوک)
+
+            approx = cv2.approxPolyDP(pts, 0.03 * peri, True)
+            n_vert = len(approx)
+
+            # تعداد و عمق convexity defects → نوک‌تیز بودن
+            spike_score = 0.0
+            try:
+                hull_idx = cv2.convexHull(pts, returnPoints=False)
+                if hull_idx is not None and len(hull_idx) >= 3 and len(pts) >= 6:
+                    defects = cv2.convexityDefects(pts.astype(np.int32), hull_idx)
+                    if defects is not None:
+                        depths = []
+                        for i in range(defects.shape[0]):
+                            s, e, f, d = defects[i, 0]
+                            depths.append(d / 256.0)
+                        if depths:
+                            mean_d = float(np.mean(depths))
+                            max_d = float(np.max(depths))
+                            # defects عمیق و زیاد → spike
+                            spike_score = (max_d / (np.sqrt(area) + 1e-6)) * (1.0 + 0.15 * len(depths))
+                            if mean_d > 4 and len(depths) >= 4:
+                                spike_score += 0.5
+            except Exception:
+                pass
+
+            # مستطیل: solidity بالا + رأس‌های کم + circularity متوسط/پایین
+            if n_vert <= 6 and solidity > 0.88 and circ < 0.75:
+                rect = cv2.minAreaRect(pts)
+                (rw, rh) = rect[1]
+                if rw > 1 and rh > 1:
+                    extent = area / (rw * rh + 1e-6)
+                    if extent > 0.70:
+                        return "rect"
+
+            # فریاد / ترس: نوک‌تیز
+            if spike_score >= 0.55 or (circ < 0.40 and solidity < 0.82 and n_vert >= 8):
+                return "shout"
+            if circ < 0.28 and solidity < 0.85:
+                return "shout"
+
+            # ابر فکر: محیط زیاد، solidity متوسط، بدون spike قوی
+            if circ < 0.38 and solidity < 0.90 and spike_score < 0.55:
+                return "thought"
+            # scalloped cloud: defects زیاد ولی کم‌عمق
+            if circ < 0.50 and n_vert >= 10 and solidity < 0.92 and spike_score < 0.45:
+                return "thought"
+
+            # دایره تمیز
+            if circ >= 0.72 and solidity > 0.90:
+                return "circle"
+            # گرد/بیضی دیالوگ
+            if circ >= 0.48:
+                return "round"
+            if circ >= 0.38 and solidity > 0.88:
+                return "soft"
+
+            return "round"
+        except Exception:
+            return "unknown"
+
+    @staticmethod
+    def _split_mask_by_clusters(
+        bubble_mask: Optional[np.ndarray],
+        shape_poly: Optional[np.ndarray],
+        clusters: List[List[Tuple[str, np.ndarray]]],
+        rect: Tuple[int, int, int, int],
+    ) -> List[Optional[np.ndarray]]:
+        """
+        ماسک کامل حباب را بین خوشه‌های متن تقسیم می‌کند.
+        هر پیکسل ماسک به نزدیک‌ترین مرکز خوشه تعلق می‌گیرد → شکل کامل هر بالن.
+        """
+        n = len(clusters)
+        if n == 0:
+            return []
+
+        # مراکز خوشه‌ها
+        centers = []
+        for cl in clusters:
+            pts = np.vstack([p for _, p in cl])
+            centers.append((float(pts[:, 0].mean()), float(pts[:, 1].mean())))
+
+        # ساخت ماسک پایه
+        base = None
+        if bubble_mask is not None and np.any(bubble_mask):
+            base = (bubble_mask > 0).astype(np.uint8)
+        elif shape_poly is not None and len(shape_poly) >= 3:
+            h = int(shape_poly[:, 1].max()) + 4
+            w = int(shape_poly[:, 0].max()) + 4
+            h = max(h, rect[1] + rect[3] + 4)
+            w = max(w, rect[0] + rect[2] + 4)
+            base = np.zeros((h, w), dtype=np.uint8)
+            cv2.fillPoly(base, [shape_poly.reshape(-1, 1, 2).astype(np.int32)], 1)
+        else:
+            return [None] * n
+
+        h, w = base.shape[:2]
+        ys, xs = np.where(base > 0)
+        if len(xs) == 0:
+            return [None] * n
+
+        # هر پیکسل → نزدیک‌ترین مرکز
+        masks = [np.zeros((h, w), dtype=np.uint8) for _ in range(n)]
+        # اگر دو خوشه و عمدتاً افقی جدا شده‌اند → برش عمودی در میانه
+        if n == 2:
+            c0x, c0y = centers[0]
+            c1x, c1y = centers[1]
+            if abs(c0x - c1x) >= abs(c0y - c1y) * 0.8:
+                # جداسازی افقی (چپ/راست)
+                mid_x = (c0x + c1x) / 2.0
+                left_i, right_i = (0, 1) if c0x <= c1x else (1, 0)
+                for x, y in zip(xs, ys):
+                    if x < mid_x:
+                        masks[left_i][y, x] = 255
+                    else:
+                        masks[right_i][y, x] = 255
+            else:
+                mid_y = (c0y + c1y) / 2.0
+                top_i, bot_i = (0, 1) if c0y <= c1y else (1, 0)
+                for x, y in zip(xs, ys):
+                    if y < mid_y:
+                        masks[top_i][y, x] = 255
+                    else:
+                        masks[bot_i][y, x] = 255
+        else:
+            # چند خوشه: نزدیک‌ترین مرکز
+            for x, y in zip(xs, ys):
+                best = 0
+                best_d = 1e18
+                for i, (cx, cy) in enumerate(centers):
+                    d = (x - cx) ** 2 + (y - cy) ** 2
+                    if d < best_d:
+                        best_d = d
+                        best = i
+                masks[best][y, x] = 255
+
+        # کمی بستن سوراخ‌ها
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+        out = []
+        for m in masks:
+            if not np.any(m):
+                out.append(None)
+                continue
+            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=2)
+            out.append(m)
+        return out
+
+    def _process_chunk_worker(self, args_tuple) -> List[TextRegion]:
+        """
+        ترتیب:
+          ۱) اول OCR کل تکه → فهم متن
+          ۲) YOLO-seg حباب + ماسک شکل
+          ۳) هر خط متن را به حبابی که مرکزش داخل ماسک/باکس است وصل کن
+          ۴) حباب بدون متن → OCR داخلی
+          ۵) خطوط بدون حباب → text_free
+        """
         idx, y0, y1, image = args_tuple
-        print(f"    [>] تشخیص حباب + OCR تیکه‌ی {idx + 1} (ردیف {y0} تا {y1})")
+        print(f"    [>] OCR اول + شکل حباب تیکه‌ی {idx + 1} (ردیف {y0} تا {y1})")
         piece = image[y0:y1, :]
 
+        # ۱) متن
+        ocr_items = self._ocr_full_piece(piece, y_offset=y0)
+        print(f"    [*] OCR: {len(ocr_items)} خط متن")
+
+        # ۲) حباب + شکل
         bubble_boxes = self.detect_bubbles(piece)
+        print(f"    [*] YOLO: {len(bubble_boxes)} حباب")
+
+        def bkey(b: dict) -> tuple:
+            r = b["rect"]
+            return (int(r[0]), int(r[1]), int(r[2]), int(r[3]))
+
+        # انتقال ماسک/پولی به مختصات صفحه
+        prepared = []
+        for det in bubble_boxes:
+            bubble_mask = det.get("bubble_mask")
+            shape_poly = det.get("shape_poly")
+            if bubble_mask is not None and y0 != 0:
+                full_h = y0 + piece.shape[0]
+                full_mask = np.zeros((full_h, piece.shape[1]), dtype=np.uint8)
+                mh = min(bubble_mask.shape[0], full_h - y0)
+                full_mask[y0:y0 + mh, :bubble_mask.shape[1]] = bubble_mask[:mh]
+                bubble_mask = full_mask
+            if shape_poly is not None and y0 != 0:
+                shape_poly = shape_poly.copy()
+                shape_poly[:, 1] += y0
+            st = self._classify_shape_type(shape_poly)
+            # اگر شکل نامشخص یا ماسک ضعیف → بازیابی از تصویر (حباب مشکی/رنگی)
+            if st == "unknown" or shape_poly is None or bubble_mask is None:
+                rec_mask, rec_poly, rec_st = self._recover_shape_from_image(
+                    piece, det["rect"], y_offset=y0
+                )
+                if rec_st != "unknown" and rec_poly is not None:
+                    if bubble_mask is None and rec_mask is not None:
+                        # انتقال ماسک piece به مختصات صفحه
+                        if y0 != 0:
+                            full_h = y0 + piece.shape[0]
+                            full_m = np.zeros((full_h, piece.shape[1]), dtype=np.uint8)
+                            mh = min(rec_mask.shape[0], full_h - y0)
+                            full_m[y0:y0 + mh] = rec_mask[:mh]
+                            bubble_mask = full_m
+                        else:
+                            bubble_mask = rec_mask
+                    shape_poly = rec_poly
+                    st = rec_st
+            prepared.append({
+                **det,
+                "bubble_mask": bubble_mask,
+                "shape_poly": shape_poly,
+                "shape_type": st,
+            })
+
+        # ۳) هر خط → حباب خودش (بر اساس ماسک شکل)
+        lines_by_bubble: Dict[tuple, List[Tuple[str, np.ndarray, float]]] = {bkey(b): [] for b in prepared}
+        free_lines: List[Tuple[str, np.ndarray, float]] = []
+
+        for text, poly, conf in ocr_items:
+            cx = float(poly[:, 0].mean())
+            cy = float(poly[:, 1].mean())
+            best, best_score = None, -1.0
+            for b in prepared:
+                if not self._point_in_mask(cx, cy, b.get("bubble_mask"), b["rect"], y_offset=y0):
+                    continue
+                x1, y1b, x2, y2b = b["rect"]
+                bcx = (x1 + x2) / 2.0
+                bcy = (y1b + y2b) / 2.0 + y0
+                dist = ((cx - bcx) ** 2 + (cy - bcy) ** 2) ** 0.5
+                bw = max(1.0, x2 - x1)
+                score = float(b.get("confidence", 0.5)) + 1.0 / (1.0 + dist / bw)
+                # اولویت با بودن داخل ماسک شکل
+                if b.get("bubble_mask") is not None:
+                    score += 0.5
+                if score > best_score:
+                    best_score = score
+                    best = b
+            if best is not None:
+                lines_by_bubble[bkey(best)].append((text, poly, conf))
+            else:
+                free_lines.append((text, poly, conf))
 
         regions: List[TextRegion] = []
-        for det in bubble_boxes:
-            text, polys = self._ocr_crop(piece, det["rect"], y_offset=y0)
-            if not text:
-                continue
+        used = set()
 
-            kind = self._classify_text(text)
-            x1, y1b, x2, y2b = det["rect"]
+        for b in prepared:
+            key = bkey(b)
+            lines = lines_by_bubble.get(key) or []
+            x1, y1b, x2, y2b = b["rect"]
             rect_full = (x1, y1b + y0, x2 - x1, y2b - y1b)
-            style = self._classify_bubble_style(
-                piece,
-                det["rect"],
-                polys,
-                kind=kind,
-                det_class=det["class_name"],
-            )
 
+            # OCR داخل حباب معمولاً کامل‌تر است (اولویت)
+            crop_text, crop_polys, crop_items = self._ocr_crop(piece, b["rect"], y_offset=y0)
+
+            def _sort_lines(items):
+                """مرتب‌سازی خطوط: بالا→پایین، چپ→راست (اسکنلیشن انگلیسی)."""
+                def key(it):
+                    poly = it[1]
+                    cy = float(np.mean(poly[:, 1]))
+                    cx = float(np.mean(poly[:, 0]))
+                    return (int(cy // 12), cx)
+                return sorted(items, key=key)
+
+            lines_s = _sort_lines(lines) if lines else []
+            page_text = re.sub(
+                r"\s{2,}", " ", " ".join(t for t, _, _ in lines_s)
+            ).strip() if lines_s else ""
+            page_polys = [p for _, p, _ in lines_s] if lines_s else []
+
+            def _score(t: str) -> int:
+                if not t:
+                    return 0
+                letters = sum(1 for c in t if c.isalpha())
+                return letters * 2 + len(t)
+
+            if _score(crop_text) >= _score(page_text):
+                full_text = collapse_repeated_ocr_phrases(crop_text)
+                polys = crop_polys if crop_polys else page_polys
+            else:
+                full_text = collapse_repeated_ocr_phrases(page_text)
+                polys = page_polys if page_polys else crop_polys
+
+            # اگر هنوز خوشه‌های جدا داخل یک حباب بودند، جدا کن
+            # هر بخش شکل کامل بالن خودش را از ماسک می‌گیرد (نه فقط دور متن)
+            if crop_items and len(crop_items) >= 2:
+                clusters = self._cluster_ocr_lines(crop_items, gap_ratio=0.18)
+                # فقط اگر هر بخش متن معنادار دارد
+                if len(clusters) >= 2:
+                    valid = []
+                    for cl in clusters:
+                        letters = sum(1 for t, _ in cl for c in t if c.isalpha())
+                        if letters >= 3:
+                            valid.append(cl)
+                    clusters = valid if len(valid) >= 2 else []
+                # خوشه‌های جدا از نظر مکانی (کنار هم / روی هم) → حتماً جدا کن
+                if len(clusters) >= 2:
+                    def _cl_center(cl):
+                        xs = np.concatenate([p[:, 0] for _, p in cl])
+                        ys = np.concatenate([p[:, 1] for _, p in cl])
+                        return float(xs.mean()), float(ys.mean())
+
+                    forced_split = False
+                    for i in range(len(clusters)):
+                        for j in range(i + 1, len(clusters)):
+                            cxi, cyi = _cl_center(clusters[i])
+                            cxj, cyj = _cl_center(clusters[j])
+                            # فاصله افقی/عمودی زیاد نسبت به اندازه
+                            if abs(cxi - cxj) > 55 or abs(cyi - cyj) > 70:
+                                forced_split = True
+                    texts_cl = [
+                        re.sub(r"\s{2,}", " ", " ".join(t for t, _ in cl)).strip()
+                        for cl in clusters
+                    ]
+                    any_dup = False
+                    if not forced_split:
+                        for i in range(len(texts_cl)):
+                            for j in range(i + 1, len(texts_cl)):
+                                if self._texts_are_duplicate(texts_cl[i], texts_cl[j]):
+                                    any_dup = True
+                                    break
+                            if any_dup:
+                                break
+                    if any_dup and not forced_split:
+                        clusters = []
+                if len(clusters) >= 2:
+                    print(f"    [*] متن داخل یک حباب به {len(clusters)} بخش جدا شد (با شکل کامل بالن)")
+                    split_masks = self._split_mask_by_clusters(
+                        b.get("bubble_mask"),
+                        b.get("shape_poly"),
+                        clusters,
+                        rect_full,
+                    )
+                    for ci, cl in enumerate(clusters):
+                        cl_text = collapse_repeated_ocr_phrases(
+                            re.sub(r"\s{2,}", " ", " ".join(t for t, _ in cl)).strip()
+                        )
+                        if not cl_text or self._classify_text(cl_text) == "junk":
+                            continue
+                        cl_polys = [p for _, p in cl]
+                        cl_mask = split_masks[ci] if ci < len(split_masks) else None
+                        cl_poly = None
+                        if cl_mask is not None and np.any(cl_mask):
+                            cnts, _ = cv2.findContours(
+                                (cl_mask > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+                            )
+                            if cnts:
+                                largest = max(cnts, key=cv2.contourArea)
+                                if cv2.contourArea(largest) > 30:
+                                    cl_poly = largest.reshape(-1, 2).astype(np.int32)
+                        if cl_poly is None:
+                            # fallback: convex hull متن + کمی پد
+                            cl_poly = cv2.convexHull(np.vstack(cl_polys)).reshape(-1, 2).astype(np.int32)
+
+                        if cl_poly is not None and len(cl_poly) >= 3:
+                            rx1 = int(cl_poly[:, 0].min())
+                            ry1 = int(cl_poly[:, 1].min())
+                            rx2 = int(cl_poly[:, 0].max())
+                            ry2 = int(cl_poly[:, 1].max())
+                        else:
+                            xs = np.concatenate([p[:, 0] for p in cl_polys])
+                            ys = np.concatenate([p[:, 1] for p in cl_polys])
+                            pad = 8
+                            rx1 = max(0, int(xs.min()) - pad)
+                            ry1 = max(0, int(ys.min()) - pad)
+                            rx2 = int(xs.max()) + pad
+                            ry2 = int(ys.max()) + pad
+
+                        regions.append(
+                            TextRegion(
+                                id=0,
+                                boxes=cl_polys,
+                                source_text=cl_text,
+                                rect=(rx1, ry1, max(8, rx2 - rx1), max(8, ry2 - ry1)),
+                                angle=0.0,
+                                kind=self._classify_text(cl_text),
+                                det_class=b.get("class_name", "text_bubble"),
+                                det_confidence=float(b.get("confidence", 0.5)),
+                                bubble_mask=cl_mask,
+                                shape_poly=cl_poly,
+                            )
+                        )
+                    used.add(key)
+                    continue
+
+            if not full_text:
+                continue
+            used.add(key)
+            kind = self._classify_text(full_text)
             regions.append(
                 TextRegion(
                     id=0,
                     boxes=polys,
-                    source_text=text,
+                    source_text=full_text,
                     rect=rect_full,
                     angle=0.0,
                     kind=kind,
-                    det_class=det["class_name"],
-                    det_confidence=det["confidence"],
-                    bubble_style=style,
+                    det_class=b.get("class_name", "text_bubble"),
+                    det_confidence=float(b.get("confidence", 0.5)),
+                    bubble_mask=b.get("bubble_mask"),
+                    shape_poly=b.get("shape_poly"),
                 )
             )
+
+        # خطوط آزاد → خوشه و text_free (اگر همان متن داخل حباب هست، رد کن)
+        if free_lines:
+            bubble_texts = [r.source_text for r in regions if r.source_text]
+            as_pairs = [(t, p) for t, p, _ in free_lines]
+            confs = {id(p): c for t, p, c in free_lines}
+            for cl in self._cluster_ocr_lines(as_pairs, gap_ratio=0.15):
+                cl_text = re.sub(r"\s{2,}", " ", " ".join(t for t, _ in cl)).strip()
+                if not cl_text:
+                    continue
+                # junk تک‌حرفی / خیلی کوتاه
+                letters = sum(1 for c in cl_text if c.isalpha())
+                if letters < 2 or (letters <= 2 and len(cl_text) <= 3):
+                    continue
+                if any(self._texts_are_duplicate(cl_text, bt) for bt in bubble_texts):
+                    print(f"    [~] متن آزاد تکراری با حباب، حذف شد: «{cl_text[:40]}»")
+                    continue
+                cl_polys = [p for _, p in cl]
+                xs = np.concatenate([p[:, 0] for p in cl_polys])
+                ys = np.concatenate([p[:, 1] for p in cl_polys])
+                pad = 8
+                rx1 = max(0, int(xs.min()) - pad)
+                ry1 = max(0, int(ys.min()) - pad)
+                rx2 = int(xs.max()) + pad
+                ry2 = int(ys.max()) + pad
+                kind = self._classify_text(cl_text)
+                hull = cv2.convexHull(np.vstack(cl_polys)).reshape(-1, 2).astype(np.int32)
+                regions.append(
+                    TextRegion(
+                        id=0,
+                        boxes=cl_polys,
+                        source_text=cl_text,
+                        rect=(rx1, ry1, rx2 - rx1, ry2 - ry1),
+                        angle=0.0,
+                        kind=kind,
+                        det_class="text_free",
+                        det_confidence=0.5,
+                        bubble_mask=None,
+                        shape_poly=hull,
+                    )
+                )
+                print(f"    [+] متن آزاد (بدون حباب مدل): «{cl_text[:40]}»")
+
+        # گزارش شکل
+        shapes = {}
+        for r in regions:
+            st = self._classify_shape_type(getattr(r, "shape_poly", None))
+            shapes[st] = shapes.get(st, 0) + 1
+        if shapes:
+            print("    [*] شکل حباب‌ها: " + ", ".join(f"{k}={v}" for k, v in shapes.items()))
+
         return regions
 
     def _draw_debug_regions(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+        """
+        رنگ شکل بالن:
+          circle  → آبی روشن
+          round   → بنفش
+          rect    → نارنجی
+          unknown → خاکستری
+        سبز = خطوط OCR
+        """
         vis = image.copy()
-        
-        kind_colors = {
-            "dialogue": (0, 0, 255),
-            "promo": (0, 165, 255),
-            "sfx": (255, 255, 0),
-            "junk": (128, 128, 128),
+        shape_colors = {
+            "circle": (255, 180, 0),     # آبی — دیالوگ گرد
+            "round": (255, 0, 255),      # بنفش — دیالوگ
+            "rect": (0, 140, 255),       # نارنجی — روایت/کپشن
+            "thought": (0, 220, 220),    # زرد — ابر فکر
+            "shout": (0, 0, 255),        # قرمز — فریاد/ترس
+            "soft": (200, 180, 100),     # فیروزه‌ای ملایم
+            "unknown": (160, 160, 160),
         }
-        
-        style_colors = {
-            "normal": (0, 200, 0),
-            "shout": (0, 0, 255),
-            "thought": (255, 128, 0),
-            "whisper": (200, 200, 0),
-            "explosion": (255, 0, 255),
-            "black": (40, 40, 40),
-            "sfx_shape": (0, 255, 255),
+        ocr_color = (0, 220, 0)
+        shape_fa = {
+            "circle": "CIRCLE", "round": "ROUND", "rect": "RECT",
+            "thought": "THOUGHT", "shout": "SHOUT", "soft": "SOFT", "unknown": "?",
         }
 
         for r in regions:
             x, y, w, h = r.rect
-            color = kind_colors.get(r.kind, (0, 0, 255))
-            style = getattr(r, "bubble_style", "normal") or "normal"
-            scolor = style_colors.get(style, (0, 200, 0))
+            poly = getattr(r, "shape_poly", None)
+            st = getattr(r, "shape_type", None) or self._classify_shape_type(poly)
+            scolor = shape_colors.get(st, shape_colors["unknown"])
 
-            cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
-            
-            cv2.rectangle(vis, (x + 2, y + 2), (x + w - 2, y + h - 2), scolor, 1)
-
-            label = f"[{r.id}] {r.kind}/{style} ({r.det_confidence:.2f})"
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-            cv2.rectangle(vis, (x, max(0, y - th - 8)), (x + tw + 6, y), color, -1)
-            cv2.putText(
-                vis, label, (x + 2, max(12, y - 4)),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1, cv2.LINE_AA,
-            )
-
-            short = (r.source_text or "")[:28]
-            if short:
-                cv2.putText(
-                    vis, short, (x, y + h + 14),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 200, 0), 1, cv2.LINE_AA,
+            # پر کردن نیمه‌شفاف شکل (ماسک یا چندضلعی یا فقط باکس)
+            bm = getattr(r, "bubble_mask", None)
+            if bm is not None and bm.shape[:2] == vis.shape[:2] and np.any(bm):
+                tint = np.zeros_like(vis)
+                tint[bm > 0] = scolor
+                vis = cv2.addWeighted(vis, 1.0, tint, 0.28, 0)
+                cnts, _ = cv2.findContours(
+                    (bm > 0).astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
                 )
+                cv2.drawContours(vis, cnts, -1, scolor, 3)
+            elif poly is not None and len(poly) >= 3:
+                pts = poly.reshape(-1, 1, 2).astype(np.int32)
+                overlay = vis.copy()
+                cv2.fillPoly(overlay, [pts], scolor)
+                cv2.addWeighted(overlay, 0.22, vis, 0.78, 0, vis)
+                cv2.polylines(vis, [pts], True, scolor, 3)
+            else:
+                cv2.rectangle(vis, (x, y), (x + w, y + h), scolor, 3)
+
+            # OCR
+            for op in (r.boxes or []):
+                if op is None or len(op) < 2:
+                    continue
+                pts = np.array(op, dtype=np.int32).reshape(-1, 1, 2)
+                cv2.polylines(vis, [pts], True, ocr_color, 1)
+
+            label = f"[{r.id}] {shape_fa.get(st, st)} {r.det_confidence:.2f}"
+            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
+            yy = max(th + 6, y)
+            cv2.rectangle(vis, (x, yy - th - 8), (x + tw + 6, yy), scolor, -1)
+            cv2.putText(vis, label, (x + 3, yy - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+
+            short = (r.source_text or "")[:30]
+            if short:
+                cv2.putText(vis, short, (x, min(vis.shape[0] - 4, y + h + 16)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, ocr_color, 1, cv2.LINE_AA)
+
+        # راهنما گوشه
+        legend = [
+            ("CIRCLE", shape_colors["circle"]), ("ROUND", shape_colors["round"]),
+            ("RECT", shape_colors["rect"]), ("THOUGHT", shape_colors["thought"]),
+            ("SHOUT", shape_colors["shout"]), ("OCR", ocr_color),
+        ]
+        lx, ly = 8, 18
+        for name, col in legend:
+            cv2.rectangle(vis, (lx, ly - 12), (lx + 14, ly + 2), col, -1)
+            cv2.putText(vis, name, (lx + 18, ly), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (30, 30, 30), 1, cv2.LINE_AA)
+            lx += 90
         return vis
 
     def process_core(self, image: np.ndarray) -> np.ndarray:
@@ -2037,13 +3431,19 @@ class MangaTranslator:
         if len(unique_regions) < before_contain:
             print(f"    [*] {before_contain - len(unique_regions)} جعبهٔ تو در تو حذف شد (جلوگیری از نوشتن دوباره).")
         before_merge = len(unique_regions)
-        unique_regions = self._merge_vertically_split_regions(
-            unique_regions, cut_ys=cut_ys, max_gap=60, edge_margin=80
-        )
-        if len(unique_regions) < before_merge:
-            print(f"    [*] {before_merge - len(unique_regions)} حباب نصفه (برش chunk) به هم وصل شد.")
-        
+        # فقط وقتی صفحه تکه‌تکه شده ادغام کن؛ وگرنه حباب‌های جدا را اشتباه به هم وصل می‌کند
+        if cut_ys:
+            unique_regions = self._merge_vertically_split_regions(
+                unique_regions, cut_ys=cut_ys, max_gap=40, edge_margin=50
+            )
+            if len(unique_regions) < before_merge:
+                print(f"    [*] {before_merge - len(unique_regions)} حباب نصفه (برش chunk) به هم وصل شد.")
         unique_regions = self._suppress_contained_regions(unique_regions, containment_thresh=0.70)
+        # تکه‌های UI مجاور (ACTIVATING… + SKILL…) → یک جمله
+        before_ui = len(unique_regions)
+        unique_regions = self._merge_adjacent_ui_fragments(unique_regions)
+        if len(unique_regions) < before_ui:
+            print(f"    [*] {before_ui - len(unique_regions)} تکهٔ UI مجاور ادغام شد.")
 
         if self.reading_order == "rtl":
             unique_regions.sort(key=lambda r: (r.rect[1] // 80, -(r.rect[0] + r.rect[2])))
@@ -2062,30 +3462,53 @@ class MangaTranslator:
         sfx_regions = [r for r in unique_regions if r.kind == "sfx"]
         junk_regions = [r for r in unique_regions if r.kind == "junk"]
 
-        style_counts: Dict[str, int] = {}
-        for r in unique_regions:
-            st = getattr(r, "bubble_style", "normal") or "normal"
-            style_counts[st] = style_counts.get(st, 0) + 1
-        style_summary = " | ".join(f"{k}={v}" for k, v in sorted(style_counts.items()))
-
         print(f"[فاز ۱ - تشخیص حباب + OCR] انجام شد. مجموع {len(unique_regions)} حباب "
               f"(دیالوگ={len(dialogue_regions)} | تبلیغ={len(promo_regions)} | "
               f"SFX={len(sfx_regions)} | junk={len(junk_regions)})")
-        print(f"    سبک بالن: {style_summary}")
+        shape_fa = {
+            "circle": "دایره",
+            "round": "گرد/بیضی",
+            "rect": "مستطیل/روایت",
+            "thought": "ابر فکر",
+            "shout": "فریاد/ترس",
+            "soft": "نرم",
+            "unknown": "نامشخص",
+        }
         for r in unique_regions:
             tag = {"dialogue": "متن", "promo": "تبلیغ", "sfx": "SFX", "junk": "junk"}.get(r.kind, r.kind)
-            st = getattr(r, "bubble_style", "normal") or "normal"
-            print(
-                f"  [{r.id}] ({tag}/{st}, det={r.det_class}/{r.det_confidence:.2f}) "
-                f"{r.source_text}"
-            )
+            st = self._classify_shape_type(getattr(r, "shape_poly", None))
+            r.shape_type = st  # type: ignore
+            st_fa = shape_fa.get(st, st)
+            print(f"  [{r.id}] شکل={st_fa} ({st}) | {tag} conf={r.det_confidence:.2f}")
+            print(f"       متن: {r.source_text}")
 
         if self.debug:
             debug_vis = self._draw_debug_regions(image, unique_regions)
             self._last_debug_image = debug_vis
+            # متن کامل برای debug.log
+            log_lines = [
+                "=== manga_translator DEBUG LOG ===",
+                f"regions={len(unique_regions)}",
+                "",
+                "--- BUBBLES + TEXT ---",
+            ]
+            for r in unique_regions:
+                st = getattr(r, "shape_type", None) or self._classify_shape_type(
+                    getattr(r, "shape_poly", None)
+                )
+                x, y, rw, rh = r.rect
+                log_lines.append(
+                    f"  [{r.id}] shape={st} kind={r.kind} conf={r.det_confidence:.3f} "
+                    f"rect=({x},{y},{rw},{rh})"
+                )
+                log_lines.append(f"       EN: {r.source_text}")
+                if r.translated_text:
+                    log_lines.append(f"       FA: {r.translated_text}")
+            self._last_debug_log = "\n".join(log_lines) + "\n"
             print(f"  [*] DEBUG: تصویر دیباگ با {len(unique_regions)} حباب آماده شد.")
         else:
             self._last_debug_image = None
+            self._last_debug_log = None
 
         raw_image_copy = image.copy()
 
@@ -2101,6 +3524,12 @@ class MangaTranslator:
         for r in translated_regions:
             print(f"  EN: {r.source_text}")
             print(f"  FA: {r.translated_text}")
+        if self.debug and getattr(self, "_last_debug_log", None):
+            extra = ["", "--- TRANSLATIONS ---"]
+            for r in translated_regions:
+                extra.append(f"  [{r.id}] EN: {r.source_text}")
+                extra.append(f"       FA: {r.translated_text}")
+            self._last_debug_log = (self._last_debug_log or "") + "\n".join(extra) + "\n"
         if promo_regions:
             print(f"  [*] {len(promo_regions)} تبلیغ/واترمارک → دست نخورده می‌ماند.")
         if sfx_regions:
@@ -2121,10 +3550,41 @@ class MangaTranslator:
         return final_image
 
     @staticmethod
-    def _dedupe_regions_by_rect(regions: List[TextRegion], iou_thresh: float = 0.4) -> List[TextRegion]:
+    @staticmethod
+    def _norm_text_key(t: str) -> str:
+        t = (t or "").lower()
+        t = re.sub(r"[^a-z0-9\u0600-\u06ff]+", "", t)
+        return t
 
+    @classmethod
+    def _texts_are_duplicate(cls, a: str, b: str) -> bool:
+        """همان جمله / یکی زیررشتهٔ دیگری / تکرار چسبیده OCR."""
+        na, nb = cls._norm_text_key(a), cls._norm_text_key(b)
+        if not na or not nb:
+            return False
+        if na == nb:
+            return True
+        shorter, longer = (na, nb) if len(na) <= len(nb) else (nb, na)
+        if len(shorter) >= 6 and shorter in longer:
+            # زیررشتهٔ خیلی کوتاه نسبت به جملهٔ بلند = همان حباب شکسته
+            if len(shorter) >= max(6, int(len(longer) * 0.45)):
+                return True
+            if len(shorter) >= 10:
+                return True
+        if len(shorter) >= 10 and longer.startswith(shorter):
+            return True
+        return False
+
+    def _dedupe_regions_by_rect(self, regions: List[TextRegion], iou_thresh: float = 0.4) -> List[TextRegion]:
+        """
+        حذف تکراری فقط وقتی باکس‌ها نزدیک/روی‌هم‌اند.
+        متن یکسان در دو جای دور صفحه (مثل دو نوتیف UI) → هر دو می‌مانند.
+        """
         if not regions:
             return []
+
+        for r in regions:
+            r.source_text = collapse_repeated_ocr_phrases(r.source_text or "")
 
         def iou(r1, r2):
             x1, y1, w1, h1 = r1
@@ -2135,17 +3595,158 @@ class MangaTranslator:
             union = w1 * h1 + w2 * h2 - inter
             return inter / union if union > 0 else 0.0
 
-        ordered = sorted(regions, key=lambda r: r.det_confidence, reverse=True)
+        def centers_close(r1, r2, max_dist=160):
+            cx1 = r1[0] + r1[2] / 2.0
+            cy1 = r1[1] + r1[3] / 2.0
+            cx2 = r2[0] + r2[2] / 2.0
+            cy2 = r2[1] + r2[3] / 2.0
+            return abs(cx1 - cx2) < max_dist and abs(cy1 - cy2) < max_dist
+
+        def rank(r: TextRegion):
+            is_bub = 1 if (r.det_class or "") == "text_bubble" else 0
+            clean = 1 if "(" not in (r.source_text or "")[:4] else 0
+            return (is_bub, clean, len(r.source_text or ""), r.det_confidence)
+
+        ordered = sorted(regions, key=rank, reverse=True)
         kept: List[TextRegion] = []
+
         for r in ordered:
+            key = self._norm_text_key(r.source_text)
+            if not key:
+                continue
             dup = False
             for k in kept:
+                near = centers_close(r.rect, k.rect) or iou(r.rect, k.rect) > 0.12
+                same_txt = self._texts_are_duplicate(r.source_text, k.source_text)
+                # فقط اگر نزدیک باشند تکراری حساب می‌شود
+                if same_txt and near:
+                    if len(r.source_text or "") > len(k.source_text or "") + 3:
+                        k.source_text = collapse_repeated_ocr_phrases(r.source_text)
+                    dup = True
+                    break
                 if iou(r.rect, k.rect) > iou_thresh:
+                    if len(r.source_text or "") > len(k.source_text or ""):
+                        k.source_text = collapse_repeated_ocr_phrases(r.source_text)
                     dup = True
                     break
             if not dup:
+                r.source_text = collapse_repeated_ocr_phrases(r.source_text)
                 kept.append(r)
         return kept
+
+    def _merge_adjacent_ui_fragments(self, regions: List[TextRegion]) -> List[TextRegion]:
+        """
+        فقط تکه‌های UI/سیستم (نه حباب گفتگو):
+          ACTIVATING EXCLUSIVE + SKILL DRAGON SCALES! → یک جمله
+        حباب‌های YOLO با shape واقعی دست نخورده می‌مانند.
+        """
+        if len(regions) < 2:
+            return regions
+
+        ui_words = re.compile(
+            r"(?i)\b(activat|skill|exclusive|combination|resist|enter|state|"
+            r"dragon|scale|overlord|slash|buff|debuff|level|hp|mp|exp)\b"
+        )
+
+        def is_ui_fragment(r: TextRegion) -> bool:
+            # حباب گفتگوی واقعی (ماسک/شکل shout/thought/circle) → ادغام نکن
+            st = getattr(r, "shape_type", None) or ""
+            if st in ("shout", "thought", "circle", "round", "soft"):
+                return False
+            if (r.det_class or "") == "text_bubble" and getattr(r, "bubble_mask", None) is not None:
+                # اگر ماسک دارد و متنش دیالوگ محاوره‌ای است
+                t = (r.source_text or "")
+                if not ui_words.search(t) and len(t) > 25:
+                    return False
+            t = (r.source_text or "").strip()
+            if len(t) > 90:
+                return False
+            if ui_words.search(t):
+                return True
+            # تکهٔ خیلی کوتاه مستطیلی
+            if len(t) <= 40 and st in ("rect", "unknown", ""):
+                return True
+            return False
+
+        def vgap(a: TextRegion, b: TextRegion) -> float:
+            ay2 = a.rect[1] + a.rect[3]
+            if a.rect[1] <= b.rect[1]:
+                return float(b.rect[1] - ay2)
+            return float(a.rect[1] - (b.rect[1] + b.rect[3]))
+
+        def x_overlap_ratio(a: TextRegion, b: TextRegion) -> float:
+            ax1, ax2 = a.rect[0], a.rect[0] + a.rect[2]
+            bx1, bx2 = b.rect[0], b.rect[0] + b.rect[2]
+            inter = max(0, min(ax2, bx2) - max(ax1, bx1))
+            min_w = max(1, min(a.rect[2], b.rect[2]))
+            return inter / float(min_w)
+
+        ordered = sorted(regions, key=lambda r: (r.rect[1], r.rect[0]))
+        used = set()
+        out: List[TextRegion] = []
+
+        for i, a in enumerate(ordered):
+            if i in used:
+                continue
+            if not is_ui_fragment(a):
+                used.add(i)
+                out.append(a)
+                continue
+            merged = a
+            for j in range(i + 1, len(ordered)):
+                if j in used:
+                    continue
+                b = ordered[j]
+                if not is_ui_fragment(b):
+                    continue
+                gap = vgap(merged, b)
+                if gap > 40:
+                    break
+                if gap < -5:
+                    continue
+                if x_overlap_ratio(merged, b) < 0.40:
+                    continue
+                ta = (merged.source_text or "").strip()
+                tb = (b.source_text or "").strip()
+                if not ta or not tb:
+                    continue
+                top = merged if merged.rect[1] <= b.rect[1] else b
+                bot = b if top is merged else merged
+                new_text = collapse_repeated_ocr_phrases(f"{top.source_text} {bot.source_text}".strip())
+                x1 = min(merged.rect[0], b.rect[0])
+                y1 = min(merged.rect[1], b.rect[1])
+                x2 = max(merged.rect[0] + merged.rect[2], b.rect[0] + b.rect[2])
+                y2 = max(merged.rect[1] + merged.rect[3], b.rect[1] + b.rect[3])
+                # اتحاد ماسک اگر هر دو دارند
+                mask_a = getattr(merged, "bubble_mask", None)
+                mask_b = getattr(b, "bubble_mask", None)
+                mask = None
+                if mask_a is not None and mask_b is not None and mask_a.shape == mask_b.shape:
+                    mask = np.maximum(mask_a, mask_b)
+                elif mask_a is not None:
+                    mask = mask_a
+                elif mask_b is not None:
+                    mask = mask_b
+                poly = getattr(merged, "shape_poly", None)
+                if poly is None:
+                    poly = getattr(b, "shape_poly", None)
+                merged = TextRegion(
+                    id=merged.id,
+                    boxes=list(merged.boxes or []) + list(b.boxes or []),
+                    source_text=new_text,
+                    translated_text="",
+                    rect=(x1, y1, x2 - x1, y2 - y1),
+                    angle=merged.angle,
+                    kind=merged.kind,
+                    det_class=merged.det_class or b.det_class,
+                    det_confidence=max(merged.det_confidence, b.det_confidence),
+                    bubble_mask=mask,
+                    shape_poly=poly,
+                )
+                used.add(j)
+            used.add(i)
+            out.append(merged)
+        return out
 
     @staticmethod
     def _suppress_contained_regions(
@@ -2217,9 +3818,9 @@ class MangaTranslator:
             return inter / float(min(aw, bw) or 1)
 
         def touches_cut(r: TextRegion) -> bool:
-            
+            # بدون خط برش chunk هیچ ادغامی انجام نشود
             if not cut_ys:
-                return True  
+                return False
             y1 = r.rect[1]
             y2 = r.rect[1] + r.rect[3]
             for cy in cut_ys:
@@ -2228,9 +3829,8 @@ class MangaTranslator:
             return False
 
         def near_same_cut(a: TextRegion, b: TextRegion) -> bool:
-            
             if not cut_ys:
-                return True
+                return False
             ay1, ay2 = a.rect[1], a.rect[1] + a.rect[3]
             by1, by2 = b.rect[1], b.rect[1] + b.rect[3]
             for cy in cut_ys:
@@ -2823,8 +4423,7 @@ class MangaTranslator:
         h0, w0 = out_image.shape[:2]
         scale = 1.0
 
-        if self.max_output_width and self.max_output_width > 0 and w0 > self.max_output_width:
-            scale = min(scale, self.max_output_width / float(w0))
+        # max-width حذف شد؛ فقط max-height اختیاری برای خروجی خیلی بلند
         if self.max_output_height and self.max_output_height > 0 and h0 > self.max_output_height:
             scale = min(scale, self.max_output_height / float(h0))
 
@@ -3037,26 +4636,139 @@ html, body { background: #0a0a0b; }
 
         return int(best_y)
 
-    def _normalize_page_width(self, im: np.ndarray) -> np.ndarray:
-        if im is None or im.size == 0:
+    def _normalize_page_width(self, im: np.ndarray, target_w: int) -> np.ndarray:
+        """فقط وقتی عرض نزدیک است به بالاترین عرض گروه می‌رساند (بدون max-width سراسری)."""
+        if im is None or im.size == 0 or not target_w or target_w <= 0:
             return im
-        target_w = self.max_output_width
-        if not target_w or target_w <= 0:
-            return im
-        wide_threshold = target_w + 200
         h, w = im.shape[:2]
         if w == target_w:
             return im
+        # فقط بزرگ‌کردن تا target؛ کوچک کردن اجباری سراسری نداریم
+        if w > target_w:
+            return im
         scale = target_w / float(w)
-        new_w = target_w
         new_h = max(1, int(round(h * scale)))
-        if w > wide_threshold:
-            interp = cv2.INTER_AREA
+        return cv2.resize(im, (target_w, new_h), interpolation=cv2.INTER_LINEAR)
+
+    def _harmonize_similar_widths(
+        self, image_files: List[str], work_dir: str
+    ) -> List[str]:
+        """
+        عرض‌های نزدیک را گروه می‌کند و همه را به بالاترین عرض همان گروه می‌رساند.
+        مثال: 800, 900, 1000 با tol≈0.18 → همه ۱۰۰۰؛ 2000 جدا می‌ماند.
+        سبک: فقط resize، بدون چسباندن صفحات.
+        """
+        if len(image_files) <= 1:
+            return image_files
+
+        meta = []
+        for f in image_files:
+            im = cv2.imread(f)
+            if im is None:
+                continue
+            meta.append((f, im.shape[1], im.shape[0]))
+        if len(meta) <= 1:
+            return image_files
+
+        # خوشه‌بندی حریصانه روی عرض مرتب‌شده
+        ordered = sorted(meta, key=lambda x: x[1])
+        groups: List[List[Tuple[str, int, int]]] = []
+        tol = max(0.05, float(self.width_group_tol))
+
+        for item in ordered:
+            placed = False
+            for g in groups:
+                # نسبت به min و max گروه
+                g_ws = [x[1] for x in g]
+                g_min, g_max = min(g_ws), max(g_ws)
+                w = item[1]
+                # نزدیک اگر در بازهٔ نسبی قرار بگیرد
+                ref = max(g_max, w)
+                if abs(w - g_max) / ref <= tol and abs(w - g_min) / ref <= tol * 1.25:
+                    g.append(item)
+                    placed = True
+                    break
+            if not placed:
+                groups.append([item])
+
+        os.makedirs(work_dir, exist_ok=True)
+        # map path → target_w
+        target_of: Dict[str, int] = {}
+        for g in groups:
+            tw = max(x[1] for x in g)
+            for path, w, _h in g:
+                target_of[path] = tw
+
+        out_files: List[str] = []
+        changed = 0
+        for i, f in enumerate(image_files):
+            if f not in target_of:
+                out_files.append(f)
+                continue
+            tw = target_of[f]
+            im = cv2.imread(f)
+            if im is None:
+                out_files.append(f)
+                continue
+            orig_w = im.shape[1]
+            im2 = self._normalize_page_width(im, tw)
+            out_n = os.path.join(work_dir, f"page_{i+1:03d}.jpg")
+            self._write_image(im2, out_n)
+            out_files.append(out_n)
+            if im2.shape[1] != orig_w:
+                changed += 1
+
+        if changed:
+            summary = []
+            for g in groups:
+                ws = sorted({x[1] for x in g})
+                tw = max(ws)
+                if len(ws) > 1 or any(w != tw for w in ws):
+                    summary.append(f"{min(ws)}–{max(ws)}→{tw}")
+            print(
+                f"[*] هم‌تراز عرض (سبک): {changed}/{len(out_files)} صفحه "
+                f"(گروه‌ها: {', '.join(summary) or '—'} | tol={tol:.0%})"
+            )
         else:
-            interp = cv2.INTER_LINEAR
-        return cv2.resize(im, (new_w, new_h), interpolation=interp)
+            print("[*] هم‌تراز عرض: همه عرض‌ها یکسان یا دور از هم — تغییری نبود.")
+        return out_files
+
+    def _split_tall_image_safe(self, im: np.ndarray, max_h: int) -> List[np.ndarray]:
+        """برش عمودی تصویر بلند در دره‌های کم‌جزئیات تا متن نصف نشود."""
+        h = im.shape[0]
+        if h <= max_h:
+            return [im]
+        parts: List[np.ndarray] = []
+        y = 0
+        min_piece = max(400, int(max_h * 0.25))
+        while y < h:
+            remain = h - y
+            if remain <= max_h:
+                parts.append(im[y:h])
+                break
+            target = y + max_h
+            # برش امن نزدیک target (ترجیح کمی بالاتر تا از سقف رد نشود)
+            cut = self._find_safe_cut_y(
+                im, target_y=target,
+                search_up=min(1200, max_h // 2),
+                search_down=min(250, max(50, h - target - 1)),
+                band=14,
+            )
+            if cut <= y + min_piece:
+                cut = min(h, y + max_h)
+            if cut >= h:
+                parts.append(im[y:h])
+                break
+            parts.append(im[y:cut])
+            y = cut
+        return parts
 
     def _stitch_pages_for_efficiency(self, image_files: List[str], work_dir: str) -> List[str]:
+        """
+        صفحات کوتاه را تا سقف ارتفاع می‌چسباند.
+        - عرض را به median اجباری نمی‌کند؛ فقط داخل هر نوار به max عرض همان صفحات می‌رساند.
+        - اگر یک صفحه از سقف بلندتر بود، با _find_safe_cut_y برش می‌زند (روی متن نمی‌افتد).
+        """
         if self.stitch_max_height <= 0 or len(image_files) <= 1:
             return image_files
 
@@ -3074,32 +4786,45 @@ html, body { background: #0a0a0b; }
             if start_idx >= len(image_files):
                 return result
 
-        
-        sample_widths = []
-        for f in image_files[start_idx:start_idx + min(8, len(image_files) - start_idx)]:
-            im = cv2.imread(f)
-            if im is not None:
-                sample_widths.append(im.shape[1])
-        if not sample_widths:
-            return image_files
-        sample_widths.sort()
-        target_w = sample_widths[len(sample_widths) // 2]
-
         strip_i = 0
         current_pages: List[np.ndarray] = []
         current_h = 0
-        min_strip = max(1800, int(max_h * 0.30))
+        min_strip = max(1200, int(max_h * 0.25))
+
+        def _match_width(im: np.ndarray, tw: int) -> np.ndarray:
+            h, w = im.shape[:2]
+            if w == tw or tw <= 0:
+                return im
+            scale = tw / float(w)
+            new_h = max(1, int(round(h * scale)))
+            interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+            return cv2.resize(im, (tw, new_h), interpolation=interp)
 
         def emit_current(label: str = "") -> None:
             nonlocal strip_i, current_pages, current_h
             if not current_pages:
                 return
-            strip = np.vstack(current_pages) if len(current_pages) > 1 else current_pages[0]
-            out_path = os.path.join(work_dir, f"strip_{strip_i + 1:03d}.jpg")
-            self._write_image(strip, out_path)
-            result.append(out_path)
-            print(f"    [+] نوار {strip_i + 1}: {label or f'{len(current_pages)} صفحه'} ({strip.shape[0]}px)")
-            strip_i += 1
+            # عرض نوار = max عرض صفحات همین نوار (نه median سراسری)
+            tw = max(p.shape[1] for p in current_pages)
+            aligned = [_match_width(p, tw) for p in current_pages]
+            strip = np.vstack(aligned) if len(aligned) > 1 else aligned[0]
+            # اگر هنوز از سقف رد شد (نادر)، برش امن
+            if strip.shape[0] > max_h + 50:
+                for pi, part in enumerate(self._split_tall_image_safe(strip, max_h)):
+                    out_path = os.path.join(work_dir, f"strip_{strip_i + 1:03d}.jpg")
+                    self._write_image(part, out_path)
+                    result.append(out_path)
+                    print(f"    [+] نوار {strip_i + 1}: برش امن ({part.shape[0]}px)")
+                    strip_i += 1
+            else:
+                out_path = os.path.join(work_dir, f"strip_{strip_i + 1:03d}.jpg")
+                self._write_image(strip, out_path)
+                result.append(out_path)
+                print(
+                    f"    [+] نوار {strip_i + 1}: "
+                    f"{label or f'{len(current_pages)} صفحه'} ({strip.shape[0]}px, w={tw})"
+                )
+                strip_i += 1
             current_pages = []
             current_h = 0
             del strip
@@ -3110,26 +4835,27 @@ html, body { background: #0a0a0b; }
                 print(f"    [!] خواندن نشد، رد شد: {os.path.basename(f)}")
                 continue
 
-            h, w = im.shape[:2]
-            if w != target_w:
-                im = cv2.resize(im, (target_w, h), interpolation=cv2.INTER_AREA)
-
-            if current_pages and (current_h + h) > max_h:
-                if current_h >= min_strip:
-                    emit_current(f"{len(current_pages)} صفحه (قبل از صفحه‌ی جدید)")
-
-            current_pages.append(im)
-            current_h += h
-
-            if current_h >= max_h:
-                emit_current(f"{len(current_pages)} صفحه (رسید به سقف {max_h}px)")
+            # صفحهٔ خیلی بلند → برش امن قبل از چسباندن
+            pieces = self._split_tall_image_safe(im, max_h)
+            for piece in pieces:
+                h = piece.shape[0]
+                if current_pages and (current_h + h) > max_h:
+                    if current_h >= min_strip:
+                        emit_current(f"{len(current_pages)} صفحه (قبل از صفحهٔ جدید)")
+                    elif current_pages:
+                        # نوار کوتاه ولی صفحهٔ جدید جا نمی‌شود → همین را بفرست
+                        emit_current(f"{len(current_pages)} صفحه (جا نشد)")
+                current_pages.append(piece)
+                current_h += h
+                if current_h >= max_h:
+                    emit_current(f"{len(current_pages)} صفحه (سقف {max_h}px)")
 
         if current_pages:
             emit_current(f"{len(current_pages)} صفحه (آخرین نوار)")
 
         print(
             f"[*] چسباندن صفحات: {len(image_files)} صفحه → {len(result)} نوار "
-            f"(سقف برش={max_h}px{'، صفحهٔ اول جدا' if self.stitch_keep_first else ''})"
+            f"(سقف={max_h}px، برش امن متن{'، صفحهٔ اول جدا' if self.stitch_keep_first else ''})"
         )
         return result if result else image_files
 
@@ -3196,28 +4922,12 @@ html, body { background: #0a0a0b; }
             return
 
         
-        if len(image_files) >= 1 and self.max_output_width and self.max_output_width > 0:
+        # هم‌ترازی سبک عرض‌های نزدیک (بدون max-width سراسری و بدون چسباندن صفحات)
+        if len(image_files) > 1:
             norm_dir = os.path.join(cache_dir, "normalized")
-            os.makedirs(norm_dir, exist_ok=True)
-            normalized_files = []
-            changed = 0
-            target_w = self.max_output_width
-            for i, f in enumerate(image_files):
-                im = cv2.imread(f)
-                if im is None:
-                    continue
-                orig_w = im.shape[1]
-                im = self._normalize_page_width(im)
-                if im.shape[1] != orig_w:
-                    changed += 1
-                out_n = os.path.join(norm_dir, f"page_{i+1:03d}.jpg")
-                self._write_image(im, out_n)
-                normalized_files.append(out_n)
-            if normalized_files:
-                image_files = normalized_files
-                print(f"[*] نرمال‌سازی عرض: {changed}/{len(normalized_files)} صفحه به عرض {target_w}px "
-                      f"(>{target_w + 200} → کیفیت بالا | ≤{target_w + 200} → کیفیت عادی) — قبل از چسباندن انجام شد.")
+            image_files = self._harmonize_similar_widths(image_files, norm_dir)
 
+        # چسباندن صفحات فقط اگر صریحاً --stitch-max-height > 0
         if self.stitch_max_height > 0 and len(image_files) > 1:
             stitch_dir = os.path.join(cache_dir, "stitched")
             image_files = self._stitch_pages_for_efficiency(image_files, stitch_dir)
@@ -3266,8 +4976,18 @@ html, body { background: #0a0a0b; }
                 dbg_path = os.path.join(debug_dir, dbg_name)
                 self._write_image(self._last_debug_image, dbg_path)
                 debug_files.append(dbg_path)
-                print(f"  [*] DEBUG ذخیره شد: {dbg_path}")
+                print(f"  [*] DEBUG تصویر: {dbg_path}")
+                log_path = os.path.join(debug_dir, "debug.log")
+                try:
+                    with open(log_path, "a", encoding="utf-8") as lf:
+                        lf.write(f"\n##### file: {os.path.basename(out_file)} #####\n")
+                        lf.write(self._last_debug_log or "")
+                        lf.write("\n")
+                    print(f"  [*] DEBUG لاگ: {log_path}")
+                except Exception as e:
+                    print(f"  [!] نوشتن debug.log ناموفق: {e}")
                 self._last_debug_image = None
+                self._last_debug_log = None
 
         if skipped:
             print(f"[*] {skipped} صفحه از قبل توی کش بود و دوباره پردازش نشد (resume فعاله).")
@@ -3365,7 +5085,7 @@ html, body { background: #0a0a0b; }
 def build_arg_parser():
     import argparse
     p = argparse.ArgumentParser(
-        description="مترجم خودکار مانگا/مانهوا به فارسی (RT-DETR برای مرز حباب + PaddleOCR برای خواندن متن) — "
+        description="مترجم خودکار مانگا/مانهوا به فارسی (YOLOv8 حباب + PaddleOCR + LaMa Crop-Inpaint-Paste) — "
                     "پشتیبانی از Gemini / OpenAI / DeepSeek / Groq / xAI / Ollama و ..."
     )
     p.add_argument("-i", "--input", required=True)
@@ -3376,20 +5096,13 @@ def build_arg_parser():
     p.add_argument("--api-key", action="append", default=None,
                    help="کلید API. چندبار یا با کاما. env متناظر هم خوانده می‌شود")
     p.add_argument("--api-base", default=None, help="آدرس پایه API (اختیاری)")
-    p.add_argument("--font", required=True,
-                   help="فونت پیش‌فرض فارسی (برای بالن normal و fallback)")
-    p.add_argument("--font-shout", default=None,
-                   help="فونت مخصوص بالن فریاد/خاردار (shout)")
-    p.add_argument("--font-thought", default=None,
-                   help="فونت مخصوص بالن فکر/ابری (thought)")
-    p.add_argument("--font-whisper", default=None,
-                   help="فونت مخصوص بالن نجوا/خط‌چین (whisper)")
-    p.add_argument("--font-explosion", default=None,
-                   help="فونت مخصوص بالن انفجاری/شعاعی (explosion)")
-    p.add_argument("--font-sfx", default=None,
-                   help="فونت مخصوص SFX و شکل‌های افکت")
-    p.add_argument("--font-black", default=None,
-                   help="فونت مخصوص بالن پرسیاه (black)")
+    p.add_argument(
+        "--font", required=True,
+        help="فونت فارسی. یک مسیر، چند مسیر با کاما، یا نگاشت استایل:\n"
+             "  --font Vazir.ttf\n"
+             "  --font Vazir.ttf,Impact.ttf,Comic.ttf\n"
+             "  --font dialogue=Vazir.ttf,shout=Impact.ttf,thought=Comic.ttf,sfx=Bangers.ttf,narration=Nazanin.ttf"
+    )
     p.add_argument("--ocr-lang", nargs="+", default=["en"], help="زبان‌های OCR. en | ko en | ja en")
     p.add_argument("--model", default=None, help="نام مدل. اگر ندهی از پیش‌فرض provider استفاده می‌شود")
     p.add_argument("--reading-order", choices=["rtl", "ltr"], default="rtl")
@@ -3399,25 +5112,26 @@ def build_arg_parser():
     p.add_argument("--keep-old", action="store_true")
     p.add_argument("--request-delay", type=float, default=0.0)
     p.add_argument("--max-retries", type=int, default=4)
-    p.add_argument("--det-confidence", type=float, default=0.35,
-                   help="آستانه‌ی اطمینان تشخیص حباب RT-DETR (پیش‌فرض 0.35)")
+    p.add_argument("--det-confidence", type=float, default=0.25,
+                   help="آستانه‌ی اطمینان تشخیص حباب YOLOv8 (پیش‌فرض 0.25)")
     p.add_argument("--det-iou", type=float, default=0.45,
                    help="آستانه‌ی IoU برای NMS باکس‌های تشخیص‌داده‌شده (پیش‌فرض 0.45)")
-    p.add_argument("--stitch-max-height", type=int, default=12000,
-                   help="سقف ارتفاع هر نوار چسبانده‌شده (پیش‌فرض ۱۲۰۰۰). ۰ = خاموش. "
-                        "مقدار کمتر = نوارهای کوتاه‌تر و مصرف حافظه کمتر.")
+    p.add_argument("--yolo-model", default=None,
+                   help="مسیر فایل .pt مدل YOLO (اختیاری). پیش‌فرض: مدل تخصصی حباب مانهوا از HuggingFace")
+    p.add_argument("--stitch-max-height", type=int, default=0,
+                   help="چسباندن صفحات به نوار (پیش‌فرض ۰=خاموش). مثلاً 12000 اگر بخواهی فعال شود.")
     p.add_argument("--stitch-short-threshold", type=int, default=6000,
-                   help="صفحاتی کوتاه‌تر از این ارتفاع (پیش‌فرض ۶۰۰۰px) با هم چسبانده می‌شوند.")
+                   help="فقط با --stitch-max-height>0 معنا دارد.")
     p.add_argument("--no-stitch-keep-first", action="store_true",
-                   help="صفحهٔ اول را هم داخل نوارها بگذار (پیش‌فرض: صفحهٔ اول جدا می‌ماند)")
+                   help="فقط با stitch فعال.")
+    p.add_argument("--width-tol", type=float, default=0.18,
+                   help="تلورانس هم‌ترازی عرض نزدیک (پیش‌فرض 0.18 یعنی ~۱۸٪). "
+                        "مثلاً 900 و 1000 در یک گروه → همه به 1000.")
     p.add_argument("--img-format", choices=["webp", "png", "jpg"], default="jpg")
     p.add_argument("--quality", type=int, default=95,
                help="کیفیت JPEG/WebP خروجی (پیش‌فرض ۹۵ — کیفیت بالا)")
-    p.add_argument("--max-width", type=int, default=1200,
-               help="حداکثر عرض خروجی به پیکسل (پیش‌فرض ۱۲۰۰۰ = تقریباً بدون کوچک‌کردن)")
     p.add_argument("--max-height", type=int, default=0,
-               help="حداکثر ارتفاع خروجی به پیکسل (۰ = بدون محدودیت). "
-                    "اگر نوار از این ارتفاع بلندتر باشد، با کیفیت بالا کوچک می‌شود تا متن خوانا بماند.")
+               help="حداکثر ارتفاع خروجی (۰=بدون محدودیت). max-width حذف شده.")
     p.add_argument("--min-confidence", type=float, default=0.12,
                    help="آستانه‌ی اطمینان PaddleOCR برای هر خط متن (پیش‌فرض 0.12)")
     p.add_argument("--workers", type=int, default=1)
@@ -3478,12 +5192,6 @@ def main():
         model_name=args.model,
         api_base=args.api_base,
         font_path=args.font,
-        font_shout=getattr(args, "font_shout", None),
-        font_thought=getattr(args, "font_thought", None),
-        font_whisper=getattr(args, "font_whisper", None),
-        font_explosion=getattr(args, "font_explosion", None),
-        font_sfx=getattr(args, "font_sfx", None),
-        font_black=getattr(args, "font_black", None),
         reading_order=args.reading_order,
         gpu=args.gpu,
         max_retries=args.max_retries,
@@ -3498,12 +5206,13 @@ def main():
         pad_ratio=args.pad_ratio,
         inpaint_radius=args.inpaint_radius,
         translation_temperature=args.temperature,
-        max_output_width=(args.max_width or None),
         max_output_height=(args.max_height if args.max_height and args.max_height > 0 else None),
         stitch_max_height=args.stitch_max_height,
         stitch_short_threshold=args.stitch_short_threshold,
         stitch_keep_first=not args.no_stitch_keep_first,
+        width_group_tol=float(getattr(args, "width_tol", 0.18) or 0.18),
         debug=bool(getattr(args, "debug", False)),
+        yolo_model_path=getattr(args, "yolo_model", None),
     )
     translator.run(args.input, output_path, resume=not args.no_resume, clean_old=not args.keep_old)
 
