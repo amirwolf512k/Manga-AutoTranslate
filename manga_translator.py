@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import os
+import sys
+import subprocess
 
-# قبل از import هر چیزی از Paddle — جلوگیری از کرش OneDNN روی CPU
+
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
 os.environ.setdefault("FLAGS_onednn", "0")
 os.environ.setdefault("FLAGS_enable_pir_in_executor", "0")
@@ -13,9 +15,303 @@ os.environ.setdefault("FLAGS_enable_pir_api", "0")
 os.environ.setdefault("FLAGS_pir_apply_shape_optimization_pass", "0")
 os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
 
+
+def _pip_install(*packages: str) -> bool:
+    if not packages:
+        return True
+    cmd = [sys.executable, "-m", "pip", "install", "-q", "--prefer-binary", *packages]
+    print(f"[*] نصب: {' '.join(packages)}")
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+        if r.returncode != 0:
+            err = (r.stderr or r.stdout or "")[-800:]
+            print(f"    [!] ناموفق: {err}")
+            return False
+        return True
+    except Exception as e:
+        print(f"    [!] خطا: {e}")
+        return False
+
+
+def _pip_uninstall(*packages: str) -> None:
+    try:
+        subprocess.run(
+            [sys.executable, "-m", "pip", "uninstall", "-y", *packages],
+            capture_output=True,
+            timeout=180,
+        )
+    except Exception:
+        pass
+
+
+def _can_import(module: str) -> bool:
+    try:
+        __import__(module)
+        return True
+    except Exception:
+        return False
+
+
+def _nvidia_gpu_present() -> bool:
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return True
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True, timeout=8)
+        if r.returncode == 0 and b"GPU" in (r.stdout or b""):
+            return True
+    except Exception:
+        pass
+    try:
+        if os.path.exists("/dev/nvidia0") or os.path.exists("/dev/nvidiactl"):
+            return True
+    except Exception:
+        return False
+    return False
+
+
+def _ort_has_cuda() -> bool:
+    try:
+        import onnxruntime as _ort
+        return "CUDAExecutionProvider" in _ort.get_available_providers()
+    except Exception:
+        return False
+
+
+def _ensure_all_dependencies() -> None:
+    
+    print("[*] بررسی وابستگی‌ها ...")
+
+    
+    core = []
+    if not _can_import("numpy"):
+        core.append("numpy")
+    if not _can_import("cv2"):
+        core.append("opencv-python-headless")
+    if not _can_import("PIL"):
+        core.append("Pillow")
+    if core:
+        _pip_install(*core)
+
+    
+    text_pkgs = []
+    if not _can_import("arabic_reshaper"):
+        text_pkgs.append("arabic-reshaper")
+    if not _can_import("bidi"):
+        text_pkgs.append("python-bidi")
+    if text_pkgs:
+        _pip_install(*text_pkgs)
+
+    
+    misc = []
+    if not _can_import("huggingface_hub"):
+        misc.append("huggingface_hub")
+    if not _can_import("requests"):
+        misc.append("requests")
+    if not _can_import("bs4"):
+        misc.append("beautifulsoup4")
+    if not _can_import("yaml"):
+        misc.append("pyyaml")
+    if not _can_import("tqdm"):
+        misc.append("tqdm")
+    
+    if not (_can_import("pymupdf") or _can_import("fitz")):
+        misc.append("pymupdf")
+    if misc:
+        _pip_install(*misc)
+
+    
+    if not _can_import("rapidocr_onnxruntime"):
+        _pip_install("rapidocr-onnxruntime")
+
+    
+    if not _can_import("google.genai") and not _can_import("google.generativeai"):
+        _pip_install("google-genai")
+    if not _can_import("openai"):
+        _pip_install("openai")
+
+
+    
+    import platform as _platform
+
+    want_gpu = _nvidia_gpu_present()
+    has_ort = _can_import("onnxruntime")
+    has_cuda = _ort_has_cuda() if has_ort else False
+
+    def _torch_cuda_ver() -> str:
+        try:
+            import torch
+            return str(getattr(torch.version, "cuda", None) or "")
+        except Exception:
+            return ""
+
+    def _cuda_major() -> int:
+        ver = _torch_cuda_ver()
+        try:
+            return int(ver.split(".")[0])
+        except Exception:
+            return 0
+
+    def _clear_ort_modules() -> None:
+        for name in list(sys.modules):
+            if name == "onnxruntime" or name.startswith("onnxruntime."):
+                del sys.modules[name]
+
+    def _ort_prepare_cuda() -> bool:
+        
+        try:
+            import torch  
+        except Exception:
+            pass
+        try:
+            import onnxruntime as _ort
+            if hasattr(_ort, "preload_dlls"):
+                try:
+                    _ort.preload_dlls()
+                except Exception:
+                    pass
+            prov = list(_ort.get_available_providers())
+            ok = "CUDAExecutionProvider" in prov
+            print(f"    providers: {prov}")
+            return ok
+        except Exception as e:
+            print(f"    [!] import ort: {e}")
+            return False
+
+    def _install_ort_cpu() -> None:
+        
+        if _can_import("onnxruntime"):
+            print("[*] onnxruntime از قبل هست (CPU یا GPU).")
+            return
+        print("[*] نصب onnxruntime (CPU) ...")
+        _pip_install("onnxruntime")
+
+    def _install_ort_gpu() -> str:
+        
+        if _platform.system().lower() == "darwin":
+            print("[*] macOS → فقط CPU")
+            return "fail"
+
+        major = _cuda_major()
+        ver = _torch_cuda_ver() or "?"
+        print(f"[*] GPU پیدا شد (CUDA={ver} | OS={_platform.system()}) → onnxruntime-gpu ...")
+        _pip_uninstall("onnxruntime", "onnxruntime-gpu")
+
+        ok_pip = False
+        if major >= 13:
+            print("[*] CUDA 13+ → ort-cuda-13-nightly")
+            cmd = [
+                sys.executable, "-m", "pip", "install", "-q", "--prefer-binary", "--pre",
+                "--index-url",
+                "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/",
+                "onnxruntime-gpu",
+            ]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                ok_pip = r.returncode == 0
+                if not ok_pip:
+                    print("    [!] nightly ناموفق → PyPI onnxruntime-gpu")
+                    ok_pip = _pip_install("onnxruntime-gpu")
+            except Exception as e:
+                print(f"    [!] {e}")
+                ok_pip = _pip_install("onnxruntime-gpu")
+        elif major == 12 or major == 0:
+            print("[*] CUDA 12 → onnxruntime-gpu==1.26.0 (+ cuda/cudnn runtime)")
+            ok_pip = _pip_install("onnxruntime-gpu==1.26.0")
+            if not ok_pip:
+                for pkg in ("onnxruntime-gpu==1.25.1", "onnxruntime-gpu==1.22.0"):
+                    print(f"    fallback: {pkg}")
+                    if _pip_install(pkg):
+                        ok_pip = True
+                        break
+            
+            if ok_pip:
+                if not _pip_install("onnxruntime-gpu[cuda,cudnn]==1.26.0"):
+                    _pip_install(
+                        "nvidia-cublas-cu12",
+                        "nvidia-cudnn-cu12",
+                        "nvidia-cuda-runtime-cu12",
+                        "nvidia-cufft-cu12",
+                        "nvidia-curand-cu12",
+                    )
+        elif major == 11:
+            print("[*] CUDA 11 → feed cuda-11")
+            subprocess.run(
+                [sys.executable, "-m", "pip", "install", "-q", "--prefer-binary",
+                 "coloredlogs", "flatbuffers", "numpy", "packaging", "protobuf", "sympy"],
+                capture_output=True, timeout=300,
+            )
+            cmd = [
+                sys.executable, "-m", "pip", "install", "-q", "--prefer-binary",
+                "onnxruntime-gpu",
+                "--index-url",
+                "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/onnxruntime-cuda-11/pypi/simple/",
+            ]
+            try:
+                r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                ok_pip = r.returncode == 0
+            except Exception:
+                ok_pip = False
+            if not ok_pip:
+                ok_pip = _pip_install("onnxruntime-gpu==1.18.1")
+        else:
+            ok_pip = _pip_install("onnxruntime-gpu")
+
+        if not ok_pip:
+            return "fail"
+
+        _clear_ort_modules()
+        if _ort_prepare_cuda():
+            print("[+] onnxruntime-gpu با CUDAExecutionProvider آماده است.")
+            return "cuda"
+
+        
+        print(
+            "[!] CUDA EP الان در providers نیست. "
+            "بستهٔ GPU نگه داشته می‌شود؛ یک‌بار Restart session بزن یا ادامه با CPU provider."
+        )
+        return "cpu"
+
+    if want_gpu:
+        major = _cuda_major()
+        need_repin = False
+        if has_cuda and major == 12:
+            try:
+                import onnxruntime as _ort
+                ov = getattr(_ort, "__version__", "") or ""
+                parts = ov.split(".")
+                if len(parts) >= 2 and int(parts[0]) == 1 and int(parts[1]) >= 27:
+                    need_repin = True
+                    print(f"[*] ORT {ov} برای CUDA13 است؛ سیستم CUDA12 → 1.26.0")
+            except Exception:
+                pass
+
+        if has_cuda and not need_repin:
+            print("[*] onnxruntime-gpu آماده (CUDA).")
+            _ort_prepare_cuda()
+        else:
+            status = _install_ort_gpu()
+            if status == "fail":
+                _install_ort_cpu()
+            elif status in ("cuda", "cpu"):
+                
+                if os.environ.get("_ORT_GPU_REEXEC") != "1":
+                    print("[*] راه‌اندازی مجدد پروسه برای لود CUDA libs ...")
+                    os.environ["_ORT_GPU_REEXEC"] = "1"
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
+    else:
+        _install_ort_cpu()
+
+    print("[+] بررسی وابستگی‌ها تمام شد.\\n")
+
+
+_ensure_all_dependencies()
+
 import json
 import re
-import sys
 import shutil
 import string
 import time
@@ -26,10 +322,11 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict
 import threading
+import random
+
 import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageFont
-import random
 
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
 os.environ.setdefault("FLAGS_onednn", "0")
@@ -38,8 +335,7 @@ try:
     import arabic_reshaper
     from bidi.algorithm import get_display
 except ImportError:
-    print("خطا: کتابخانه‌های arabic_reshaper و python-bidi نصب نیستند.\n"
-          "دستور: pip install arabic-reshaper python-bidi", file=sys.stderr)
+    print("خطا: arabic-reshaper / python-bidi بعد از نصب خودکار هنوز نیستند.", file=sys.stderr)
     raise
 
 _HAS_GEMINI = False
@@ -60,20 +356,25 @@ try:
 except ImportError:
     OpenAI = None
 
-# ── ONNX backends (CPU-first, GPU auto) ──────────────────────────────
 try:
     import onnxruntime as ort
+    try:
+        import torch  
+    except Exception:
+        pass
+    try:
+        if hasattr(ort, "preload_dlls"):
+            ort.preload_dlls()
+    except Exception:
+        pass
 except ImportError:
-    print("خطا: onnxruntime نصب نیست.\n"
-          "  CPU: pip install onnxruntime\n"
-          "  GPU: pip install onnxruntime-gpu", file=sys.stderr)
+    print("خطا: onnxruntime نصب نشد.", file=sys.stderr)
     raise
 
 try:
     from huggingface_hub import hf_hub_download
 except ImportError:
-    print("خطا: huggingface_hub نصب نیست.\n"
-          "دستور: pip install huggingface_hub", file=sys.stderr)
+    print("خطا: huggingface_hub نصب نشد.", file=sys.stderr)
     raise
 
 _HAS_RAPIDOCR = False
@@ -83,7 +384,6 @@ try:
 except ImportError:
     RapidOCR = None
 
-# PaddleOCR فقط به‌عنوان fallback اختیاری
 _HAS_PADDLE = False
 try:
     from paddleocr import PaddleOCR
@@ -91,13 +391,55 @@ try:
 except ImportError:
     PaddleOCR = None
 
-# torch فقط برای تشخیص وجود CUDA (اختیاری)
+
 def _torch_cuda_available() -> bool:
     try:
         import torch
         return bool(torch.cuda.is_available())
     except Exception:
         return False
+
+
+def _system_cpu_count() -> int:
+    try:
+        return max(1, int(os.cpu_count() or 1))
+    except Exception:
+        return 1
+
+
+def _recommend_parallelism(use_gpu: bool, vram_gb: float = 0.0, user_workers: int = 0) -> dict:
+    cpus = _system_cpu_count()
+    if use_gpu:
+        if vram_gb >= 10:
+            page_w, ocr_w = 3, 3
+        elif vram_gb >= 6:
+            page_w, ocr_w = 2, 2
+        elif vram_gb >= 3.5:
+            page_w, ocr_w = 2, 2
+        else:
+            page_w, ocr_w = 1, 1
+        chunk_w = 1
+        ort_threads = 2
+    else:
+        
+        page_w = min(3, max(1, cpus // 3))
+        ocr_w = min(6, max(2, cpus // 2))
+        chunk_w = 1
+        ort_threads = max(1, min(4, cpus // max(1, page_w)))
+
+    if user_workers and user_workers > 1:
+        page_w = max(1, min(page_w, user_workers))
+        ocr_w = max(1, min(ocr_w if use_gpu else cpus, user_workers))
+
+    return {
+        "cpus": cpus,
+        "page_workers": max(1, int(page_w)),
+        "ocr_workers": max(1, int(ocr_w)),
+        "chunk_workers": max(1, int(chunk_w)),
+        "ort_threads": max(1, int(ort_threads)),
+        "use_gpu": bool(use_gpu),
+        "vram_gb": float(vram_gb or 0.0),
+    }
 
 
 PROVIDER_PRESETS = {
@@ -131,8 +473,8 @@ class TextRegion:
     det_confidence: float = 0.0
     
     bubble_style: str = "normal"
-    shape_type: str = "circle"  # circle | round | box | jagged
-    mask_poly: Optional[object] = None  # np.ndarray کانتور ماسک برای دیباگ
+    shape_type: str = "circle"  
+    mask_poly: Optional[object] = None  
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -276,20 +618,20 @@ def uncensor_swears(text: str) -> str:
 
 
 
-# ═══════════════════════════════════════════════════════════════════════
-# ONNX helper backends (embedded – no separate file needed)
-# ═══════════════════════════════════════════════════════════════════════
+
+
+
 
 def _ort_providers(prefer_gpu: bool = True):
-    available = ort.get_available_providers()
+    available = set(ort.get_available_providers())
     order = []
-    if prefer_gpu:
-        for p in ("TensorrtExecutionProvider", "CUDAExecutionProvider", "CoreMLExecutionProvider"):
-            if p in available:
-                order.append(p)
+    if prefer_gpu and "CUDAExecutionProvider" in available:
+        order.append("CUDAExecutionProvider")
+    elif prefer_gpu and "CoreMLExecutionProvider" in available:
+        order.append("CoreMLExecutionProvider")
     if "CPUExecutionProvider" in available:
         order.append("CPUExecutionProvider")
-    return order or list(available)
+    return order or ["CPUExecutionProvider"]
 
 
 def _ort_session_options(threads: int = 4):
@@ -304,27 +646,78 @@ def _ort_session_options(threads: int = 4):
     return so
 
 
+_ORT_CUDA_OK = None  
+
+
+def _prepare_ort_cuda_dlls() -> None:
+    
+    try:
+        import torch  
+        if torch.cuda.is_available():
+            
+            try:
+                _ = torch.empty(1, device="cuda")
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        if hasattr(ort, "preload_dlls"):
+            
+            try:
+                ort.preload_dlls(cuda=True, cudnn=True, msvc=True, directory="")
+            except TypeError:
+                ort.preload_dlls()
+            except Exception:
+                try:
+                    ort.preload_dlls()
+                except Exception:
+                    pass
+    except Exception:
+        pass
+
+
 def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4):
-    return ort.InferenceSession(
-        model_path,
-        sess_options=_ort_session_options(threads),
-        providers=_ort_providers(prefer_gpu),
-    )
+    
+    global _ORT_CUDA_OK
+    so = _ort_session_options(threads)
+    want = prefer_gpu and (_ORT_CUDA_OK is not False)
+
+    if want:
+        _prepare_ort_cuda_dlls()
+
+    
+    if want and "CUDAExecutionProvider" in ort.get_available_providers():
+        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    else:
+        providers = ["CPUExecutionProvider"]
+
+    try:
+        sess = ort.InferenceSession(model_path, sess_options=so, providers=providers)
+    except Exception as e:
+        print(f"[!] InferenceSession GPU ناموفق ({e}) → CPU")
+        _ORT_CUDA_OK = False
+        sess = ort.InferenceSession(
+            model_path, sess_options=so, providers=["CPUExecutionProvider"]
+        )
+
+    active = list(sess.get_providers())
+    if want and "CUDAExecutionProvider" in active:
+        _ORT_CUDA_OK = True
+    elif want:
+        _ORT_CUDA_OK = False
+        print(
+            f"[!] session providers={active} (CUDA ساخته نشد؛ "
+            f"اغلب کمبود cuDNN/cublas یا تداخل TensorRT). "
+            f"امتحان: pip install 'onnxruntime-gpu[cuda,cudnn]==1.26.0'"
+        )
+    return sess
 
 
 class RTDetrV2ONNXDetector:
-    """تشخیص متن و حباب مانگا با RT-DETR-v2 ONNX (ogkalu/comic-text-and-bubble-detector).
-
-    کلاس‌ها:
-      0: bubble       — حباب خالی/کادر
-      1: text_bubble  — متن داخل حباب (اولویت اصلی برای OCR)
-      2: text_free    — متن آزاد بیرون حباب
-
-    خروجی با فرمت قبلی سازگار است تا بقیهٔ پایپ‌لاین عوض نشود.
-    """
 
     DET_REPO = "ogkalu/comic-text-and-bubble-detector"
-    # ترجیح: int8 سبک‌تر؛ در صورت نبود → detector.onnx کامل
+    
     DET_FILES = ("detector-v4-s_int8.onnx", "detector.onnx", "detector-v4.onnx")
     CLASS_NAMES = {
         0: "bubble",
@@ -338,8 +731,8 @@ class RTDetrV2ONNXDetector:
         self,
         model_path: Optional[str] = None,
         prefer_gpu: bool = True,
-        conf_thresh: float = 0.28,
-        iou_thresh: float = 0.45,
+        conf_thresh: float = 0.35,
+        iou_thresh: float = 0.40,
         threads: int = 4,
         multi_scale: bool = False,
         cache_dir: Optional[str] = None,
@@ -386,21 +779,21 @@ class RTDetrV2ONNXDetector:
         rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         resized = cv2.resize(rgb, (self.INPUT_SIZE, self.INPUT_SIZE), interpolation=cv2.INTER_LINEAR)
         arr = resized.astype(np.float32) / 255.0
-        arr = arr.transpose(2, 0, 1)[None]  # 1x3xHxW
+        arr = arr.transpose(2, 0, 1)[None]  
         orig_size = np.array([[w0, h0]], dtype=np.int64)
         return arr, orig_size, h0, w0
 
     def _parse_outputs(self, outputs, h0: int, w0: int, threshold: float) -> List[dict]:
         if not outputs or len(outputs) < 3:
-            # بعضی exportها: boxes, scores, labels ترتیب متفاوت
+            
             if len(outputs) >= 3:
                 pass
             else:
                 return []
 
         labels, boxes, scores = outputs[0], outputs[1], outputs[2]
-        # اگر ترتیب labels/boxes/scores نبود، حدس بزن
-        # RT-DETR استاندارد: labels, boxes, scores
+        
+        
         def _squeeze(a):
             a = np.asarray(a)
             if a.ndim >= 2 and a.shape[0] == 1:
@@ -411,11 +804,11 @@ class RTDetrV2ONNXDetector:
         boxes = _squeeze(boxes)
         scores = _squeeze(scores)
 
-        # اگر scores شبیه labels به نظر برسد جابه‌جا کن
+        
         if scores.ndim == 1 and labels.ndim == 1 and boxes.ndim == 2:
             pass
         elif boxes.ndim == 1:
-            # ممکن است ترتیب boxes, labels, scores باشد
+            
             labels, boxes, scores = _squeeze(outputs[1]), _squeeze(outputs[0]), _squeeze(outputs[2])
 
         raw: List[dict] = []
@@ -426,15 +819,17 @@ class RTDetrV2ONNXDetector:
                 continue
             lab = int(labels[i])
             name = self.CLASS_NAMES.get(lab, "text_bubble")
-            # حباب خالی بدون متن را رد کن — فقط برای متن OCR می‌خواهیم
+            
             if name == "bubble":
-                # نگه می‌داریم با اولویت پایین تا در صورت نیاز برای ماسک استفاده شود
-                name = "text_bubble"  # بعضی صفحات فقط bubble می‌زنند
+                
+                if conf < 0.48:
+                    continue
+                name = "text_bubble"
             box = boxes[i]
             if len(box) < 4:
                 continue
             x1, y1, x2, y2 = [float(v) for v in box[:4]]
-            # اگر مختصات نرمال [0,1] بود
+            
             if 0.0 <= x1 <= 1.5 and 0.0 <= x2 <= 1.5 and x2 <= 2.0:
                 x1, x2 = x1 * w0, x2 * w0
                 y1, y2 = y1 * h0, y2 * h0
@@ -442,10 +837,15 @@ class RTDetrV2ONNXDetector:
             y1 = int(max(0, min(h0 - 1, round(y1))))
             x2 = int(max(0, min(w0, round(x2))))
             y2 = int(max(0, min(h0, round(y2))))
-            if x2 - x1 < 8 or y2 - y1 < 8:
+            
+            if x2 - x1 < 12 or y2 - y1 < 12:
                 continue
-            # shape ساده از نسبت ابعاد
             bw, bh = x2 - x1, y2 - y1
+            area = bw * bh
+            
+            if area < 400:
+                continue
+            
             ar = bw / max(1, bh)
             if 0.75 <= ar <= 1.35:
                 shape = "circle"
@@ -455,7 +855,7 @@ class RTDetrV2ONNXDetector:
                 shape = "round"
             raw.append({
                 "class_id": lab,
-                "class_name": name if lab != 0 else "text_bubble",
+                "class_name": name,
                 "confidence": conf,
                 "rect": [x1, y1, x2, y2],
                 "shape_type": shape,
@@ -477,7 +877,7 @@ class RTDetrV2ONNXDetector:
             areaA = (a[2] - a[0]) * (a[3] - a[1])
             areaB = (b[2] - b[0]) * (b[3] - b[1])
             return inter / float(areaA + areaB - inter)
-        # اولویت: text_bubble > text_free
+        
         priority = {"text_bubble": 2, "text_free": 1, "bubble": 0}
         boxes = sorted(
             boxes,
@@ -504,26 +904,29 @@ class RTDetrV2ONNXDetector:
         all_boxes = []
         all_boxes.extend(self._detect_single(image_bgr, self.conf_thresh))
 
-        # پاس دوم با آستانه پایین‌تر برای متن‌های کوچک
-        low_boxes = self._detect_single(image_bgr, max(0.15, self.conf_thresh * 0.55))
+        
+        low_th = max(0.22, self.conf_thresh * 0.65)
+        low_boxes = self._detect_single(image_bgr, low_th)
         page_area = float(max(1, h * w))
         for b in low_boxes:
             x1, y1, x2, y2 = b["rect"]
             bw, bh = x2 - x1, y2 - y1
             area = bw * bh
-            if area < page_area * 0.05 and bw < w * 0.4 and bh < h * 0.3:
+            
+            if (area < page_area * 0.04 and bw < w * 0.35 and bh < h * 0.25
+                    and b["confidence"] >= low_th + 0.05):
                 all_boxes.append(b)
 
-        # multi-scale اختیاری
-        if self.multi_scale and h >= 900 and w >= 400:
-            for scale, th_factor in ((0.55, 0.70),):
+        
+        if self.multi_scale and h >= 1100 and w >= 500:
+            for scale, th_factor in ((0.55, 0.75),):
                 sw = max(1, int(w * scale))
                 sh = max(1, int(h * scale))
-                if sw < 240 or sh < 240:
+                if sw < 280 or sh < 280:
                     continue
                 small = cv2.resize(image_bgr, (sw, sh), interpolation=cv2.INTER_AREA)
-                low_th = max(0.15, self.conf_thresh * th_factor)
-                small_boxes = self._detect_single(small, low_th)
+                low_th2 = max(0.22, self.conf_thresh * th_factor)
+                small_boxes = self._detect_single(small, low_th2)
                 inv = 1.0 / scale
                 for b in small_boxes:
                     x1, y1, x2, y2 = b["rect"]
@@ -531,13 +934,14 @@ class RTDetrV2ONNXDetector:
                     bw = b["rect"][2] - b["rect"][0]
                     bh = b["rect"][3] - b["rect"][1]
                     area = bw * bh
-                    if area < page_area * 0.05 and max(bw, bh) < max(w, h) * 0.4:
+                    if (area < page_area * 0.04 and max(bw, bh) < max(w, h) * 0.35
+                            and b["confidence"] >= low_th2):
                         all_boxes.append(b)
 
-        return self._nms(all_boxes, max(0.35, self.iou_thresh * 0.85))
+        return self._nms(all_boxes, max(0.38, self.iou_thresh * 0.9))
 
 
-# سازگاری با کد قدیمی
+
 YoloSegONNXDetector = RTDetrV2ONNXDetector
 RTDetrONNXDetector = RTDetrV2ONNXDetector
 
@@ -566,7 +970,7 @@ class RapidOCRBackend:
 
 
 class PaddleOCRv3Backend:
-    """سازگار با PaddleOCR 3.x — خروجی یکنواخت مثل فرمت قدیمی."""
+    
 
     _debug_once = True
 
@@ -619,7 +1023,7 @@ class PaddleOCRv3Backend:
     def ocr(self, image_bgr: np.ndarray):
         if image_bgr is None or image_bgr.size == 0:
             return None
-        # بعضی نسخه‌ها با RGB بهتر کار می‌کنند
+        
         if image_bgr.ndim == 3 and image_bgr.shape[2] == 3:
             image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
         else:
@@ -677,7 +1081,7 @@ class PaddleOCRv3Backend:
         if result is None:
             return lines
 
-        # فرمت خیلی قدیمی: [[[box,(text,score)],...]]
+        
         if isinstance(result, list) and result:
             first = result[0]
             if isinstance(first, (list, tuple)) and first:
@@ -703,7 +1107,7 @@ class PaddleOCRv3Backend:
         for page in pages:
             rec_texts = rec_scores = polys = None
 
-            # 1) attribute روی Result
+            
             for obj in (page, getattr(page, "res", None)):
                 if obj is None:
                     continue
@@ -714,7 +1118,7 @@ class PaddleOCRv3Backend:
                 if polys is None:
                     polys = getattr(obj, "rec_polys", None) or getattr(obj, "dt_polys", None) or getattr(obj, "rec_boxes", None)
 
-            # 2) dict / Mapping
+            
             data = page
             if not isinstance(data, dict):
                 for attr in ("json", "res", "data"):
@@ -738,7 +1142,7 @@ class PaddleOCRv3Backend:
                 if polys is None:
                     polys = data.get("rec_polys") or data.get("dt_polys") or data.get("rec_boxes")
 
-            # 3) __getitem__ style
+            
             if rec_texts is None and hasattr(page, "__getitem__"):
                 try:
                     rec_texts = page["rec_texts"]
@@ -759,7 +1163,7 @@ class PaddleOCRv3Backend:
             if not rec_texts:
                 continue
             if len(rec_texts) == 1 and isinstance(rec_texts[0], (list, tuple)):
-                # گاهی [[texts...]]
+                
                 if rec_texts[0] and isinstance(rec_texts[0][0], str):
                     rec_texts = list(rec_texts[0])
 
@@ -795,21 +1199,21 @@ class PaddleOCRv3Backend:
 
 
 class LamaONNX:
-    # مدل ترجیحی: نسخهٔ سبک و بهینه‌شدهٔ پروژهٔ K3 (مناسب CPU و موبایل)
+    
     K3_URL = "https://media.githubusercontent.com/media/Kthree-K3/K3-Manga-AutoTranslate-Mobile/main/Models/lama.onnx"
-    # fallback
+    
     REPO = "Carve/LaMa-ONNX"
     FILE = "lama_fp32.onnx"
 
     def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
                  size: int = 512, threads: int = 4, cache_dir: Optional[str] = None):
         self.prefer_gpu = bool(prefer_gpu)
-        # روی CPU سقف ۲۵۶ = سرعت بیشتر و RAM کمتر
+        
         self.size = 256 if not prefer_gpu else size
         if not model_path or not os.path.isfile(model_path):
             model_path = self._download_model(cache_dir=cache_dir)
         self.model_path = model_path
-        # CPU: ۱ thread کافی و پایدارتر (کمتر contention)
+        
         use_threads = 1 if not prefer_gpu else max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
         print(
@@ -828,7 +1232,7 @@ class LamaONNX:
 
     @classmethod
     def _download_model(cls, cache_dir: Optional[str] = None) -> str:
-        """اول مدل K3 را از گیت‌هاب می‌گیرد؛ در صورت شکست به HuggingFace."""
+        
         from pathlib import Path
         cache_root = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "manga_translator_models"
         cache_root.mkdir(parents=True, exist_ok=True)
@@ -860,12 +1264,12 @@ class LamaONNX:
         return hf_hub_download(repo_id=cls.REPO, filename=cls.FILE, cache_dir=cache_dir)
 
     def _pick_size(self, w: int, h: int) -> int:
-        """سایز پویا: حباب کوچک‌تر → ورودی کوچک‌تر → سرعت بیشتر و RAM کمتر."""
+        
         m = max(int(w), int(h))
         if not self.prefer_gpu:
-            # CPU: همیشه ۲۵۶ — برای پاک کردن متن مانگا کافی و حدود ۲–۳× سریع‌تر از ۳۸۴
+            
             return 256
-        # GPU: کیفیت بالاتر مجاز
+        
         if m <= 180:
             return 256
         if m <= 320:
@@ -882,7 +1286,7 @@ class LamaONNX:
             if mask.ndim == 3:
                 mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
             mask = Image.fromarray(mask)
-        orig_size = image.size  # (w, h)
+        orig_size = image.size  
         run_size = self._pick_size(orig_size[0], orig_size[1])
         img = image.convert("RGB").resize((run_size, run_size), Image.LANCZOS)
         msk = mask.convert("L").resize((run_size, run_size), Image.NEAREST)
@@ -893,7 +1297,7 @@ class LamaONNX:
         out = self.session.run(None, {self._in_image: img_np, self._in_mask: mask_np})[0]
         out = np.clip(out[0].transpose(1, 2, 0), 0, 1)
         out = (out * 255).astype(np.uint8) if out.max() <= 1.01 else np.clip(out, 0, 255).astype(np.uint8)
-        # آزادسازی میانی
+        
         del img_np, mask_np, img, msk
         return Image.fromarray(out).resize(orig_size, Image.LANCZOS)
 
@@ -939,7 +1343,7 @@ class MangaTranslator:
         return ""
 
     def _decide_lama(self, force_gpu: Optional[bool]) -> bool:
-        """روی GPU به‌صورت پیش‌فرض LaMa ONNX؛ روی CPU فقط اگر --gpu زده شود."""
+        
         has_ort_gpu = self._detect_ort_gpu()
         has_cuda = self._detect_torch_cuda() or has_ort_gpu
         vram = self._cuda_vram_gb()
@@ -977,11 +1381,11 @@ class MangaTranslator:
         min_confidence: float = 0.12,
         det_confidence: float = 0.25,
         det_iou_threshold: float = 0.45,
-        max_retries: int = 12,  # به اندازه cascade مدل‌ها
+        max_retries: int = 12,  
         request_delay: float = 0.0,
         img_format: str = "jpg",
         img_quality: int = 95,
-        max_workers: int = 1,
+        max_workers: int = 0,
         translation_temperature: float = 0.85,
         max_output_width: Optional[int] = None,
         max_output_height: Optional[int] = None,
@@ -1038,22 +1442,22 @@ class MangaTranslator:
         self.font_path = font_path
         
         self.font_by_style: Dict[str, str] = {
-            "normal": font_path,  # کودک
-            "shout": font_shout or font_path,  # افسانه
-            "comedy_shout": font_comedy_shout or font_shout or font_path,  # کروش
-            "whisper": font_whisper or font_path,  # دست‌نویس
-            "sun_thought": font_sun_thought or font_thought or font_path,  # مهر
-            "thought": font_thought or font_path,  # مروارید
-            "free_text": font_free_text or font_path,  # ارامکو/هوما/تهران
-            "system": font_system or font_path,  # اصفهان/فرناز
-            "monster": font_monster or font_sfx or font_path,  # کردی
-            "cry": font_cry or font_path,  # موج/هاله
-            "fear": font_fear or font_path,  # صحرا
-            "broadcast": font_broadcast or font_path,  # اکبر/اسمان/مثلث
-            "letter": font_letter or font_path,  # آندالوس/فورات
-            "narrator": font_narrator or font_path,  # الهام
-            "square_thought": font_square_thought or font_thought or font_path,  # یکان
-            "black": font_black or font_path,  # اتابای/فرزیانی/زنگار
+            "normal": font_path,  
+            "shout": font_shout or font_path,  
+            "comedy_shout": font_comedy_shout or font_shout or font_path,  
+            "whisper": font_whisper or font_path,  
+            "sun_thought": font_sun_thought or font_thought or font_path,  
+            "thought": font_thought or font_path,  
+            "free_text": font_free_text or font_path,  
+            "system": font_system or font_path,  
+            "monster": font_monster or font_sfx or font_path,  
+            "cry": font_cry or font_path,  
+            "fear": font_fear or font_path,  
+            "broadcast": font_broadcast or font_path,  
+            "letter": font_letter or font_path,  
+            "narrator": font_narrator or font_path,  
+            "square_thought": font_square_thought or font_thought or font_path,  
+            "black": font_black or font_path,  
             "explosion": font_explosion or font_shout or font_path,
             "sfx_shape": font_sfx or font_path,
             "sfx": font_sfx or font_path,
@@ -1071,10 +1475,10 @@ class MangaTranslator:
         self.det_iou_threshold = det_iou_threshold
         self.max_retries = max_retries
         self.request_delay = request_delay
-        self.api_timeout = 10.0  # ثانیه؛ اگر جواب نیامد سریع مدل/کلید عوض شود
+        self.api_timeout = 10.0  
         self.img_format = img_format
         self.img_quality = img_quality
-        self.max_workers = max(1, int(max_workers))
+        self.max_workers = max(0, int(max_workers))  
         self.translation_temperature = translation_temperature
         self.max_output_width = max_output_width
         self.max_output_height = max_output_height
@@ -1098,37 +1502,65 @@ class MangaTranslator:
             )
 
         
-        # ── GPU / CPU ──
+        
         if gpu is None:
-            ocr_gpu = self._detect_ort_gpu()
-            if ocr_gpu:
-                print("[*] GPU (ONNX Runtime) شناسایی شد.")
+            has_ort = self._detect_ort_gpu()
+            has_torch = self._detect_torch_cuda()
+            ocr_gpu = bool(has_ort or has_torch)
+            if has_ort:
+                print("[*] GPU شناسایی شد (ONNX Runtime CUDA).")
+            elif has_torch:
+                print(
+                    "[*] GPU سخت‌افزاری (PyTorch) هست؛ ORT هنوز روی CPU است. "
+                    "اگر نصب GPU ORT موفق شود بعد از Restart سریع‌تر می‌شود."
+                )
             else:
-                print("[*] GPU پیدا نشد → همه مدل‌ها روی CPU (ONNX).")
+                print("[*] GPU پیدا نشد → همه مدل‌ها روی CPU.")
         else:
             ocr_gpu = bool(gpu)
             print(f"[*] اجبار به {'GPU' if ocr_gpu else 'CPU'}.")
-        self.use_gpu = ocr_gpu
-        self._ort_threads = 4 if not ocr_gpu else 4
+        
+        self.use_gpu = bool(self._detect_ort_gpu()) if gpu is None else bool(gpu)
+        vram = self._cuda_vram_gb() if ocr_gpu else 0.0
+        user_w = int(max_workers) if max_workers else 0
+        cap = _recommend_parallelism(use_gpu=ocr_gpu, vram_gb=vram, user_workers=user_w if user_w > 1 else 0)
+        self.ocr_workers = cap["ocr_workers"]
+        self.page_workers = cap["page_workers"]
+        self._ort_threads = cap["ort_threads"]
+        self._det_lock = threading.Lock()
+        self._title_skip_lock = threading.Lock()
+        if user_w > 1:
+            self.max_workers = user_w
+            self.page_workers = max(1, min(self.page_workers, user_w))
+            if not ocr_gpu:
+                self.ocr_workers = max(self.ocr_workers, min(user_w, cap["cpus"]))
+        else:
+            self.max_workers = cap["chunk_workers"]
+        print(
+            f"[*] توان سیستم: CPU={cap['cpus']} هسته | "
+            f"GPU={'بله' if ocr_gpu else 'خیر'}"
+            + (f" ({vram:.1f} GB)" if ocr_gpu and vram > 0 else "")
+            + f" → صفحهٔ هم‌زمان={self.page_workers} | OCR موازی={self.ocr_workers} | "
+              f"chunk={self.max_workers} | ORT-threads={self._ort_threads}"
+        )
 
-        # ── LaMa ──
         self.use_lama = self._decide_lama(force_gpu=gpu)
 
-        # ── Detection ONNX ──
+        
         print(f"[*] بارگذاری RT-DETR-v2 ONNX ({self.DET_REPO}) ...")
         self.det = YoloSegONNXDetector(
-            prefer_gpu=ocr_gpu,
+            prefer_gpu=self.use_gpu,
             conf_thresh=self.det_confidence,
             iou_thresh=self.det_iou_threshold,
             threads=self._ort_threads,
-            multi_scale=True,  # برای حباب‌های کوچک (مثل SIR!) ضروری است
+            multi_scale=bool(self.use_gpu),
         )
         self._det_device = "cuda" if ocr_gpu else "cpu"
-        # سازگاری با کد قدیمی که ممکنه به این‌ها اشاره کند
+        
         self.det_processor = None
         self.det_model = None
 
-        # ── OCR ONNX ──
+        
         self.ocr_langs = ocr_langs or ["en"]
         lang_map = {
             "en": "en", "fa": "fa", "ko": "korean", "ja": "japan", "zh": "ch",
@@ -1142,13 +1574,13 @@ class MangaTranslator:
                 break
 
         self.ocr = None
-        # اولویت ۱: RapidOCR (ONNX خالص — پایدار روی CPU، بدون OneDNN/Paddle)
+        
         if _HAS_RAPIDOCR:
             try:
                 self.ocr = RapidOCRBackend(lang=main_lang)
             except Exception as e:
                 print(f"[!] RapidOCR لود نشد ({e})")
-        # اولویت ۲: PaddleOCR (روی بعضی CPUها با OneDNN خطا می‌دهد)
+        
         if self.ocr is None and _HAS_PADDLE:
             try:
                 self.ocr = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
@@ -1161,7 +1593,37 @@ class MangaTranslator:
                 "  یا: pip install rapidocr-onnxruntime"
             )
 
-        
+        self._ocr_pool = None
+        self._ocr_pool_size = 1
+        n_pool = max(1, int(getattr(self, "ocr_workers", 1) or 1))
+        if n_pool > 1:
+            try:
+                from queue import Queue
+                pool_q = Queue()
+                engines = [self.ocr]
+                for i in range(1, n_pool):
+                    eng = None
+                    try:
+                        if _HAS_RAPIDOCR and isinstance(self.ocr, RapidOCRBackend):
+                            eng = RapidOCRBackend(lang=main_lang)
+                        elif _HAS_PADDLE and isinstance(self.ocr, PaddleOCRv3Backend):
+                            eng = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
+                    except Exception as e:
+                        print(f"    [!] OCR موازی #{i + 1} لود نشد ({e})")
+                    if eng is not None:
+                        engines.append(eng)
+                for eng in engines:
+                    pool_q.put(eng)
+                self._ocr_pool = pool_q
+                self._ocr_pool_size = len(engines)
+                self.ocr_workers = self._ocr_pool_size
+                if self._ocr_pool_size > 1:
+                    print(f"[+] استخر OCR موازی: {self._ocr_pool_size} موتور")
+            except Exception as e:
+                print(f"[!] ساخت استخر OCR ناموفق ({e}) → تک‌موتوره")
+                self._ocr_pool = None
+                self.ocr_workers = 1
+
         if self.provider_type == "gemini":
             if not _HAS_GEMINI:
                 raise ImportError("برای استفاده از Gemini باید google-genai نصب باشد:\n  pip install google-genai")
@@ -1197,6 +1659,18 @@ class MangaTranslator:
                 self.use_lama = False
                 self._lama = None
         return self._lama
+
+    def _ocr_engine_call(self, image_bgr: np.ndarray):
+        
+        pool = getattr(self, "_ocr_pool", None)
+        if pool is not None:
+            eng = pool.get()
+            try:
+                return eng.ocr(image_bgr)
+            finally:
+                pool.put(eng)
+        with self._ocr_lock:
+            return self.ocr.ocr(image_bgr)
 
     def _mask_key(self, key: str) -> str:
         if not key:
@@ -1236,7 +1710,7 @@ class MangaTranslator:
 
     @staticmethod
     def _static_fallback_models(primary: str) -> List[str]:
-        # از جدید به قدیم: 3.7 → … → 2.5 → latest → قدیمی‌تر
+        
         preferred = [
             "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash",
             "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
@@ -1252,7 +1726,7 @@ class MangaTranslator:
 
     @staticmethod
     def _model_sort_key(name: str) -> tuple:
-        """اولویت: نسخه‌های جدیدتر اول (۳.۷ → ۳.۶ → … → ۲.۵ → latest → قدیمی)."""
+        
         n = name.lower().replace("models/", "")
         ver_m = re.search(r"gemini-(\d+(?:\.\d+)?)", n)
         major_minor = 0.0
@@ -1266,7 +1740,7 @@ class MangaTranslator:
         is_pro = "pro" in n and "flash" not in n
         is_latest = n.endswith("-latest") or n in ("gemini-flash-latest", "gemini-flash-lite-latest", "gemini-pro-latest")
 
-        # family: flash معمولی اول، بعد lite، بعد pro
+        
         if is_flash and not is_lite and not is_pro:
             type_rank = 0
         elif is_lite:
@@ -1276,15 +1750,15 @@ class MangaTranslator:
         else:
             type_rank = 3
 
-        # latest بدون شماره نسخه → بعد از نسخه‌های عددی هم‌خانواده
+        
         if is_latest and major_minor <= 0:
-            # flash-latest بعد از بالاترین 3.x قرار می‌گیرد با version مصنوعی
+            
             version_rank = -99.0 if not is_lite else -98.0
         else:
-            # نسخه بالاتر = اولویت بیشتر (منفی برای sort صعودی)
+            
             version_rank = -major_minor
 
-        # اگر نسخه خیلی قدیمی (زیر 2.0) ته صف
+        
         age_penalty = 0 if major_minor >= 2.0 or is_latest else 10
 
         return (age_penalty, type_rank, version_rank, n)
@@ -1425,13 +1899,19 @@ class MangaTranslator:
             self.det.conf_thresh = old
 
     def detect_bubbles(self, image_bgr: np.ndarray) -> List[dict]:
-        boxes = self.det.detect(image_bgr)
+        
+        lock = getattr(self, "_det_lock", None)
+        if lock is not None:
+            with lock:
+                boxes = self.det.detect(image_bgr)
+        else:
+            boxes = self.det.detect(image_bgr)
         h, w = image_bgr.shape[:2]
         boxes = self._split_touching_bubbles(boxes, h, w)
         return boxes
 
     def _split_touching_bubbles(self, boxes: List[dict], img_h: int, img_w: int) -> List[dict]:
-        """جدا کردن حباب‌های چسبیده/هم‌پوشان با فرسایش + distance transform."""
+        
         if not boxes:
             return boxes
         out: List[dict] = []
@@ -1452,14 +1932,15 @@ class MangaTranslator:
 
             comps = self._mask_to_lobes(full, x1, y1, x2, y2)
             if len(comps) < 2:
-                # projection fallback
+                
                 comps = self._split_by_projection(full, x1, y1, x2, y2)
 
-            # فقط اگر هر لوب بخش قابل‌توجهی از حباب باشد split کن
-            # (جلوگیری از شکستن یک بالن چندخطی به چند باکس)
+            
+            
             if len(comps) >= 2:
                 parent_a = float(max(1, (full[y1:y2, x1:x2] > 0).sum()))
-                comps = [c for c in comps if c[4] >= max(80.0, parent_a * 0.22)]
+                
+                comps = [c for c in comps if c[4] >= max(160.0, parent_a * 0.30)]
                 if len(comps) < 2:
                     comps = []
 
@@ -1501,7 +1982,7 @@ class MangaTranslator:
         return out
 
     def _mask_to_lobes(self, full: np.ndarray, x1, y1, x2, y2):
-        """چند لوب جدا از ماسک با distance transform + watershed-like peaks."""
+        
         roi = full[y1:y2, x1:x2]
         if roi.size == 0 or roi.max() == 0:
             return []
@@ -1510,7 +1991,7 @@ class MangaTranslator:
         if area < 100:
             return []
 
-        # 1) فرسایش تطبیقی
+        
         ksz = max(3, int(min(w, h) * 0.06))
         if ksz % 2 == 0:
             ksz += 1
@@ -1529,15 +2010,15 @@ class MangaTranslator:
                 continue
             peaks.append(li)
 
-        # 2) اگر فرسایش کافی نبود → قله‌های distance transform
+        
         if len(peaks) < 2:
             dist = cv2.distanceTransform(roi, cv2.DIST_L2, 5)
-            # نرمال
+            
             if dist.max() > 0:
                 dist_n = (dist / dist.max() * 255).astype(np.uint8)
             else:
                 return []
-            # فقط پیکسل‌های دور از لبه (هسته)
+            
             _, sure = cv2.threshold(dist_n, 0.45 * dist_n.max(), 255, 0)
             sure = sure.astype(np.uint8)
             nlab2, labels2, stats2, _ = cv2.connectedComponentsWithStats(sure, connectivity=8)
@@ -1550,8 +2031,8 @@ class MangaTranslator:
                 peaks.append(li)
             if len(peaks) < 2:
                 return []
-            # برای هر قله، منطقه را با watershed تقریبی از dist گسترش بده
-            # ساده: هر پیکسل ماسک را به نزدیک‌ترین قله نسبت بده
+            
+            
             peak_pts = []
             for li in peaks:
                 ys, xs = np.where(labels == li)
@@ -1560,7 +2041,7 @@ class MangaTranslator:
                 peak_pts.append((int(xs.mean()), int(ys.mean()), li))
             if len(peak_pts) < 2:
                 return []
-            # assign
+            
             yy, xx = np.where(roi > 0)
             if len(xx) == 0:
                 return []
@@ -1577,7 +2058,7 @@ class MangaTranslator:
         comps = []
         for li in peaks:
             part = ((labels == li).astype(np.uint8) * 255)
-            # کمی expand و clip به ماسک اصلی
+            
             part = cv2.dilate(part, kernel, iterations=2)
             part = cv2.bitwise_and(part, roi)
             ys, xs = np.where(part > 0)
@@ -1593,7 +2074,7 @@ class MangaTranslator:
                 int(len(xs)),
                 full_part,
             ))
-        # فقط اگر مساحت‌ها معقول باشند (نه یک تکه خیلی ریز)
+        
         if len(comps) >= 2:
             comps.sort(key=lambda t: t[4], reverse=True)
             main_a = comps[0][4]
@@ -1602,26 +2083,26 @@ class MangaTranslator:
 
     @staticmethod
     def _split_by_projection(mask: np.ndarray, x1, y1, x2, y2):
-        """دره در جمع ستونی/ردیفی → دو حباب کنار/روی هم."""
+        
         roi = mask[y1:y2, x1:x2]
         if roi.size == 0:
             return []
         h, w = roi.shape
         results = []
-        # افقی (دو حباب کنار هم)
+        
         col = (roi > 0).sum(axis=0).astype(np.float32)
         if col.max() > 0:
             col = col / col.max()
-            # smoothed
+            
             k = max(3, w // 20)
             col_s = np.convolve(col, np.ones(k) / k, mode="same")
-            # دره‌های عمیق در وسط
+            
             mid_lo, mid_hi = int(w * 0.2), int(w * 0.8)
             if mid_hi > mid_lo:
                 seg = col_s[mid_lo:mid_hi]
                 valley = int(np.argmin(seg)) + mid_lo
                 if col_s[valley] < 0.25 and col_s[:valley].max() > 0.5 and col_s[valley:].max() > 0.5:
-                    # دو بخش
+                    
                     left_mask = roi[:, :valley]
                     right_mask = roi[:, valley:]
                     for part, ox in ((left_mask, 0), (right_mask, valley)):
@@ -1639,7 +2120,7 @@ class MangaTranslator:
         if len(results) >= 2:
             return results
         results = []
-        # عمودی (دو حباب روی هم)
+        
         row = (roi > 0).sum(axis=1).astype(np.float32)
         if row.max() > 0:
             row = row / row.max()
@@ -1690,7 +2171,7 @@ class MangaTranslator:
             pool = [b for b in pool if iou(best["rect"], b["rect"]) < iou_thresh]
         return keep
 
-    # نام سبک → توضیح فارسی (برای لاگ/دیباگ)
+    
     STYLE_LABELS_FA = {
         "normal": "عادی/کودک",
         "shout": "فریاد خشم/افسانه",
@@ -1723,14 +2204,7 @@ class MangaTranslator:
         source_text: str = "",
         shape_type: str = "circle",
     ) -> str:
-        """سبک بالن بر اساس ناحیهٔ واقعی دور متن OCR (نه فقط برچسب YOLO).
-
-        اولویت:
-          1) sfx / free_text
-          2) پس‌زمینه تیره → black
-          3) تحلیل لبه/پر بودن ناحیهٔ متن (بیضی سفید = normal)
-          4) shape_type فقط به‌عنوان راهنمای ضعیف
-        """
+        
         if kind == "sfx":
             return "sfx_shape"
         if det_class == "text_free":
@@ -1738,12 +2212,12 @@ class MangaTranslator:
 
         h_img, w_img = image_bgr.shape[:2]
 
-        # ابتدا rect (مختصات قطعه)؛ در صورت امکان با bbox خطوط OCR محدود به تصویر گسترش بده
+        
         def _as_xyxy(r):
             a = [int(v) for v in r[:4]]
             if len(r) >= 4 and a[2] > a[0] and a[3] > a[1] and a[2] <= w_img * 1.05:
                 return a[0], a[1], a[2], a[3]
-            # x,y,w,h
+            
             return a[0], a[1], a[0] + max(1, a[2]), a[1] + max(1, a[3])
 
         x1, y1, x2, y2 = _as_xyxy(rect)
@@ -1754,7 +2228,7 @@ class MangaTranslator:
                 p = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
                 if p.size < 2:
                     continue
-                # فقط اگر داخل تصویر قطعه باشد (نه مختصات مطلق صفحه)
+                
                 if (p[:, 0].min() >= -5 and p[:, 1].min() >= -5
                         and p[:, 0].max() <= w_img + 5 and p[:, 1].max() <= h_img + 5):
                     pts_all.append(p)
@@ -1769,7 +2243,7 @@ class MangaTranslator:
         bh = max(1, y2 - y1)
         aspect = bw / float(bh)
 
-        # حاشیهٔ بزرگ‌تر تا لبهٔ بالن هم داخل ROI باشد
+        
         pad = max(10, int(0.22 * max(bw, bh)))
         cx1, cy1 = max(0, x1 - pad), max(0, y1 - pad)
         cx2, cy2 = min(w_img, x2 + pad), min(h_img, y2 + pad)
@@ -1790,7 +2264,7 @@ class MangaTranslator:
         system_kw = ("SYSTEM", "QUEST", "STATUS", "LEVEL", "HP", "MP", "EXP", "SKILL", "ITEM", "NOTICE")
         has_system = any(k in txt_upper for k in system_kw) or bool(re.search(r"【.+】", txt))
 
-        # ماسک ناحیهٔ روشن (داخل بالن سفید)
+        
         _, th = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         if mean_g < 120:
             th = 255 - th
@@ -1814,7 +2288,7 @@ class MangaTranslator:
 
         shape = (shape_type or "circle").lower()
 
-        # فریاد فقط با شواهد قوی لبه (نه صرفاً برچسب jagged مدل)
+        
         really_jagged = (
             roughness > 1.50
             and solidity < 0.72
@@ -1824,7 +2298,7 @@ class MangaTranslator:
         if really_jagged:
             return "shout"
 
-        # بالن سفید صاف/بیضی → همیشه normal (حتی اگر YOLO گفته jagged)
+        
         looks_oval_white = (
             bright_ratio > 0.28
             and mean_g > 140
@@ -1846,7 +2320,7 @@ class MangaTranslator:
         if shape == "round" and circularity > 0.50:
             return "thought"
 
-        # jagged مدل بدون تأیید لبه → نادیده بگیر
+        
         return "normal"
 
     def _ocr_crop(self, image_bgr: np.ndarray, rect: List[int], y_offset: int = 0,
@@ -1865,7 +2339,7 @@ class MangaTranslator:
         if crop0.size == 0:
             return "", []
 
-        # فقط داخل ماسک حباب OCR شود
+        
         if mask_poly is not None and len(np.asarray(mask_poly).reshape(-1)) >= 6:
             try:
                 pts = np.asarray(mask_poly, dtype=np.float32).reshape(-1, 2).copy()
@@ -1879,23 +2353,17 @@ class MangaTranslator:
                 pass
 
         def _prep_variants(crop_bgr):
-            """چند نسخه پیش‌پردازش — بهترین نتیجه انتخاب می‌شود."""
-            variants = []
-            # 0) خام
-            variants.append(crop_bgr.copy())
+            
+            variants = [crop_bgr]
             try:
-                gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY) if crop_bgr.ndim == 3 else crop_bgr.copy()
-                # 1) CLAHE ملایم
-                clahe = cv2.createCLAHE(clipLimit=1.8, tileGridSize=(8, 8))
-                g1 = clahe.apply(gray)
-                variants.append(cv2.cvtColor(g1, cv2.COLOR_GRAY2BGR))
-                # 2) threshold تطبیقی (متن سیاه روی سفید)
-                g2 = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                           cv2.THRESH_BINARY, 31, 11)
-                variants.append(cv2.cvtColor(g2, cv2.COLOR_GRAY2BGR))
-                # 3) Otsu
-                _, g3 = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-                variants.append(cv2.cvtColor(g3, cv2.COLOR_GRAY2BGR))
+                gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY) if crop_bgr.ndim == 3 else crop_bgr
+                mean_v = float(np.mean(gray))
+                if mean_v < 115:
+                    work = cv2.bitwise_not(gray)
+                else:
+                    work = gray
+                clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+                variants.append(cv2.cvtColor(clahe.apply(work), cv2.COLOR_GRAY2BGR))
             except Exception:
                 pass
             return variants
@@ -1903,22 +2371,23 @@ class MangaTranslator:
         def _run_ocr_on(img):
             ch, cw = img.shape[:2]
             scale = 1.0
-            if max(ch, cw) < 300:
-                scale = max(300 / max(ch, cw), 2.0)
-                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-            elif min(ch, cw) < 90:
-                scale = 2.2
-                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
-            with self._ocr_lock:
-                try:
-                    result = self.ocr.ocr(img)
-                except RuntimeError as e:
-                    msg = str(e).lower()
-                    if "could not execute a primitive" in msg or "could not create a primitive" in msg:
-                        time.sleep(0.3)
-                        result = self.ocr.ocr(img)
-                    else:
-                        raise
+            
+            m = max(ch, cw)
+            if m < 280:
+                scale = max(280.0 / float(m), 1.6)
+                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+            elif min(ch, cw) < 72:
+                scale = 1.8
+                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+            try:
+                result = self._ocr_engine_call(img)
+            except RuntimeError as e:
+                msg = str(e).lower()
+                if "could not execute a primitive" in msg or "could not create a primitive" in msg:
+                    time.sleep(0.2)
+                    result = self._ocr_engine_call(img)
+                else:
+                    raise
             items = []
             if result and result[0]:
                 for line in result[0]:
@@ -1929,15 +2398,45 @@ class MangaTranslator:
                         continue
                     if set(txt).issubset(PUNCTUATION_SET):
                         continue
-                    # مختصات را به مقیاس اصلی برگردان
                     poly[:, 0] = poly[:, 0] / scale + cx1
                     poly[:, 1] = poly[:, 1] / scale + cy1 + y_offset
                     items.append((poly.astype(np.int32), txt, conf))
             return items
 
-        # چند پاس — نتیجه‌ای که بیشترین حروف معنادار دارد برنده است
+        def _ocr_result_score(items) -> float:
+            if not items:
+                return -1e9
+            joined = " ".join(t for _, t, _ in items)
+            alnum = re.sub(r"[^\w]", "", joined, flags=re.UNICODE)
+            letters = re.findall(r"[A-Za-z]", joined)
+            digits = re.findall(r"\d", joined)
+            avg_conf = float(np.mean([c for _, _, c in items])) if items else 0.0
+            weird_splits = len(re.findall(r"\b[A-Za-z]{1,3}\s+[A-Za-z]{1,3}\b", joined))
+            mixed = len(re.findall(
+                r"\b(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b", joined
+            ))
+            letter_ratio = len(letters) / max(1, len(letters) + len(digits))
+            return (
+                len(alnum) * 1.5
+                + avg_conf * 25
+                + letter_ratio * 15
+                - weird_splits * 4
+                - mixed * 12
+            )
+
+        def _is_good_enough(items, score: float) -> bool:
+            
+            if not items or score < 25:
+                return False
+            avg_conf = float(np.mean([c for _, _, c in items]))
+            joined = " ".join(t for _, t, _ in items)
+            mixed = len(re.findall(
+                r"\b(?=[A-Za-z0-9]*[A-Za-z])(?=[A-Za-z0-9]*\d)[A-Za-z0-9]+\b", joined
+            ))
+            return avg_conf >= 0.55 and mixed == 0 and len(joined.strip()) >= 2
+
         best_items = []
-        best_score = -1.0
+        best_score = -1e9
         for var in _prep_variants(crop0):
             try:
                 items = _run_ocr_on(var)
@@ -1945,15 +2444,13 @@ class MangaTranslator:
                 continue
             if not items:
                 continue
-            joined = " ".join(t for _, t, _ in items)
-            alnum = re.sub(r"[^\w]", "", joined, flags=re.UNICODE)
-            # امتیاز: طول حروف + میانگین conf - جریمه فاصله‌های عجیب وسط کلمه
-            avg_conf = float(np.mean([c for _, _, c in items])) if items else 0
-            weird_splits = len(re.findall(r"\b[A-Za-z]{1,3}\s+[A-Za-z]{1,3}\b", joined))
-            score = len(alnum) * 1.5 + avg_conf * 20 - weird_splits * 3
+            score = _ocr_result_score(items)
             if score > best_score:
                 best_score = score
                 best_items = items
+            
+            if _is_good_enough(items, score):
+                break
 
         if not best_items:
             return "", [], []
@@ -1973,14 +2470,7 @@ class MangaTranslator:
 
     @staticmethod
     def _insert_missing_spaces(text: str) -> str:
-        """ترمیم متن OCR حروف‌درشت مانگا: هم فاصلهٔ گم‌شده، هم فاصلهٔ اشتباه وسط کلمه.
 
-        مثال:
-          CALLTO → CALL TO
-          REBEL LION → REBELLION
-          CLEA NERS → CLEANERS
-          THATW HENI → THAT WHEN I
-        """
         if not text or len(text) < 3:
             return text
         letters = re.findall(r"[A-Za-z]", text)
@@ -1990,7 +2480,7 @@ class MangaTranslator:
         if upper_ratio < 0.55:
             return text
 
-        # دیکشنری کلمات رایج دیالوگ مانگا/انگلیسی (حروف‌بزرگ)
+        
         WORDS = {
             "A", "AN", "THE", "AND", "OR", "BUT", "IF", "AS", "AT", "BY", "TO", "OF", "IN", "ON",
             "FOR", "FROM", "WITH", "WITHOUT", "WITHIN", "ABOUT", "AFTER", "BEFORE", "UNDER", "OVER",
@@ -2037,15 +2527,15 @@ class MangaTranslator:
             "THE", "SOUND", "OF", "YOUR", "MICROPHONE", "THE", "SAME", "AS", "WHEN", "YOU", "USE",
             "YOUR", "NORMAL", "POWERS", "MY", "LORD", "PIECE", "ORDERED", "AFTER", "ALL", "RESISTANCE", "DEVELOPED", "WONDER", "YOU'VE", "TAKING", "MANY", "ORDERS", "CHOKERS", "MICRO", "PHONE", "MICROPHONE", "FESTIVAL", "REIGN", "CLEANERS", "COMING", "BACKFIRED", "AUDIENCE", "PUPPETS", "REBELLION", "MOMENT", "OUTSIDE", "RULE", "RANGE", "EFFORT", "INFORMATION", "EVERYTHING", "REPORT", "THROUGH", "WHERE", "WHEN", "TURNED", "CONTROL", "WOULDN'T", "DIDN'T", "MADE", "SURE", "HAVE", "TAKEN", "KEEP", "FROM", "TELL", "CLEANERS", "COMING", "DOLL", "FEST",
         }
-        # اضافه کردن فرم‌های بدون آپاستروف
+        
         extra = set()
         for w in list(WORDS):
             extra.add(w.replace("'", ""))
             extra.add(w.replace("'", " "))
         WORDS |= extra
 
-        # ۱) اول فاصله‌های اشتباه وسط کلمه را حذف کن (کلمات شکسته مثل REBEL LION)
-        # اگر دو توکن پشت‌سرهم با هم یک کلمهٔ شناخته‌شده بسازند → بچسبان
+        
+        
         tokens = re.findall(r"[A-Za-z']+|[^\sA-Za-z']+", text)
         merged = []
         i = 0
@@ -2057,7 +2547,7 @@ class MangaTranslator:
                     merged.append(tok + tokens[i + 1])
                     i += 2
                     continue
-                # سه تکه؟
+                
                 if i + 2 < len(tokens) and re.fullmatch(r"[A-Za-z']+", tokens[i + 2]):
                     combo3 = (tok + tokens[i + 1] + tokens[i + 2]).upper()
                     if combo3 in WORDS:
@@ -2067,7 +2557,7 @@ class MangaTranslator:
             merged.append(tok)
             i += 1
 
-        # ۲) برای توکن‌های بلند بدون فاصله، segmentation حریصانه با طولانی‌ترین match
+        
         out = []
         for tok in merged:
             if not re.fullmatch(r"[A-Za-z']+", tok) or len(tok) < 4:
@@ -2077,7 +2567,7 @@ class MangaTranslator:
             if up in WORDS:
                 out.append(tok)
                 continue
-            # greedy longest match
+            
             parts = []
             s = up
             ok = True
@@ -2094,7 +2584,7 @@ class MangaTranslator:
                     ok = False
                     break
             if ok and len(parts) >= 2:
-                # حفظ case تقریبی (همه بزرگ)
+                
                 out.append(" ".join(parts))
             else:
                 out.append(tok)
@@ -2105,32 +2595,32 @@ class MangaTranslator:
                 result += " "
             result += p
         result = re.sub(r"\s{2,}", " ", result).strip()
-        # فاصله قبل از علامت
+        
         result = re.sub(r"\s+([?!.,…])", r"\1", result)
         return result
 
     @staticmethod
     def _is_weak_ocr_text(text: str) -> bool:
-        """متن OCR بی‌معنی / خیلی کوتاه / نویز."""
+        
         t = (text or "").strip()
         if not t:
             return True
-        # فقط علائم یا یک کاراکتر عجیب
+        
         alnum = re.sub(r"[^\w]", "", t, flags=re.UNICODE)
         if len(alnum) <= 1:
             return True
-        # فقط عدد/نماد
+        
         if re.fullmatch(r"[\d\W_]+", t):
             return True
         return False
 
     @staticmethod
     def _skin_ratio(image_bgr: np.ndarray, rect) -> float:
-        """نسبت پیکسل‌های شبیه پوست/صورت در باکس (برای رد false-positive روی صورت)."""
+        
         try:
             x1, y1, x2, y2 = [int(v) for v in rect[:4]]
             if x2 <= x1:
-                # rect = x,y,w,h
+                
                 x, y, w, h = [int(v) for v in rect[:4]]
                 x1, y1, x2, y2 = x, y, x + w, y + h
             h_img, w_img = image_bgr.shape[:2]
@@ -2142,11 +2632,11 @@ class MangaTranslator:
             if crop.size == 0:
                 return 0.0
             hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-            # پوست انسان + ته‌رنگ سبز/خاکستری مانگا (گابلین و ...)
+            
             masks = []
             masks.append(cv2.inRange(hsv, (0, 20, 50), (25, 180, 255)))
             masks.append(cv2.inRange(hsv, (160, 20, 50), (180, 180, 255)))
-            masks.append(cv2.inRange(hsv, (35, 15, 40), (95, 160, 220)))  # سبز مانگا
+            masks.append(cv2.inRange(hsv, (35, 15, 40), (95, 160, 220)))  
             m = masks[0]
             for mm in masks[1:]:
                 m = cv2.bitwise_or(m, mm)
@@ -2367,12 +2857,16 @@ class MangaTranslator:
         return "dialogue"
 
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+        
         h_img, w_img = image.shape[:2]
         text_mask = np.zeros((h_img, w_img), dtype=np.uint8)
         promo_mask = np.zeros((h_img, w_img), dtype=np.uint8)
-        pad = max(2, int(getattr(self, "mask_padding", 3) or 3))
+        pad = max(1, int(getattr(self, "mask_padding", 3) or 3))
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         for region in regions:
+            
+            ocr_local = np.zeros((h_img, w_img), dtype=np.uint8)
             filled = False
             for poly in region.boxes:
                 pts = np.array(poly, np.int32).reshape((-1, 1, 2))
@@ -2380,53 +2874,70 @@ class MangaTranslator:
                 xs = pts[:, 0, 0]
                 if np.any(ys < -50) or np.any(ys > h_img + 50) or np.any(xs < -50) or np.any(xs > w_img + 50):
                     continue
-                cv2.fillPoly(text_mask, [pts], 255)
+                cv2.fillPoly(ocr_local, [pts], 255)
                 filled = True
                 if getattr(region, "kind", "dialogue") in ("promo", "sfx"):
                     cv2.fillPoly(promo_mask, [pts], 255)
 
+            x, y, rw, rh = region.rect
+            x0 = max(0, int(x) - 2)
+            y0 = max(0, int(y) - 2)
+            x1 = min(w_img, int(x + rw) + 2)
+            y1 = min(h_img, int(y + rh) + 2)
+            if x1 <= x0 or y1 <= y0:
+                continue
+
             if not filled:
-                x, y, w, h = region.rect
-                x0 = max(0, int(x) - pad)
-                y0 = max(0, int(y) - pad)
-                x1 = min(w_img, int(x + w) + pad)
-                y1 = min(h_img, int(y + h) + pad)
-                if x1 > x0 and y1 > y0:
-                    text_mask[y0:y1, x0:x1] = 255
-                    if getattr(region, "kind", "dialogue") in ("promo", "sfx"):
-                        promo_mask[y0:y1, x0:x1] = 255
+                
+                ocr_local[y0:y1, x0:x1] = 255
+
+            roi = gray[y0:y1, x0:x1]
+            if roi.size < 30:
+                text_mask = cv2.bitwise_or(text_mask, ocr_local)
+                continue
+
+            med = float(np.median(roi))
+            if med > 135:
+                ink = (roi < med - 22).astype(np.uint8) * 255
+            else:
+                ink = (roi > med + 22).astype(np.uint8) * 255
+
+            
+            near_ocr = cv2.dilate(ocr_local[y0:y1, x0:x1], np.ones((5, 5), np.uint8), iterations=1)
+            if filled:
+                ink = cv2.bitwise_and(ink, near_ocr)
+            
+            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k2, iterations=1)
+
+            local = cv2.bitwise_or(ocr_local[y0:y1, x0:x1], ink)
+            text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], local)
 
         if not np.any(text_mask):
             return text_mask
 
-        if pad > 0:
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (pad * 2 + 1, pad * 2 + 1))
-            text_mask = cv2.dilate(text_mask, k, iterations=1)
+        
+        k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, pad), max(3, pad)))
+        text_mask = cv2.dilate(text_mask, k_edge, iterations=1)
+        text_mask = cv2.morphologyEx(
+            text_mask, cv2.MORPH_CLOSE,
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)), iterations=1
+        )
 
+        
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-        lower_purple = np.array([110, 15, 15])
-        upper_purple = np.array([170, 255, 255])
-        purple_mask = cv2.inRange(hsv, lower_purple, upper_purple)
-
-        near_text = cv2.dilate(text_mask, np.ones((10, 10), np.uint8), iterations=1)
-        purple_around_text = cv2.bitwise_and(purple_mask, near_text)
-
-        full_target_mask = cv2.bitwise_or(text_mask, purple_around_text)
+        purple = cv2.inRange(hsv, np.array([110, 20, 20]), np.array([170, 255, 255]))
+        near = cv2.dilate(text_mask, np.ones((4, 4), np.uint8), iterations=1)
+        text_mask = cv2.bitwise_or(text_mask, cv2.bitwise_and(purple, near))
 
         if np.any(promo_mask):
-            promo_dilated = cv2.dilate(promo_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)), iterations=3)
-            full_target_mask = cv2.bitwise_or(full_target_mask, promo_dilated)
-
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        dilated = cv2.dilate(full_target_mask, kernel, iterations=2)
-        return dilated
+            text_mask = cv2.bitwise_or(
+                text_mask,
+                cv2.dilate(promo_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)), iterations=1)
+            )
+        return text_mask
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        """
-        پاک‌سازی متن با روش توصیه‌شدهٔ PDF (Crop-BBox → LaMa روی تکه کوچک → Paste-Back):
-        - به‌جای دادن کل تصویر به LaMa، فقط دور هر حباب crop کوچک + ماسک محلی می‌گیریم.
-        - کیفیت حفظ می‌شود، RAM پایین می‌ماند و روی CPU عالی کار می‌کند.
-        """
         if not regions:
             return image.copy()
 
@@ -2435,16 +2946,12 @@ class MangaTranslator:
             if not np.any(mask):
                 return img.copy()
             cleaned = img.copy()
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            dilated = cv2.dilate(mask, kernel, iterations=2)
-            cleaned = cv2.inpaint(
-                cleaned, dilated,
-                inpaintRadius=max(5, self.inpaint_radius + 2),
-                flags=cv2.INPAINT_TELEA,
-            )
-            residual = cv2.dilate(dilated, np.ones((3, 3), np.uint8), iterations=1)
-            cleaned = cv2.inpaint(cleaned, residual, inpaintRadius=3, flags=cv2.INPAINT_NS)
-            print("  - پاکسازی با OpenCV inpaint (دو پاس) انجام شد.")
+            
+            radius = max(3, int(self.inpaint_radius))
+            cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=radius, flags=cv2.INPAINT_TELEA)
+            
+            cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=max(2, radius // 2), flags=cv2.INPAINT_NS)
+            print("  - پاکسازی OpenCV: فقط پیکسل‌های متن (بدون دست زدن به بقیه حباب).")
             return cleaned
 
         if not self.use_lama:
@@ -2457,7 +2964,7 @@ class MangaTranslator:
         cleaned = image.copy()
         h_img, w_img = cleaned.shape[:2]
         base_pad = max(2, int(getattr(self, "mask_padding", 3) or 3))
-        # padding کمتر = crop کوچک‌تر = LaMa سریع‌تر و RAM کمتر (هنوز حاشیه کافی برای مدل)
+        
         pad = max(8, base_pad * 3)
 
         processed = 0
@@ -2519,20 +3026,30 @@ class MangaTranslator:
             if not filled or not np.any(local_mask):
                 continue
 
-            k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-            local_mask = cv2.dilate(local_mask, k, iterations=1)
+            
+            crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            med = float(np.median(crop_gray))
+            if med > 135:
+                ink = (crop_gray < med - 22).astype(np.uint8) * 255
+            else:
+                ink = (crop_gray > med + 22).astype(np.uint8) * 255
+            near = cv2.dilate(local_mask, np.ones((5, 5), np.uint8), iterations=1)
+            ink = cv2.bitwise_and(ink, near)
+            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k2, iterations=1)
+            local_mask = cv2.bitwise_or(local_mask, ink)
+            local_mask = cv2.dilate(local_mask, k2, iterations=1)
 
             rid = getattr(region, "id", i)
-            # حباب خیلی کوچک → OpenCV (تقریباً آنی) به‌جای LaMa
             use_fast = max(cw, ch) < 140 or int(np.count_nonzero(local_mask)) < 800
             try:
                 if use_fast:
-                    local_dilated = cv2.dilate(local_mask, k, iterations=2)
                     result_bgr = cv2.inpaint(
-                        crop, local_dilated,
-                        inpaintRadius=max(4, self.inpaint_radius + 1),
+                        crop, local_mask,
+                        inpaintRadius=max(3, self.inpaint_radius),
                         flags=cv2.INPAINT_TELEA,
                     )
+                    result_bgr = cv2.inpaint(result_bgr, local_mask, inpaintRadius=2, flags=cv2.INPAINT_NS)
                     cleaned[y0:y1e, x0:x1e] = result_bgr
                     processed += 1
                     print(
@@ -2555,12 +3072,12 @@ class MangaTranslator:
                 failed += 1
                 print(f"    [!] LaMa روی حباب {rid} خطا: {e}", flush=True)
                 try:
-                    local_dilated = cv2.dilate(local_mask, k, iterations=2)
                     crop_inpainted = cv2.inpaint(
-                        crop, local_dilated,
-                        inpaintRadius=max(5, self.inpaint_radius + 2),
+                        crop, local_mask,
+                        inpaintRadius=max(3, self.inpaint_radius),
                         flags=cv2.INPAINT_TELEA,
                     )
+                    crop_inpainted = cv2.inpaint(crop_inpainted, local_mask, inpaintRadius=2, flags=cv2.INPAINT_NS)
                     cleaned[y0:y1e, x0:x1e] = crop_inpainted
                 except Exception:
                     pass
@@ -2672,7 +3189,9 @@ class MangaTranslator:
             "از کل جمله و فضای صحنه برای فهم آن استفاده کن.\n"
             "اگر یک بخش واضحاً اشتباه OCR شده، معنای محتمل را بازسازی کن.\n"
             "اما چیزی از خودت اختراع نکن که با صحنه سازگار نیست.\n"
-            "عدد یا نماد بی‌معنی وسط کلمه (مثل گوهی5) را حذف کن و جمله را طبیعی بنویس.\n\n"
+            "عدد یا نماد بی‌معنی وسط کلمه را حذف کن و جمله را طبیعی بنویس.\n"
+            "رقم‌هایی که OCR به‌جای حرف خوانده (0↔O، 1↔I/L، 5↔S، 7↔T، 8↔B، 6↔G و …) "
+            "را از روی بافت جمله اصلاح کن؛ هیچ لیست جایگزینی ثابت حفظ نکن.\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "تست نهایی\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -2802,88 +3321,10 @@ class MangaTranslator:
             raise RuntimeError(f"پاسخ خالی از {self.provider} دریافت شد.")
         return text
 
-    @staticmethod
-    def _fix_ocr_text(text: str) -> str:
-        if not text:
-            return text
-        t = text
-        t = re.sub(r"\s+", " ", t).strip()
-
-        t = MangaTranslator._insert_missing_spaces(t)
-
-        
-        t = re.sub(
-            r"^(?:<?\s*)?(?:PARTY|GROUP|TEAM)\s*\d*\s*(?:LEADER|CAPTAIN|CHIEF|HEAD)?[:\s]*[A-Z][A-Z\s\.]{0,25}(?:>|\s*:?\s*)?",
-            "",
-            t,
-            flags=re.IGNORECASE,
-        ).strip()
-        t = re.sub(r"^<?\s*[A-Z][A-Z\s\.]{2,25}(?::|\s*>)\s*", "", t).strip()
-        t = re.sub(r"^<\s*[^>]{3,40}>\s*", "", t).strip()
-
-        replacements = [
-            (r"\bMUDI[:]?YING\b", "MODIFYING"),
-            (r"\bMODIEYING\b", "MODIFYING"),
-            (r"\bMODIFYlNG\b", "MODIFYING"),
-            (r"\bRECONSTRUC(?:TION)?\b", "RECONSTRUCTION"),
-            (r"\bRECONSTRUC\b", "RECONSTRUCTION"),
-            (r"\bPROCES\b", "PROCESS"),
-            (r"\bPARALYZE[D]?\b", "PARALYZED"),
-            (r"\bMANA\b", "MANA"),
-            (r"\bAND\s+YE\b", "AND YET"),
-            (r"\bNDYE\b", "AND YET"),
-            (r"\bONL\b", "ONLY"),
-            (r"\bMYE\b", "MY"),
-            (r"\bUNSCATHED\b", "UNSCATHED"),
-            (r"\bUNFORESEEN\b", "UNFORESEEN"),
-            (r"\bOVERCONSUMPTION\b", "OVERCONSUMPTION"),
-            (r"\bRECONSTRUCTION\s+PROCES\b", "RECONSTRUCTION PROCESS"),
-            (r"\bBODY\s+RECONSTRUCTION\b", "BODY RECONSTRUCTION"),
-            # ترمیم OCR رایج این صفحه / فونت مانگا
-            (r"\bREBEL\s*LION\b", "REBELLION"),
-            (r"\bCLEA\s*NERS\b", "CLEANERS"),
-            (r"\bCALL\s*TO\b", "CALL TO"),
-            (r"\bCALLTO\b", "CALL TO"),
-            (r"\bA\s*REIS\b", "ARE IS"),
-            (r"\bAREIS\b", "ARE IS"),
-            (r"\bTHATW\s*HENI\b", "THAT WHEN I"),
-            (r"\bTHATWHENI\b", "THAT WHEN I"),
-            (r"\bIMADE\b", "I MADE"),
-            (r"\bIWOULDN\b", "I WOULDN"),
-            (r"\bMYPUP\s*PETS\b", "MY PUPPETS"),
-            (r"\bMYPUPPETS\b", "MY PUPPETS"),
-            (r"\bBACKF\s*IRED\b", "BACKFIRED"),
-            (r"\bITMUST\b", "IT MUST"),
-            (r"\bEFFO\s*RTTO\b", "EFFORT TO"),
-            (r"\bEFFORTTO\b", "EFFORT TO"),
-            (r"\bFROMME\b", "FROM ME"),
-            (r"\bYHE\b", "THE"),
-            (r"\bWOROS\b", "WORDS"),
-            (r"\bEIGN\b", "REIGN"),
-            (r"\bFEST\s*IVAL\b", "FESTIVAL"),
-            (r"\bIORD\s*ERED\b", "I ORDERED"),
-            (r"\bYOUTO\b", "YOU TO"),
-            (r"\bEVERY\s*THING\b", "EVERYTHING"),
-            (r"\bEVERYPIE\s*CEOF\b", "EVERY PIECE OF"),
-            (r"\bIN\s*FORMA\s*TION\b", "INFORMATION"),
-            (r"\bYOURCHO\s*KERS\b", "YOUR CHOKERS"),
-            (r"\bA\s*FTERALL\b", "AFTER ALL"),
-            (r"\bAFTERALL\b", "AFTER ALL"),
-        ]
-        for pat, rep in replacements:
-            t = re.sub(pat, rep, t, flags=re.IGNORECASE)
-        t = re.sub(r"([A-Za-z])[:;|]([A-Za-z])", r"\1\2", t)
-        t = re.sub(r"\s*[QOIl]?\d{3,}\s*$", "", t, flags=re.I).strip()
-        t = re.sub(r"\s+\d{3,}\s*$", "", t).strip()
-        return t.strip()
 
     def translate_regions(self, regions: List[TextRegion]) -> None:
         if not regions:
             return
-
-        for r in regions:
-            r.source_text = self._fix_ocr_text(uncensor_swears(r.source_text or ""))
-
         payload = [{"id": r.id, "text": r.source_text} for r in regions]
         system_instruction = self._get_system_instruction()
         user_prompt = (
@@ -2915,8 +3356,8 @@ class MangaTranslator:
                         return self._translate_with_gemini(user_prompt, system_instruction)
                     return self._translate_with_openai(user_prompt, system_instruction)
 
-                # مهم: بعد از timeout نباید wait=True باشد وگرنه تا تمام شدن
-                # درخواست گیرکردهٔ قبلی بلاک می‌ماند و مدل بعدی عملاً اجرا نمی‌شود.
+                
+                
                 _ex = ThreadPoolExecutor(max_workers=1)
                 try:
                     _fut = _ex.submit(_do_call)
@@ -2928,7 +3369,7 @@ class MangaTranslator:
                             f"(مدل={self.model_name}) → تعویض...",
                             flush=True,
                         )
-                        # future را ول کن؛ thread در پس‌زمینه می‌میرد
+                        
                         _fut.cancel()
                         try:
                             _ex.shutdown(wait=False, cancel_futures=True)
@@ -3071,7 +3512,8 @@ class MangaTranslator:
         def wrap_at(size: int, line_gap: int):
             font = self._load_font(size, style=style)
             sw = self._stroke_width_for(size)
-            usable_w = max(8, max_w - 2 * sw)
+            
+            usable_w = max(8, max_w - 2 * sw - 4)
             lines: List[str] = []
             current = ""
             for word in words:
@@ -3089,7 +3531,7 @@ class MangaTranslator:
             glyph_h = bb[3] - bb[1]
             line_h = glyph_h + line_gap
             total_h = line_h * len(lines) if lines else line_h
-            total_h += 2 * sw
+            total_h += 2 * sw + 2
             widest = max(
                 (draw.textbbox((0, 0), self._shape_farsi(l), font=font, stroke_width=sw)[2] for l in lines),
                 default=0,
@@ -3098,26 +3540,27 @@ class MangaTranslator:
 
         n_words = len(words)
         short_text = n_words <= 2 and sum(len(w) for w in words) <= 12
-        min_size = 14 if short_text else 11
-        max_size = 48
+        min_size = 13 if short_text else 10
+        max_size = 44
 
         smallest_attempt = None
-        for line_gap in (4, 2, 1, 0):
+        for line_gap in (3, 2, 1, 0):
             for size in range(max_size, min_size - 1, -1):
                 font, lines, sw, total_h, widest, line_h = wrap_at(size, line_gap)
                 smallest_attempt = (font, lines, sw, line_h)
-                if total_h <= max_h and widest <= max_w:
+                
+                if total_h <= max_h - 2 and widest <= max_w - 2:
                     return font, lines, sw
 
-        for size in range(min_size - 1, 9, -1):
+        for size in range(min_size - 1, 8, -1):
             font, lines, sw, total_h, widest, line_h = wrap_at(size, 0)
             smallest_attempt = (font, lines, sw, line_h)
-            if total_h <= max_h and widest <= max_w:
+            if total_h <= max_h - 2 and widest <= max_w - 2:
                 return font, lines, sw
 
         if smallest_attempt is None:
-            font = self._load_font(11, style=style)
-            sw = self._stroke_width_for(11)
+            font = self._load_font(10, style=style)
+            sw = self._stroke_width_for(10)
             return font, [" ".join(words)], sw
         return smallest_attempt[0], smallest_attempt[1], smallest_attempt[2]
 
@@ -3186,13 +3629,14 @@ class MangaTranslator:
             x, y, w, h = region.rect
             short = len((region.translated_text or "").split()) <= 2
             if short and (w < 90 or h < 50):
-                expand = max(6, int(max(w, h) * 0.15))
+                expand = max(6, int(max(w, h) * 0.12))
                 x = max(0, x - expand // 2)
                 y = max(0, y - expand // 2)
                 w = w + expand
                 h = h + expand
 
-            pad = max(3, int(min(w, h) * (0.05 if short else 0.08)))
+            
+            pad = max(5, int(min(w, h) * (0.07 if short else 0.10)))
             box_w = max(14, w - 2 * pad)
             box_h = max(14, h - 2 * pad)
 
@@ -3211,20 +3655,26 @@ class MangaTranslator:
                 bb = font.getbbox("آیگچ", stroke_width=sw)
                 glyph_h = bb[3] - bb[1]
                 n = max(1, len(lines))
-                avail = max(glyph_h, box_h - 2 * sw)
+                avail = max(glyph_h, box_h - 2 * sw - 2)
                 line_h = max(glyph_h + 1, avail // n) if n else glyph_h + 2
-                if line_h * n + 2 * sw > box_h:
-                    line_h = max(glyph_h, (box_h - 2 * sw) // n)
+                if line_h * n + 2 * sw > box_h - 2:
+                    line_h = max(glyph_h, (box_h - 2 * sw - 2) // n)
                 total_h = line_h * n
                 start_y = y + pad + max(0, (box_h - total_h) // 2)
-                bottom_limit = y + pad + box_h
+                bottom_limit = y + pad + box_h - sw
 
                 for i, line in enumerate(lines):
                     shaped = self._shape_farsi(line)
                     line_w = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
+                    
+                    if line_w > box_w + 2:
+                        smaller = max(8, font.size - 1) if hasattr(font, "size") else 10
+                        font = self._load_font(smaller, style=style)
+                        sw = self._stroke_width_for(smaller)
+                        line_w = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
                     line_x = x + pad + max(0, (box_w - line_w) // 2)
                     line_y = start_y + i * line_h
-                    if line_y + glyph_h > bottom_limit + sw:
+                    if line_y + glyph_h > bottom_limit:
                         break
                     draw.text((line_x, line_y), shaped, font=font, fill=text_rgb, stroke_width=sw, stroke_fill=stroke_rgb)
             else:
@@ -3266,11 +3716,7 @@ class MangaTranslator:
         rect: Tuple[int, int, int, int],
         gap_ratio: float = 0.12,
     ):
-        """فقط وقتی دو بلوک متن واقعاً جدا هستند شکسته شود.
 
-        خطوط چندخطی داخل یک بالن معمولی نباید جدا شوند.
-        فقط فاصلهٔ خیلی بزرگ (تقریباً دو حباب جدا در یک detection) باعث split می‌شود.
-        """
         if not polys or len(polys) < 2 or not line_texts:
             return []
         n = min(len(polys), len(line_texts))
@@ -3292,8 +3738,8 @@ class MangaTranslator:
         med_w = float(np.median(widths)) if widths else 20.0
         rx, ry, rw, rh = rect
 
-        # آستانهٔ سخت: فقط فاصلهٔ بزرگ‌تر از ~۱.۸ برابر ارتفاع خط = دو بلوک جدا
-        # (فاصلهٔ عادی بین خطوط یک بالن معمولاً ۰.۲–۰.۸ ارتفاع خط است)
+        
+        
         def gap_cluster(axis: str):
             if axis == "y":
                 ordered = sorted(items, key=lambda d: d["yc"])
@@ -3319,14 +3765,14 @@ class MangaTranslator:
                 g = gap(prev, it)
                 ov = overlap(prev, it)
                 sp = span(prev, it)
-                # فقط فاصلهٔ خیلی بزرگ و هم‌پوشانی افقی/عمودی کم
+                
                 if g >= gap_th and ov < 0.25 * sp:
                     clusters.append([it])
                 else:
                     clusters[-1].append(it)
             return clusters
 
-        # اولویت: محور غالب باکس؛ بدون k2 اجباری روی خطوط عادی
+        
         if rw >= rh * 1.25:
             clusters = gap_cluster("x")
             if len(clusters) < 2:
@@ -3339,7 +3785,7 @@ class MangaTranslator:
         if len(clusters) < 2:
             return []
 
-        # اگر یکی از خوشه‌ها خیلی کوچک/بی‌معنی است، split نکن
+        
         parts = []
         for cl in clusters:
             chunk_txt = " ".join(it["text"] for it in cl if it["text"]).strip()
@@ -3373,32 +3819,68 @@ class MangaTranslator:
         regions: List[TextRegion] = []
         empty_ocr = 0
         skipped_face = 0
-        for det in bubble_boxes:
+
+        
+        def _run_ocr_det(det):
+            try:
+                ocr_out = self._ocr_crop(
+                    piece, det["rect"], y_offset=y0, mask_poly=det.get("mask_poly")
+                )
+                if len(ocr_out) == 3:
+                    text, polys, line_texts = ocr_out
+                else:
+                    text, polys = ocr_out
+                    line_texts = text.split() if text else []
+                return det, text or "", polys or [], line_texts or []
+            except Exception as e:
+                print(f"        [!] OCR باکس خطا: {e}")
+                return det, "", [], []
+
+        ocr_w = max(1, int(getattr(self, "ocr_workers", 1) or 1))
+        ocr_results = []
+        n_boxes = len(bubble_boxes)
+        if n_boxes == 0:
+            ocr_results = []
+        elif ocr_w <= 1 or n_boxes == 1:
+            for i, det in enumerate(bubble_boxes):
+                ocr_results.append(_run_ocr_det(det))
+                if (i + 1) % 5 == 0 or (i + 1) == n_boxes:
+                    print(f"        … OCR {i + 1}/{n_boxes}", flush=True)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            w = min(ocr_w, n_boxes)
+            print(f"        OCR موازی ×{w} روی {n_boxes} باکس…", flush=True)
+            with ThreadPoolExecutor(max_workers=w) as ex:
+                futs = {ex.submit(_run_ocr_det, det): i for i, det in enumerate(bubble_boxes)}
+                tmp = [None] * n_boxes
+                done_n = 0
+                for fut in as_completed(futs):
+                    i = futs[fut]
+                    tmp[i] = fut.result()
+                    done_n += 1
+                    if done_n % 5 == 0 or done_n == n_boxes:
+                        print(f"        … OCR {done_n}/{n_boxes}", flush=True)
+                ocr_results = list(tmp)
+
+        for det, text, polys, line_texts in ocr_results:
             x1, y1b, x2, y2b = det["rect"]
             bw, bh = x2 - x1, y2b - y1b
             conf = float(det.get("confidence", 0.0))
-
-            ocr_out = self._ocr_crop(piece, det["rect"], y_offset=y0, mask_poly=det.get("mask_poly"))
-            if len(ocr_out) == 3:
-                text, polys, line_texts = ocr_out
-            else:
-                text, polys = ocr_out
-                line_texts = text.split() if text else []
             if not text:
                 empty_ocr += 1
                 continue
 
-            # OCR ضعیف → رد
+            
             if self._is_weak_ocr_text(text):
                 empty_ocr += 1
                 continue
 
-            # صورت / پوست بدون متن واقعی → false positive مدل YOLO
+            
             skin = self._skin_ratio(piece, det["rect"])
             if skin >= 0.35 and (conf < 0.55 or len(re.sub(r"[^\w]", "", text, flags=re.UNICODE)) < 4):
                 skipped_face += 1
                 continue
-            # باکس خیلی بزرگ شبیه صورت/بالاتنه با متن کوتاه
+            
             page_a = float(max(1, piece.shape[0] * piece.shape[1]))
             box_a = float(max(1, bw * bh))
             if box_a > page_a * 0.04 and skin >= 0.28 and len(text) < 8:
@@ -3412,10 +3894,10 @@ class MangaTranslator:
 
             rect_full = (x1, y1b + y0, x2 - x1, y2b - y1b)
 
-            # فقط اگر دو بلوک متن واقعاً جدا باشند split کن (نه خطوط یک بالن)
+            
             split_parts = self._split_by_ocr_clusters(line_texts, polys, rect_full, gap_ratio=0.12)
 
-            # نصف کردن افقی فقط برای دو حباب چسبیدهٔ واضح (درهٔ خیلی بزرگ در وسط)
+            
             if not split_parts and bw >= max(160, int(bh * 1.8)) and len(polys) >= 3:
                 xs = []
                 for poly in polys:
@@ -3423,7 +3905,7 @@ class MangaTranslator:
                     xs.append(float(p[:, 0].mean()))
                 xs = np.array(sorted(xs))
                 gaps = np.diff(xs)
-                # حداقل ~۳۵٪ عرض باکس باید خالی باشد تا دو حباب جدا فرض شود
+                
                 if len(gaps) and gaps.max() >= max(40.0, 0.35 * bw):
                     mid = int((xs[int(np.argmax(gaps))] + xs[int(np.argmax(gaps)) + 1]) / 2)
                     halves = [[x1, y1b, mid, y2b], [mid, y1b, x2, y2b]]
@@ -3459,9 +3941,9 @@ class MangaTranslator:
                     shape_type=shape,
                 )
                 mpoly = det.get("mask_poly")
-                # برای بخش‌های شکسته، mask_poly والد را فقط اگر یک بخش باشد نگه دار
+                
                 if len(split_parts) > 1:
-                    mpoly = None  # باکس/کانتور جزئی دقیق‌تر از mask مشترک
+                    mpoly = None  
                 elif mpoly is not None and y0:
                     mpoly = np.asarray(mpoly).copy().reshape(-1, 2)
                     mpoly[:, 1] = mpoly[:, 1] + y0
@@ -3488,7 +3970,7 @@ class MangaTranslator:
         return regions
 
     def _draw_debug_regions(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        """دیباگ مثل cc.jpg: یک جعبهٔ قرمز تنگ دور کل متن هر حباب (نه هر خط جدا)."""
+        
         vis = image.copy()
         for r in regions:
             if getattr(r, "kind", "dialogue") == "junk":
@@ -3497,7 +3979,7 @@ class MangaTranslator:
             if not src:
                 continue
 
-            color = (0, 0, 220)  # قرمز BGR
+            color = (0, 0, 220)  
             boxes = getattr(r, "boxes", None) or []
             label_x = label_y = 0
             if boxes:
@@ -3545,23 +4027,23 @@ class MangaTranslator:
     def process_core(self, image: np.ndarray) -> np.ndarray:
         h, w = image.shape[:2]
 
-        # ── Window Scanning با Overlap (طبق PDF) ──
-        # تکه‌های ~۴۰۰۰ پیکسلی + حدود ۳۵۰ پیکسل همپوشانی
-        # تا هیچ حباب متنی روی مرز دو تکه نصفه نشود.
+        
+        
+        
         max_chunk = 4000
         overlap = 350 if h > max_chunk + 200 else 0
         chunk_ranges = []
         y = 0
         while y < h:
-            # انتهای تکه با احتساب overlap (مگر آخرین تکه)
+            
             y_end = min(y + max_chunk + (overlap if y + max_chunk < h else 0), h)
             chunk_ranges.append((y, y_end))
             if y_end >= h:
                 break
-            # قدم بعدی = max_chunk (همپوشانی دوباره در تکه بعدی خوانده می‌شود)
+            
             y += max_chunk
 
-        # مرزهای اصلی (بدون overlap) برای منطق merge حباب‌های نصفه
+        
         cut_ys = []
         yy = 0
         while yy + max_chunk < h:
@@ -3632,21 +4114,24 @@ class MangaTranslator:
                 f"{r.source_text}"
             )
 
+        debug_vis = None
         if self.debug:
             debug_vis = self._draw_debug_regions(image, unique_regions)
-            self._last_debug_image = debug_vis
             print(f"  [*] DEBUG: تصویر دیباگ با {len(unique_regions)} حباب آماده شد.")
-        else:
-            self._last_debug_image = None
+        
+        if not hasattr(self, "_tls"):
+            self._tls = threading.local()
+        self._tls.debug_image = debug_vis
+        self._last_debug_image = debug_vis
 
         raw_image_copy = image.copy()
 
-        # ── فاز ۲+۳ موازی: پاک‌سازی و ترجمه همزمان ──
-        # LaMa در thread جدا اجرا می‌شود؛ ترجمه روی thread اصلی.
-        # فقط قبل از رندر منتظر تمام‌شدن پاک‌سازی می‌مانیم.
+        
+        
+        
         to_clean = dialogue_regions + promo_regions
         cleaned_image = image
-        clean_err = [None]  # mutable برای thread
+        clean_err = [None]  
 
         def _run_clean():
             try:
@@ -3665,14 +4150,14 @@ class MangaTranslator:
         with ThreadPoolExecutor(max_workers=1) as clean_ex:
             clean_fut = clean_ex.submit(_run_clean)
 
-            # ترجمه همزمان با پاک‌سازی
+            
             if dialogue_regions:
                 print("[فاز ۳ - تفکر و ترجمه] ارسال درخواست به مدل ترجمه (همزمان با پاک‌سازی)...")
                 self.translate_regions(dialogue_regions)
             else:
                 print("[فاز ۳ - تفکر و ترجمه] دیالوگ معتبری برای ترجمه نبود.")
 
-            # منتظر تمام‌شدن پاک‌سازی
+            
             cleaned_image = clean_fut.result()
 
         if clean_err[0] is not None:
@@ -3691,7 +4176,7 @@ class MangaTranslator:
         if junk_regions:
             print(f"  [*] {len(junk_regions)} junk → دست نخورده می‌ماند.")
 
-        # ── فاز ۴: رندر متن فارسی روی تصویر پاک‌شده ──
+        
         print("[فاز ۴ - رندر نهایی] شروع جایگذاری و ذخیره...")
         if translated_regions:
             final_image = self.render_translations(cleaned_image, translated_regions, raw_image_copy)
@@ -3748,12 +4233,12 @@ class MangaTranslator:
             return float(max(0, xi2 - xi1) * max(0, yi2 - yi1))
 
         def score(r: TextRegion) -> tuple:
-            # ترجیح: باکس جمع‌وجور با متن معقول (نه باکس بزرگ که چند حباب همسایه را بلعیده)
+            
             is_bubble = 1 if (r.det_class or "") == "text_bubble" else 0
             text_len = len((r.source_text or "").strip())
             a = area(r)
             density = text_len / max(1.0, (a ** 0.5) / 10.0)
-            # area کوچکتر بهتر است وقتی containment است → منفی
+            
             return (is_bubble, density, r.det_confidence, -a)
 
         ordered = sorted(regions, key=score, reverse=True)
@@ -3770,16 +4255,16 @@ class MangaTranslator:
                 contain_r_in_k = inter / ar   
                 contain_k_in_r = inter / ak   
                 if contain_r_in_k >= containment_thresh:
-                    # r داخل k است → r را نگه دار اگر چگالی متن بهتری دارد
+                    
                     if score(r) > score(k):
-                        # k را بعداً حذف می‌کنیم با نیاوردن r به kept؟ اینجا r کاندید است
-                        # فقط وقتی k بهتر است r را drop کن
+                        
+                        
                         drop = True
                         break
-                    # در غیر این صورت r را نگه دار (k بعداً با contain_k_in_r حذف می‌شود)
+                    
                     continue
                 if contain_k_in_r >= containment_thresh:
-                    # k داخل r است و k قبلاً kept شده → r بزرگ‌تر را drop کن
+                    
                     drop = True
                     break
             if not drop:
@@ -3811,7 +4296,7 @@ class MangaTranslator:
             return inter / float(min(aw, bw) or 1)
 
         def touches_cut(r: TextRegion) -> bool:
-            # بدون خط برش chunk → هیچ ادغامی (وگرنه حباب‌های جدا دوباره قاطی می‌شوند)
+            
             if not cut_ys:
                 return False
             y1 = r.rect[1]
@@ -4342,7 +4827,7 @@ class MangaTranslator:
 
     @staticmethod
     def _pdf_to_images(pdf_path: str, dest_dir: str) -> List[str]:
-        import fitz
+        import pymupdf as fitz  
         os.makedirs(dest_dir, exist_ok=True)
         doc = fitz.open(pdf_path)
         zoom = 200 / 72
@@ -4632,21 +5117,16 @@ html, body { background: #0a0a0b; }
 
     @staticmethod
     def _cluster_widths(widths: List[int], abs_tol: int = 120, rel_tol: float = 0.12) -> Dict[int, int]:
-        """
-        عرض‌های نزدیک را یک خوشه می‌کند و برای هر خوشه میانه برمی‌گرداند.
-        مثال: 800,900,1000 → همه 900 | 1700,1800,1900 → همه 1800
-        «سه عدد بالا/پایین» با tolerance نسبی+مطلق پوشش داده می‌شود.
-        """
         if not widths:
             return {}
-        # (index, width) مرتب‌شده بر اساس عرض
+        
         indexed = sorted(enumerate(widths), key=lambda t: t[1])
         clusters: List[List[Tuple[int, int]]] = []
         for idx, w in indexed:
             if not clusters:
                 clusters.append([(idx, w)])
                 continue
-            # مقایسه با میانهٔ خوشهٔ فعلی
+            
             cur = clusters[-1]
             med = int(np.median([x[1] for x in cur]))
             tol = max(abs_tol, int(med * rel_tol))
@@ -4658,7 +5138,7 @@ html, body { background: #0a0a0b; }
         mapping: Dict[int, int] = {}
         for cur in clusters:
             med = int(round(float(np.median([x[1] for x in cur]))))
-            # رند به مضارب ۱۰ برای یکدستی
+            
             med = max(1, int(round(med / 10.0) * 10))
             for idx, _ in cur:
                 mapping[idx] = med
@@ -4674,14 +5154,14 @@ html, body { background: #0a0a0b; }
         h, w = im.shape[:2]
         if w == target_w:
             return im
-        # سقف سخت max_output_width (اگر تنظیم شده)
+        
         cap = self.max_output_width
         if cap and cap > 0 and target_w > cap:
             target_w = cap
         scale = target_w / float(w)
         new_w = int(target_w)
         new_h = max(1, int(round(h * scale)))
-        # کوچک‌کردن → AREA | بزرگ‌کردن/نزدیک → LINEAR
+        
         if w > target_w + 200:
             interp = cv2.INTER_AREA
         else:
@@ -4829,7 +5309,7 @@ html, body { background: #0a0a0b; }
 
         
         if len(image_files) >= 1:
-            # خواندن عرض واقعی همه صفحات → خوشه‌بندی عرض‌های نزدیک → میانه هر خوشه
+            
             widths: List[int] = []
             valid_files: List[str] = []
             for f in image_files:
@@ -4841,9 +5321,9 @@ html, body { background: #0a0a0b; }
                 del im0
 
             if valid_files:
-                # اگر max_output_width ست شده، فقط سقف است؛ هدف اصلی میانهٔ خوشه است
+                
                 wmap = self._cluster_widths(widths, abs_tol=120, rel_tol=0.12)
-                # اعمال سقف
+                
                 cap = self.max_output_width if self.max_output_width and self.max_output_width > 0 else 0
                 if cap:
                     for i in list(wmap.keys()):
@@ -4854,7 +5334,7 @@ html, body { background: #0a0a0b; }
                 os.makedirs(norm_dir, exist_ok=True)
                 normalized_files = []
                 changed = 0
-                # خلاصه خوشه‌ها برای لاگ
+                
                 cluster_summary: Dict[int, int] = {}
                 for i, f in enumerate(valid_files):
                     im = cv2.imread(f)
@@ -4887,10 +5367,10 @@ html, body { background: #0a0a0b; }
         skipped = 0
         page_ext = "." + self.img_format if self.img_format != "jpg" else ".jpg"
 
+        
+        pending = []  
         for page_i, f in enumerate(image_files):
-            MangaTranslator._title_skip_enabled = (page_i == 0)
             out_file = os.path.join(out_dir, os.path.splitext(os.path.basename(f))[0] + page_ext)
-
             if resume and os.path.isfile(out_file):
                 processed_files.append(out_file)
                 if self.debug:
@@ -4902,32 +5382,88 @@ html, body { background: #0a0a0b; }
                         debug_files.append(dbg_candidate)
                 skipped += 1
                 continue
+            pending.append((page_i, f, out_file))
 
+        page_w = max(1, int(getattr(self, "page_workers", 1) or 1))
+        if pending:
+            print(
+                f"[*] پردازش {len(pending)} صفحه "
+                f"({'هم‌زمان ×' + str(min(page_w, len(pending))) if page_w > 1 and len(pending) > 1 else 'ترتیبی'})..."
+            )
+
+        def _process_one_page(item):
+            page_i, f, out_file = item
+            if page_i == 0:
+                MangaTranslator._title_skip_enabled = True
             try:
                 result = self.process_image_file(f)
-            except GeminiQuotaExhausted as e:
-                print(f"\n[!] {e}")
-                print(f"    {len(processed_files)}/{len(image_files)} صفحه تا الان با موفقیت پردازش شده.")
-                break
+            except GeminiQuotaExhausted:
+                raise
             except Exception as e:
                 print(f"    [!] خطا در پردازش {os.path.basename(f)}: {e}", file=sys.stderr)
-                continue
+                return page_i, out_file, None, None, str(e)
+            finally:
+                if page_i == 0:
+                    MangaTranslator._title_skip_enabled = False
+            dbg = None
+            tls = getattr(self, "_tls", None)
+            if self.debug and tls is not None:
+                dbg = getattr(tls, "debug_image", None)
+                tls.debug_image = None
+            elif self.debug and self._last_debug_image is not None:
+                dbg = self._last_debug_image
+                self._last_debug_image = None
+            return page_i, out_file, result, dbg, None
 
+        quota_hit = False
+        
+        results_by_i = {}
+
+        if page_w <= 1 or len(pending) <= 1:
+            for item in pending:
+                try:
+                    page_i, out_file, result, dbg, err = _process_one_page(item)
+                except GeminiQuotaExhausted as e:
+                    print(f"\n[!] {e}")
+                    print(f"    بخشی از صفحات تا الان پردازش شده.")
+                    quota_hit = True
+                    break
+                results_by_i[page_i] = (out_file, result, dbg)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            w = min(page_w, len(pending))
+            with ThreadPoolExecutor(max_workers=w) as ex:
+                futs = {ex.submit(_process_one_page, item): item[0] for item in pending}
+                try:
+                    for fut in as_completed(futs):
+                        try:
+                            page_i, out_file, result, dbg, err = fut.result()
+                        except GeminiQuotaExhausted as e:
+                            print(f"\n[!] {e}")
+                            print(f"    بخشی از صفحات تا الان پردازش شده.")
+                            quota_hit = True
+                            for other in futs:
+                                other.cancel()
+                            break
+                        results_by_i[page_i] = (out_file, result, dbg)
+                finally:
+                    pass
+
+        
+        for page_i in sorted(results_by_i.keys()):
+            out_file, result, dbg = results_by_i[page_i]
             if result is None:
                 continue
-
             self._write_image(result, out_file)
             processed_files.append(out_file)
-
-            if self.debug and self._last_debug_image is not None:
+            if self.debug and dbg is not None:
                 debug_dir = os.path.join(cache_dir, "debug")
                 os.makedirs(debug_dir, exist_ok=True)
                 dbg_name = os.path.splitext(os.path.basename(out_file))[0] + "_debug.jpg"
                 dbg_path = os.path.join(debug_dir, dbg_name)
-                self._write_image(self._last_debug_image, dbg_path)
+                self._write_image(dbg, dbg_path)
                 debug_files.append(dbg_path)
                 print(f"  [*] DEBUG ذخیره شد: {dbg_path}")
-                self._last_debug_image = None
 
         if skipped:
             print(f"[*] {skipped} صفحه از قبل توی کش بود و دوباره پردازش نشد (resume فعاله).")
@@ -5071,10 +5607,10 @@ def build_arg_parser():
                    help="اگر تا این ثانیه پاسخی نیامد، مدل/کلید عوض می‌شود (پیش‌فرض ۱۰)")
     p.add_argument("--max-retries", type=int, default=12,
                    help="حداکثر تلاش ترجمه (پیش‌فرض ۱۲ برای پیمایش cascade مدل‌ها)")
-    p.add_argument("--det-confidence", type=float, default=0.28,
-                   help="آستانه‌ی اطمینان تشخیص متن/حباب RT-DETR (پیش‌فرض 0.28)")
-    p.add_argument("--det-iou", type=float, default=0.45,
-                   help="آستانه‌ی IoU برای NMS باکس‌های تشخیص‌داده‌شده (پیش‌فرض 0.45)")
+    p.add_argument("--det-confidence", type=float, default=0.35,
+                   help="آستانه‌ی اطمینان تشخیص متن/حباب RT-DETR (پیش‌فرض 0.35 — سخت‌گیرتر برای جلوگیری از حباب اضافی)")
+    p.add_argument("--det-iou", type=float, default=0.40,
+                   help="آستانه‌ی IoU برای NMS باکس‌های تشخیص‌داده‌شده (پیش‌فرض 0.40)")
     p.add_argument("--stitch-max-height", type=int, default=12000,
                    help="سقف ارتفاع هر نوار چسبانده‌شده (پیش‌فرض ۱۲۰۰۰). ۰ = خاموش. "
                         "مقدار کمتر = نوارهای کوتاه‌تر و مصرف حافظه کمتر.")
@@ -5090,12 +5626,16 @@ def build_arg_parser():
     p.add_argument("--max-height", type=int, default=0,
                help="حداکثر ارتفاع خروجی به پیکسل (۰ = بدون محدودیت). "
                     "اگر نوار از این ارتفاع بلندتر باشد، با کیفیت بالا کوچک می‌شود تا متن خوانا بماند.")
-    p.add_argument("--min-confidence", type=float, default=0.12,
-                   help="آستانه‌ی اطمینان PaddleOCR برای هر خط متن (پیش‌فرض 0.12)")
-    p.add_argument("--workers", type=int, default=1)
-    p.add_argument("--mask-padding", type=int, default=3)
-    p.add_argument("--pad-ratio", type=float, default=0.06)
-    p.add_argument("--inpaint-radius", type=int, default=3)
+    p.add_argument("--min-confidence", type=float, default=0.15,
+                   help="آستانه‌ی اطمینان OCR برای هر خط متن (پیش‌فرض 0.15)")
+    p.add_argument("--workers", type=int, default=0,
+                   help="سقف موازی‌سازی (۰=خودکار بر اساس CPU/GPU). مثال: --workers 4")
+    p.add_argument("--mask-padding", type=int, default=3,
+                   help="پدینگ ماسک پاکسازی (پیش‌فرض ۳)")
+    p.add_argument("--pad-ratio", type=float, default=0.08,
+                   help="نسبت پدینگ داخل حباب برای متن (پیش‌فرض ۰.۰۸)")
+    p.add_argument("--inpaint-radius", type=int, default=4,
+                   help="شعاع inpaint اوپن‌سی‌وی (پیش‌فرض ۴)")
     p.add_argument("--temperature", type=float, default=0.85)
     p.add_argument("--debug", action="store_true",
                    help="حالت دیباگ: مربع رنگی دور هر حباب + خروجی جداگانه با پسوند -debug "
@@ -5171,7 +5711,7 @@ def main():
         gpu=args.gpu,
         max_retries=args.max_retries,
         request_delay=args.request_delay,
-        # api_timeout بعد از ساخت ست می‌شود
+        
 
         img_format=args.img_format,
         img_quality=args.quality,
@@ -5195,7 +5735,23 @@ def main():
         translator.use_lama = True
         print("[*] --lama → LaMa ONNX حتی روی CPU فعال شد.")
 
-    translator.run(args.input, output_path, resume=not args.no_resume, clean_old=not args.keep_old)
+    try:
+        translator.run(args.input, output_path, resume=not args.no_resume, clean_old=not args.keep_old)
+    finally:
+        
+        
+        try:
+            import threading
+            for t in threading.enumerate():
+                if t is not threading.main_thread() and t.is_alive():
+                    try:
+                        t.daemon = True
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        
+        os._exit(0)
 
 
 if __name__ == "__main__":
