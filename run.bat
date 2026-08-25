@@ -6,50 +6,6 @@ echo ========================================
 echo  مترجم خودکار مانگا / مانهوا (فارسی)
 echo ========================================
 echo.
-
-echo ۰) بررسی و نصب وابستگی‌ها...
-
-(
-echo numpy==1.26.4
-echo opencv-python-headless==4.8.1.78
-echo opencv-python==4.8.1.78
-echo opencv-contrib-python==4.8.1.78
-) > constraints.txt
-
-set NEED_INSTALL=0
-
-python -c "import numpy; exit(0 if numpy.__version__ == '1.26.4' else 1)" 2>nul
-if errorlevel 1 set NEED_INSTALL=1
-
-python -c "import cv2" 2>nul
-if errorlevel 1 set NEED_INSTALL=1
-
-python -c "import paddle" 2>nul
-if errorlevel 1 set NEED_INSTALL=1
-
-python -c "import paddleocr" 2>nul
-if errorlevel 1 set NEED_INSTALL=1
-
-python -c "import pymupdf" 2>nul
-if errorlevel 1 set NEED_INSTALL=1
-
-if !NEED_INSTALL! equ 1 (
-    echo برخی پکیج‌ها نصب نیستند یا نسخه اشتباه دارند. در حال نصب دقیق...
-    pip install --upgrade pip setuptools wheel
-    pip install --no-cache-dir --constraint constraints.txt numpy==1.26.4
-    pip install --no-cache-dir --constraint constraints.txt opencv-python-headless==4.8.1.78
-    pip install --no-cache-dir --no-deps --constraint constraints.txt paddlepaddle==2.6.2 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
-    pip install --no-cache-dir --no-deps --constraint constraints.txt paddleocr==2.7.0.3
-    pip install --no-cache-dir --constraint constraints.txt pymupdf
-    pip install --no-cache-dir --constraint constraints.txt --ignore-installed attrdict cython fire lxml openpyxl pdf2docx premailer python-docx visualdl
-    pip install --no-cache-dir --constraint constraints.txt Pillow pyclipper lmdb scikit-image shapely python-bidi arabic-reshaper rapidfuzz imageio matplotlib tqdm requests beautifulsoup4 decorator imgaug opt-einsum astor pyyaml simple-lama-inpainting
-    pip install --no-cache-dir --constraint constraints.txt torch torchvision --index-url https://download.pytorch.org/whl/cpu
-    pip install --no-cache-dir --constraint constraints.txt "transformers==4.49.0" huggingface_hub sentencepiece
-    echo نصب وابستگی‌ها تمام شد.
-) else (
-    echo همه پکیج‌های اصلی درست نصب هستند.
-)
-echo.
 where python >nul 2>&1
 if errorlevel 1 (
     echo خطا: Python پیدا نشد. لطفاً اول نصبش کنید.
