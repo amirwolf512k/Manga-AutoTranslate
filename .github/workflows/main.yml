@@ -73,7 +73,7 @@ jobs:
           opencv-python==4.8.1.78
           opencv-contrib-python==4.8.1.78
           CONSTRAINTS
-          pip install --constraint constraints.txt opencv-python-headless==4.8.1.78 numpy<2 onnxruntime rapidocr-onnxruntime huggingface_hub Pillow python-bidi arabic-reshaper pymupdf google-genai openai tqdm requests beautifulsoup4 pyyaml
+          pip install --constraint constraints.txt opencv-python-headless==4.8.1.78 "numpy<2" onnxruntime rapidocr-onnxruntime huggingface_hub Pillow python-bidi arabic-reshaper pymupdf google-genai openai tqdm requests beautifulsoup4 pyyaml
           if [ "${{ inputs.provider }}" = "gemini" ]; then
             pip install --no-cache-dir google-genai
           else
