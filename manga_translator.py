@@ -124,8 +124,11 @@ def _ensure_all_dependencies() -> None:
         _pip_install(*misc)
 
     
-    if not _can_import("rapidocr_onnxruntime"):
-        _pip_install("rapidocr-onnxruntime")
+    if not _can_import("rapidocr"):
+        if not _pip_install("rapidocr"):
+            
+            if not _can_import("rapidocr_onnxruntime"):
+                _pip_install("rapidocr-onnxruntime")
 
     
     if not _can_import("google.genai") and not _can_import("google.generativeai"):
@@ -305,7 +308,7 @@ def _ensure_all_dependencies() -> None:
     else:
         _install_ort_cpu()
 
-    print("[+] بررسی وابستگی‌ها تمام شد.\\n")
+    print("[+] بررسی وابستگی‌ها تمام شد.\n")
 
 
 _ensure_all_dependencies()
@@ -785,11 +788,7 @@ class RTDetrV2ONNXDetector:
 
     def _parse_outputs(self, outputs, h0: int, w0: int, threshold: float) -> List[dict]:
         if not outputs or len(outputs) < 3:
-            
-            if len(outputs) >= 3:
-                pass
-            else:
-                return []
+            return []
 
         labels, boxes, scores = outputs[0], outputs[1], outputs[2]
         
@@ -837,15 +836,17 @@ class RTDetrV2ONNXDetector:
             y1 = int(max(0, min(h0 - 1, round(y1))))
             x2 = int(max(0, min(w0, round(x2))))
             y2 = int(max(0, min(h0, round(y2))))
-            
-            if x2 - x1 < 12 or y2 - y1 < 12:
-                continue
+
             bw, bh = x2 - x1, y2 - y1
             area = bw * bh
+            edge_band = max(40, int(0.04 * h0))
+            touches_edge = (y1 <= edge_band) or (y2 >= h0 - edge_band)
             
-            if area < 400:
+            min_side = 10 if touches_edge else 12
+            min_area = 220 if touches_edge else 400
+            if bw < min_side or bh < min_side or area < min_area:
                 continue
-            
+
             ar = bw / max(1, bh)
             if 0.75 <= ar <= 1.35:
                 shape = "circle"
@@ -901,41 +902,47 @@ class RTDetrV2ONNXDetector:
 
     def detect(self, image_bgr: np.ndarray):
         h, w = image_bgr.shape[:2]
-        all_boxes = []
-        all_boxes.extend(self._detect_single(image_bgr, self.conf_thresh))
-
-        
-        low_th = max(0.22, self.conf_thresh * 0.65)
-        low_boxes = self._detect_single(image_bgr, low_th)
         page_area = float(max(1, h * w))
-        for b in low_boxes:
+        
+        edge_band = max(40, int(0.04 * h))
+
+        low_th = max(0.18, self.conf_thresh * 0.55)
+        all_boxes = []
+        for b in self._detect_single(image_bgr, low_th):
             x1, y1, x2, y2 = b["rect"]
             bw, bh = x2 - x1, y2 - y1
             area = bw * bh
+            touches_edge = (y1 <= edge_band) or (y2 >= h - edge_band)
+            if b["confidence"] >= self.conf_thresh:
+                all_boxes.append(b)
+                continue
             
+            if touches_edge and b["confidence"] >= low_th and area >= 300 and bw >= 20 and bh >= 16:
+                all_boxes.append(b)
+                continue
             if (area < page_area * 0.04 and bw < w * 0.35 and bh < h * 0.25
                     and b["confidence"] >= low_th + 0.05):
                 all_boxes.append(b)
 
-        
         if self.multi_scale and h >= 1100 and w >= 500:
-            for scale, th_factor in ((0.55, 0.75),):
-                sw = max(1, int(w * scale))
-                sh = max(1, int(h * scale))
-                if sw < 280 or sh < 280:
-                    continue
+            sw = max(1, int(w * 0.55))
+            sh = max(1, int(h * 0.55))
+            if sw >= 280 and sh >= 280:
                 small = cv2.resize(image_bgr, (sw, sh), interpolation=cv2.INTER_AREA)
-                low_th2 = max(0.22, self.conf_thresh * th_factor)
-                small_boxes = self._detect_single(small, low_th2)
-                inv = 1.0 / scale
-                for b in small_boxes:
+                low_th2 = max(0.18, self.conf_thresh * 0.65)
+                inv = 1.0 / 0.55
+                for b in self._detect_single(small, low_th2):
                     x1, y1, x2, y2 = b["rect"]
                     b["rect"] = [int(x1 * inv), int(y1 * inv), int(x2 * inv), int(y2 * inv)]
                     bw = b["rect"][2] - b["rect"][0]
                     bh = b["rect"][3] - b["rect"][1]
                     area = bw * bh
+                    y1n, y2n = b["rect"][1], b["rect"][3]
+                    touches_edge = (y1n <= edge_band) or (y2n >= h - edge_band)
                     if (area < page_area * 0.04 and max(bw, bh) < max(w, h) * 0.35
                             and b["confidence"] >= low_th2):
+                        all_boxes.append(b)
+                    elif touches_edge and b["confidence"] >= low_th2 and area >= 300:
                         all_boxes.append(b)
 
         return self._nms(all_boxes, max(0.38, self.iou_thresh * 0.9))
@@ -947,16 +954,61 @@ RTDetrONNXDetector = RTDetrV2ONNXDetector
 
 
 class RapidOCRBackend:
+    
     def __init__(self, lang: str = "en"):
-        if not _HAS_RAPIDOCR:
-            raise ImportError("pip install rapidocr-onnxruntime")
-        self.engine = RapidOCR()
         self.lang = lang
-        print(f"[+] RapidOCR (ONNX) آماده | lang={lang}")
+        self._new_api = False
+        try:
+            
+            from rapidocr import RapidOCR as NewRapidOCR
+            self.engine = NewOCR = NewRapidOCR()
+            self._new_api = True
+            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang}")
+            return
+        except Exception:
+            pass
+        if not _HAS_RAPIDOCR:
+            raise ImportError("pip install rapidocr (یا rapidocr-onnxruntime)")
+        self.engine = RapidOCR()
+        print(f"[+] RapidOCR (ONNX, PP-OCRv3 قدیمی) آماده | lang={lang}")
+
+    @staticmethod
+    def _deaccent(txt: str) -> str:
+        
+        try:
+            import unicodedata as _ud
+            out = _ud.normalize("NFKD", txt)
+            out = "".join(ch for ch in out if not _ud.combining(ch))
+            return out
+        except Exception:
+            return txt
 
     def ocr(self, image_bgr: np.ndarray):
         if image_bgr is None or image_bgr.size == 0:
             return None
+        if self._new_api:
+            try:
+                out = self.engine(image_bgr)
+                txts = getattr(out, "txts", None)
+                if not txts:
+                    return None
+                boxes = getattr(out, "boxes", None)
+                scores = getattr(out, "scores", None)
+                lines = []
+                for i, t in enumerate(txts):
+                    t = self._deaccent(str(t)).strip()
+                    if not t:
+                        continue
+                    score = float(scores[i]) if scores is not None and i < len(scores) else 1.0
+                    box = boxes[i] if boxes is not None and i < len(boxes) else [[0, 0], [1, 0], [1, 1], [0, 1]]
+                    lines.append([np.asarray(box, dtype=np.float32), (t, score)])
+                return [lines] if lines else None
+            except Exception as e:
+                print(f"    [OCR] rapidocr جدید خطا: {e} → موتور قدیمی")
+                self._new_api = False
+                if not _HAS_RAPIDOCR:
+                    return None
+        
         result, _ = self.engine(image_bgr)
         if not result:
             return None
@@ -965,7 +1017,10 @@ class RapidOCRBackend:
             if len(item) < 3:
                 continue
             box, text, score = item[0], item[1], item[2]
-            lines.append([box, (str(text), float(score))])
+            text = self._deaccent(str(text)).strip()
+            if not text:
+                continue
+            lines.append([box, (text, float(score))])
         return [lines] if lines else None
 
 
@@ -1198,6 +1253,107 @@ class PaddleOCRv3Backend:
 
 
 
+class MiganONNX:
+    
+    
+    
+    REPO = "karanjakhar/migan"
+    FILE = "migan_pipeline_v2.onnx"
+
+    def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
+                 threads: int = 4, cache_dir: Optional[str] = None):
+        self.prefer_gpu = bool(prefer_gpu)
+        if not model_path or not os.path.isfile(model_path):
+            model_path = self._download_model(cache_dir=cache_dir)
+        self.model_path = model_path
+        use_threads = 1 if not prefer_gpu else max(1, int(threads))
+        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
+
+        names = [i.name for i in self.session.get_inputs()]
+        self._in_image = names[0]
+        self._in_mask = names[1] if len(names) > 1 else "mask"
+        for n in names:
+            low = n.lower()
+            if "mask" in low:
+                self._in_mask = n
+            elif "image" in low or "img" in low:
+                self._in_image = n
+
+        
+        try:
+            shp = self.session.get_inputs()[0].shape
+            self.run_size = int(shp[-1]) if isinstance(shp[-1], int) and shp[-1] > 0 else 512
+        except Exception:
+            self.run_size = 512
+        print(
+            f"[+] MI-GAN ONNX آماده | providers={self.session.get_providers()} | "
+            f"threads={use_threads} | size={self.run_size}"
+        )
+
+    @classmethod
+    def _download_model(cls, cache_dir: Optional[str] = None) -> str:
+        from pathlib import Path
+        cache_root = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "manga_translator_models"
+        cache_root.mkdir(parents=True, exist_ok=True)
+        dst = cache_root / "migan_pipeline_v2.onnx"
+        if dst.is_file() and dst.stat().st_size > 1_000_000:
+            print(f"[*] مدل MI-GAN از کش: {dst}")
+            return str(dst)
+
+        print(f"[*] دانلود مدل MI-GAN ONNX از {cls.REPO} (~۲۷MB) ...")
+        return hf_hub_download(repo_id=cls.REPO, filename=cls.FILE, cache_dir=cache_dir)
+
+    def __call__(self, image, mask):
+        if isinstance(image, np.ndarray):
+            if image.ndim == 3 and image.shape[2] == 3:
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            else:
+                img_rgb = cv2.cvtColor(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2RGB)
+        else:
+            img_rgb = np.array(image.convert("RGB"))
+        if isinstance(mask, np.ndarray):
+            mask_u8 = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY) if mask.ndim == 3 else mask
+        else:
+            mask_u8 = np.array(mask.convert("L"))
+        orig_size = (img_rgb.shape[1], img_rgb.shape[0])
+        oh, ow = img_rgb.shape[:2]
+
+        
+        
+        
+        ph = (8 - oh % 8) % 8
+        pw = (8 - ow % 8) % 8
+        if max(oh + ph, ow + pw) > 640:
+            rs = 512
+            interp = cv2.INTER_AREA if max(oh, ow) > rs else cv2.INTER_CUBIC
+            img_use = cv2.resize(img_rgb, (rs, rs), interpolation=interp)
+            msk_use = cv2.resize(mask_u8, (rs, rs), interpolation=cv2.INTER_AREA)
+            msk_use = cv2.dilate(msk_use, np.ones((3, 3), np.uint8), iterations=1)
+            _, msk_use = cv2.threshold(msk_use, 64, 255, cv2.THRESH_BINARY)
+            out_size = (rs, rs)
+        else:
+            img_use = cv2.copyMakeBorder(img_rgb, 0, ph, 0, pw, cv2.BORDER_REPLICATE)
+            msk_use = cv2.copyMakeBorder(mask_u8, 0, ph, 0, pw, cv2.BORDER_CONSTANT, value=0)
+            out_size = (ow + pw, oh + ph)
+
+        img_in = img_use.transpose(2, 0, 1)[None].astype(np.uint8)
+        
+        
+        
+        mask_in = ((msk_use <= 127).astype(np.uint8)) * 255
+        mask_in = mask_in[None, None]
+        out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
+        o = out[0].transpose(1, 2, 0)
+        if o.shape[1] != out_size[1] or o.shape[0] != out_size[0]:
+            o = cv2.resize(o, out_size, interpolation=cv2.INTER_LANCZOS4)
+        o = o[:oh, :ow]
+
+        del img_in, mask_in, img_use, msk_use
+        if o.shape[1] != orig_size[0] or o.shape[0] != orig_size[1]:
+            o = cv2.resize(o, orig_size, interpolation=cv2.INTER_LANCZOS4)
+        return Image.fromarray(np.ascontiguousarray(o))
+
+
 class LamaONNX:
     
     K3_URL = "https://media.githubusercontent.com/media/Kthree-K3/K3-Manga-AutoTranslate-Mobile/main/Models/lama.onnx"
@@ -1279,27 +1435,42 @@ class LamaONNX:
     def __call__(self, image, mask):
         if isinstance(image, np.ndarray):
             if image.ndim == 3 and image.shape[2] == 3:
-                image = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             else:
-                image = Image.fromarray(image)
+                img_rgb = cv2.cvtColor(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2RGB)
+        else:
+            arr = np.array(image.convert("RGB"))
+            img_rgb = arr
         if isinstance(mask, np.ndarray):
-            if mask.ndim == 3:
-                mask = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-            mask = Image.fromarray(mask)
-        orig_size = image.size  
+            mask_u8 = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY) if mask.ndim == 3 else mask
+        else:
+            mask_u8 = np.array(mask.convert("L"))
+        orig_size = (img_rgb.shape[1], img_rgb.shape[0])  
         run_size = self._pick_size(orig_size[0], orig_size[1])
-        img = image.convert("RGB").resize((run_size, run_size), Image.LANCZOS)
-        msk = mask.convert("L").resize((run_size, run_size), Image.NEAREST)
-        img_np = np.array(img).astype(np.float32) / 255.0
-        mask_np = (np.array(msk) > 127).astype(np.float32)
-        img_np = img_np.transpose(2, 0, 1)[None]
-        mask_np = mask_np[None, None]
-        out = self.session.run(None, {self._in_image: img_np, self._in_mask: mask_np})[0]
+
+        
+        
+        
+        interp = cv2.INTER_AREA if max(img_rgb.shape[:2]) > run_size else cv2.INTER_CUBIC
+        img_np = cv2.resize(img_rgb, (run_size, run_size), interpolation=interp)
+        
+        msk = cv2.resize(mask_u8, (run_size, run_size), interpolation=cv2.INTER_AREA)
+        msk = cv2.dilate(msk, np.ones((3, 3), np.uint8), iterations=1)
+        _, msk = cv2.threshold(msk, 64, 255, cv2.THRESH_BINARY)
+
+        img_in = img_np.astype(np.float32) / 255.0
+        mask_in = (msk.astype(np.float32) / 255.0)
+        img_in = img_in.transpose(2, 0, 1)[None]
+        mask_in = mask_in[None, None]
+        out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
         out = np.clip(out[0].transpose(1, 2, 0), 0, 1)
         out = (out * 255).astype(np.uint8) if out.max() <= 1.01 else np.clip(out, 0, 255).astype(np.uint8)
+
         
-        del img_np, mask_np, img, msk
-        return Image.fromarray(out).resize(orig_size, Image.LANCZOS)
+        del img_in, mask_in, img_np, msk
+        
+        result = cv2.resize(out, orig_size, interpolation=cv2.INTER_LANCZOS4)
+        return Image.fromarray(result)
 
 
 class MangaTranslator:
@@ -1353,16 +1524,16 @@ class MangaTranslator:
             print("[*] --cpu زده شده → پاک‌سازی با OpenCV inpaint (سریع روی CPU).")
             return False
         if force_gpu is True:
-            print(f"[*] --gpu/--lama زده شده → LaMa ONNX فعال "
+            print(f"[*] --gpu/--lama زده شده → MI-GAN/LaMa ONNX فعال "
                   f"({name or ('ORT-GPU' if has_ort_gpu else 'CPU')}).")
             return True
         if not has_cuda:
-            print("[*] GPU پیدا نشد → OpenCV inpaint (برای LaMa روی CPU: --lama).")
+            print("[*] GPU پیدا نشد → OpenCV inpaint (برای MI-GAN/LaMa روی CPU: --lama).")
             return False
         if vram > 0 and vram < self._LAMA_MIN_VRAM_GB:
             print(f"[*] GPU هست ({name}, {vram:.1f} GB) ولی VRAM کم → OpenCV.")
             return False
-        print(f"[*] GPU مناسب → LaMa ONNX فعال ({name or 'CUDA'}, {vram:.1f} GB).")
+        print(f"[*] GPU مناسب → MI-GAN/LaMa ONNX فعال ({name or 'CUDA'}, {vram:.1f} GB).")
         return True
 
     def __init__(
@@ -1553,7 +1724,7 @@ class MangaTranslator:
             conf_thresh=self.det_confidence,
             iou_thresh=self.det_iou_threshold,
             threads=self._ort_threads,
-            multi_scale=bool(self.use_gpu),
+            multi_scale=False,  
         )
         self._det_device = "cuda" if ocr_gpu else "cpu"
         
@@ -1649,15 +1820,24 @@ class MangaTranslator:
     def _get_lama(self):
         if self._lama is None and self.use_lama:
             try:
-                print("    [*] بارگذاری مدل LaMa ONNX ...")
-                self._lama = LamaONNX(
+                print("    [*] بارگذاری MI-GAN ONNX (سبک و سریع) ...")
+                self._lama = MiganONNX(
                     prefer_gpu=self.use_gpu,
                     threads=getattr(self, "_ort_threads", 4),
                 )
+                self._inpainter_name = "MI-GAN"
             except Exception as e:
-                print(f"    [!] بارگذاری LaMa ONNX ناموفق ({e})؛ به OpenCV برمی‌گردیم.")
-                self.use_lama = False
-                self._lama = None
+                print(f"    [!] MI-GAN ناموفق ({e}) → LaMa")
+                try:
+                    self._lama = LamaONNX(
+                        prefer_gpu=self.use_gpu,
+                        threads=getattr(self, "_ort_threads", 4),
+                    )
+                    self._inpainter_name = "LaMa"
+                except Exception as e2:
+                    print(f"    [!] LaMa هم ناموفق ({e2}) → OpenCV")
+                    self.use_lama = False
+                    self._lama = None
         return self._lama
 
     def _ocr_engine_call(self, image_bgr: np.ndarray):
@@ -1915,6 +2095,7 @@ class MangaTranslator:
         if not boxes:
             return boxes
         out: List[dict] = []
+        margin = 4
         for b in boxes:
             mpoly = b.get("mask_poly")
             rect = b["rect"]
@@ -1923,22 +2104,31 @@ class MangaTranslator:
             x2, y2 = min(img_w, x2), min(img_h, y2)
             bw, bh = max(1, x2 - x1), max(1, y2 - y1)
 
-            full = np.zeros((img_h, img_w), dtype=np.uint8)
+            
+            rx1 = max(0, x1 - margin)
+            ry1 = max(0, y1 - margin)
+            rx2 = min(img_w, x2 + margin)
+            ry2 = min(img_h, y2 + margin)
+
+            
+            full = np.zeros((ry2 - ry1, rx2 - rx1), dtype=np.uint8)
             if mpoly is not None and len(np.asarray(mpoly).reshape(-1)) >= 6:
-                pts = np.asarray(mpoly, dtype=np.int32).reshape(-1, 1, 2)
+                pts = np.asarray(mpoly, dtype=np.int32).reshape(-1, 1, 2).copy()
+                pts[:, 0, 0] -= rx1
+                pts[:, 0, 1] -= ry1
                 cv2.fillPoly(full, [pts], 255)
             else:
-                cv2.rectangle(full, (x1, y1), (x2, y2), 255, -1)
+                cv2.rectangle(full, (x1 - rx1, y1 - ry1), (x2 - rx1, y2 - ry1), 255, -1)
 
-            comps = self._mask_to_lobes(full, x1, y1, x2, y2)
+            comps = self._mask_to_lobes(full, x1 - rx1, y1 - ry1, x2 - rx1, y2 - ry1)
             if len(comps) < 2:
                 
-                comps = self._split_by_projection(full, x1, y1, x2, y2)
+                comps = self._split_by_projection(full, x1 - rx1, y1 - ry1, x2 - rx1, y2 - ry1)
 
             
             
             if len(comps) >= 2:
-                parent_a = float(max(1, (full[y1:y2, x1:x2] > 0).sum()))
+                parent_a = float(max(1, (full[y1 - ry1:y2 - ry1, x1 - rx1:x2 - rx1] > 0).sum()))
                 
                 comps = [c for c in comps if c[4] >= max(160.0, parent_a * 0.30)]
                 if len(comps) < 2:
@@ -1950,8 +2140,10 @@ class MangaTranslator:
 
             for (xa, ya, xb, yb, _a, lobe_mask) in comps:
                 pad = 2
-                xa, ya = max(0, xa - pad), max(0, ya - pad)
-                xb, yb = min(img_w, xb + pad), min(img_h, yb + pad)
+                xa, ya = xa + rx1 - pad, ya + ry1 - pad
+                xb, yb = xb + rx1 + pad, yb + ry1 + pad
+                xa, ya = max(0, xa), max(0, ya)
+                xb, yb = min(img_w, xb), min(img_h, yb)
                 if xb - xa < 12 or yb - ya < 12:
                     continue
                 part_poly = None
@@ -1961,6 +2153,8 @@ class MangaTranslator:
                     if cnts:
                         cnt = max(cnts, key=cv2.contourArea)
                         part_poly = cnt.reshape(-1, 2).astype(np.int32)
+                        part_poly[:, 0] += rx1
+                        part_poly[:, 1] += ry1
                         area_c = float(cv2.contourArea(cnt)) + 1e-6
                         peri_c = float(cv2.arcLength(cnt, True)) + 1e-6
                         circ = 4.0 * np.pi * area_c / (peri_c * peri_c)
@@ -2045,14 +2239,17 @@ class MangaTranslator:
             yy, xx = np.where(roi > 0)
             if len(xx) == 0:
                 return []
+            
+            assign_vals = np.full(len(xx), peak_pts[0][2], dtype=np.int32)
+            px0, py0, _ = peak_pts[0]
+            bd = (xx - px0).astype(np.float64) ** 2 + (yy - py0).astype(np.float64) ** 2
+            for px, py, li in peak_pts[1:]:
+                d = (xx - px).astype(np.float64) ** 2 + (yy - py).astype(np.float64) ** 2
+                closer = d < bd
+                assign_vals[closer] = li
+                bd[closer] = d[closer]
             assign = np.zeros_like(roi, dtype=np.int32)
-            for x, y in zip(xx, yy):
-                best, bd = peak_pts[0][2], 1e18
-                for px, py, li in peak_pts:
-                    d = (x - px) ** 2 + (y - py) ** 2
-                    if d < bd:
-                        bd, best = d, li
-                assign[y, x] = best
+            assign[yy, xx] = assign_vals
             labels = assign
 
         comps = []
@@ -2328,8 +2525,12 @@ class MangaTranslator:
 
         x1, y1, x2, y2 = rect
         h_img, w_img = image_bgr.shape[:2]
-        pad_x = max(2, int((x2 - x1) * pad_ratio))
-        pad_y = max(2, int((y2 - y1) * pad_ratio))
+        
+        edge_band = max(24, int(0.03 * h_img))
+        touches_edge = (y1 <= edge_band) or (y2 >= h_img - edge_band)
+        pr = pad_ratio * (1.6 if touches_edge else 1.0)
+        pad_x = max(2, int((x2 - x1) * pr))
+        pad_y = max(3 if touches_edge else 2, int((y2 - y1) * pr))
         cx1 = max(0, x1 - pad_x)
         cy1 = max(0, y1 - pad_y)
         cx2 = min(w_img, x2 + pad_x)
@@ -2364,6 +2565,11 @@ class MangaTranslator:
                     work = gray
                 clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
                 variants.append(cv2.cvtColor(clahe.apply(work), cv2.COLOR_GRAY2BGR))
+                
+                
+                blur = cv2.GaussianBlur(work, (0, 0), 1.2)
+                _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                variants.append(cv2.cvtColor(otsu, cv2.COLOR_GRAY2BGR))
             except Exception:
                 pass
             return variants
@@ -2375,10 +2581,14 @@ class MangaTranslator:
             m = max(ch, cw)
             if m < 280:
                 scale = max(280.0 / float(m), 1.6)
-                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
             elif min(ch, cw) < 72:
-                scale = 1.8
-                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_LINEAR)
+                scale = 2.2
+                img = cv2.resize(img, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
+            if scale > 1.0:
+                
+                blur = cv2.GaussianBlur(img, (0, 0), 1.0)
+                img = cv2.addWeighted(img, 1.4, blur, -0.4, 0)
             try:
                 result = self._ocr_engine_call(img)
             except RuntimeError as e:
@@ -2397,6 +2607,10 @@ class MangaTranslator:
                     if not txt or conf < self.min_confidence:
                         continue
                     if set(txt).issubset(PUNCTUATION_SET):
+                        continue
+                    
+                    alnum = sum(ch.isalnum() for ch in txt)
+                    if alnum < max(1, int(0.34 * len(txt))):
                         continue
                     poly[:, 0] = poly[:, 0] / scale + cx1
                     poly[:, 1] = poly[:, 1] / scale + cy1 + y_offset
@@ -2463,7 +2677,21 @@ class MangaTranslator:
             lines.append(txt)
             polys.append(poly)
 
-        full_text = " ".join(lines).strip()
+        
+        
+        
+        joined = ""
+        for ln in lines:
+            ln = ln.strip()
+            if not ln:
+                continue
+            if not joined:
+                joined = ln
+            elif joined.endswith("-") and ln[:1].isalpha():
+                joined = joined[:-1] + ln
+            else:
+                joined += " " + ln
+        full_text = joined.strip()
         full_text = MangaTranslator._insert_missing_spaces(full_text)
         full_text = re.sub(r"\s{2,}", " ", full_text)
         return full_text, polys, lines
@@ -2861,11 +3089,10 @@ class MangaTranslator:
         h_img, w_img = image.shape[:2]
         text_mask = np.zeros((h_img, w_img), dtype=np.uint8)
         promo_mask = np.zeros((h_img, w_img), dtype=np.uint8)
-        pad = max(1, int(getattr(self, "mask_padding", 3) or 3))
+        pad = max(2, int(getattr(self, "mask_padding", 3) or 3))
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         for region in regions:
-            
             ocr_local = np.zeros((h_img, w_img), dtype=np.uint8)
             filled = False
             for poly in region.boxes:
@@ -2880,15 +3107,16 @@ class MangaTranslator:
                     cv2.fillPoly(promo_mask, [pts], 255)
 
             x, y, rw, rh = region.rect
-            x0 = max(0, int(x) - 2)
-            y0 = max(0, int(y) - 2)
-            x1 = min(w_img, int(x + rw) + 2)
-            y1 = min(h_img, int(y + rh) + 2)
+            
+            edge_extra = 6 if (y <= 8 or (y + rh) >= h_img - 8) else 2
+            x0 = max(0, int(x) - edge_extra)
+            y0 = max(0, int(y) - edge_extra)
+            x1 = min(w_img, int(x + rw) + edge_extra)
+            y1 = min(h_img, int(y + rh) + edge_extra)
             if x1 <= x0 or y1 <= y0:
                 continue
 
             if not filled:
-                
                 ocr_local[y0:y1, x0:x1] = 255
 
             roi = gray[y0:y1, x0:x1]
@@ -2897,18 +3125,43 @@ class MangaTranslator:
                 continue
 
             med = float(np.median(roi))
+            
             if med > 135:
-                ink = (roi < med - 22).astype(np.uint8) * 255
+                ink_soft = (roi < med - 14).astype(np.uint8) * 255
+                ink_hard = (roi < med - 28).astype(np.uint8) * 255
             else:
-                ink = (roi > med + 22).astype(np.uint8) * 255
+                ink_soft = (roi > med + 14).astype(np.uint8) * 255
+                ink_hard = (roi > med + 28).astype(np.uint8) * 255
+            ink = cv2.bitwise_or(ink_soft, ink_hard)
 
             
-            near_ocr = cv2.dilate(ocr_local[y0:y1, x0:x1], np.ones((5, 5), np.uint8), iterations=1)
+            try:
+                blur = cv2.GaussianBlur(roi, (3, 3), 0)
+                ath = cv2.adaptiveThreshold(
+                    blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY_INV if med > 135 else cv2.THRESH_BINARY,
+                    15, 8,
+                )
+                ink = cv2.bitwise_or(ink, ath)
+            except Exception:
+                pass
+
+            try:
+                hsv_roi = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)[..., 1]
+                med_s = float(np.median(hsv_roi))
+                if med_s < 60:
+                    color_ink = (hsv_roi > med_s + 30).astype(np.uint8) * 255
+                    ink = cv2.bitwise_or(ink, color_ink)
+            except Exception:
+                pass
+
+            near_ocr = cv2.dilate(ocr_local[y0:y1, x0:x1], np.ones((7, 7), np.uint8), iterations=1)
             if filled:
                 ink = cv2.bitwise_and(ink, near_ocr)
-            
+
             k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
             ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k2, iterations=1)
+            ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k2, iterations=1)
 
             local = cv2.bitwise_or(ocr_local[y0:y1, x0:x1], ink)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], local)
@@ -2916,18 +3169,16 @@ class MangaTranslator:
         if not np.any(text_mask):
             return text_mask
 
-        
-        k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, pad), max(3, pad)))
+        k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, pad + 1), max(3, pad + 1)))
         text_mask = cv2.dilate(text_mask, k_edge, iterations=1)
         text_mask = cv2.morphologyEx(
             text_mask, cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)), iterations=1
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1
         )
 
-        
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         purple = cv2.inRange(hsv, np.array([110, 20, 20]), np.array([170, 255, 255]))
-        near = cv2.dilate(text_mask, np.ones((4, 4), np.uint8), iterations=1)
+        near = cv2.dilate(text_mask, np.ones((5, 5), np.uint8), iterations=1)
         text_mask = cv2.bitwise_or(text_mask, cv2.bitwise_and(purple, near))
 
         if np.any(promo_mask):
@@ -2946,20 +3197,17 @@ class MangaTranslator:
             if not np.any(mask):
                 return img.copy()
             cleaned = img.copy()
+            radius = max(4, int(self.inpaint_radius) + 1)
             
-            radius = max(3, int(self.inpaint_radius))
             cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=radius, flags=cv2.INPAINT_TELEA)
+            cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=max(3, radius // 2), flags=cv2.INPAINT_NS)
             
-            cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=max(2, radius // 2), flags=cv2.INPAINT_NS)
-            print("  - پاکسازی OpenCV: فقط پیکسل‌های متن (بدون دست زدن به بقیه حباب).")
+            mask2 = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+            cleaned = cv2.inpaint(cleaned, mask2, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
+            print("  - پاکسازی OpenCV (۳ پاس TELEA+NS): فقط پیکسل‌های متن.")
             return cleaned
 
-        if not self.use_lama:
-            return _opencv_full(image, regions)
-
-        lama = self._get_lama()
-        if lama is None:
-            return _opencv_full(image, regions)
+        lama = self._get_lama() if self.use_lama else None
 
         cleaned = image.copy()
         h_img, w_img = cleaned.shape[:2]
@@ -3026,71 +3274,158 @@ class MangaTranslator:
             if not filled or not np.any(local_mask):
                 continue
 
-            
             crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             med = float(np.median(crop_gray))
             if med > 135:
-                ink = (crop_gray < med - 22).astype(np.uint8) * 255
+                ink = (crop_gray < med - 14).astype(np.uint8) * 255
+                ink = cv2.bitwise_or(ink, (crop_gray < med - 28).astype(np.uint8) * 255)
             else:
-                ink = (crop_gray > med + 22).astype(np.uint8) * 255
-            near = cv2.dilate(local_mask, np.ones((5, 5), np.uint8), iterations=1)
+                ink = (crop_gray > med + 14).astype(np.uint8) * 255
+                ink = cv2.bitwise_or(ink, (crop_gray > med + 28).astype(np.uint8) * 255)
+            try:
+                blur = cv2.GaussianBlur(crop_gray, (3, 3), 0)
+                ath = cv2.adaptiveThreshold(
+                    blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY_INV if med > 135 else cv2.THRESH_BINARY,
+                    15, 8,
+                )
+                ink = cv2.bitwise_or(ink, ath)
+            except Exception:
+                pass
+            try:
+                hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+                sat = hsv[..., 1]
+                med_s = float(np.median(sat))
+                if med_s < 60:
+                    color_ink = (sat > med_s + 30).astype(np.uint8) * 255
+                    near_c = cv2.dilate(local_mask, np.ones((9, 9), np.uint8), iterations=1)
+                    ink = cv2.bitwise_or(ink, cv2.bitwise_and(color_ink, near_c))
+            except Exception:
+                pass
+            near = cv2.dilate(local_mask, np.ones((7, 7), np.uint8), iterations=1)
             ink = cv2.bitwise_and(ink, near)
-            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
+            k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k2, iterations=1)
+            ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k2, iterations=1)
             local_mask = cv2.bitwise_or(local_mask, ink)
             local_mask = cv2.dilate(local_mask, k2, iterations=1)
 
             rid = getattr(region, "id", i)
-            use_fast = max(cw, ch) < 140 or int(np.count_nonzero(local_mask)) < 800
-            try:
-                if use_fast:
-                    result_bgr = cv2.inpaint(
-                        crop, local_mask,
-                        inpaintRadius=max(3, self.inpaint_radius),
+            ipn0 = getattr(self, "_inpainter_name", "LaMa")
+            small_th = 96 if ipn0 == "MI-GAN" else 140
+            use_fast = max(cw, ch) < small_th or int(np.count_nonzero(local_mask)) < 800
+
+            def _feather_paste(result_crop: np.ndarray) -> np.ndarray:
+                
+                
+                mf = cv2.GaussianBlur(local_mask, (0, 0), 1.5).astype(np.float32) / 255.0
+                mf = mf[..., None]
+                blended = (
+                    result_crop.astype(np.float32) * mf
+                    + crop.astype(np.float32) * (1.0 - mf)
+                )
+                return np.clip(blended, 0, 255).astype(np.uint8)
+
+            def _opencv_inpaint(crp: np.ndarray) -> np.ndarray:
+                rad = max(4, int(self.inpaint_radius) + 1)
+                r = cv2.inpaint(crp, local_mask, inpaintRadius=rad, flags=cv2.INPAINT_TELEA)
+                r = cv2.inpaint(r, local_mask, inpaintRadius=max(3, rad // 2), flags=cv2.INPAINT_NS)
+                
+                m2 = cv2.dilate(local_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
+                r = cv2.inpaint(r, m2, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
+                return r
+
+            def _residual_escalate() -> bool:
+                try:
+                    cur = cleaned[y0:y1e, x0:x1e]
+                    items = self._ocr_crop(cur, [0, 0, cw, ch], pad_ratio=0.0)
+                    txt = items[0] if items else ""
+                except Exception:
+                    return False
+                core = re.sub(r"[^\w]", "", txt or "", flags=re.UNICODE)
+                if len(core) < 3:
+                    return False
+
+                interior = np.zeros_like(local_mask)
+                mpoly = getattr(region, "mask_poly", None)
+                if mpoly is not None and len(np.asarray(mpoly).reshape(-1)) >= 6:
+                    pts = np.asarray(mpoly, dtype=np.int32).reshape(-1, 2).copy()
+                    pts[:, 0] -= x0
+                    pts[:, 1] -= y0
+                    if pts[:, 0].min() >= -4 and pts[:, 1].min() >= -4:
+                        cv2.fillPoly(interior, [pts], 255)
+                if not np.any(interior):
+                    k = max(11, int(0.28 * min(cw, ch)))
+                    if k % 2 == 0:
+                        k += 1
+                    kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+                    interior = cv2.dilate(local_mask, kern, iterations=2)
+                    interior = cv2.morphologyEx(interior, cv2.MORPH_CLOSE, kern, iterations=2)
+                else:
+                    interior = cv2.erode(interior, np.ones((3, 3), np.uint8), iterations=1)
+                interior = cv2.bitwise_and(
+                    interior,
+                    cv2.dilate(local_mask, np.ones((5, 5), np.uint8), iterations=5),
+                )
+                if not np.any(interior):
+                    return False
+                try:
+                    fixed = cv2.inpaint(
+                        cleaned[y0:y1e, x0:x1e], interior,
+                        inpaintRadius=max(4, self.inpaint_radius + 1),
                         flags=cv2.INPAINT_TELEA,
                     )
-                    result_bgr = cv2.inpaint(result_bgr, local_mask, inpaintRadius=2, flags=cv2.INPAINT_NS)
-                    cleaned[y0:y1e, x0:x1e] = result_bgr
+                    fixed = cv2.inpaint(fixed, interior, inpaintRadius=3, flags=cv2.INPAINT_NS)
+                    cleaned[y0:y1e, x0:x1e] = fixed
+                    print(f"    [OpenCV] حباب {rid}: متن باقی‌مانده دیده شد → پاکسازی کامل داخل حباب.", flush=True)
+                    return True
+                except Exception:
+                    return False
+
+            try:
+                if use_fast:
+                    cleaned[y0:y1e, x0:x1e] = _feather_paste(_opencv_inpaint(crop))
                     processed += 1
                     print(
                         f"    [OpenCV] حباب {rid} پاک شد ({processed}/{total}) "
                         f"[{cw}x{ch}px] {time.time() - t0:.1f}s",
                         flush=True,
                     )
+                    _residual_escalate()
                 else:
                     rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                     result_pil = lama(rgb_crop, local_mask)
-                    result_bgr = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
-                    cleaned[y0:y1e, x0:x1e] = result_bgr
+                    lama_out = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
+
+                    cleaned[y0:y1e, x0:x1e] = _feather_paste(lama_out)
                     processed += 1
+                    ipn = getattr(self, "_inpainter_name", "LaMa")
                     print(
-                        f"    [LaMa] حباب {rid} پاک شد ({processed}/{total}) "
+                        f"    [{ipn}] حباب {rid} پاک شد ({processed}/{total}) "
                         f"[{cw}x{ch}px] {time.time() - t0:.1f}s",
                         flush=True,
                     )
+                    _residual_escalate()
             except Exception as e:
                 failed += 1
-                print(f"    [!] LaMa روی حباب {rid} خطا: {e}", flush=True)
+                ipn = getattr(self, "_inpainter_name", "LaMa")
+                print(f"    [!] {ipn} روی حباب {rid} خطا: {e} → OpenCV", flush=True)
                 try:
-                    crop_inpainted = cv2.inpaint(
-                        crop, local_mask,
-                        inpaintRadius=max(3, self.inpaint_radius),
-                        flags=cv2.INPAINT_TELEA,
-                    )
-                    crop_inpainted = cv2.inpaint(crop_inpainted, local_mask, inpaintRadius=2, flags=cv2.INPAINT_NS)
-                    cleaned[y0:y1e, x0:x1e] = crop_inpainted
+                    cleaned[y0:y1e, x0:x1e] = _feather_paste(_opencv_inpaint(crop))
+                    _residual_escalate()
                 except Exception:
                     pass
 
         if processed > 0:
+            ipn = getattr(self, "_inpainter_name", "LaMa")
             msg = (
-                f"  - پاکسازی با LaMa ONNX (Crop-BBox → Paste-Back، {processed} حباب"
+                f"  - پاکسازی با {ipn} ONNX (Crop-BBox → Paste-Back، {processed} حباب"
                 + (f"، {failed} خطا" if failed else "")
                 + f"، کل {time.time() - t0:.1f}s) انجام شد."
             )
             print(msg, flush=True)
         elif failed > 0:
-            print(f"  [!] همهٔ {failed} فراخوانی LaMa شکست خورد؛ برگشت به OpenCV کامل.", flush=True)
+            print(f"  [!] همهٔ {failed} فراخوانی inpainter شکست خورد؛ برگشت به OpenCV کامل.", flush=True)
             return _opencv_full(image, regions)
         else:
             print("  - هیچ ماسک معتبری برای پاکسازی پیدا نشد.", flush=True)
@@ -3185,8 +3520,11 @@ class MangaTranslator:
             "OCR خراب\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
             "OCR را متن مقدس و دقیق فرض نکن.\n"
-            "اگر کلمه‌ای ناقص، چسبیده، اشتباه، سانسور با * یا خراب است، "
+            "اگر کلمه‌ای ناقص، چسبیده، اشتباه، سانسور با * یا خراب است, "
             "از کل جمله و فضای صحنه برای فهم آن استفاده کن.\n"
+            "فاصلهٔ جاافتادهٔ بین کلمات را حتماً برگردان؛ کلمات چسبیده را از روی معنی جدا کن:\n"
+            "  CLEANRIGHT → CLEAN RIGHT | HOOKFROM → HOOK FROM | THEUNIFOR → THE UNI FOR\n"
+            "  DOWNRIGHT TO → DOWN RIGHT TO | IMADESURE → I MADE SURE\n"
             "اگر یک بخش واضحاً اشتباه OCR شده، معنای محتمل را بازسازی کن.\n"
             "اما چیزی از خودت اختراع نکن که با صحنه سازگار نیست.\n"
             "عدد یا نماد بی‌معنی وسط کلمه را حذف کن و جمله را طبیعی بنویس.\n"
@@ -4030,20 +4368,18 @@ class MangaTranslator:
         
         
         
+        
         max_chunk = 4000
-        overlap = 350 if h > max_chunk + 200 else 0
+        overlap = 550 if h > max_chunk + 200 else 0
         chunk_ranges = []
         y = 0
         while y < h:
-            
             y_end = min(y + max_chunk + (overlap if y + max_chunk < h else 0), h)
             chunk_ranges.append((y, y_end))
             if y_end >= h:
                 break
-            
             y += max_chunk
 
-        
         cut_ys = []
         yy = 0
         while yy + max_chunk < h:
@@ -4069,7 +4405,7 @@ class MangaTranslator:
             print(f"    [*] {before_contain - len(unique_regions)} جعبهٔ تو در تو حذف شد (جلوگیری از نوشتن دوباره).")
         before_merge = len(unique_regions)
         unique_regions = self._merge_vertically_split_regions(
-            unique_regions, cut_ys=cut_ys, max_gap=25, edge_margin=40
+            unique_regions, cut_ys=cut_ys, max_gap=80, edge_margin=120
         )
         if len(unique_regions) < before_merge:
             print(f"    [*] {before_merge - len(unique_regions)} حباب نصفه (برش chunk) به هم وصل شد.")
@@ -4276,9 +4612,9 @@ class MangaTranslator:
     def _merge_vertically_split_regions(
         regions: List[TextRegion],
         cut_ys: Optional[List[int]] = None,
-        max_gap: int = 60,
-        edge_margin: int = 80,
-        min_x_overlap_ratio: float = 0.30,
+        max_gap: int = 80,
+        edge_margin: int = 120,
+        min_x_overlap_ratio: float = 0.25,
     ) -> List[TextRegion]:
         if len(regions) < 2:
             return regions
