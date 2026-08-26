@@ -124,43 +124,13 @@ def _ensure_all_dependencies() -> None:
         _pip_install(*misc)
 
     
-    if not _can_import("onnxruntime"):
-        print("[*] نصب onnxruntime (CPU) قبل از OCR ...")
-        _pip_install("onnxruntime")
+    if not _can_import("rapidocr"):
+        if not _pip_install("rapidocr"):
+            
+            if not _can_import("rapidocr_onnxruntime"):
+                _pip_install("rapidocr-onnxruntime")
 
     
-    def _ocr_available() -> bool:
-        return (
-            _can_import("rapidocr")
-            or _can_import("rapidocr_onnxruntime")
-            or _can_import("paddleocr")
-        )
-
-    if not _ocr_available():
-        print("[*] نصب موتور OCR ...")
-        
-        _pip_install("rapidocr")
-        if not (_can_import("rapidocr") or _can_import("rapidocr_onnxruntime")):
-            _pip_install("rapidocr-onnxruntime")
-        
-        if not (_can_import("rapidocr") or _can_import("rapidocr_onnxruntime")):
-            _pip_install("rapidocr_onnxruntime")
-        
-        if not _ocr_available():
-            print("[*] RapidOCR ناموفق → نصب paddleocr ...")
-            _pip_install("paddlepaddle", "paddleocr")
-        if not _ocr_available():
-            _pip_install("paddleocr")
-        if not _ocr_available():
-            print(
-                "[!] هیچ موتور OCR نصب نشد. "
-                "دستی: pip install rapidocr  یا  pip install rapidocr-onnxruntime  یا  pip install paddleocr"
-            )
-        else:
-            print("[+] موتور OCR نصب شد.")
-    else:
-        print("[*] موتور OCR از قبل در دسترس است.")
-
     if not _can_import("google.genai") and not _can_import("google.generativeai"):
         _pip_install("google-genai")
     if not _can_import("openai"):
@@ -411,20 +381,11 @@ except ImportError:
     raise
 
 _HAS_RAPIDOCR = False
-_HAS_RAPIDOCR_NEW = False
-RapidOCR = None
 try:
     from rapidocr_onnxruntime import RapidOCR
     _HAS_RAPIDOCR = True
 except ImportError:
-    try:
-        
-        from rapidocr import RapidOCR as _RapidOCRNew
-        RapidOCR = _RapidOCRNew
-        _HAS_RAPIDOCR = True
-        _HAS_RAPIDOCR_NEW = True
-    except ImportError:
-        RapidOCR = None
+    RapidOCR = None
 
 _HAS_PADDLE = False
 try:
@@ -432,30 +393,6 @@ try:
     _HAS_PADDLE = True
 except ImportError:
     PaddleOCR = None
-
-
-def _refresh_ocr_flags() -> None:
-    global _HAS_RAPIDOCR, _HAS_RAPIDOCR_NEW, _HAS_PADDLE, RapidOCR, PaddleOCR
-    if not _HAS_RAPIDOCR:
-        try:
-            from rapidocr_onnxruntime import RapidOCR as _R
-            RapidOCR = _R
-            _HAS_RAPIDOCR = True
-        except ImportError:
-            try:
-                from rapidocr import RapidOCR as _R
-                RapidOCR = _R
-                _HAS_RAPIDOCR = True
-                _HAS_RAPIDOCR_NEW = True
-            except ImportError:
-                pass
-    if not _HAS_PADDLE:
-        try:
-            from paddleocr import PaddleOCR as _P
-            PaddleOCR = _P
-            _HAS_PADDLE = True
-        except ImportError:
-            pass
 
 
 def _torch_cuda_available() -> bool:
@@ -899,17 +836,15 @@ class RTDetrV2ONNXDetector:
             y1 = int(max(0, min(h0 - 1, round(y1))))
             x2 = int(max(0, min(w0, round(x2))))
             y2 = int(max(0, min(h0, round(y2))))
-
+            
+            if x2 - x1 < 12 or y2 - y1 < 12:
+                continue
             bw, bh = x2 - x1, y2 - y1
             area = bw * bh
-            edge_band = max(40, int(0.04 * h0))
-            touches_edge = (y1 <= edge_band) or (y2 >= h0 - edge_band)
             
-            min_side = 10 if touches_edge else 12
-            min_area = 220 if touches_edge else 400
-            if bw < min_side or bh < min_side or area < min_area:
+            if area < 400:
                 continue
-
+            
             ar = bw / max(1, bh)
             if 0.75 <= ar <= 1.35:
                 shape = "circle"
@@ -966,37 +901,32 @@ class RTDetrV2ONNXDetector:
     def detect(self, image_bgr: np.ndarray):
         h, w = image_bgr.shape[:2]
         page_area = float(max(1, h * w))
-        
-        edge_band = max(40, int(0.04 * h))
 
-        low_th = max(0.18, self.conf_thresh * 0.55)
+        
+        
+        
+        low_th = max(0.22, self.conf_thresh * 0.65)
         all_boxes = []
         for b in self._detect_single(image_bgr, low_th):
             x1, y1, x2, y2 = b["rect"]
             bw, bh = x2 - x1, y2 - y1
             area = bw * bh
-            touches_edge = (y1 <= edge_band) or (y2 >= h - edge_band)
             if b["confidence"] >= self.conf_thresh:
                 all_boxes.append(b)
                 continue
             
-            if touches_edge and b["confidence"] >= low_th and area >= 300 and bw >= 20 and bh >= 16:
-                all_boxes.append(b)
-                continue
-            
-            if b.get("class_name") == "text_free" and b["confidence"] >= low_th and area >= 500:
-                all_boxes.append(b)
-                continue
             if (area < page_area * 0.04 and bw < w * 0.35 and bh < h * 0.25
                     and b["confidence"] >= low_th + 0.05):
                 all_boxes.append(b)
 
+        
+        
         if self.multi_scale and h >= 1100 and w >= 500:
             sw = max(1, int(w * 0.55))
             sh = max(1, int(h * 0.55))
             if sw >= 280 and sh >= 280:
                 small = cv2.resize(image_bgr, (sw, sh), interpolation=cv2.INTER_AREA)
-                low_th2 = max(0.18, self.conf_thresh * 0.65)
+                low_th2 = max(0.22, self.conf_thresh * 0.75)
                 inv = 1.0 / 0.55
                 for b in self._detect_single(small, low_th2):
                     x1, y1, x2, y2 = b["rect"]
@@ -1004,12 +934,8 @@ class RTDetrV2ONNXDetector:
                     bw = b["rect"][2] - b["rect"][0]
                     bh = b["rect"][3] - b["rect"][1]
                     area = bw * bh
-                    y1n, y2n = b["rect"][1], b["rect"][3]
-                    touches_edge = (y1n <= edge_band) or (y2n >= h - edge_band)
                     if (area < page_area * 0.04 and max(bw, bh) < max(w, h) * 0.35
                             and b["confidence"] >= low_th2):
-                        all_boxes.append(b)
-                    elif touches_edge and b["confidence"] >= low_th2 and area >= 300:
                         all_boxes.append(b)
 
         return self._nms(all_boxes, max(0.38, self.iou_thresh * 0.9))
@@ -1021,40 +947,23 @@ RTDetrONNXDetector = RTDetrV2ONNXDetector
 
 
 class RapidOCRBackend:
-
+    
     def __init__(self, lang: str = "en"):
         self.lang = lang
         self._new_api = False
-        
         try:
+            
             from rapidocr import RapidOCR as NewRapidOCR
-            self.engine = NewRapidOCR()
+            self.engine = NewOCR = NewRapidOCR()
             self._new_api = True
             print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang}")
             return
-        except Exception as e1:
-            print(f"    [OCR] rapidocr جدید: {type(e1).__name__}: {e1}")
-        
-        try:
-            from rapidocr_onnxruntime import RapidOCR as OldRapidOCR
-            self.engine = OldRapidOCR()
-            self._new_api = False
-            print(f"[+] RapidOCR (ONNX, PP-OCRv3) آماده | lang={lang}")
-            return
-        except Exception as e2:
-            print(f"    [OCR] rapidocr_onnxruntime: {type(e2).__name__}: {e2}")
-        
-        if RapidOCR is not None:
-            try:
-                self.engine = RapidOCR()
-                self._new_api = bool(_HAS_RAPIDOCR_NEW)
-                print(f"[+] RapidOCR (fallback import) آماده | lang={lang}")
-                return
-            except Exception as e3:
-                print(f"    [OCR] RapidOCR fallback: {type(e3).__name__}: {e3}")
-        raise ImportError(
-            "pip install rapidocr  یا  pip install rapidocr-onnxruntime"
-        )
+        except Exception:
+            pass
+        if not _HAS_RAPIDOCR:
+            raise ImportError("pip install rapidocr (یا rapidocr-onnxruntime)")
+        self.engine = RapidOCR()
+        print(f"[+] RapidOCR (ONNX, PP-OCRv3 قدیمی) آماده | lang={lang}")
 
     @staticmethod
     def _deaccent(txt: str) -> str:
@@ -1808,7 +1717,7 @@ class MangaTranslator:
             conf_thresh=self.det_confidence,
             iou_thresh=self.det_iou_threshold,
             threads=self._ort_threads,
-            multi_scale=True,  
+            multi_scale=False,  
         )
         self._det_device = "cuda" if ocr_gpu else "cpu"
         
@@ -1829,55 +1738,23 @@ class MangaTranslator:
                 break
 
         self.ocr = None
-        _refresh_ocr_flags()
-
         
-        try:
-            self.ocr = RapidOCRBackend(lang=main_lang)
-        except Exception as e:
-            print(f"[!] RapidOCR لود نشد ({e})")
-
-        if self.ocr is None:
-            _refresh_ocr_flags()
-            if not _HAS_PADDLE:
-                print("[*] تلاش برای نصب paddleocr ...")
-                _pip_install("paddleocr")
-                _refresh_ocr_flags()
-            if _HAS_PADDLE:
-                try:
-                    self.ocr = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
-                except Exception as e:
-                    print(f"[!] PaddleOCR لود نشد ({e})")
-
-        if self.ocr is None:
-            
-            print("[*] نصب مجدد OCR برای محیط CI ...")
-            _pip_install("rapidocr")
-            _pip_install("rapidocr-onnxruntime")
-            _refresh_ocr_flags()
+        if _HAS_RAPIDOCR:
             try:
                 self.ocr = RapidOCRBackend(lang=main_lang)
             except Exception as e:
-                print(f"[!] RapidOCR (retry) ناموفق: {e}")
-            if self.ocr is None:
-                _pip_install("paddleocr")
-                _refresh_ocr_flags()
-                if _HAS_PADDLE:
-                    try:
-                        self.ocr = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
-                    except Exception as e:
-                        print(f"[!] PaddleOCR (retry) ناموفق: {e}")
-
+                print(f"[!] RapidOCR لود نشد ({e})")
+        
+        if self.ocr is None and _HAS_PADDLE:
+            try:
+                self.ocr = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
+            except Exception as e:
+                print(f"[!] PaddleOCR لود نشد ({e})")
         if self.ocr is None:
             raise ImportError(
                 "هیچ OCR در دسترس نیست.\n"
-                "  در GitHub Actions / CI این‌ها را در requirements یا قبل از اجرا نصب کنید:\n"
-                "    pip install rapidocr onnxruntime\n"
-                "  یا:\n"
-                "    pip install rapidocr-onnxruntime\n"
-                "  یا:\n"
-                "    pip install paddleocr\n"
-                "  و مطمئن شوید onnxruntime روی CPU بدون خطا import می‌شود."
+                "  پیشنهاد: pip install paddleocr\n"
+                "  یا: pip install rapidocr-onnxruntime"
             )
 
         self._ocr_pool = None
@@ -1891,9 +1768,9 @@ class MangaTranslator:
                 for i in range(1, n_pool):
                     eng = None
                     try:
-                        if isinstance(self.ocr, RapidOCRBackend):
+                        if _HAS_RAPIDOCR and isinstance(self.ocr, RapidOCRBackend):
                             eng = RapidOCRBackend(lang=main_lang)
-                        elif isinstance(self.ocr, PaddleOCRv3Backend):
+                        elif _HAS_PADDLE and isinstance(self.ocr, PaddleOCRv3Backend):
                             eng = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
                     except Exception as e:
                         print(f"    [!] OCR موازی #{i + 1} لود نشد ({e})")
@@ -2641,12 +2518,8 @@ class MangaTranslator:
 
         x1, y1, x2, y2 = rect
         h_img, w_img = image_bgr.shape[:2]
-        
-        edge_band = max(24, int(0.03 * h_img))
-        touches_edge = (y1 <= edge_band) or (y2 >= h_img - edge_band)
-        pr = pad_ratio * (1.6 if touches_edge else 1.0)
-        pad_x = max(2, int((x2 - x1) * pr))
-        pad_y = max(3 if touches_edge else 2, int((y2 - y1) * pr))
+        pad_x = max(2, int((x2 - x1) * pad_ratio))
+        pad_y = max(2, int((y2 - y1) * pad_ratio))
         cx1 = max(0, x1 - pad_x)
         cy1 = max(0, y1 - pad_y)
         cx2 = min(w_img, x2 + pad_x)
@@ -3205,10 +3078,11 @@ class MangaTranslator:
         h_img, w_img = image.shape[:2]
         text_mask = np.zeros((h_img, w_img), dtype=np.uint8)
         promo_mask = np.zeros((h_img, w_img), dtype=np.uint8)
-        pad = max(2, int(getattr(self, "mask_padding", 3) or 3))
+        pad = max(1, int(getattr(self, "mask_padding", 3) or 3))
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
         for region in regions:
+            
             ocr_local = np.zeros((h_img, w_img), dtype=np.uint8)
             filled = False
             for poly in region.boxes:
@@ -3223,16 +3097,15 @@ class MangaTranslator:
                     cv2.fillPoly(promo_mask, [pts], 255)
 
             x, y, rw, rh = region.rect
-            
-            edge_extra = 6 if (y <= 8 or (y + rh) >= h_img - 8) else 2
-            x0 = max(0, int(x) - edge_extra)
-            y0 = max(0, int(y) - edge_extra)
-            x1 = min(w_img, int(x + rw) + edge_extra)
-            y1 = min(h_img, int(y + rh) + edge_extra)
+            x0 = max(0, int(x) - 2)
+            y0 = max(0, int(y) - 2)
+            x1 = min(w_img, int(x + rw) + 2)
+            y1 = min(h_img, int(y + rh) + 2)
             if x1 <= x0 or y1 <= y0:
                 continue
 
             if not filled:
+                
                 ocr_local[y0:y1, x0:x1] = 255
 
             roi = gray[y0:y1, x0:x1]
@@ -3241,43 +3114,28 @@ class MangaTranslator:
                 continue
 
             med = float(np.median(roi))
-            
             if med > 135:
-                ink_soft = (roi < med - 14).astype(np.uint8) * 255
-                ink_hard = (roi < med - 28).astype(np.uint8) * 255
+                ink = (roi < med - 22).astype(np.uint8) * 255
             else:
-                ink_soft = (roi > med + 14).astype(np.uint8) * 255
-                ink_hard = (roi > med + 28).astype(np.uint8) * 255
-            ink = cv2.bitwise_or(ink_soft, ink_hard)
+                ink = (roi > med + 22).astype(np.uint8) * 255
 
             
-            try:
-                blur = cv2.GaussianBlur(roi, (3, 3), 0)
-                ath = cv2.adaptiveThreshold(
-                    blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY_INV if med > 135 else cv2.THRESH_BINARY,
-                    15, 8,
-                )
-                ink = cv2.bitwise_or(ink, ath)
-            except Exception:
-                pass
-
             try:
                 hsv_roi = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2HSV)[..., 1]
                 med_s = float(np.median(hsv_roi))
                 if med_s < 60:
-                    color_ink = (hsv_roi > med_s + 30).astype(np.uint8) * 255
+                    color_ink = (hsv_roi > med_s + 35).astype(np.uint8) * 255
                     ink = cv2.bitwise_or(ink, color_ink)
             except Exception:
                 pass
 
-            near_ocr = cv2.dilate(ocr_local[y0:y1, x0:x1], np.ones((7, 7), np.uint8), iterations=1)
+            
+            near_ocr = cv2.dilate(ocr_local[y0:y1, x0:x1], np.ones((5, 5), np.uint8), iterations=1)
             if filled:
                 ink = cv2.bitwise_and(ink, near_ocr)
-
+            
             k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2))
             ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k2, iterations=1)
-            ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k2, iterations=1)
 
             local = cv2.bitwise_or(ocr_local[y0:y1, x0:x1], ink)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], local)
@@ -3285,16 +3143,18 @@ class MangaTranslator:
         if not np.any(text_mask):
             return text_mask
 
-        k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, pad + 1), max(3, pad + 1)))
+        
+        k_edge = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (max(3, pad), max(3, pad)))
         text_mask = cv2.dilate(text_mask, k_edge, iterations=1)
         text_mask = cv2.morphologyEx(
             text_mask, cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1
+            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)), iterations=1
         )
 
+        
         hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         purple = cv2.inRange(hsv, np.array([110, 20, 20]), np.array([170, 255, 255]))
-        near = cv2.dilate(text_mask, np.ones((5, 5), np.uint8), iterations=1)
+        near = cv2.dilate(text_mask, np.ones((4, 4), np.uint8), iterations=1)
         text_mask = cv2.bitwise_or(text_mask, cv2.bitwise_and(purple, near))
 
         if np.any(promo_mask):
@@ -3313,14 +3173,12 @@ class MangaTranslator:
             if not np.any(mask):
                 return img.copy()
             cleaned = img.copy()
-            radius = max(4, int(self.inpaint_radius) + 1)
             
+            radius = max(3, int(self.inpaint_radius))
             cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=radius, flags=cv2.INPAINT_TELEA)
-            cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=max(3, radius // 2), flags=cv2.INPAINT_NS)
             
-            mask2 = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
-            cleaned = cv2.inpaint(cleaned, mask2, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
-            print("  - پاکسازی OpenCV (۳ پاس TELEA+NS): فقط پیکسل‌های متن.")
+            cleaned = cv2.inpaint(cleaned, mask, inpaintRadius=max(2, radius // 2), flags=cv2.INPAINT_NS)
+            print("  - پاکسازی OpenCV: فقط پیکسل‌های متن (بدون دست زدن به بقیه حباب).")
             return cleaned
 
         lama = self._get_lama() if self.use_lama else None
@@ -3390,39 +3248,30 @@ class MangaTranslator:
             if not filled or not np.any(local_mask):
                 continue
 
+            
             crop_gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
             med = float(np.median(crop_gray))
             if med > 135:
-                ink = (crop_gray < med - 14).astype(np.uint8) * 255
-                ink = cv2.bitwise_or(ink, (crop_gray < med - 28).astype(np.uint8) * 255)
+                ink = (crop_gray < med - 22).astype(np.uint8) * 255
             else:
-                ink = (crop_gray > med + 14).astype(np.uint8) * 255
-                ink = cv2.bitwise_or(ink, (crop_gray > med + 28).astype(np.uint8) * 255)
-            try:
-                blur = cv2.GaussianBlur(crop_gray, (3, 3), 0)
-                ath = cv2.adaptiveThreshold(
-                    blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY_INV if med > 135 else cv2.THRESH_BINARY,
-                    15, 8,
-                )
-                ink = cv2.bitwise_or(ink, ath)
-            except Exception:
-                pass
+                ink = (crop_gray > med + 22).astype(np.uint8) * 255
+            
+            
+            
             try:
                 hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
                 sat = hsv[..., 1]
                 med_s = float(np.median(sat))
                 if med_s < 60:
-                    color_ink = (sat > med_s + 30).astype(np.uint8) * 255
+                    color_ink = (sat > med_s + 35).astype(np.uint8) * 255
                     near_c = cv2.dilate(local_mask, np.ones((9, 9), np.uint8), iterations=1)
                     ink = cv2.bitwise_or(ink, cv2.bitwise_and(color_ink, near_c))
             except Exception:
                 pass
-            near = cv2.dilate(local_mask, np.ones((7, 7), np.uint8), iterations=1)
+            near = cv2.dilate(local_mask, np.ones((5, 5), np.uint8), iterations=1)
             ink = cv2.bitwise_and(ink, near)
             k2 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
             ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, k2, iterations=1)
-            ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, k2, iterations=1)
             local_mask = cv2.bitwise_or(local_mask, ink)
             local_mask = cv2.dilate(local_mask, k2, iterations=1)
 
@@ -3443,15 +3292,16 @@ class MangaTranslator:
                 return np.clip(blended, 0, 255).astype(np.uint8)
 
             def _opencv_inpaint(crp: np.ndarray) -> np.ndarray:
-                rad = max(4, int(self.inpaint_radius) + 1)
-                r = cv2.inpaint(crp, local_mask, inpaintRadius=rad, flags=cv2.INPAINT_TELEA)
-                r = cv2.inpaint(r, local_mask, inpaintRadius=max(3, rad // 2), flags=cv2.INPAINT_NS)
-                
-                m2 = cv2.dilate(local_mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
-                r = cv2.inpaint(r, m2, inpaintRadius=2, flags=cv2.INPAINT_TELEA)
-                return r
+                r = cv2.inpaint(
+                    crp, local_mask,
+                    inpaintRadius=max(3, self.inpaint_radius),
+                    flags=cv2.INPAINT_TELEA,
+                )
+                return cv2.inpaint(r, local_mask, inpaintRadius=2, flags=cv2.INPAINT_NS)
 
             def _residual_escalate() -> bool:
+                
+                
                 try:
                     cur = cleaned[y0:y1e, x0:x1e]
                     items = self._ocr_crop(cur, [0, 0, cw, ch], pad_ratio=0.0)
@@ -3462,6 +3312,7 @@ class MangaTranslator:
                 if len(core) < 3:
                     return False
 
+                
                 interior = np.zeros_like(local_mask)
                 mpoly = getattr(region, "mask_poly", None)
                 if mpoly is not None and len(np.asarray(mpoly).reshape(-1)) >= 6:
@@ -3471,27 +3322,24 @@ class MangaTranslator:
                     if pts[:, 0].min() >= -4 and pts[:, 1].min() >= -4:
                         cv2.fillPoly(interior, [pts], 255)
                 if not np.any(interior):
-                    k = max(11, int(0.28 * min(cw, ch)))
+                    
+                    k = max(9, int(0.22 * min(cw, ch)))
                     if k % 2 == 0:
                         k += 1
                     kern = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
-                    interior = cv2.dilate(local_mask, kern, iterations=2)
-                    interior = cv2.morphologyEx(interior, cv2.MORPH_CLOSE, kern, iterations=2)
+                    interior = cv2.dilate(local_mask, kern, iterations=1)
+                    interior = cv2.morphologyEx(interior, cv2.MORPH_CLOSE, kern, iterations=1)
                 else:
-                    interior = cv2.erode(interior, np.ones((3, 3), np.uint8), iterations=1)
-                interior = cv2.bitwise_and(
-                    interior,
-                    cv2.dilate(local_mask, np.ones((5, 5), np.uint8), iterations=5),
-                )
+                    interior = cv2.erode(interior, np.ones((5, 5), np.uint8), iterations=1)
+                interior = cv2.bitwise_and(interior, cv2.dilate(local_mask, np.ones((3, 3), np.uint8), iterations=6))
                 if not np.any(interior):
                     return False
                 try:
                     fixed = cv2.inpaint(
                         cleaned[y0:y1e, x0:x1e], interior,
-                        inpaintRadius=max(4, self.inpaint_radius + 1),
+                        inpaintRadius=max(3, self.inpaint_radius),
                         flags=cv2.INPAINT_TELEA,
                     )
-                    fixed = cv2.inpaint(fixed, interior, inpaintRadius=3, flags=cv2.INPAINT_NS)
                     cleaned[y0:y1e, x0:x1e] = fixed
                     print(f"    [OpenCV] حباب {rid}: متن باقی‌مانده دیده شد → پاکسازی کامل داخل حباب.", flush=True)
                     return True
@@ -3499,8 +3347,7 @@ class MangaTranslator:
                     return False
 
             try:
-                
-                if lama is None or use_fast:
+                if use_fast:
                     cleaned[y0:y1e, x0:x1e] = _feather_paste(_opencv_inpaint(crop))
                     processed += 1
                     print(
@@ -3513,6 +3360,7 @@ class MangaTranslator:
                     rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                     result_pil = lama(rgb_crop, local_mask)
                     lama_out = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
+
                     cleaned[y0:y1e, x0:x1e] = _feather_paste(lama_out)
                     processed += 1
                     ipn = getattr(self, "_inpainter_name", "LaMa")
@@ -3524,7 +3372,7 @@ class MangaTranslator:
                     _residual_escalate()
             except Exception as e:
                 failed += 1
-                ipn = getattr(self, "_inpainter_name", "OpenCV")
+                ipn = getattr(self, "_inpainter_name", "LaMa")
                 print(f"    [!] {ipn} روی حباب {rid} خطا: {e} → OpenCV", flush=True)
                 try:
                     cleaned[y0:y1e, x0:x1e] = _feather_paste(_opencv_inpaint(crop))
@@ -3533,20 +3381,13 @@ class MangaTranslator:
                     pass
 
         if processed > 0:
-            if lama is not None and failed == 0:
-                ipn = getattr(self, "_inpainter_name", "LaMa")
-                print(
-                    f"  - پاکسازی با {ipn} ONNX (Crop-BBox → Paste-Back، {processed} حباب"
-                    f"، کل {time.time() - t0:.1f}s) انجام شد.",
-                    flush=True,
-                )
-            else:
-                print(
-                    f"  - پاکسازی OpenCV انجام شد ({processed} حباب"
-                    + (f"، {failed} خطا" if failed else "")
-                    + f"، کل {time.time() - t0:.1f}s).",
-                    flush=True,
-                )
+            ipn = getattr(self, "_inpainter_name", "LaMa")
+            msg = (
+                f"  - پاکسازی با {ipn} ONNX (Crop-BBox → Paste-Back، {processed} حباب"
+                + (f"، {failed} خطا" if failed else "")
+                + f"، کل {time.time() - t0:.1f}s) انجام شد."
+            )
+            print(msg, flush=True)
         elif failed > 0:
             print(f"  [!] همهٔ {failed} فراخوانی inpainter شکست خورد؛ برگشت به OpenCV کامل.", flush=True)
             return _opencv_full(image, regions)
@@ -4491,18 +4332,20 @@ class MangaTranslator:
         
         
         
-        
         max_chunk = 4000
-        overlap = 550 if h > max_chunk + 200 else 0
+        overlap = 350 if h > max_chunk + 200 else 0
         chunk_ranges = []
         y = 0
         while y < h:
+            
             y_end = min(y + max_chunk + (overlap if y + max_chunk < h else 0), h)
             chunk_ranges.append((y, y_end))
             if y_end >= h:
                 break
+            
             y += max_chunk
 
+        
         cut_ys = []
         yy = 0
         while yy + max_chunk < h:
@@ -4528,17 +4371,11 @@ class MangaTranslator:
             print(f"    [*] {before_contain - len(unique_regions)} جعبهٔ تو در تو حذف شد (جلوگیری از نوشتن دوباره).")
         before_merge = len(unique_regions)
         unique_regions = self._merge_vertically_split_regions(
-            unique_regions, cut_ys=cut_ys, max_gap=80, edge_margin=120
+            unique_regions, cut_ys=cut_ys, max_gap=25, edge_margin=40
         )
         if len(unique_regions) < before_merge:
-            print(f"    [*] {before_merge - len(unique_regions)} حباب نصفه (برش chunk/پنل) به هم وصل شد.")
-
+            print(f"    [*] {before_merge - len(unique_regions)} حباب نصفه (برش chunk) به هم وصل شد.")
         
-        before2 = len(unique_regions)
-        unique_regions = self._merge_incomplete_dialogue_pairs(unique_regions)
-        if len(unique_regions) < before2:
-            print(f"    [*] {before2 - len(unique_regions)} دیالوگ ناقص/برش‌خورده ادغام شد.")
-
         unique_regions = self._suppress_contained_regions(unique_regions, containment_thresh=0.70)
 
         if self.reading_order == "rtl":
@@ -4741,17 +4578,14 @@ class MangaTranslator:
     def _merge_vertically_split_regions(
         regions: List[TextRegion],
         cut_ys: Optional[List[int]] = None,
-        max_gap: int = 80,
-        edge_margin: int = 120,
-        min_x_overlap_ratio: float = 0.25,
+        max_gap: int = 60,
+        edge_margin: int = 80,
+        min_x_overlap_ratio: float = 0.30,
     ) -> List[TextRegion]:
-        
         if len(regions) < 2:
             return regions
 
         cut_ys = cut_ys or []
-        
-        panel_gap = max(max_gap, 140)
 
         def x_overlap_ratio(a: TextRegion, b: TextRegion) -> float:
             ax, _, aw, _ = a.rect
@@ -4764,6 +4598,7 @@ class MangaTranslator:
             return inter / float(min(aw, bw) or 1)
 
         def touches_cut(r: TextRegion) -> bool:
+            
             if not cut_ys:
                 return False
             y1 = r.rect[1]
@@ -4782,6 +4617,7 @@ class MangaTranslator:
                 a_near = abs(ay2 - cy) <= edge_margin or abs(ay1 - cy) <= edge_margin
                 b_near = abs(by2 - cy) <= edge_margin or abs(by1 - cy) <= edge_margin
                 if a_near and b_near:
+                    
                     a_above = ay2 <= cy + edge_margin and ay1 < cy
                     b_below = by1 >= cy - edge_margin and by2 > cy
                     a_below = ay1 >= cy - edge_margin and ay2 > cy
@@ -4790,33 +4626,7 @@ class MangaTranslator:
                         return True
             return False
 
-        def looks_like_panel_split(a: TextRegion, b: TextRegion) -> bool:
-            
-            if a.kind != "dialogue" or b.kind != "dialogue":
-                return False
-            if x_overlap_ratio(a, b) < 0.45:
-                return False
-            ay1, ay2 = a.rect[1], a.rect[1] + a.rect[3]
-            by1, by2 = b.rect[1], b.rect[1] + b.rect[3]
-            if by1 >= ay1:
-                gap = by1 - ay2
-                top, bot = a, b
-            else:
-                gap = ay1 - by2
-                top, bot = b, a
-            if gap < -10 or gap > panel_gap:
-                return False
-            
-            aw, bw = float(a.rect[2]), float(b.rect[2])
-            if min(aw, bw) / max(aw, bw) < 0.55:
-                return False
-            
-            acx = a.rect[0] + a.rect[2] / 2.0
-            bcx = b.rect[0] + b.rect[2] / 2.0
-            if abs(acx - bcx) > max(40.0, 0.25 * max(aw, bw)):
-                return False
-            return True
-
+        
         ordered = sorted(regions, key=lambda r: (r.rect[1], r.rect[0]))
         used = [False] * len(ordered)
         merged: List[TextRegion] = []
@@ -4826,6 +4636,10 @@ class MangaTranslator:
                 continue
             cur = a
             used[i] = True
+            
+            if not touches_cut(cur):
+                merged.append(cur)
+                continue
 
             changed = True
             while changed:
@@ -4837,22 +4651,19 @@ class MangaTranslator:
                         continue
                     if x_overlap_ratio(cur, b) < min_x_overlap_ratio:
                         continue
+                    if not near_same_cut(cur, b):
+                        continue
 
                     cy1 = cur.rect[1]
                     cy2 = cur.rect[1] + cur.rect[3]
                     by1 = b.rect[1]
                     by2 = b.rect[1] + b.rect[3]
+
                     if by1 >= cy1:
                         gap = by1 - cy2
                     else:
                         gap = cy1 - by2
-
-                    
-                    at_cut = near_same_cut(cur, b) and gap <= max_gap and gap >= -15
-                    panel = looks_like_panel_split(cur, b)
-                    if not at_cut and not panel:
-                        continue
-                    if gap > panel_gap or gap < -15:
+                    if gap > max_gap or gap < -15:  
                         continue
 
                     
@@ -4880,8 +4691,6 @@ class MangaTranslator:
 
                     conf = max(cur.det_confidence, b.det_confidence)
                     boxes = list(cur.boxes or []) + list(b.boxes or [])
-                    style = getattr(cur, "bubble_style", None) or getattr(b, "bubble_style", None) or "normal"
-                    shape = getattr(cur, "shape_type", None) or getattr(b, "shape_type", None) or "circle"
                     cur = TextRegion(
                         id=0,
                         boxes=boxes,
@@ -4891,112 +4700,12 @@ class MangaTranslator:
                         kind=cur.kind,
                         det_class=cur.det_class or b.det_class,
                         det_confidence=conf,
-                        bubble_style=style,
-                        shape_type=shape,
                     )
                     used[j] = True
                     changed = True
             merged.append(cur)
 
         return merged
-
-
-    @staticmethod
-    def _merge_incomplete_dialogue_pairs(regions: List[TextRegion]) -> List[TextRegion]:
-        
-        if len(regions) < 2:
-            return regions
-
-        def x_overlap(a, b):
-            ax, _, aw, _ = a.rect
-            bx, _, bw, _ = b.rect
-            inter = max(0, min(ax + aw, bx + bw) - max(ax, bx))
-            return inter / float(min(aw, bw) or 1)
-
-        def incomplete(txt: str) -> bool:
-            t = (txt or "").strip()
-            if not t:
-                return False
-            
-            core = re.sub(r"[.!~…]+$", "", t).strip()
-            if core and re.fullmatch(r"[A-Za-z]{1,12}", core) and len(t.split()) <= 2:
-                return False
-            if t.endswith((",", "،", "-", "–", "—")):
-                return True
-            if t.endswith(("…", "...", "?", "؟")) and len(t.split()) >= 3:
-                return True
-            if t[-1].isalnum() and len(t.split()) <= 8 and not t.isupper():
-                return True
-            return False
-
-        ordered = sorted(regions, key=lambda r: (r.rect[1], r.rect[0]))
-        used = [False] * len(ordered)
-        out: List[TextRegion] = []
-
-        for i, a in enumerate(ordered):
-            if used[i]:
-                continue
-            cur = a
-            used[i] = True
-            if cur.kind != "dialogue":
-                out.append(cur)
-                continue
-
-            changed = True
-            while changed:
-                changed = False
-                for j, b in enumerate(ordered):
-                    if used[j] or b.kind != "dialogue":
-                        continue
-                    if x_overlap(cur, b) < 0.40:
-                        continue
-                    cy1, cy2 = cur.rect[1], cur.rect[1] + cur.rect[3]
-                    by1, by2 = b.rect[1], b.rect[1] + b.rect[3]
-                    if by1 >= cy1:
-                        gap = by1 - cy2
-                        top, bot = cur, b
-                    else:
-                        gap = cy1 - by2
-                        top, bot = b, cur
-                    if gap < -12 or gap > 180:
-                        continue
-                    aw, bw = float(cur.rect[2]), float(b.rect[2])
-                    if min(aw, bw) / max(aw, bw) < 0.55:
-                        continue
-                    acx = cur.rect[0] + cur.rect[2] / 2.0
-                    bcx = b.rect[0] + b.rect[2] / 2.0
-                    if abs(acx - bcx) > max(50.0, 0.30 * max(aw, bw)):
-                        continue
-
-                    top_txt = (top.source_text or "").strip()
-                    bot_txt = (bot.source_text or "").strip()
-                    if gap > 35 and not incomplete(top_txt):
-                        if not (len(top_txt) <= 36 and len(bot_txt) <= 36 and gap <= 90):
-                            continue
-
-                    nx = min(cur.rect[0], b.rect[0])
-                    ny = min(cy1, by1)
-                    nw = max(cur.rect[0] + cur.rect[2], b.rect[0] + b.rect[2]) - nx
-                    nh = max(cy2, by2) - ny
-                    joined = re.sub(r"\s{2,}", " ", (top_txt + " " + bot_txt).strip())
-                    style = getattr(cur, "bubble_style", None) or getattr(b, "bubble_style", None) or "normal"
-                    shape = getattr(cur, "shape_type", None) or getattr(b, "shape_type", None) or "circle"
-                    cur = TextRegion(
-                        id=0,
-                        boxes=list(cur.boxes or []) + list(b.boxes or []),
-                        source_text=joined,
-                        rect=(nx, ny, nw, nh),
-                        angle=0.0,
-                        kind="dialogue",
-                        det_class=cur.det_class or b.det_class,
-                        det_confidence=max(cur.det_confidence, b.det_confidence),
-                        bubble_style=style,
-                        shape_type=shape,
-                    )
-                    used[j] = True
-                    changed = True
-            out.append(cur)
-        return out
 
     @staticmethod
     def _is_mostly_blank(image: np.ndarray, std_thresh: float = 12.0, unique_thresh: int = 24) -> bool:
