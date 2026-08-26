@@ -983,6 +983,10 @@ class RTDetrV2ONNXDetector:
             if touches_edge and b["confidence"] >= low_th and area >= 300 and bw >= 20 and bh >= 16:
                 all_boxes.append(b)
                 continue
+            
+            if b.get("class_name") == "text_free" and b["confidence"] >= low_th and area >= 500:
+                all_boxes.append(b)
+                continue
             if (area < page_area * 0.04 and bw < w * 0.35 and bh < h * 0.25
                     and b["confidence"] >= low_th + 0.05):
                 all_boxes.append(b)
@@ -1804,7 +1808,7 @@ class MangaTranslator:
             conf_thresh=self.det_confidence,
             iou_thresh=self.det_iou_threshold,
             threads=self._ort_threads,
-            multi_scale=False,  
+            multi_scale=True,  
         )
         self._det_device = "cuda" if ocr_gpu else "cpu"
         
@@ -4527,8 +4531,14 @@ class MangaTranslator:
             unique_regions, cut_ys=cut_ys, max_gap=80, edge_margin=120
         )
         if len(unique_regions) < before_merge:
-            print(f"    [*] {before_merge - len(unique_regions)} حباب نصفه (برش chunk) به هم وصل شد.")
+            print(f"    [*] {before_merge - len(unique_regions)} حباب نصفه (برش chunk/پنل) به هم وصل شد.")
+
         
+        before2 = len(unique_regions)
+        unique_regions = self._merge_incomplete_dialogue_pairs(unique_regions)
+        if len(unique_regions) < before2:
+            print(f"    [*] {before2 - len(unique_regions)} دیالوگ ناقص/برش‌خورده ادغام شد.")
+
         unique_regions = self._suppress_contained_regions(unique_regions, containment_thresh=0.70)
 
         if self.reading_order == "rtl":
@@ -4889,6 +4899,104 @@ class MangaTranslator:
             merged.append(cur)
 
         return merged
+
+
+    @staticmethod
+    def _merge_incomplete_dialogue_pairs(regions: List[TextRegion]) -> List[TextRegion]:
+        
+        if len(regions) < 2:
+            return regions
+
+        def x_overlap(a, b):
+            ax, _, aw, _ = a.rect
+            bx, _, bw, _ = b.rect
+            inter = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+            return inter / float(min(aw, bw) or 1)
+
+        def incomplete(txt: str) -> bool:
+            t = (txt or "").strip()
+            if not t:
+                return False
+            
+            core = re.sub(r"[.!~…]+$", "", t).strip()
+            if core and re.fullmatch(r"[A-Za-z]{1,12}", core) and len(t.split()) <= 2:
+                return False
+            if t.endswith((",", "،", "-", "–", "—")):
+                return True
+            if t.endswith(("…", "...", "?", "؟")) and len(t.split()) >= 3:
+                return True
+            if t[-1].isalnum() and len(t.split()) <= 8 and not t.isupper():
+                return True
+            return False
+
+        ordered = sorted(regions, key=lambda r: (r.rect[1], r.rect[0]))
+        used = [False] * len(ordered)
+        out: List[TextRegion] = []
+
+        for i, a in enumerate(ordered):
+            if used[i]:
+                continue
+            cur = a
+            used[i] = True
+            if cur.kind != "dialogue":
+                out.append(cur)
+                continue
+
+            changed = True
+            while changed:
+                changed = False
+                for j, b in enumerate(ordered):
+                    if used[j] or b.kind != "dialogue":
+                        continue
+                    if x_overlap(cur, b) < 0.40:
+                        continue
+                    cy1, cy2 = cur.rect[1], cur.rect[1] + cur.rect[3]
+                    by1, by2 = b.rect[1], b.rect[1] + b.rect[3]
+                    if by1 >= cy1:
+                        gap = by1 - cy2
+                        top, bot = cur, b
+                    else:
+                        gap = cy1 - by2
+                        top, bot = b, cur
+                    if gap < -12 or gap > 180:
+                        continue
+                    aw, bw = float(cur.rect[2]), float(b.rect[2])
+                    if min(aw, bw) / max(aw, bw) < 0.55:
+                        continue
+                    acx = cur.rect[0] + cur.rect[2] / 2.0
+                    bcx = b.rect[0] + b.rect[2] / 2.0
+                    if abs(acx - bcx) > max(50.0, 0.30 * max(aw, bw)):
+                        continue
+
+                    top_txt = (top.source_text or "").strip()
+                    bot_txt = (bot.source_text or "").strip()
+                    if gap > 35 and not incomplete(top_txt):
+                        if not (len(top_txt) <= 36 and len(bot_txt) <= 36 and gap <= 90):
+                            continue
+
+                    nx = min(cur.rect[0], b.rect[0])
+                    ny = min(cy1, by1)
+                    nw = max(cur.rect[0] + cur.rect[2], b.rect[0] + b.rect[2]) - nx
+                    nh = max(cy2, by2) - ny
+                    joined = re.sub(r"\s{2,}", " ", (top_txt + " " + bot_txt).strip())
+                    style = getattr(cur, "bubble_style", None) or getattr(b, "bubble_style", None) or "normal"
+                    shape = getattr(cur, "shape_type", None) or getattr(b, "shape_type", None) or "circle"
+                    cur = TextRegion(
+                        id=0,
+                        boxes=list(cur.boxes or []) + list(b.boxes or []),
+                        source_text=joined,
+                        rect=(nx, ny, nw, nh),
+                        angle=0.0,
+                        kind="dialogue",
+                        det_class=cur.det_class or b.det_class,
+                        det_confidence=max(cur.det_confidence, b.det_confidence),
+                        bubble_style=style,
+                        shape_type=shape,
+                    )
+                    used[j] = True
+                    changed = True
+            out.append(cur)
+        return out
 
     @staticmethod
     def _is_mostly_blank(image: np.ndarray, std_thresh: float = 12.0, unique_thresh: int = 24) -> bool:
