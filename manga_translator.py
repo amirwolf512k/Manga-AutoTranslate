@@ -3495,7 +3495,8 @@ class MangaTranslator:
                     return False
 
             try:
-                if use_fast:
+                
+                if lama is None or use_fast:
                     cleaned[y0:y1e, x0:x1e] = _feather_paste(_opencv_inpaint(crop))
                     processed += 1
                     print(
@@ -3508,7 +3509,6 @@ class MangaTranslator:
                     rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
                     result_pil = lama(rgb_crop, local_mask)
                     lama_out = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
-
                     cleaned[y0:y1e, x0:x1e] = _feather_paste(lama_out)
                     processed += 1
                     ipn = getattr(self, "_inpainter_name", "LaMa")
@@ -3520,7 +3520,7 @@ class MangaTranslator:
                     _residual_escalate()
             except Exception as e:
                 failed += 1
-                ipn = getattr(self, "_inpainter_name", "LaMa")
+                ipn = getattr(self, "_inpainter_name", "OpenCV")
                 print(f"    [!] {ipn} روی حباب {rid} خطا: {e} → OpenCV", flush=True)
                 try:
                     cleaned[y0:y1e, x0:x1e] = _feather_paste(_opencv_inpaint(crop))
@@ -3529,13 +3529,20 @@ class MangaTranslator:
                     pass
 
         if processed > 0:
-            ipn = getattr(self, "_inpainter_name", "LaMa")
-            msg = (
-                f"  - پاکسازی با {ipn} ONNX (Crop-BBox → Paste-Back، {processed} حباب"
-                + (f"، {failed} خطا" if failed else "")
-                + f"، کل {time.time() - t0:.1f}s) انجام شد."
-            )
-            print(msg, flush=True)
+            if lama is not None and failed == 0:
+                ipn = getattr(self, "_inpainter_name", "LaMa")
+                print(
+                    f"  - پاکسازی با {ipn} ONNX (Crop-BBox → Paste-Back، {processed} حباب"
+                    f"، کل {time.time() - t0:.1f}s) انجام شد.",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"  - پاکسازی OpenCV انجام شد ({processed} حباب"
+                    + (f"، {failed} خطا" if failed else "")
+                    + f"، کل {time.time() - t0:.1f}s).",
+                    flush=True,
+                )
         elif failed > 0:
             print(f"  [!] همهٔ {failed} فراخوانی inpainter شکست خورد؛ برگشت به OpenCV کامل.", flush=True)
             return _opencv_full(image, regions)
@@ -4728,10 +4735,13 @@ class MangaTranslator:
         edge_margin: int = 120,
         min_x_overlap_ratio: float = 0.25,
     ) -> List[TextRegion]:
+        
         if len(regions) < 2:
             return regions
 
         cut_ys = cut_ys or []
+        
+        panel_gap = max(max_gap, 140)
 
         def x_overlap_ratio(a: TextRegion, b: TextRegion) -> float:
             ax, _, aw, _ = a.rect
@@ -4744,7 +4754,6 @@ class MangaTranslator:
             return inter / float(min(aw, bw) or 1)
 
         def touches_cut(r: TextRegion) -> bool:
-            
             if not cut_ys:
                 return False
             y1 = r.rect[1]
@@ -4763,7 +4772,6 @@ class MangaTranslator:
                 a_near = abs(ay2 - cy) <= edge_margin or abs(ay1 - cy) <= edge_margin
                 b_near = abs(by2 - cy) <= edge_margin or abs(by1 - cy) <= edge_margin
                 if a_near and b_near:
-                    
                     a_above = ay2 <= cy + edge_margin and ay1 < cy
                     b_below = by1 >= cy - edge_margin and by2 > cy
                     a_below = ay1 >= cy - edge_margin and ay2 > cy
@@ -4772,7 +4780,33 @@ class MangaTranslator:
                         return True
             return False
 
-        
+        def looks_like_panel_split(a: TextRegion, b: TextRegion) -> bool:
+            
+            if a.kind != "dialogue" or b.kind != "dialogue":
+                return False
+            if x_overlap_ratio(a, b) < 0.45:
+                return False
+            ay1, ay2 = a.rect[1], a.rect[1] + a.rect[3]
+            by1, by2 = b.rect[1], b.rect[1] + b.rect[3]
+            if by1 >= ay1:
+                gap = by1 - ay2
+                top, bot = a, b
+            else:
+                gap = ay1 - by2
+                top, bot = b, a
+            if gap < -10 or gap > panel_gap:
+                return False
+            
+            aw, bw = float(a.rect[2]), float(b.rect[2])
+            if min(aw, bw) / max(aw, bw) < 0.55:
+                return False
+            
+            acx = a.rect[0] + a.rect[2] / 2.0
+            bcx = b.rect[0] + b.rect[2] / 2.0
+            if abs(acx - bcx) > max(40.0, 0.25 * max(aw, bw)):
+                return False
+            return True
+
         ordered = sorted(regions, key=lambda r: (r.rect[1], r.rect[0]))
         used = [False] * len(ordered)
         merged: List[TextRegion] = []
@@ -4782,10 +4816,6 @@ class MangaTranslator:
                 continue
             cur = a
             used[i] = True
-            
-            if not touches_cut(cur):
-                merged.append(cur)
-                continue
 
             changed = True
             while changed:
@@ -4797,19 +4827,22 @@ class MangaTranslator:
                         continue
                     if x_overlap_ratio(cur, b) < min_x_overlap_ratio:
                         continue
-                    if not near_same_cut(cur, b):
-                        continue
 
                     cy1 = cur.rect[1]
                     cy2 = cur.rect[1] + cur.rect[3]
                     by1 = b.rect[1]
                     by2 = b.rect[1] + b.rect[3]
-
                     if by1 >= cy1:
                         gap = by1 - cy2
                     else:
                         gap = cy1 - by2
-                    if gap > max_gap or gap < -15:  
+
+                    
+                    at_cut = near_same_cut(cur, b) and gap <= max_gap and gap >= -15
+                    panel = looks_like_panel_split(cur, b)
+                    if not at_cut and not panel:
+                        continue
+                    if gap > panel_gap or gap < -15:
                         continue
 
                     
@@ -4837,6 +4870,8 @@ class MangaTranslator:
 
                     conf = max(cur.det_confidence, b.det_confidence)
                     boxes = list(cur.boxes or []) + list(b.boxes or [])
+                    style = getattr(cur, "bubble_style", None) or getattr(b, "bubble_style", None) or "normal"
+                    shape = getattr(cur, "shape_type", None) or getattr(b, "shape_type", None) or "circle"
                     cur = TextRegion(
                         id=0,
                         boxes=boxes,
@@ -4846,6 +4881,8 @@ class MangaTranslator:
                         kind=cur.kind,
                         det_class=cur.det_class or b.det_class,
                         det_confidence=conf,
+                        bubble_style=style,
+                        shape_type=shape,
                     )
                     used[j] = True
                     changed = True
