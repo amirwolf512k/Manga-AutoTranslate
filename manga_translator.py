@@ -124,13 +124,43 @@ def _ensure_all_dependencies() -> None:
         _pip_install(*misc)
 
     
-    if not _can_import("rapidocr"):
-        if not _pip_install("rapidocr"):
-            
-            if not _can_import("rapidocr_onnxruntime"):
-                _pip_install("rapidocr-onnxruntime")
+    if not _can_import("onnxruntime"):
+        print("[*] نصب onnxruntime (CPU) قبل از OCR ...")
+        _pip_install("onnxruntime")
 
     
+    def _ocr_available() -> bool:
+        return (
+            _can_import("rapidocr")
+            or _can_import("rapidocr_onnxruntime")
+            or _can_import("paddleocr")
+        )
+
+    if not _ocr_available():
+        print("[*] نصب موتور OCR ...")
+        
+        _pip_install("rapidocr")
+        if not (_can_import("rapidocr") or _can_import("rapidocr_onnxruntime")):
+            _pip_install("rapidocr-onnxruntime")
+        
+        if not (_can_import("rapidocr") or _can_import("rapidocr_onnxruntime")):
+            _pip_install("rapidocr_onnxruntime")
+        
+        if not _ocr_available():
+            print("[*] RapidOCR ناموفق → نصب paddleocr ...")
+            _pip_install("paddlepaddle", "paddleocr")
+        if not _ocr_available():
+            _pip_install("paddleocr")
+        if not _ocr_available():
+            print(
+                "[!] هیچ موتور OCR نصب نشد. "
+                "دستی: pip install rapidocr  یا  pip install rapidocr-onnxruntime  یا  pip install paddleocr"
+            )
+        else:
+            print("[+] موتور OCR نصب شد.")
+    else:
+        print("[*] موتور OCR از قبل در دسترس است.")
+
     if not _can_import("google.genai") and not _can_import("google.generativeai"):
         _pip_install("google-genai")
     if not _can_import("openai"):
@@ -381,11 +411,20 @@ except ImportError:
     raise
 
 _HAS_RAPIDOCR = False
+_HAS_RAPIDOCR_NEW = False
+RapidOCR = None
 try:
     from rapidocr_onnxruntime import RapidOCR
     _HAS_RAPIDOCR = True
 except ImportError:
-    RapidOCR = None
+    try:
+        
+        from rapidocr import RapidOCR as _RapidOCRNew
+        RapidOCR = _RapidOCRNew
+        _HAS_RAPIDOCR = True
+        _HAS_RAPIDOCR_NEW = True
+    except ImportError:
+        RapidOCR = None
 
 _HAS_PADDLE = False
 try:
@@ -393,6 +432,30 @@ try:
     _HAS_PADDLE = True
 except ImportError:
     PaddleOCR = None
+
+
+def _refresh_ocr_flags() -> None:
+    global _HAS_RAPIDOCR, _HAS_RAPIDOCR_NEW, _HAS_PADDLE, RapidOCR, PaddleOCR
+    if not _HAS_RAPIDOCR:
+        try:
+            from rapidocr_onnxruntime import RapidOCR as _R
+            RapidOCR = _R
+            _HAS_RAPIDOCR = True
+        except ImportError:
+            try:
+                from rapidocr import RapidOCR as _R
+                RapidOCR = _R
+                _HAS_RAPIDOCR = True
+                _HAS_RAPIDOCR_NEW = True
+            except ImportError:
+                pass
+    if not _HAS_PADDLE:
+        try:
+            from paddleocr import PaddleOCR as _P
+            PaddleOCR = _P
+            _HAS_PADDLE = True
+        except ImportError:
+            pass
 
 
 def _torch_cuda_available() -> bool:
@@ -954,23 +1017,40 @@ RTDetrONNXDetector = RTDetrV2ONNXDetector
 
 
 class RapidOCRBackend:
-    
+
     def __init__(self, lang: str = "en"):
         self.lang = lang
         self._new_api = False
+        
         try:
-            
             from rapidocr import RapidOCR as NewRapidOCR
-            self.engine = NewOCR = NewRapidOCR()
+            self.engine = NewRapidOCR()
             self._new_api = True
             print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang}")
             return
-        except Exception:
-            pass
-        if not _HAS_RAPIDOCR:
-            raise ImportError("pip install rapidocr (یا rapidocr-onnxruntime)")
-        self.engine = RapidOCR()
-        print(f"[+] RapidOCR (ONNX, PP-OCRv3 قدیمی) آماده | lang={lang}")
+        except Exception as e1:
+            print(f"    [OCR] rapidocr جدید: {type(e1).__name__}: {e1}")
+        
+        try:
+            from rapidocr_onnxruntime import RapidOCR as OldRapidOCR
+            self.engine = OldRapidOCR()
+            self._new_api = False
+            print(f"[+] RapidOCR (ONNX, PP-OCRv3) آماده | lang={lang}")
+            return
+        except Exception as e2:
+            print(f"    [OCR] rapidocr_onnxruntime: {type(e2).__name__}: {e2}")
+        
+        if RapidOCR is not None:
+            try:
+                self.engine = RapidOCR()
+                self._new_api = bool(_HAS_RAPIDOCR_NEW)
+                print(f"[+] RapidOCR (fallback import) آماده | lang={lang}")
+                return
+            except Exception as e3:
+                print(f"    [OCR] RapidOCR fallback: {type(e3).__name__}: {e3}")
+        raise ImportError(
+            "pip install rapidocr  یا  pip install rapidocr-onnxruntime"
+        )
 
     @staticmethod
     def _deaccent(txt: str) -> str:
@@ -1745,23 +1825,55 @@ class MangaTranslator:
                 break
 
         self.ocr = None
+        _refresh_ocr_flags()
+
         
-        if _HAS_RAPIDOCR:
+        try:
+            self.ocr = RapidOCRBackend(lang=main_lang)
+        except Exception as e:
+            print(f"[!] RapidOCR لود نشد ({e})")
+
+        if self.ocr is None:
+            _refresh_ocr_flags()
+            if not _HAS_PADDLE:
+                print("[*] تلاش برای نصب paddleocr ...")
+                _pip_install("paddleocr")
+                _refresh_ocr_flags()
+            if _HAS_PADDLE:
+                try:
+                    self.ocr = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
+                except Exception as e:
+                    print(f"[!] PaddleOCR لود نشد ({e})")
+
+        if self.ocr is None:
+            
+            print("[*] نصب مجدد OCR برای محیط CI ...")
+            _pip_install("rapidocr")
+            _pip_install("rapidocr-onnxruntime")
+            _refresh_ocr_flags()
             try:
                 self.ocr = RapidOCRBackend(lang=main_lang)
             except Exception as e:
-                print(f"[!] RapidOCR لود نشد ({e})")
-        
-        if self.ocr is None and _HAS_PADDLE:
-            try:
-                self.ocr = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
-            except Exception as e:
-                print(f"[!] PaddleOCR لود نشد ({e})")
+                print(f"[!] RapidOCR (retry) ناموفق: {e}")
+            if self.ocr is None:
+                _pip_install("paddleocr")
+                _refresh_ocr_flags()
+                if _HAS_PADDLE:
+                    try:
+                        self.ocr = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
+                    except Exception as e:
+                        print(f"[!] PaddleOCR (retry) ناموفق: {e}")
+
         if self.ocr is None:
             raise ImportError(
                 "هیچ OCR در دسترس نیست.\n"
-                "  پیشنهاد: pip install paddleocr\n"
-                "  یا: pip install rapidocr-onnxruntime"
+                "  در GitHub Actions / CI این‌ها را در requirements یا قبل از اجرا نصب کنید:\n"
+                "    pip install rapidocr onnxruntime\n"
+                "  یا:\n"
+                "    pip install rapidocr-onnxruntime\n"
+                "  یا:\n"
+                "    pip install paddleocr\n"
+                "  و مطمئن شوید onnxruntime روی CPU بدون خطا import می‌شود."
             )
 
         self._ocr_pool = None
@@ -1775,9 +1887,9 @@ class MangaTranslator:
                 for i in range(1, n_pool):
                     eng = None
                     try:
-                        if _HAS_RAPIDOCR and isinstance(self.ocr, RapidOCRBackend):
+                        if isinstance(self.ocr, RapidOCRBackend):
                             eng = RapidOCRBackend(lang=main_lang)
-                        elif _HAS_PADDLE and isinstance(self.ocr, PaddleOCRv3Backend):
+                        elif isinstance(self.ocr, PaddleOCRv3Backend):
                             eng = PaddleOCRv3Backend(lang=main_lang, use_gpu=ocr_gpu)
                     except Exception as e:
                         print(f"    [!] OCR موازی #{i + 1} لود نشد ({e})")
