@@ -48,8 +48,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
-          cache: "pip"
+          python-version: "3.12"
 
       - name: Install system libraries
         run: |
@@ -141,7 +140,7 @@ jobs:
           echo "ورودی: ${{ inputs.input_url }}"
           echo "آرگومان‌های اضافه: $EXTRA_ARGS $MODEL_ARG"
 
-          python k3mat.py \
+          python manga_translator.py \
             "${{ inputs.input_url }}" \
             --api-key "$RESOLVED_KEY" \
             $MODEL_ARG \
