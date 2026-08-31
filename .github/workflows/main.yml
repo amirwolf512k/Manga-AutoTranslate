@@ -178,9 +178,5 @@ jobs:
           name: k3mat-output
           path: |
             output/**
-            **/*_final.png
-            **/*_debug.png
-            **/*.pdf
-            **/*.kmt
           retention-days: 7
           if-no-files-found: warn
