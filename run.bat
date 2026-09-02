@@ -91,7 +91,7 @@ if not "!PROVIDER!"=="ollama" (
 echo.
 
 echo ۳) مدل (Enter = پیش‌فرض provider):
-if "!PROVIDER!"=="gemini" echo   مثال: gemini-flash-latest / gemini-2.5-flash
+if "!PROVIDER!"=="gemini" echo   مثال: gemini-flash-latest / gemini-3.8-flash
 if "!PROVIDER!"=="openai" echo   مثال: gpt-4o-mini / gpt-4o
 if "!PROVIDER!"=="deepseek" echo   مثال: deepseek-chat / deepseek-reasoner
 if "!PROVIDER!"=="groq" echo   مثال: llama-3.3-70b-versatile
