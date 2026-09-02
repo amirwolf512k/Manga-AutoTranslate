@@ -1,46 +1,57 @@
-name: K3 Manga AutoTranslate
+name: Manga Auto Translate FA
 
 on:
   workflow_dispatch:
     inputs:
       input_url:
-        description: "لینک فصل / پوشه / عکس / PDF (پشتیبانی از * و چند لینک با ,)"
+        description: "لینک ورودی (صفحه مانگا / ZIP / PDF / تصویر)"
         required: true
         type: string
+      provider:
+        description: "ارائه‌دهنده AI"
+        required: false
+        default: "gemini"
+        type: choice
+        options:
+          - gemini
+          - openai
+          - deepseek
+          - groq
+          - xai
+          - openrouter
+          - together
       model:
-        description: "نام مدل Gemini (خالی = gemini-flash-latest)"
+        description: "نام مدل (خالی = پیش‌فرض provider)"
         required: false
         default: ""
         type: string
+      ocr_lang:
+        description: "زبان OCR (مثلاً en یا ko en یا ja en)"
+        required: false
+        default: "en"
+        type: string
+      reading_order:
+        description: "ترتیب خواندن"
+        required: false
+        default: "rtl"
+        type: choice
+        options:
+          - rtl
+          - ltr
       output_format:
-        description: "فرمت خروجی اضافه"
+        description: "فرمت خروجی"
         required: false
         default: "pdf"
         type: choice
         options:
-          - none
           - pdf
-      debug:
-        description: "ذخیره تصویر دیباگ با کادر سبز"
-        required: false
-        default: false
-        type: boolean
-      thinking:
-        description: "حالت تفکر عمیق مدل"
-        required: false
-        default: true
-        type: boolean
-      clean:
-        description: "ذخیره تصاویر پاکسازی‌شده + فایل .kmt"
-        required: false
-        default: false
-        type: boolean
+          - html
+          - zip
 
 jobs:
   translate:
     runs-on: ubuntu-latest
     timeout-minutes: 360
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -50,133 +61,126 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install system libraries
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq \
-            libgl1 libglib2.0-0 libsm6 libxext6 libxrender1 \
-            libgomp1 curl ca-certificates
+      - name: Install system dependencies
+        run: | #sudo apt-get update
+          sudo apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev
 
-      - name: Install Python packages
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip setuptools wheel
+          cat > constraints.txt << 'CONSTRAINTS'
+          numpy==1.26.4
+          opencv-python-headless==4.8.1.78
+          opencv-python==4.8.1.78
+          opencv-contrib-python==4.8.1.78
+          CONSTRAINTS
+          pip install --no-cache-dir --constraint constraints.txt numpy==1.26.4
+          pip install --no-cache-dir --constraint constraints.txt opencv-python-headless==4.8.1.78
+          pip install --no-cache-dir --no-deps --constraint constraints.txt paddlepaddle==2.6.2 -i https://www.paddlepaddle.org.cn/packages/stable/cpu/
+          pip install --no-cache-dir --no-deps --constraint constraints.txt paddleocr==2.7.0.3
+          pip install --no-cache-dir --constraint constraints.txt pymupdf
+          pip install --no-cache-dir --constraint constraints.txt attrdict cython fire lxml openpyxl pdf2docx premailer python-docx visualdl
+          pip install --no-cache-dir --constraint constraints.txt Pillow pyclipper lmdb scikit-image shapely python-bidi arabic-reshaper rapidfuzz imageio matplotlib tqdm requests beautifulsoup4 decorator imgaug opt-einsum astor pyyaml simple-lama-inpainting
+          pip install --no-cache-dir --constraint constraints.txt torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          pip install --no-cache-dir --constraint constraints.txt "transformers==4.49.0" huggingface_hub sentencepiece
 
-          pip install --no-cache-dir \
-            "numpy<2.0" \
-            "opencv-python-headless>=4.8,<4.10" \
-            Pillow requests \
-            arabic-reshaper python-bidi \
-            beautifulsoup4 lxml \
-            pymupdf tqdm
-
-          # OCR
-          pip install --no-cache-dir rapidocr-onnxruntime || \
-          pip install --no-cache-dir rapidocr
-
-          # inpaint اختیاری
-          pip install --no-cache-dir simple-lama-inpainting || true
-
-      - name: Download Vazirmatn fonts
-        run: |
-          mkdir -p "Fonts Vazirmatn"
-          BASE="https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf"
-          for w in Black Bold Regular ExtraBold Medium Light; do
-            curl -fsSL --retry 3 -o "Fonts Vazirmatn/Vazirmatn-${w}.ttf" \
-              "${BASE}/Vazirmatn-${w}.ttf" || true
-          done
-          # اگر دانلود شکست خورد از Noto استفاده کن
-          if [ ! -f "Fonts Vazirmatn/Vazirmatn-Regular.ttf" ]; then
-            echo "فونت Vazirmatn دانلود نشد؛ نصب Noto..."
-            sudo apt-get install -y -qq fonts-noto-core || true
-            NOTO=$(find /usr/share/fonts -name "*Noto*Arabic*Regular*.ttf" 2>/dev/null | head -1)
-            if [ -n "$NOTO" ]; then
-              cp "$NOTO" "Fonts Vazirmatn/Vazirmatn-Regular.ttf"
-              cp "$NOTO" "Fonts Vazirmatn/Vazirmatn-Bold.ttf"
-              cp "$NOTO" "Fonts Vazirmatn/Vazirmatn-Black.ttf"
-            fi
+          if [ "${{ inputs.provider }}" = "gemini" ]; then
+            pip install --no-cache-dir google-genai
+          else
+            pip install --no-cache-dir openai
           fi
-          ls -la "Fonts Vazirmatn/" || true
 
-      - name: Resolve API key
+      - name: Download fonts (Vazirmatn multi-weight)
+        run: |
+          mkdir -p fonts
+          BASE="https://github.com/rastikerdar/vazirmatn/raw/master/fonts/ttf"
+          for w in Regular Medium SemiBold Bold ExtraBold Black Light; do
+            curl -fsSL -o "fonts/Vazirmatn-${w}.ttf" "${BASE}/Vazirmatn-${w}.ttf"
+          done
+          echo "FONT_PATH=fonts/Vazirmatn-Regular.ttf" >> $GITHUB_ENV
+          echo "FONT_SHOUT=fonts/Vazirmatn-ExtraBold.ttf" >> $GITHUB_ENV
+          echo "FONT_EXPLOSION=fonts/Vazirmatn-Black.ttf" >> $GITHUB_ENV
+          echo "FONT_SFX=fonts/Vazirmatn-Black.ttf" >> $GITHUB_ENV
+          echo "FONT_BLACK=fonts/Vazirmatn-Bold.ttf" >> $GITHUB_ENV
+          echo "FONT_THOUGHT=fonts/Vazirmatn-Light.ttf" >> $GITHUB_ENV
+          echo "FONT_WHISPER=fonts/Vazirmatn-Light.ttf" >> $GITHUB_ENV
+          ls -la fonts/
+
+      - name: Resolve API key from secrets
         id: api
         env:
           GEMINI: ${{ secrets.GEMINI }}
+          OPENAI: ${{ secrets.OPENAI }}
+          DEEPSEEK: ${{ secrets.DEEPSEEK }}
+          GROQ: ${{ secrets.GROQ }}
+          XAI: ${{ secrets.XAI }}
+          OPENROUTER: ${{ secrets.OPENROUTER }}
+          TOGETHER: ${{ secrets.TOGETHER }}
           API: ${{ secrets.API }}
         run: |
-          KEY="${GEMINI:-$API}"
+          PROVIDER="${{ inputs.provider }}"
+          KEY=""
+          case "$PROVIDER" in
+            gemini)     KEY="${GEMINI:-$API}" ;;
+            openai)     KEY="${OPENAI:-$API}" ;;
+            deepseek)   KEY="${DEEPSEEK:-$API}" ;;
+            groq)       KEY="${GROQ:-$API}" ;;
+            xai)        KEY="${XAI:-$API}" ;;
+            openrouter) KEY="${OPENROUTER:-$API}" ;;
+            together)   KEY="${TOGETHER:-$API}" ;;
+            *)          KEY="${API}" ;;
+          esac
+
           if [ -z "$KEY" ]; then
-            echo "::error::Secret کلید API تنظیم نشده."
-            echo "در Settings → Secrets and variables → Actions"
-            echo "یک Secret به اسم GEMINI (یا API) بسازید و کلید Gemini را بگذارید."
-            echo "برای چند کلید: key1,key2,key3"
+            echo "خطا: Secret مربوط به provider «$PROVIDER» تنظیم نشده."
+            echo "یکی از این‌ها را در Settings → Secrets بگذارید:"
+            echo "  GEMINI / OPENAI / DEEPSEEK / GROQ /"
+            echo "  XAI / OPENROUTER / TOGETHER / یا API عمومی"
             exit 1
           fi
           echo "RESOLVED_KEY=$KEY" >> $GITHUB_ENV
-          echo "کلید API پیدا شد."
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
 
-      - name: Run k3mat
+      - name: Run translator
         run: |
-          set -e
-
-          EXTRA_ARGS="--auto-yes"
-          if [ "${{ inputs.debug }}" = "true" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --debug"
-          fi
-          if [ "${{ inputs.thinking }}" = "true" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --thinking"
-          fi
-          if [ "${{ inputs.clean }}" = "true" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --clean"
-          fi
-          if [ "${{ inputs.output_format }}" = "pdf" ]; then
-            EXTRA_ARGS="$EXTRA_ARGS --pdf"
-          fi
+          OUT_EXT=".${{ inputs.output_format }}"
+          echo "OUT_EXT=$OUT_EXT" >> $GITHUB_ENV
 
           MODEL_ARG=""
           if [ -n "${{ inputs.model }}" ]; then
             MODEL_ARG="--model ${{ inputs.model }}"
           fi
 
-          echo "ورودی: ${{ inputs.input_url }}"
-          echo "آرگومان‌های اضافه: $EXTRA_ARGS $MODEL_ARG"
-
           python manga_translator.py \
-            "${{ inputs.input_url }}" \
+            -i "${{ inputs.input_url }}" \
+            -o "$OUT_EXT" \
+            --font "$FONT_PATH" \
+            --ocr-lang ${{ inputs.ocr_lang }} \
+            --reading-order ${{ inputs.reading_order }} \
+            --provider "$PROVIDER" \
             --api-key "$RESOLVED_KEY" \
             $MODEL_ARG \
-            $EXTRA_ARGS
+            --cpu
 
-          echo "------ لیست فایل‌های تولیدشده ------"
-          find . -type f \( -name "*_final.png" -o -name "*_debug.png" -o -name "*.pdf" -o -name "*.kmt" \) | head -50
-          ls -la
-
-      - name: Collect outputs
-        id: collect
-        run: |
-          mkdir -p output
-          # خروجی‌های نهایی و دیباگ
-          find . -type f \( -name "*_final.png" -o -name "*_debug.png" -o -name "*.pdf" -o -name "*.kmt" \) \
-            -not -path "./output/*" -exec cp {} output/ \; 2>/dev/null || true
-          # پوشه‌های AutoTranslate
-          find . -type d -name "AutoTranslate_*" -exec cp -r {} output/ \; 2>/dev/null || true
-          find . -type d -name "AutoClean_*" -exec cp -r {} output/ \; 2>/dev/null || true
-
-          COUNT=$(find output -type f | wc -l)
-          echo "تعداد فایل خروجی: $COUNT"
-          ls -laR output || true
-
-          if [ "$COUNT" -eq 0 ]; then
-            echo "::warning::هیچ فایل خروجی پیدا نشد؛ کل workspace آپلود می‌شود."
-            echo "HAS_OUTPUT=false" >> $GITHUB_ENV
-          else
-            echo "HAS_OUTPUT=true" >> $GITHUB_ENV
+          RESULT=$(ls -1t *"$OUT_EXT" 2>/dev/null | head -n 1 || true)
+          if [ -z "$RESULT" ]; then
+            echo "هیچ فایل خروجی با پسوند $OUT_EXT پیدا نشد."
+            ls -la
+            exit 1
           fi
 
-      - name: Upload results
+          STEM=$(basename "$RESULT" "$OUT_EXT")
+          echo "RESULT_FILE=$RESULT" >> $GITHUB_ENV
+          echo "RESULT_STEM=$STEM" >> $GITHUB_ENV
+          echo "خروجی نهایی: $RESULT"
+
+      - name: Upload all results
         uses: actions/upload-artifact@v4
         with:
-          name: k3mat-output
+          name: ${{ env.RESULT_STEM }}
           path: |
-            output/**
+            *.pdf
+            *.html
+            *.zip
           retention-days: 7
-          if-no-files-found: warn
+          if-no-files-found: error
