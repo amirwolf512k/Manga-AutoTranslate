@@ -244,7 +244,7 @@ python manga_translator.py -i "..." -o aa.pdf --font fonts/Vazirmatn-Regular.ttf
 
 ### ۱) Google Colab (پیشنهادی)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf5122/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf512k/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
 
 1. Runtime را روی **GPU (T4)** بگذار  
 2. همه سلول‌ها را با **Run all** اجرا کن
