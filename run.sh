@@ -160,7 +160,7 @@ echo ""
 
 echo "۳) مدل (Enter = پیش‌فرض provider):"
 case $PROVIDER in
-    gemini)     echo "  مثال: gemini-flash-latest | gemini-2.5-flash | gemini-2.5-flash-lite" ;;
+    gemini)     echo "  مثال: gemini-flash-latest | gemini-3.8-flash | gemini-2.5-flash-lite" ;;
     openai)     echo "  مثال: gpt-4o-mini | gpt-4o | gpt-4.1-mini" ;;
     deepseek)   echo "  مثال: deepseek-chat | deepseek-reasoner" ;;
     groq)       echo "  مثال: llama-3.3-70b-versatile | llama-3.1-8b-instant" ;;
