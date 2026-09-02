@@ -1043,7 +1043,7 @@ class PaddleOCRWrapper:
 PROVIDER_PRESETS = {
     "gemini": {
         "type": "gemini",
-        "default_model": "gemini-3.5-flash",
+        "default_model": "gemini-3.8-flash",
         "env_key": "GEMINI_API_KEY",
     },
     "openai": {
@@ -1414,7 +1414,7 @@ class MangaTranslator:
         self._tls = threading.local()  
 
         
-        self.model_name = (model_name or self.provider_cfg.get("default_model") or "gemini-3.5-flash").strip()
+        self.model_name = (model_name or self.provider_cfg.get("default_model") or "gemini-3.8-flash").strip()
         self._model_cascade: List[str] = []
         self._model_index: int = 0
         self._last_good_model: str = ""
@@ -1723,18 +1723,20 @@ class MangaTranslator:
     def _static_fallback_models(primary: str) -> List[str]:
         
         preferred = [
-            "gemini-flash-lite-latest",
-            "gemini-2.5-flash-lite",
-            "gemini-2.0-flash-lite",
-            "gemini-2.5-flash",
-            "gemini-2.0-flash",
+            "gemini-3.8-flash",
+            "gemini-3.7-flash",
+            "gemini-3.6-flash",
+            "gemini-3.5-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.1-flash-lite",
             "gemini-flash-latest",
-            "gemini-1.5-flash",
-            "gemini-3-flash-preview",
+            "gemini-flash-lite-latest",
+            "gemini-2.5-flash",
+            "gemini-2.5-flash-lite",
         ]
         cascade = [primary] if primary else []
         for m in preferred:
-            if m not in cascade:
+            if m and m not in cascade:
                 cascade.append(m)
         return cascade or preferred
 
@@ -1845,10 +1847,30 @@ class MangaTranslator:
         
         return False
 
+
+    @staticmethod
+    def _extract_suggested_model(err: Exception) -> Optional[str]:
+        
+        msg = str(err or "")
+        
+        m = re.search(r"use models?/([a-zA-Z0-9._\-]+)", msg, flags=re.I)
+        if m:
+            name = m.group(1).strip().replace("models/", "")
+            if name.lower().startswith("gemini"):
+                return name
+        m = re.search(r"models/([a-zA-Z0-9._\-]+)", msg)
+        if m:
+            name = m.group(1).strip()
+            if name.lower().startswith("gemini") and "no longer available" not in msg.lower():
+                return name
+        return None
+
     def _build_model_cascade(self, primary: str, client=None) -> List[str]:
-        primary = (primary or "gemini-2.5-flash").strip().replace("models/", "")
-        if self._is_bad_translate_model(primary):
-            primary = "gemini-2.5-flash"
+        
+        primary = (primary or "").strip().replace("models/", "")
+        if primary and self._is_bad_translate_model(primary):
+            primary = ""
+
         discovered: List[str] = []
         if client is not None:
             discovered = self._discover_models_from_api(client)
@@ -1857,28 +1879,30 @@ class MangaTranslator:
             discovered = [m for m in discovered if not self._is_bad_translate_model(m)]
             discovered = sorted(set(discovered), key=self._model_sort_key)
             print(
-                f"[*] {len(discovered)} مدل متنی flash از API | "
-                f"نمونه: {' → '.join(discovered[:6])}{'…' if len(discovered) > 6 else ''}"
+                f"[*] {len(discovered)} مدل متنی از API کشف شد | "
+                f"{' → '.join(discovered[:8])}{'…' if len(discovered) > 8 else ''}"
             )
-            cascade = []
-            if primary and not self._is_bad_translate_model(primary):
+            cascade: List[str] = []
+            if primary and primary in discovered:
+                cascade.append(primary)
+            elif primary and not self._is_bad_translate_model(primary):
                 cascade.append(primary)
             for m in discovered:
                 if m not in cascade:
                     cascade.append(m)
-            rest = sorted([m for m in cascade[1:]], key=self._model_sort_key)
-            cascade = ([cascade[0]] + rest) if cascade else rest
             def _costly(n: str) -> bool:
                 low = n.lower()
                 return ("pro" in low and "flash" not in low)
-            cheap = [m for m in cascade if not _costly(m)]
-            costly = [m for m in cascade if _costly(m)]
-            cascade = cheap + costly
+            head = cascade[:1]
+            rest = cascade[1:]
+            cheap = [m for m in rest if not _costly(m)]
+            costly = [m for m in rest if _costly(m)]
+            cascade = head + cheap + costly
             if cascade:
                 return cascade
 
-        print("[*] کشف API ممکن نشد / خالی → لیست ثابت flash")
-        return self._static_fallback_models(primary)
+        print("[*] کشف API ممکن نشد / خالی → fallback محافظه‌کارانه")
+        return self._static_fallback_models(primary or "gemini-2.5-flash")
 
     def _drop_current_model_and_switch(self, reason: str = "") -> bool:
         
@@ -1930,19 +1954,29 @@ class MangaTranslator:
         return True
 
     def _reset_model_cascade(self, reason: str = "") -> None:
-        
         if not self._model_cascade:
-            self._model_cascade = [
-                m for m in self._static_fallback_models("gemini-2.5-flash")
-                if not self._is_bad_translate_model(m)
-            ] or ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-3-flash-preview"]
+            client = getattr(self, "client", None)
+            try:
+                client = self._thread_client()
+            except Exception:
+                pass
+            rebuilt = self._build_model_cascade(
+                getattr(self, "_last_good_model", "") or "",
+                client=client,
+            )
+            self._model_cascade = rebuilt or self._static_fallback_models("gemini-3.8-flash")
         self._model_index = 0
         self.model_name = self._model_cascade[0]
+        try:
+            self._set_thread_model(self.model_name, 0)
+        except Exception:
+            pass
         extra = f" ({reason})" if reason else ""
         print(
             f"    [*] ریست cascade مدل → {self.model_name} "
             f"[1/{len(self._model_cascade)}]{extra}"
         )
+
 
     def _switch_to_next_key(self, reason: str = "", cycle: bool = False) -> bool:
         
@@ -3516,10 +3550,7 @@ class MangaTranslator:
         if not regions:
             return
 
-        
         self._pick_random_api_key(reason="ترجمه صفحه")
-
-        
         self._cascade_full_cycles = 0
         self._same_model_timeout_retries = 0
         if self._model_cascade:
@@ -3527,16 +3558,15 @@ class MangaTranslator:
             if good and good in self._model_cascade:
                 idx = self._model_cascade.index(good)
             else:
-                
                 idx = 0
                 for i, m in enumerate(self._model_cascade):
-                    if "lite" in m.lower():
+                    
+                    if "3." in m or "flash-latest" in m.lower() or "lite" in m.lower():
                         idx = i
                         break
-            
-            local = self._model_cascade[idx: idx + 5]
+            local = self._model_cascade[idx: idx + 6]
             if len(local) < 3:
-                local = self._model_cascade[:5]
+                local = self._model_cascade[:6]
             tls = getattr(self, "_tls", None)
             if tls is not None:
                 tls.local_cascade = local
@@ -3545,6 +3575,65 @@ class MangaTranslator:
 
         for r in regions:
             r.source_text = self._fix_ocr_text(uncensor_swears(r.source_text or ""))
+
+        def _make_batches(items: List[TextRegion]):
+            max_items = 12
+            max_chars = 2200
+            batches: List[List[TextRegion]] = []
+            cur: List[TextRegion] = []
+            cur_chars = 0
+            for r in items:
+                tlen = len(r.source_text or "")
+                if cur and (len(cur) >= max_items or cur_chars + tlen > max_chars):
+                    batches.append(cur)
+                    cur = []
+                    cur_chars = 0
+                cur.append(r)
+                cur_chars += tlen
+            if cur:
+                batches.append(cur)
+            return batches
+
+        
+        pending = list(regions)
+        for round_i in range(1, 4):
+            if not pending:
+                break
+            batches = _make_batches(pending)
+            if len(batches) > 1 or round_i > 1:
+                print(
+                    f"    [*] دور {round_i}: {len(pending)} دیالوگ → {len(batches)} بسته"
+                )
+            for bi, batch in enumerate(batches, 1):
+                if len(batches) > 1:
+                    print(f"    [*] بسته {bi}/{len(batches)}: {len(batch)} دیالوگ")
+                self._translate_regions_batch(batch)
+                if bi < len(batches):
+                    time.sleep(0.8)
+
+            pending = [r for r in regions if not (r.translated_text or "").strip()]
+            if not pending:
+                break
+            if round_i < 3:
+                wait_s = 8.0 * round_i
+                print(
+                    f"    [!] {len(pending)} دیالوگ هنوز بدون ترجمه — "
+                    f"صبر {wait_s:.0f}ثانیه و تلاش مجدد..."
+                )
+                time.sleep(wait_s)
+                
+                if self._api_keys and len(self._api_keys) > 1:
+                    self._pick_random_api_key(reason=f"دور {round_i + 1}")
+                if self._model_cascade and len(self._model_cascade) > 1:
+                    self._switch_to_next_model(reason=f"دور {round_i + 1}")
+
+        still = sum(1 for r in regions if not (r.translated_text or "").strip())
+        if still:
+            print(f"    [!] در نهایت {still} دیالوگ بدون ترجمه ماند.")
+
+    def _translate_regions_batch(self, regions: List[TextRegion]) -> None:
+        if not regions:
+            return
 
         payload = [{"id": r.id, "text": r.source_text} for r in regions]
         system_instruction = self._get_system_instruction()
@@ -3741,28 +3830,29 @@ class MangaTranslator:
                     if self._is_rate_or_model_quota_error(e):
                         print(f"    [!] محدودیت مدل/نرخ روی {self.model_name} "
                               f"(کلید {self._key_index + 1}/{len(self._api_keys)})")
-                        
+                        wait_s = min(8.0 + attempt * 3.5, 25.0)
+                        print(f"    [*] صبر {wait_s:.0f} ثانیه برای بازیابی سهمیه...")
+                        time.sleep(wait_s)
                         if self._switch_to_next_model(reason="quota/rate مدل"):
                             self._recreate_api_client()
-                            time.sleep(0.1)
+                            time.sleep(0.5)
                             continue
-                        
                         if not hasattr(self, "_cascade_full_cycles"):
                             self._cascade_full_cycles = 0
                         self._cascade_full_cycles += 1
                         if self._cascade_full_cycles <= 1:
                             self._reset_model_cascade(reason="rate→ریست مدل‌ها")
                             self._recreate_api_client()
-                            time.sleep(0.2)
+                            time.sleep(1.0)
                             continue
                         self._cascade_full_cycles = 0
                         if self._switch_to_next_key(reason="after full cascade", cycle=True):
                             self._reset_model_cascade(reason="کلید جدید")
                             self._recreate_api_client()
-                            time.sleep(0.2)
+                            time.sleep(1.5)
                             continue
                         if attempt < self.max_retries:
-                            time.sleep(0.3)
+                            time.sleep(2.0)
                             continue
 
                     
@@ -3774,28 +3864,52 @@ class MangaTranslator:
                         is_core_flash = any(
                             core == x or core.startswith(x)
                             for x in (
+                                "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash",
                                 "gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash",
                                 "gemini-flash-latest", "gemini-2.5-flash-lite",
+                                "gemini-flash-lite-latest", "gemini-3.5-flash-lite",
                             )
                         )
+                        suggested = self._extract_suggested_model(e)
+                        if suggested:
+                            print(f"    [!] مدل «{self.model_name}» دیگر در دسترس نیست → "
+                                  f"پیشنهاد API: {suggested}")
+                            
+                            dead = self.model_name
+                            cascade = [x for x in (self._model_cascade or []) if x != dead]
+                            if suggested not in cascade:
+                                cascade.insert(0, suggested)
+                            else:
+                                cascade = [suggested] + [x for x in cascade if x != suggested]
+                            self._model_cascade = cascade
+                            self._model_index = 0
+                            self.model_name = suggested
+                            self._set_thread_model(suggested, 0)
+                            self._recreate_api_client()
+                            time.sleep(0.5)
+                            continue
                         if is_404 and is_core_flash:
                             print(f"    [!] 404 روی {self.model_name} با این کلید → کلید بعدی "
                                   f"(مدل اصلی حذف نمی‌شود)")
                             if self._switch_to_next_key(reason="404 key", cycle=True):
                                 self._recreate_api_client()
-                                time.sleep(0.15)
+                                time.sleep(0.8)
                                 continue
-                            
                             print(f"    [!] همه کلیدها روی {self.model_name} 404 → مدل بعدی")
+                            if self._drop_current_model_and_switch(reason="404 all keys"):
+                                self._recreate_api_client()
+                                time.sleep(0.5)
+                                continue
                             if self._switch_to_next_model(reason="404 all keys"):
                                 self._recreate_api_client()
                                 continue
                         else:
                             print(f"    [!] مدل «{self.model_name}» ناسازگار → بعدی")
                             if self._drop_current_model_and_switch(reason=str(e)[:80]):
-                                time.sleep(0.1)
+                                time.sleep(0.5)
                                 continue
                             if self._switch_to_next_model(reason="gone"):
+                                time.sleep(0.3)
                                 continue
 
                     if self._is_model_unavailable_error(e):
@@ -3811,11 +3925,14 @@ class MangaTranslator:
                     x in err_str for x in ("rate limit", "429", "quota", "insufficient_quota")
                 ):
                     print(f"    [!] محدودیت نرخ/سهمیه ({self.provider}/{self.model_name})...")
+                    wait_s = min(6.0 + attempt * 3.0, 22.0)
+                    print(f"    [*] صبر {wait_s:.0f} ثانیه برای بازیابی سهمیه...")
+                    time.sleep(wait_s)
                     if self._switch_to_next_model(reason="rate/quota"):
-                        time.sleep(0.15)
+                        time.sleep(0.5)
                         continue
                     if self._switch_to_next_key(reason="rate/quota", cycle=True):
-                        time.sleep(min(delay, 2))
+                        time.sleep(1.5)
                         continue
                 if self._is_banned_or_invalid_key_error(e) or any(
                     x in err_str for x in ("invalid api key", "authentication", "incorrect api key")
@@ -3831,6 +3948,8 @@ class MangaTranslator:
 
         print(f"    [!] {self.max_retries} تلاش ناموفق — ریست کامل و تلاش نهایی...")
         try:
+            print("    [*] صبر ۱۲ ثانیه قبل از تلاش نهایی...")
+            time.sleep(12.0)
             self._reset_model_cascade(reason="تلاش نهایی")
             if self._api_keys and len(self._api_keys) > 1:
                 self._pick_random_api_key(reason="تلاش نهایی")
@@ -3840,24 +3959,12 @@ class MangaTranslator:
                 text_final = self._translate_with_gemini(user_prompt, system_instruction)
             else:
                 text_final = self._translate_with_openai(user_prompt, system_instruction)
-            parsed = self._parse_translation_response(text_final, work_regions)
+            self._parse_translation_response(text_final, work_regions)
             for r in work_regions:
-                item = parsed.get(r.id)
-                if not item:
-                    continue
-                if isinstance(item, dict):
-                    fa = (item.get("translation") or "").strip()
-                    tone = (item.get("tone") or "").strip().lower()
-                else:
-                    fa = str(item).strip()
-                    tone = ""
+                if not (getattr(r, "bubble_style", None) or "").strip():
+                    r.bubble_style = "normal"
+                fa = (r.translated_text or "").strip()
                 if fa:
-                    r.translated_text = fa
-                    if tone:
-                        try:
-                            r.bubble_style = tone
-                        except Exception:
-                            pass
                     print(f"    ← بالن[{r.id}] (نهایی): {fa[:70]}{'…' if len(fa) > 70 else ''}")
             got = sum(
                 1 for r in work_regions
