@@ -573,7 +573,9 @@ class MiganONNX:
         _, msk_use = cv2.threshold(msk_use, 64, 255, cv2.THRESH_BINARY)
 
         img_in = img_use.transpose(2, 0, 1)[None].astype(np.uint8)
-        mask_in = ((msk_use <= 127).astype(np.uint8)) * 255
+        
+        
+        mask_in = ((msk_use > 127).astype(np.uint8)) * 255
         mask_in = mask_in[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
         o = out[0].transpose(1, 2, 0)
@@ -2153,6 +2155,9 @@ class MangaTranslator:
                     continue
 
                 stripped = text.strip()
+                
+                if self._is_non_english_script(stripped):  
+                    continue
                 kind = self._classify_text(stripped)
 
                 if kind == "junk" and len(re.sub(r"[^\w]", "", stripped)) <= 1:
@@ -2167,11 +2172,80 @@ class MangaTranslator:
                 })
         return detections
 
+
+    def _ocr_lang_flags(self):
+        
+        langs = [str(x).lower().strip() for x in (getattr(self, "ocr_langs", None) or ["en"])]
+        allow_en = any(l == "en" or l.startswith("en") for l in langs)
+        allow_ko = any(l == "ko" or l.startswith("ko") or l in ("korean", "hangul") for l in langs)
+        allow_ja = any(l == "ja" or l.startswith("ja") or l in ("jp", "japanese") for l in langs)
+        allow_zh = any(l in ("zh", "ch", "cn", "chinese") or l.startswith("zh") for l in langs)
+        
+        if langs == ["en"] or (len(langs) == 1 and langs[0].startswith("en")):
+            allow_ko = allow_ja = allow_zh = False
+            allow_en = True
+        return allow_en, allow_ko, allow_ja, allow_zh
+
+    def _want_english_only(self) -> bool:
+        allow_en, allow_ko, allow_ja, allow_zh = self._ocr_lang_flags()
+        return allow_en and not (allow_ko or allow_ja or allow_zh)
+
+    def _is_non_english_script(self, text: str) -> bool:
+        
+        if not text:
+            return True
+        allow_en, allow_ko, allow_ja, allow_zh = self._ocr_lang_flags()
+
+        has_latin = False
+        has_hangul = False
+        has_kana = False
+        has_han = False  
+        for ch in text:
+            o = ord(ch)
+            if ch.isascii() and ch.isalpha():
+                has_latin = True
+            elif 0xAC00 <= o <= 0xD7A3:
+                has_hangul = True
+            elif 0x3040 <= o <= 0x30FF or 0xFF66 <= o <= 0xFF9D:
+                has_kana = True
+            elif (0x3400 <= o <= 0x9FFF) or (0xF900 <= o <= 0xFAFF) or (0x3000 <= o <= 0x303F):
+                has_han = True
+
+        
+        if has_hangul and not allow_ko:
+            return True
+        if has_kana and not allow_ja:
+            return True
+        
+        if has_han and not (allow_ja or allow_zh):
+            return True
+        
+        allowed_any = (
+            (has_latin and allow_en)
+            or (has_hangul and allow_ko)
+            or (has_kana and allow_ja)
+            or (has_han and (allow_ja or allow_zh))
+        )
+        if not allowed_any and (has_latin or has_hangul or has_kana or has_han):
+            return True
+        return False
+
     @staticmethod
     def _classify_text(text: str) -> str:
+
         stripped = (text or "").strip()
         if not stripped:
             return "junk"
+
+        
+        latin_core = re.sub(r"[^A-Za-z]", "", stripped)
+        if len(latin_core) >= 3 and re.fullmatch(r"[A-Za-z][A-Za-z\s.'\-]*[.!?…~]*", stripped.replace("...", ".").replace("…", ".")):
+            
+            if any(c in "AEIOUaeiou" for c in latin_core):
+                return "dialogue"
+        if len(latin_core) >= 2 and stripped.endswith(("?", "!", "?!", "!?", "...?", "...!")):
+            if any(c in "AEIOUaeiou" for c in latin_core):
+                return "dialogue"
 
         low_full = stripped.lower()
         low_compact = re.sub(r"[\s.\-_]", "", low_full)
@@ -2728,6 +2802,7 @@ class MangaTranslator:
                 rect=(x0, y0, x1 - x0, y1 - y0),
                 angle=avg_angle,
                 kind=region_kind,
+                ocr_polys=list(boxes),
             )
         )
 
@@ -2867,6 +2942,9 @@ class MangaTranslator:
         return unique
 
 
+
+
+
     def _ink_mask_inside_bubble(self, gray: np.ndarray, x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
         
         crop = gray[y0:y1, x0:x1]
@@ -2875,96 +2953,61 @@ class MangaTranslator:
             return np.zeros((ch, cw), dtype=np.uint8)
 
         med = float(np.median(crop))
-        
-        if med >= 130:
-            seed = (crop >= 175).astype(np.uint8) * 255
-            thr_dark = True
-        else:
+        dark_text = med >= 120
+
+        if dark_text:
             
-            seed = (crop <= med + 40).astype(np.uint8) * 255
-            thr_dark = False
-        seed = cv2.morphologyEx(
-            seed, cv2.MORPH_CLOSE,
-            cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11)),
-            iterations=3,
+            hard = (crop < max(100, med - 40)).astype(np.uint8) * 255
+            try:
+                ad = cv2.adaptiveThreshold(
+                    crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY_INV, 15, 11,
+                )
+                ink = cv2.bitwise_or(hard, ad)
+            except Exception:
+                ink = hard
+        else:
+            hard = (crop > min(180, med + 40)).astype(np.uint8) * 255
+            try:
+                ad = cv2.adaptiveThreshold(
+                    crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+                    cv2.THRESH_BINARY, 15, 11,
+                )
+                ink = cv2.bitwise_or(hard, ad)
+            except Exception:
+                ink = hard
+
+        ink = cv2.morphologyEx(
+            ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8), iterations=1
         )
-        n, labels, stats, cents = cv2.connectedComponentsWithStats(seed, connectivity=8)
-        best_lab, best_a = 0, 0
-        cx0, cy0 = cw / 2.0, ch / 2.0
-        for i in range(1, n):
-            a = int(stats[i, cv2.CC_STAT_AREA])
-            if a < max(60, 0.03 * ch * cw):
-                continue
-            dist = abs(cents[i][0] - cx0) + abs(cents[i][1] - cy0)
-            score = a - dist * 1.5
-            if score > best_a:
-                best_a = score
-                best_lab = i
-        if best_lab == 0:
-            
-            core = np.ones((ch, cw), dtype=np.uint8) * 255
-            ring = np.zeros((ch, cw), dtype=np.uint8)
-        else:
-            interior = (labels == best_lab).astype(np.uint8) * 255
-            core = cv2.erode(interior, np.ones((5, 5), np.uint8), iterations=1)
-            if core.max() == 0:
-                core = cv2.erode(interior, np.ones((3, 3), np.uint8), iterations=1)
-            if core.max() == 0:
-                core = interior
-            ring = cv2.subtract(interior, core)
-
-        if thr_dark:
-            thr = 145
-            ink = ((crop < thr) & (core > 0)).astype(np.uint8) * 255
-            try:
-                ad = cv2.adaptiveThreshold(
-                    crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY_INV, 15, 8,
-                )
-                ink = cv2.bitwise_or(ink, cv2.bitwise_and(ad, core))
-            except Exception:
-                pass
-        else:
-            
-            ink = ((crop > med + 25) & (core > 0)).astype(np.uint8) * 255
-            try:
-                ad = cv2.adaptiveThreshold(
-                    crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY, 15, 8,
-                )
-                ink = cv2.bitwise_or(ink, cv2.bitwise_and(ad, core))
-            except Exception:
-                pass
-
-        n2, lab2, st2, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
-        keep = np.zeros_like(ink)
-        for i in range(1, n2):
-            a = int(st2[i, cv2.CC_STAT_AREA])
-            if a < 4:
-                continue
-            comp = lab2 == i
-            on_ring = int((comp & (ring > 0)).sum())
-            bw = int(st2[i, cv2.CC_STAT_WIDTH])
-            bh = int(st2[i, cv2.CC_STAT_HEIGHT])
-            ls, ss = max(bw, bh), max(1, min(bw, bh))
-            if on_ring > 0.7 * a and ss <= 4 and ls > 20:
-                continue
-            if ls >= int(0.5 * max(ch, cw)) and ss <= 5:
-                continue
-            keep[comp] = 255
-
-        keep = cv2.dilate(keep, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=2)
-        keep = cv2.bitwise_and(keep, core)
-        return keep
+        return ink
 
     @staticmethod
     def _text_zone_in_crop(region: "TextRegion", x0: int, y0: int, x1: int, y1: int):
-        polys = list(getattr(region, "ocr_polys", None) or [])
-        if not polys:
-            return None
+        
         cw, ch = x1 - x0, y1 - y0
         if cw < 4 or ch < 4:
             return None
+
+        polys = list(getattr(region, "ocr_polys", None) or [])
+        _, _, rw, rh = region.rect
+        rect_area = max(1, int(rw) * int(rh))
+
+        if not polys:
+            for b in list(getattr(region, "boxes", None) or []):
+                pts = np.asarray(b, dtype=np.int32).reshape(-1, 2)
+                if pts.size < 6:
+                    continue
+                bx0, by0 = int(pts[:, 0].min()), int(pts[:, 1].min())
+                bx1, by1 = int(pts[:, 0].max()), int(pts[:, 1].max())
+                b_area = max(1, (bx1 - bx0) * (by1 - by0))
+                if b_area >= 0.75 * rect_area:
+                    continue
+                polys.append(pts)
+
+        if not polys:
+            return None
+
         zone = np.zeros((ch, cw), dtype=np.uint8)
         for poly in polys:
             pts = np.asarray(poly, dtype=np.int32).reshape(-1, 2).copy()
@@ -2975,10 +3018,66 @@ class MangaTranslator:
             cv2.fillPoly(zone, [pts], 255)
         if zone.max() == 0:
             return None
-        zone = cv2.dilate(
-            zone, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)), iterations=1
-        )
+        zone = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=2)
         return zone
+
+    @staticmethod
+    def _protect_bubble_wall(ink: np.ndarray, gray_crop: np.ndarray) -> np.ndarray:
+        
+        ch, cw = ink.shape[:2]
+        if ch < 12 or cw < 12:
+            return ink
+
+        
+        border = max(6, min(20, min(ch, cw) // 7))
+        protected = ink.copy()
+        protected[:border, :] = 0
+        protected[-border:, :] = 0
+        protected[:, :border] = 0
+        protected[:, -border:] = 0
+
+        
+        try:
+            edges = cv2.Canny(gray_crop, 50, 120)
+            edges = cv2.dilate(edges, np.ones((2, 2), np.uint8), iterations=1)
+            n, lab, st, _ = cv2.connectedComponentsWithStats(edges, connectivity=8)
+            wall = np.zeros_like(edges)
+            for i in range(1, n):
+                a = int(st[i, cv2.CC_STAT_AREA])
+                bw = int(st[i, cv2.CC_STAT_WIDTH])
+                bh = int(st[i, cv2.CC_STAT_HEIGHT])
+                ls, ss = max(bw, bh), max(1, min(bw, bh))
+                
+                if ss <= 5 and ls >= max(18, int(0.25 * max(ch, cw))):
+                    wall[lab == i] = 255
+                elif a > 0.08 * ch * cw and ss <= 8:
+                    wall[lab == i] = 255
+            wall = cv2.dilate(wall, np.ones((2, 2), np.uint8), iterations=1)
+            protected = cv2.bitwise_and(protected, cv2.bitwise_not(wall))
+        except Exception:
+            pass
+
+        
+        n2, lab2, st2, _ = cv2.connectedComponentsWithStats(protected, connectivity=8)
+        keep = np.zeros_like(protected)
+        page_a = float(max(1, ch * cw))
+        for i in range(1, n2):
+            a = int(st2[i, cv2.CC_STAT_AREA])
+            bw = int(st2[i, cv2.CC_STAT_WIDTH])
+            bh = int(st2[i, cv2.CC_STAT_HEIGHT])
+            if a < 3:
+                continue
+            ls, ss = max(bw, bh), max(1, min(bw, bh))
+            if ss <= 3 and ls >= int(0.30 * max(ch, cw)):
+                continue
+            if a > 0.20 * page_a:
+                continue
+            if ls >= int(0.70 * max(ch, cw)) and ss <= 6:
+                continue
+            keep[lab2 == i] = 255
+
+        keep = cv2.dilate(keep, np.ones((2, 2), np.uint8), iterations=1)
+        return keep
 
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         
@@ -2988,28 +3087,46 @@ class MangaTranslator:
 
         for region in regions:
             x, y, rw, rh = region.rect
-            
-            pad = 2
-            x0 = max(0, int(x) - pad)
-            y0 = max(0, int(y) - pad)
-            x1 = min(w_img, int(x + rw) + pad)
-            y1 = min(h_img, int(y + rh) + pad)
+            x0 = max(0, int(x))
+            y0 = max(0, int(y))
+            x1 = min(w_img, int(x + rw))
+            y1 = min(h_img, int(y + rh))
             if x1 - x0 < 8 or y1 - y0 < 8:
                 continue
+
+            zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
             ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
             if ink.max() == 0:
+                
+                ch, cw = y1 - y0, x1 - x0
+                border = max(4, min(14, min(ch, cw) // 8))
+                soft = np.zeros((ch, cw), dtype=np.uint8)
+                soft[border:ch - border, border:cw - border] = 255
+                ink = soft
+            else:
+                if zone is not None:
+                    ink = cv2.bitwise_and(ink, zone)
+                else:
+                    
+                    ch, cw = ink.shape[:2]
+                    border = max(5, min(16, min(ch, cw) // 7))
+                    ink[:border, :] = 0
+                    ink[-border:, :] = 0
+                    ink[:, :border] = 0
+                    ink[:, -border:] = 0
+                ink = self._protect_bubble_wall(ink, gray[y0:y1, x0:x1])
+                
+                if ink.max() > 0:
+                    ink = cv2.dilate(ink, np.ones((2, 2), np.uint8), iterations=1)
+
+            if ink.max() == 0:
                 continue
-            
-            zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
-            if zone is not None:
-                ink = cv2.bitwise_and(ink, zone)
-                if ink.max() == 0:
-                    continue
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
 
         return text_mask
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+        
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
             return image.copy()
@@ -3020,33 +3137,28 @@ class MangaTranslator:
             pass
 
         cleaned = image.copy()
-        gray0 = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         H, W = image.shape[:2]
-
         
+        dil = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
+
         if self.use_lama:
             lama = self._get_lama()
             if lama is not None:
                 try:
-                    dil = cv2.dilate(
-                        mask,
-                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)),
-                        iterations=1,
-                    )
                     ys, xs = np.where(dil > 0)
                     if len(xs) > 0:
-                        pad = 32
+                        pad = 20
                         x0, x1 = max(0, int(xs.min()) - pad), min(W, int(xs.max()) + pad + 1)
                         y0, y1 = max(0, int(ys.min()) - pad), min(H, int(ys.max()) + pad + 1)
                         
-                        if (x1 - x0) * (y1 - y0) <= 512 * 512 * 4:
+                        area = (x1 - x0) * (y1 - y0)
+                        if area <= 512 * 512 * 6:
                             crop_img = image[y0:y1, x0:x1]
                             crop_msk = dil[y0:y1, x0:x1]
                             result_pil = lama(crop_img, crop_msk)
                             out = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
                             if out.shape[:2] != crop_img.shape[:2]:
                                 out = cv2.resize(out, (crop_img.shape[1], crop_img.shape[0]))
-                            
                             m = crop_msk > 0
                             if m.any():
                                 cleaned[y0:y1, x0:x1][m] = out[m]
@@ -3054,54 +3166,44 @@ class MangaTranslator:
                                 f"  - پاکسازی با {getattr(self, '_inpainter_name', 'ONNX')} "
                                 f"(کراپ {x1-x0}x{y1-y0})."
                             )
-                        else:
-                            print("  [*] ناحیه متن بزرگ → پاکسازی OpenCV")
                 except Exception as e:
                     print(f"  [!] {getattr(self, '_inpainter_name', 'ONNX')} خطا ({e}) → OpenCV")
 
+        cleaned = cv2.inpaint(cleaned, dil, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+
         
-        for rad in (5, 4, 3):
-            dil = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3)), iterations=1)
-            cleaned = cv2.inpaint(cleaned, dil, inpaintRadius=rad, flags=cv2.INPAINT_TELEA)
-            g2 = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
-            residual = np.zeros_like(mask)
-            for region in regions:
-                x, y, rw, rh = region.rect
-                x0, y0 = max(0, int(x)), max(0, int(y))
-                x1 = min(image.shape[1], int(x + rw))
-                y1 = min(image.shape[0], int(y + rh))
-                if x1 - x0 < 8 or y1 - y0 < 8:
-                    continue
-                crop = g2[y0:y1, x0:x1]
-                orig = gray0[y0:y1, x0:x1]
-                
-                med = float(np.median(orig))
-                if med >= 140:
-                    bright = (orig >= 170).astype(np.uint8) * 255
-                    bright = cv2.morphologyEx(
-                        bright, cv2.MORPH_CLOSE,
-                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)),
-                        iterations=2,
-                    )
-                    core = cv2.erode(bright, np.ones((3, 3), np.uint8), iterations=1)
-                    ink = ((crop < 130) & (core > 0)).astype(np.uint8) * 255
-                else:
-                    
-                    ink = ((crop > med + 25) & (orig > med + 15)).astype(np.uint8) * 255
-                    ink = cv2.morphologyEx(
-                        ink, cv2.MORPH_OPEN,
-                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2, 2)),
-                    )
-                
-                zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
-                if zone is not None:
-                    ink = cv2.bitwise_and(ink, zone)
-                residual[y0:y1, x0:x1] = cv2.bitwise_or(residual[y0:y1, x0:x1], ink)
+        gray0 = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        g2 = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+        residual = np.zeros_like(dil)
+        for region in regions:
+            x, y, rw, rh = region.rect
+            x0, y0 = max(0, int(x)), max(0, int(y))
+            x1 = min(image.shape[1], int(x + rw))
+            y1 = min(image.shape[0], int(y + rh))
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                continue
+            zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
+            crop = g2[y0:y1, x0:x1]
+            orig = gray0[y0:y1, x0:x1]
+            med = float(np.median(orig))
+            if med >= 130:
+                ink = ((crop < 120) & (orig < 140)).astype(np.uint8) * 255
+            else:
+                ink = ((crop > med + 25) & (orig > med + 15)).astype(np.uint8) * 255
+            if zone is not None:
+                ink = cv2.bitwise_and(ink, zone)
+            else:
+                ch, cw = ink.shape[:2]
+                border = max(5, min(16, min(ch, cw) // 7))
+                ink[:border, :] = 0
+                ink[-border:, :] = 0
+                ink[:, :border] = 0
+                ink[:, -border:] = 0
+            ink = self._protect_bubble_wall(ink, orig)
+            residual[y0:y1, x0:x1] = cv2.bitwise_or(residual[y0:y1, x0:x1], ink)
+        if np.any(residual):
             residual = cv2.dilate(residual, np.ones((3, 3), np.uint8), iterations=1)
-            if not np.any(residual):
-                break
-            cleaned = cv2.inpaint(cleaned, residual, inpaintRadius=rad, flags=cv2.INPAINT_TELEA)
-            mask = cv2.bitwise_or(mask, residual)
+            cleaned = cv2.inpaint(cleaned, residual, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
         print("  - پاکسازی فقط متن تمام شد — دیوارهٔ حباب حفظ شد.")
         return cleaned
@@ -4359,43 +4461,129 @@ class MangaTranslator:
 
       return vis
 
+
     def _ocr_crop(self, image_bgr: np.ndarray, rect) -> Tuple[str, List[np.ndarray]]:
         
         x1, y1, x2, y2 = [int(v) for v in rect]
         h, w = image_bgr.shape[:2]
-        pad = 4
+        pad = 8
         x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
         x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
         if x2 - x1 < 8 or y2 - y1 < 8:
             return "", []
-        crop = image_bgr[y1:y2, x1:x2]
-        try:
-            results = self.ocr.ocr(crop)
-        except Exception:
-            return "", []
-        if not results or not results[0]:
-            return "", []
-        lines = []
-        polys: List[np.ndarray] = []
-        for line in results[0]:
+        crop0 = image_bgr[y1:y2, x1:x2]
+        ch0, cw0 = crop0.shape[:2]
+
+        def _run(crop_bgr, scale: float):
+            if scale > 1.01:
+                crop_bgr = cv2.resize(
+                    crop_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
+                )
             try:
-                if isinstance(line, (list, tuple)) and len(line) >= 2:
+                results = self.ocr.ocr(crop_bgr)
+            except Exception:
+                return "", [], 0.0
+            if not results or not results[0]:
+                return "", [], 0.0
+            lines, polys, confs = [], [], []
+            for line in results[0]:
+                try:
+                    if not (isinstance(line, (list, tuple)) and len(line) >= 2):
+                        continue
                     pair = line[1]
                     if isinstance(pair, (list, tuple)):
                         text = str(pair[0]).strip()
                         conf = float(pair[1]) if len(pair) > 1 else 1.0
                     else:
                         text, conf = str(pair).strip(), 1.0
-                    if text and conf >= self.min_confidence:
-                        lines.append(text)
-                        if len(line) >= 1 and isinstance(line[0], (list, tuple)) and len(line[0]) >= 3:
-                            poly = np.array(line[0], dtype=np.int32).reshape(-1, 2)
-                            if poly.min() >= -8 and poly.max() < 100000:
-                                poly = poly + np.array([x1, y1], dtype=np.int32)
-                                polys.append(poly)
-            except Exception:
-                continue
-        return " ".join(lines).strip(), polys
+                    if not text or conf < self.min_confidence:
+                        continue
+                    if self._is_non_english_script(text):  
+                        continue
+                    lines.append(text)
+                    confs.append(conf)
+                    if len(line) >= 1 and isinstance(line[0], (list, tuple)) and len(line[0]) >= 3:
+                        poly = np.array(line[0], dtype=np.float32).reshape(-1, 2)
+                        if poly.min() >= -8 and poly.max() < 100000:
+                            if scale > 1.01:
+                                poly = poly / scale
+                            poly = poly + np.array([x1, y1], dtype=np.float32)
+                            polys.append(poly.astype(np.int32))
+                except Exception:
+                    continue
+            joined = " ".join(lines).strip()
+            avg_conf = float(np.mean(confs)) if confs else 0.0
+            return joined, polys, avg_conf
+
+        def _score(txt: str, conf: float) -> float:
+            if not txt:
+                return -1.0
+            latin = sum(1 for c in txt if c.isascii() and c.isalpha())
+            
+            return latin * 2.0 + conf * 3.0 + min(len(txt), 24) * 0.15
+
+        candidates = []
+
+        
+        m = max(ch0, cw0)
+        if m < 200:
+            base_scale = 2.4
+        elif m < 360:
+            base_scale = 1.8
+        elif m < 600:
+            base_scale = 1.35
+        else:
+            base_scale = 1.15  
+
+        
+        inset = int(min(ch0, cw0) * 0.12)
+        if ch0 > 2 * inset + 20 and cw0 > 2 * inset + 20:
+            core = crop0[inset:ch0 - inset, inset:cw0 - inset]
+        else:
+            core = crop0
+
+        variants = []
+        variants.append(("raw", core, base_scale))
+        try:
+            lab = cv2.cvtColor(core, cv2.COLOR_BGR2LAB)
+            l, a, b = cv2.split(lab)
+            l2 = cv2.createCLAHE(2.5, (8, 8)).apply(l)
+            enh = cv2.cvtColor(cv2.merge((l2, a, b)), cv2.COLOR_LAB2BGR)
+            variants.append(("clahe", enh, base_scale))
+        except Exception:
+            pass
+        try:
+            g = cv2.cvtColor(core, cv2.COLOR_BGR2GRAY)
+            _, bw = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            if float(np.mean(bw)) < 127:
+                bw = cv2.bitwise_not(bw)
+            bw = cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
+            variants.append(("otsu", bw, min(base_scale + 0.25, 2.2)))
+        except Exception:
+            pass
+
+        best = ("", [], -1.0)
+        inset_used = inset if core is not crop0 else 0
+        for name, crop_v, sc in variants:
+            txt, polys, conf = _run(crop_v, sc)
+            
+            if inset_used and polys:
+                adj = []
+                for p in polys:
+                    pp = p.astype(np.int32).copy()
+                    pp[:, 0] += inset_used
+                    pp[:, 1] += inset_used
+                    adj.append(pp)
+                polys = adj
+            scv = _score(txt, conf)
+            if scv > best[2]:
+                best = (txt, polys, scv)
+            latin = sum(1 for c in (txt or "") if c.isascii() and c.isalpha())
+            if latin >= 4 and conf >= 0.35:
+                break
+
+        return best[0], best[1]
+
 
     @staticmethod
     def _drop_contained_boxes(boxes: List[dict], contain_thresh: float = 0.72) -> List[dict]:
@@ -4573,8 +4761,17 @@ class MangaTranslator:
             text, line_polys = self._ocr_crop(image, [x1, y1, x2, y2])
             if not text:
                 continue
+
             
+            if self._is_non_english_script(text):  
+                continue
+
             kind = self._classify_text(text)
+            
+            if kind in ("junk", "sfx", "promo"):
+                latin = re.sub(r"[^A-Za-z]", "", text)
+                if len(latin) >= 3 and any(c in "AEIOUaeiou" for c in latin):
+                    kind = "dialogue"
             poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
             regions.append(TextRegion(
                 id=i,
