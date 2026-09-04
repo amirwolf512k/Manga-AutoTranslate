@@ -135,7 +135,8 @@ jobs:
             --provider "$PROVIDER" \
             --api-key "$RESOLVED_KEY" \
             $MODEL_ARG \
-            --cpu
+            --cpu \
+            --debug
 
           RESULT=$(ls -1t *"$OUT_EXT" 2>/dev/null | head -n 1 || true)
           if [ -z "$RESULT" ]; then
