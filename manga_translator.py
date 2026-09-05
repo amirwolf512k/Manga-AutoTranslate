@@ -485,6 +485,20 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
     return sess
 
 
+def _cpu_thread_fallback(session, model_path: str, use_threads: int):
+    
+    
+    try:
+        provs = list(session.get_providers())
+        cpu_n = max(1, min(8, os.cpu_count() or 4))
+        if "CUDAExecutionProvider" not in provs and use_threads < cpu_n:
+            print(f"    [*] اینپینت روی CPU است → threads: {use_threads} → {cpu_n}")
+            return _make_ort_session(model_path, prefer_gpu=False, threads=cpu_n), cpu_n
+    except Exception:
+        pass
+    return session, use_threads
+
+
 class MiganONNX:
     
     REPO = "karanjakhar/migan"
@@ -496,8 +510,14 @@ class MiganONNX:
         if not model_path or not os.path.isfile(model_path):
             model_path = self._download_model(cache_dir=cache_dir)
         self.model_path = model_path
-        use_threads = 1 if not prefer_gpu else max(1, int(threads))
+        
+        
+        if not prefer_gpu:
+            use_threads = max(1, min(8, os.cpu_count() or 4))
+        else:
+            use_threads = max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
+        self.session, use_threads = _cpu_thread_fallback(self.session, model_path, use_threads)
 
         names = [i.name for i in self.session.get_inputs()]
         self._in_image = names[0]
@@ -572,9 +592,12 @@ class MiganONNX:
         msk_use = cv2.dilate(msk_use, np.ones((3, 3), np.uint8), iterations=1)
         _, msk_use = cv2.threshold(msk_use, 64, 255, cv2.THRESH_BINARY)
 
+        
+        
+        hole = msk_use > 127
+        img_use[hole] = 0
+
         img_in = img_use.transpose(2, 0, 1)[None].astype(np.uint8)
-        
-        
         mask_in = ((msk_use > 127).astype(np.uint8)) * 255
         mask_in = mask_in[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
@@ -600,8 +623,14 @@ class LamaONNX:
         if not model_path or not os.path.isfile(model_path):
             model_path = self._download_model(cache_dir=cache_dir)
         self.model_path = model_path
-        use_threads = 1 if not prefer_gpu else max(1, int(threads))
+        
+        
+        if not prefer_gpu:
+            use_threads = max(1, min(8, os.cpu_count() or 4))
+        else:
+            use_threads = max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
+        self.session, use_threads = _cpu_thread_fallback(self.session, model_path, use_threads)
         print(
             f"[+] LaMa ONNX آماده | providers={self.session.get_providers()} | "
             f"threads={use_threads} | max_size={self.size}"
@@ -615,6 +644,19 @@ class LamaONNX:
                 self._in_mask = n
             elif "image" in low or "img" in low:
                 self._in_image = n
+        
+        
+        self._fixed_size = False
+        try:
+            for inp in self.session.get_inputs():
+                dims = list(inp.shape)[-2:]
+                fixed = [d for d in dims if isinstance(d, int) and d > 0]
+                if len(fixed) == 2 and fixed[0] == fixed[1] and fixed[0] >= 64:
+                    self.size = fixed[0]
+                    self._fixed_size = True
+                    break
+        except Exception:
+            pass
 
     @classmethod
     def _download_model(cls, cache_dir: Optional[str] = None) -> str:
@@ -652,6 +694,8 @@ class LamaONNX:
 
     def _pick_size(self, w: int, h: int) -> int:
         m = max(int(w), int(h))
+        if getattr(self, "_fixed_size", False):
+            return self.size
         if not self.prefer_gpu:
             return 256
         if m <= 180:
@@ -1119,6 +1163,7 @@ class TextRegion:
     angle: float = 0.0
     kind: str = "dialogue"
     bubble_style: str = "normal"  
+    det_class: str = ""  
     
     ocr_polys: List[np.ndarray] = field(default_factory=list)
 
@@ -1371,9 +1416,10 @@ class MangaTranslator:
         mask_padding: int = 3,
         pad_ratio: float = 0.06,
         min_confidence: float = 0.12,
-        det_confidence: float = 0.28,
+        det_confidence: float = 0.16,
         max_retries: int = 8,
         request_delay: float = 0.0,
+        bubbles_per_request: int = 6,
         api_timeout: float = 30.0,
         max_chunk_height: int = 3600,
         chunk_overlap: int = 300,
@@ -1457,6 +1503,8 @@ class MangaTranslator:
         self.min_confidence = min_confidence
         self.max_retries = max_retries
         self.request_delay = request_delay
+        
+        self.bubbles_per_request = 6
         self.api_timeout = float(api_timeout) if api_timeout and api_timeout > 0 else 30.0
         self._daily_fail_streak: int = 0  
         self._daily_fail_model: str = ""
@@ -1589,7 +1637,7 @@ class MangaTranslator:
             print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
             self.det = RTDetrV2ONNXDetector(
                 prefer_gpu=self.use_gpu,
-                conf_thresh=max(0.32, self.det_confidence),
+                conf_thresh=self.det_confidence,
                 iou_thresh=0.45,
                 threads=max(1, int(self.max_workers or 2)),
                 multi_scale=True,
@@ -1633,24 +1681,26 @@ class MangaTranslator:
                 print(f"    {len(self._api_keys)} کلید API (جابه‌جایی خودکار)")
 
     def _get_lama(self):
+        
+        
         if self._lama is None and self.use_lama:
             try:
-                print("    [*] بارگذاری MI-GAN ONNX (سبک و سریع) ...")
-                self._lama = MiganONNX(
+                print("    [*] بارگذاری LaMa ONNX (K3، مناسب CPU) ...")
+                self._lama = LamaONNX(
                     prefer_gpu=self.use_gpu,
                     threads=max(1, int(getattr(self, "max_workers", 2) or 2)),
                 )
-                self._inpainter_name = "MI-GAN"
+                self._inpainter_name = "LaMa"
             except Exception as e:
-                print(f"    [!] MI-GAN ناموفق ({e}) → LaMa ONNX")
+                print(f"    [!] LaMa ناموفق ({e}) → MI-GAN ONNX")
                 try:
-                    self._lama = LamaONNX(
+                    self._lama = MiganONNX(
                         prefer_gpu=self.use_gpu,
                         threads=max(1, int(getattr(self, "max_workers", 2) or 2)),
                     )
-                    self._inpainter_name = "LaMa"
+                    self._inpainter_name = "MI-GAN"
                 except Exception as e2:
-                    print(f"    [!] LaMa ONNX هم ناموفق ({e2}) → OpenCV")
+                    print(f"    [!] MI-GAN هم ناموفق ({e2}) → OpenCV")
                     self.use_lama = False
                     self._lama = None
                     self._inpainter_name = "OpenCV"
@@ -2357,7 +2407,7 @@ class MangaTranslator:
                 if len(remainder) <= 6 and len(low_compact) <= 40:
                     return "promo"
 
-        if any(w.replace(" ", "") in low_compact for w in WATERMARK_PATTERNS):
+        if MangaTranslator._is_watermark_text(stripped):
             return "promo"
         if PROMO_RE.search(stripped):
             return "promo"
@@ -2953,34 +3003,51 @@ class MangaTranslator:
             return np.zeros((ch, cw), dtype=np.uint8)
 
         med = float(np.median(crop))
-        dark_text = med >= 120
 
-        if dark_text:
-            
-            hard = (crop < max(100, med - 40)).astype(np.uint8) * 255
+        def _mask(dark: bool) -> np.ndarray:
+            if dark:
+                hard = (crop < max(100, med - 40)).astype(np.uint8) * 255
+                flag = cv2.THRESH_BINARY_INV
+            else:
+                
+                
+                
+                if med < 128:
+                    bright_t = max(150, med + 60)
+                else:
+                    bright_t = min(180, med + 40)
+                hard = (crop > bright_t).astype(np.uint8) * 255
+                flag = cv2.THRESH_BINARY
             try:
                 ad = cv2.adaptiveThreshold(
                     crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY_INV, 15, 11,
+                    flag, 15, 11,
                 )
-                ink = cv2.bitwise_or(hard, ad)
+                
+                
+                
+                mean = cv2.boxFilter(crop, ddepth=cv2.CV_32F, ksize=(15, 15))
+                flat = np.abs(crop.astype(np.float32) - mean) < 12.0
+                ad[flat] = 0
             except Exception:
-                ink = hard
-        else:
-            hard = (crop > min(180, med + 40)).astype(np.uint8) * 255
-            try:
-                ad = cv2.adaptiveThreshold(
-                    crop, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                    cv2.THRESH_BINARY, 15, 11,
-                )
-                ink = cv2.bitwise_or(hard, ad)
-            except Exception:
-                ink = hard
+                ad = hard
+            m = cv2.bitwise_or(hard, ad)
+            return cv2.morphologyEx(
+                m, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8), iterations=1
+            )
 
-        ink = cv2.morphologyEx(
-            ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8), iterations=1
-        )
-        return ink
+        dark_ink = _mask(True)
+        dark_cov = float(np.count_nonzero(dark_ink)) / float(max(1, ch * cw))
+
+        
+        
+        
+        if dark_cov > 0.45:
+            bright_ink = _mask(False)
+            bright_cov = float(np.count_nonzero(bright_ink)) / float(max(1, ch * cw))
+            if 0 < bright_cov < dark_cov:
+                return bright_ink
+        return dark_ink
 
     @staticmethod
     def _text_zone_in_crop(region: "TextRegion", x0: int, y0: int, x1: int, y1: int):
@@ -3018,6 +3085,9 @@ class MangaTranslator:
             cv2.fillPoly(zone, [pts], 255)
         if zone.max() == 0:
             return None
+        
+        
+        
         zone = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=2)
         return zone
 
@@ -3079,6 +3149,98 @@ class MangaTranslator:
         keep = cv2.dilate(keep, np.ones((2, 2), np.uint8), iterations=1)
         return keep
 
+    @staticmethod
+    def _drop_non_text_components(ink: np.ndarray, ch: int, cw: int) -> np.ndarray:
+        
+        
+        try:
+            n, lab, st, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+        except Exception:
+            return ink
+        keep = np.zeros_like(ink)
+        crop_area = float(max(1, ch * cw))
+        for i in range(1, n):
+            a = int(st[i, cv2.CC_STAT_AREA])
+            if a < 6:
+                continue
+            bw = int(st[i, cv2.CC_STAT_WIDTH])
+            bh = int(st[i, cv2.CC_STAT_HEIGHT])
+            if a > 0.12 * crop_area:
+                continue
+            if bh > 0.50 * ch or bw > 0.90 * cw:
+                continue
+            keep[lab == i] = 255
+        return keep
+
+    def _bubble_interior_mask(self, gray_crop: np.ndarray, zone: np.ndarray) -> Optional[np.ndarray]:
+        
+        
+        
+        
+        ch, cw = gray_crop.shape[:2]
+        if zone is None or cv2.countNonZero(zone) == 0:
+            return None
+        med = float(np.median(gray_crop))
+        if med >= 128:
+            base = (gray_crop >= max(120, med - 60)).astype(np.uint8)
+        else:
+            base = (gray_crop <= min(150, med + 60)).astype(np.uint8)
+        base = cv2.morphologyEx(base, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
+        n, lab = cv2.connectedComponents(base, connectivity=4)
+        seed = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=3)
+        labs = lab[seed > 0]
+        vals, cnts = np.unique(labs[labs > 0], return_counts=True)
+        if len(vals) == 0:
+            return None
+        comp = (lab == vals[int(np.argmax(cnts))]).astype(np.uint8) * 255
+        if int(np.count_nonzero(comp)) < 0.10 * ch * cw:
+            return None
+        
+        padc = cv2.copyMakeBorder(comp, 1, 1, 1, 1, cv2.BORDER_CONSTANT, value=0)
+        ff = padc.copy()
+        ffm = np.zeros((padc.shape[0] + 2, padc.shape[1] + 2), np.uint8)
+        cv2.floodFill(ff, ffm, (0, 0), 255)
+        filled = cv2.bitwise_or(padc, cv2.bitwise_not(ff))[1:-1, 1:-1]
+        if float(np.count_nonzero(filled)) > 0.95 * ch * cw:
+            
+            return None
+        
+        filled = cv2.erode(filled, np.ones((3, 3), np.uint8), iterations=2)
+        return filled
+
+    def _letters_mask_in_crop(self, gray_crop: np.ndarray, zone: np.ndarray,
+                              ch: int, cw: int, wide: bool = False) -> np.ndarray:
+        
+        
+        
+        med = float(np.median(gray_crop))
+        dark = (gray_crop < max(90, med - 40)).astype(np.uint8) * 255
+        bright = (gray_crop > min(215, med + 45)).astype(np.uint8) * 255
+        both = cv2.bitwise_or(dark, bright)
+        if wide:
+            
+            
+            near = np.full_like(gray_crop, 255)
+            b = 3
+            near[:b, :] = 0
+            near[-b:, :] = 0
+            near[:, :b] = 0
+            near[:, -b:] = 0
+        else:
+            near = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=10)
+        cand = cv2.bitwise_and(both, near)
+        
+        
+        
+        n, lab, st, _ = cv2.connectedComponentsWithStats(cand, connectivity=8)
+        keep = np.zeros_like(cand)
+        for i in range(1, n):
+            a = int(st[i, cv2.CC_STAT_AREA])
+            if a < 8 or a > 0.35 * ch * cw:
+                continue
+            keep[lab == i] = 255
+        return keep
+
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         
         h_img, w_img = image.shape[:2]
@@ -3095,35 +3257,215 @@ class MangaTranslator:
                 continue
 
             zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
+            ch, cw = y1 - y0, x1 - x0
+
+            
+            det_class = (getattr(region, "det_class", "") or "")
+            
+            if getattr(self, "erase_bubble_interior", False) and zone is not None and det_class in ("bubble", "text_bubble"):
+                interior = self._bubble_interior_mask(gray[y0:y1, x0:x1], zone)
+                if interior is not None and interior.max() > 0:
+                    text_mask[y0:y1, x0:x1] = cv2.bitwise_or(
+                        text_mask[y0:y1, x0:x1], interior
+                    )
+                    continue
+
             ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
-            if ink.max() == 0:
-                
-                ch, cw = y1 - y0, x1 - x0
-                border = max(4, min(14, min(ch, cw) // 8))
-                soft = np.zeros((ch, cw), dtype=np.uint8)
-                soft[border:ch - border, border:cw - border] = 255
-                ink = soft
-            else:
-                if zone is not None:
-                    ink = cv2.bitwise_and(ink, zone)
-                else:
+
+            if zone is not None:
+                med_reg = float(np.median(gray[y0:y1, x0:x1]))
+                if med_reg < 120:
                     
-                    ch, cw = ink.shape[:2]
-                    border = max(5, min(16, min(ch, cw) // 7))
-                    ink[:border, :] = 0
-                    ink[-border:, :] = 0
-                    ink[:, :border] = 0
-                    ink[:, -border:] = 0
-                ink = self._protect_bubble_wall(ink, gray[y0:y1, x0:x1])
+                    
+                    
+                    z = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=4)
+                    
+                    
+                    
+                    try:
+                        pts_all = []
+                        for poly in list(getattr(region, "ocr_polys", None) or []):
+                            p = np.asarray(poly, dtype=np.int32).reshape(-1, 2).copy()
+                            if p.size == 0:
+                                continue
+                            p[:, 0] -= x0
+                            p[:, 1] -= y0
+                            pts_all.append(p)
+                        if pts_all:
+                            pts_all = np.vstack(pts_all)
+                            hull = cv2.convexHull(pts_all)
+                            zh = np.zeros_like(z)
+                            cv2.fillPoly(zh, [hull], 255)
+                            hull_cov = float(np.count_nonzero(zh)) / float(max(1, ch * cw))
+                            if hull_cov <= 0.85:
+                                z = cv2.bitwise_or(
+                                    z,
+                                    cv2.dilate(zh, np.ones((3, 3), np.uint8), iterations=1),
+                                )
+                    except Exception:
+                        pass
+                    
+                    
+                    try:
+                        letters = self._letters_mask_in_crop(gray[y0:y1, x0:x1], zone, ch, cw)
+                        z_area = float(max(1, np.count_nonzero(zone)))
+                        if letters.max() > 0 and float(np.count_nonzero(letters)) >= 0.15 * z_area:
+                            ink = letters
+                        else:
+                            ink = z
+                    except Exception:
+                        ink = z
+                elif ink.max() == 0:
+                    
+                    
+                    ink = zone
+                else:
+                    ink = cv2.bitwise_and(ink, zone)
+            elif ink.max() > 0:
                 
-                if ink.max() > 0:
-                    ink = cv2.dilate(ink, np.ones((2, 2), np.uint8), iterations=1)
+                ink = self._drop_non_text_components(ink, ch, cw)
+
+            
+            
+            if zone is not None and ink.max() > 0:
+                letters = self._letters_mask_in_crop(
+                    gray[y0:y1, x0:x1], zone, ch, cw,
+                    wide=(det_class == "text_free"),
+                )
+                if letters.max() > 0:
+                    ink = cv2.bitwise_or(ink, letters)
+
+            
+            
+            try:
+                _ang = abs(float(getattr(region, "angle", 0.0) or 0.0))
+            except (TypeError, ValueError):
+                _ang = 0.0
+            if ink.max() > 0 and _ang >= 8:
+                ink = cv2.dilate(ink, np.ones((3, 3), np.uint8), iterations=2)
 
             if ink.max() == 0:
                 continue
+
+            if zone is None:
+                border = max(5, min(16, min(ch, cw) // 7))
+                ink[:border, :] = 0
+                ink[-border:, :] = 0
+                ink[:, :border] = 0
+                ink[:, -border:] = 0
+                ink = self._protect_bubble_wall(ink, gray[y0:y1, x0:x1])
+                if ink.max() == 0:
+                    continue
+
+            if ink.max() > 0:
+                ink = cv2.dilate(ink, np.ones((2, 2), np.uint8), iterations=1)
+
+            
+            
+            
+            
+            if ink.max() > 0:
+                cov = float(np.count_nonzero(ink)) / float(max(1, ch * cw))
+                if cov > 0.60:
+                    reduced = self._drop_non_text_components(ink, ch, cw)
+                    if reduced.max() > 0:
+                        ink = reduced
+                        print(
+                            f"    [!] ماسک ناحیه ({x0},{y0}) خیلی بزرگ بود "
+                            f"({cov*100:.0f}٪) → فقط مؤلفه‌های متن‌مانند نگه داشته شد."
+                        )
+
+            
+            
+            
+            if zone is None:
+                cov = float(np.count_nonzero(ink)) / float(max(1, ch * cw))
+                if cov > 0.45:
+                    print(
+                        f"    [!] ماسک ناحیه ({x0},{y0}) غیرقابل‌اعتماد بود "
+                        f"({cov*100:.0f}٪) → پاک‌سازی این ناحیه رد شد."
+                    )
+                    continue
+
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
 
         return text_mask
+
+    def _flat_fill_cluster(self, crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[np.ndarray]:
+        
+        
+        
+        m = crop_msk > 0
+        if not m.any():
+            return None
+        ring = cv2.dilate(crop_msk, np.ones((21, 21), np.uint8)) > 0
+        ring &= ~m
+        if int(np.count_nonzero(ring)) < 60:
+            return None
+        ring_px = crop_img[ring].astype(np.float32)
+        if float(ring_px.std(axis=0).max()) > 14.0:
+            return None
+        
+        inv = (~m).astype(np.float32)
+        k = 31
+        out = crop_img.astype(np.float32).copy()
+        for c in range(3):
+            num = cv2.blur(out[:, :, c] * inv, (k, k))
+            den = cv2.blur(inv, (k, k))
+            est = num / np.maximum(den, 1e-4)
+            out[:, :, c][m] = est[m]
+        return np.clip(out, 0, 255).astype(np.uint8)
+
+    @staticmethod
+    def _mask_clusters(mask: np.ndarray, pad: int = 18, max_clusters: int = 24) -> List[Tuple[int, int, int, int]]:
+        
+        
+        
+        n, _lab, st, _ = cv2.connectedComponentsWithStats(
+            (mask > 0).astype(np.uint8), connectivity=8
+        )
+        boxes: List[List[int]] = []
+        for i in range(1, n):
+            if int(st[i, cv2.CC_STAT_AREA]) < 4:
+                continue
+            bx, by = int(st[i, cv2.CC_STAT_LEFT]), int(st[i, cv2.CC_STAT_TOP])
+            bw, bh = int(st[i, cv2.CC_STAT_WIDTH]), int(st[i, cv2.CC_STAT_HEIGHT])
+            boxes.append([bx - pad, by - pad, bx + bw + pad, by + bh + pad])
+        if not boxes:
+            return []
+
+        def _merge_all(rects: List[List[int]]) -> List[List[int]]:
+            merged = True
+            while merged:
+                merged = False
+                out: List[List[int]] = []
+                for b in rects:
+                    hit = None
+                    for o in out:
+                        if b[0] < o[2] and b[2] > o[0] and b[1] < o[3] and b[3] > o[1]:
+                            hit = o
+                            break
+                    if hit is None:
+                        out.append(list(b))
+                    else:
+                        hit[0] = min(hit[0], b[0])
+                        hit[1] = min(hit[1], b[1])
+                        hit[2] = max(hit[2], b[2])
+                        hit[3] = max(hit[3], b[3])
+                        merged = True
+                rects = out
+            return rects
+
+        boxes = _merge_all(boxes)
+        if len(boxes) > max_clusters:
+            
+            boxes = _merge_all([
+                [b[0] - pad * 2, b[1] - pad * 2, b[2] + pad * 2, b[3] + pad * 2]
+                for b in boxes
+            ])
+        return [
+            (max(0, b[0]), max(0, b[1]), b[2], b[3]) for b in boxes
+        ]
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         
@@ -3141,36 +3483,62 @@ class MangaTranslator:
         
         dil = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
 
+        
+        
+        onnx_done = np.zeros_like(dil)
+
         if self.use_lama:
             lama = self._get_lama()
             if lama is not None:
                 try:
-                    ys, xs = np.where(dil > 0)
-                    if len(xs) > 0:
-                        pad = 20
-                        x0, x1 = max(0, int(xs.min()) - pad), min(W, int(xs.max()) + pad + 1)
-                        y0, y1 = max(0, int(ys.min()) - pad), min(H, int(ys.max()) + pad + 1)
+                    
+                    
+                    
+                    n_run = 0
+                    n_flat = 0
+                    for (cx0, cy0, cx1, cy1) in self._mask_clusters(dil):
+                        crop_img = image[cy0:cy1, cx0:cx1]
+                        crop_msk = dil[cy0:cy1, cx0:cx1]
                         
-                        area = (x1 - x0) * (y1 - y0)
-                        if area <= 512 * 512 * 6:
-                            crop_img = image[y0:y1, x0:x1]
-                            crop_msk = dil[y0:y1, x0:x1]
-                            result_pil = lama(crop_img, crop_msk)
-                            out = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
-                            if out.shape[:2] != crop_img.shape[:2]:
-                                out = cv2.resize(out, (crop_img.shape[1], crop_img.shape[0]))
-                            m = crop_msk > 0
-                            if m.any():
-                                cleaned[y0:y1, x0:x1][m] = out[m]
-                            print(
-                                f"  - پاکسازی با {getattr(self, '_inpainter_name', 'ONNX')} "
-                                f"(کراپ {x1-x0}x{y1-y0})."
-                            )
+                        if int(np.count_nonzero(crop_msk)) < 40:
+                            continue
+                        
+                        flat = self._flat_fill_cluster(crop_img, crop_msk)
+                        if flat is not None:
+                            mm = crop_msk > 0
+                            cleaned[cy0:cy1, cx0:cx1][mm] = flat[mm]
+                            onnx_done[cy0:cy1, cx0:cx1][mm] = 255
+                            n_flat += 1
+                            continue
+                        result_pil = lama(crop_img, crop_msk)
+                        out = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
+                        if out.shape[:2] != crop_img.shape[:2]:
+                            out = cv2.resize(out, (crop_img.shape[1], crop_img.shape[0]))
+                        m = crop_msk > 0
+                        if m.any():
+                            cleaned[cy0:cy1, cx0:cx1][m] = out[m]
+                            onnx_done[cy0:cy1, cx0:cx1][m] = 255
+                        n_run += 1
+                    if n_flat:
+                        print(f"  - {n_flat} خوشه روی پس‌زمینهٔ تخت → پرکردن مستقیم (بدون GAN).")
+                    if n_run:
+                        print(
+                            f"  - پاکسازی با {getattr(self, '_inpainter_name', 'ONNX')} "
+                            f"({n_run} خوشهٔ جدا)."
+                        )
                 except Exception as e:
                     print(f"  [!] {getattr(self, '_inpainter_name', 'ONNX')} خطا ({e}) → OpenCV")
 
-        cleaned = cv2.inpaint(cleaned, dil, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+        remaining = cv2.bitwise_and(dil, cv2.bitwise_not(onnx_done))
+        if np.any(remaining):
+            
+            
+            cleaned = cv2.inpaint(cleaned, remaining, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
 
+        
+        
+        
+        
         
         gray0 = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         g2 = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
@@ -3182,25 +3550,42 @@ class MangaTranslator:
             y1 = min(image.shape[0], int(y + rh))
             if x1 - x0 < 8 or y1 - y0 < 8:
                 continue
+            ch, cw = y1 - y0, x1 - x0
             zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
             crop = g2[y0:y1, x0:x1]
             orig = gray0[y0:y1, x0:x1]
+            diff = cv2.absdiff(crop, orig)
             med = float(np.median(orig))
-            if med >= 130:
-                ink = ((crop < 120) & (orig < 140)).astype(np.uint8) * 255
-            else:
-                ink = ((crop > med + 25) & (orig > med + 15)).astype(np.uint8) * 255
+            inky = (orig < med - 30) | (orig > med + 30)
+            ink = ((diff < 20) & inky).astype(np.uint8) * 255
             if zone is not None:
-                ink = cv2.bitwise_and(ink, zone)
+                near = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=8)
+                
+                near = cv2.bitwise_and(
+                    near,
+                    cv2.dilate(dil[y0:y1, x0:x1], np.ones((3, 3), np.uint8), iterations=6),
+                )
             else:
-                ch, cw = ink.shape[:2]
+                near = np.full_like(ink, 255)
                 border = max(5, min(16, min(ch, cw) // 7))
-                ink[:border, :] = 0
-                ink[-border:, :] = 0
-                ink[:, :border] = 0
-                ink[:, -border:] = 0
-            ink = self._protect_bubble_wall(ink, orig)
-            residual[y0:y1, x0:x1] = cv2.bitwise_or(residual[y0:y1, x0:x1], ink)
+                near[:border, :] = 0
+                near[-border:, :] = 0
+                near[:, :border] = 0
+                near[:, -border:] = 0
+            ink = cv2.bitwise_and(ink, near)
+            
+            n, lab, st, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+            keep = np.zeros_like(ink)
+            for i in range(1, n):
+                a = int(st[i, cv2.CC_STAT_AREA])
+                if a < 8 or a > 0.5 * ch * cw:
+                    continue
+                bx, by = int(st[i, cv2.CC_STAT_LEFT]), int(st[i, cv2.CC_STAT_TOP])
+                bw_, bh_ = int(st[i, cv2.CC_STAT_WIDTH]), int(st[i, cv2.CC_STAT_HEIGHT])
+                if bx == 0 or by == 0 or bx + bw_ >= cw or by + bh_ >= ch:
+                    continue
+                keep[lab == i] = 255
+            residual[y0:y1, x0:x1] = cv2.bitwise_or(residual[y0:y1, x0:x1], keep)
         if np.any(residual):
             residual = cv2.dilate(residual, np.ones((3, 3), np.uint8), iterations=1)
             cleaned = cv2.inpaint(cleaned, residual, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
@@ -3344,6 +3729,13 @@ class MangaTranslator:
             "اگر یک بخش واضحاً اشتباه OCR شده، معنای محتمل را بازسازی کن.\n"
             "اما چیزی از خودت اختراع نکن که با صحنه سازگار نیست.\n"
             "عدد یا نماد بی‌معنی وسط کلمه را حذف کن و جمله را طبیعی بنویس.\n"
+            "استثنای مهم — اعداد سطح/رتبه: اگر در متن OCR عددی مثل LV.539 یا Level 12 هست، "
+            "همان عدد دقیق را در ترجمه بیاور (مثلاً «سطح ۵۳۹»). "
+            "هیچ‌وقت عدد سطح را از خودت نساز یا عوض نکن؛ اگر OCR عدد را ناقص آورده "
+            "(مثل LV. بدون رقم)، همان را «سطح …» با عدد موجود بگذار و عدد از خودت درنیاور.\n"
+            "حتی وقتی OCR کلمهٔ LV را خراب یا چسبانه آورده (مثل CIRGIiIV-531 یا lV-531 یا IV.531 "
+            "یا هر کلمه‌ای که به یک عدد چسبیده)، آن عددِ ته متن همان شمارهٔ سطح/رتبه است؛ "
+            "آن را جدا کن و در ترجمه به شکل «سطح ۵۳۱» بیاور.\n"
             "رقم‌هایی که OCR به‌جای حرف خوانده (0↔O، 1↔I/L، 5↔S، 7↔T، 8↔B، 6↔G و …) "
             "را از روی بافت جمله اصلاح کن؛ هیچ لیست جایگزینی ثابت حفظ نکن.\n\n"
             "━━━━━━━━━━━━━━━━━━━━\n"
@@ -3397,12 +3789,45 @@ class MangaTranslator:
         )
 
     @staticmethod
+    @staticmethod
+    def _is_watermark_text(text: str) -> bool:
+        
+        
+        
+        t = (text or "").lower()
+        toks = re.findall(r"[a-z0-9]+", t)
+        if not toks:
+            return False
+        token_set = set(toks)
+        compact = "".join(toks)
+        grams = {tuple(toks[i:i + n]) for n in (2, 3) for i in range(len(toks) - n + 1)}
+        for w in WATERMARK_PATTERNS:
+            parts = tuple(w.split())
+            if not parts:
+                continue
+            if len(parts) == 1:
+                if parts[0] in token_set:
+                    return True
+                
+                if len(parts[0]) >= 8 and parts[0] in compact:
+                    return True
+            else:
+                if parts in grams:
+                    return True
+        return bool(PROMO_RE.search(text) or DOMAIN_RE.search(text))
+
+    @staticmethod
     def _cleanup_translation(t: str) -> str:
         
         if not t:
             return t
         
         t = t.replace("?", "؟")
+        
+        
+        t = re.sub(r"(?i)([a-z])\1{1,}", "", t)
+        t = re.sub(r"(?i)([!؟])\s*[a-z]{1,3}\s*", r"\1", t)
+        t = re.sub(r"(?i)(?<=[(\u0600-\u06FF)])\s*[a-z]{1,2}\s*$", "", t)
         t = re.sub(r"\s+([؟!.,،])", r"\1", t)
         return t.strip()
 
@@ -3644,8 +4069,25 @@ class MangaTranslator:
         
         t = re.sub(r"([A-Za-z])[:;|]([A-Za-z])", r"\1\2", t)
         
-        t = re.sub(r"\s*[QOIl]?\d{3,}\s*$", "", t, flags=re.I).strip()
-        t = re.sub(r"\s+\d{3,}\s*$", "", t).strip()
+        
+        
+        
+        def _strip_trailing_number(s: str, pat: str) -> str:
+            m = re.search(pat, s, flags=re.I)
+            if not m:
+                return s
+            prefix = s[:m.start()]
+            
+            
+            if re.search(
+                r"(?:lv|iv|1v|l1|i1|lvl|level|ch|chapter|ep|episode|vol|no|score|hp|mp|power|rank)\s*[.:\-–]?\s*$",
+                prefix[-10:], flags=re.I,
+            ):
+                return s
+            return (prefix + s[m.end():]).strip()
+
+        t = _strip_trailing_number(t, r"\s*[QOIl]?\d{3,}\s*$")
+        t = _strip_trailing_number(t, r"\s+\d{3,}\s*$")
         return t.strip()
 
     def translate_regions(self, regions: List[TextRegion]) -> None:
@@ -3679,7 +4121,11 @@ class MangaTranslator:
             r.source_text = self._fix_ocr_text(uncensor_swears(r.source_text or ""))
 
         def _make_batches(items: List[TextRegion]):
-            max_items = 12
+            
+            
+            
+            
+            max_items = max(1, int(getattr(self, "bubbles_per_request", 6) or 6))
             max_chars = 2200
             batches: List[List[TextRegion]] = []
             cur: List[TextRegion] = []
@@ -3711,7 +4157,7 @@ class MangaTranslator:
                     print(f"    [*] بسته {bi}/{len(batches)}: {len(batch)} دیالوگ")
                 self._translate_regions_batch(batch)
                 if bi < len(batches):
-                    time.sleep(0.8)
+                    time.sleep(2.0)
 
             pending = [r for r in regions if not (r.translated_text or "").strip()]
             if not pending:
@@ -3774,10 +4220,13 @@ class MangaTranslator:
                     print("    [!] مدل مناسب در cascade نماند.")
                     break
 
-                if self.provider_type == "gemini":
-                    text = self._translate_with_gemini(user_prompt, system_instruction)
-                else:
-                    text = self._translate_with_openai(user_prompt, system_instruction)
+                
+                
+                with self._api_lock:
+                    if self.provider_type == "gemini":
+                        text = self._translate_with_gemini(user_prompt, system_instruction)
+                    else:
+                        text = self._translate_with_openai(user_prompt, system_instruction)
 
                 
                 try:
@@ -4103,9 +4552,41 @@ class MangaTranslator:
             return 2
         return max(2, size // 16)
 
+    def _max_font_for_region(self, region: "TextRegion") -> int:
+        
+        
+        polys = list(getattr(region, "ocr_polys", None) or []) or list(getattr(region, "boxes", None) or [])
+        if not polys:
+            return 48
+        try:
+            ang = float(getattr(region, "angle", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            ang = 0.0
+        a = np.deg2rad(ang)
+        ca, sa = np.cos(-a), np.sin(-a)
+        hs: List[float] = []
+        for p in polys:
+            try:
+                pts = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+            except Exception:
+                continue
+            if pts.shape[0] < 2:
+                continue
+            rot = np.empty_like(pts)
+            rot[:, 0] = pts[:, 0] * ca - pts[:, 1] * sa
+            rot[:, 1] = pts[:, 0] * sa + pts[:, 1] * ca
+            hs.append(float(rot[:, 1].max() - rot[:, 1].min()))
+        if not hs:
+            return 48
+        h_line = float(np.median(hs))
+        if h_line <= 2:
+            return 48
+        
+        return int(np.clip(round(h_line * 1.2), 12, 48))
+
     def _wrap_and_fit(
         self, draw: ImageDraw.ImageDraw, text: str, max_w: int, max_h: int,
-        style: str = "",
+        style: str = "", max_size: int = 48,
     ) -> Tuple[ImageFont.FreeTypeFont, List[str], int]:
         
         words = text.split()
@@ -4155,7 +4636,7 @@ class MangaTranslator:
         n_words = len(words)
         short_text = n_words <= 2 and sum(len(w) for w in words) <= 12
         min_size = 14 if short_text else 11
-        max_size = 48
+        max_size = max(min_size, min(48, int(max_size or 48)))
 
         smallest_attempt = None
         
@@ -4167,7 +4648,7 @@ class MangaTranslator:
                     return font, lines, sw
 
         
-        for size in range(min_size - 1, 7, -1):
+        for size in range(min_size - 1, 5, -1):
             font, lines, sw, total_h, widest, line_h = wrap_at(size, 0)
             smallest_attempt = (font, lines, sw, line_h)
             if total_h <= max_h and widest <= max_w:
@@ -4250,96 +4731,13 @@ class MangaTranslator:
             if not region.translated_text:
                 continue
 
-            x, y, w, h = region.rect
-
-            short = len((region.translated_text or "").split()) <= 2
-            if short and (w < 90 or h < 50):
+            try:
+                self._render_one_region(pil_img, draw, image, original_image, region)
+            except Exception as e:
                 
-                expand = max(4, int(min(w, h) * 0.12))
-                x = max(0, x - expand // 2)
-                y = max(0, y - expand // 2)
-                w = w + expand
-                h = h + expand
-            
-            pad = max(3, int(min(w, h) * (0.05 if short else 0.08)))
-            box_w = max(14, w - 2 * pad)
-            box_h = max(14, h - 2 * pad)
-
-            style = (getattr(region, "bubble_style", None) or "").strip().lower()
-            font, lines, sw = self._wrap_and_fit(
-                draw, region.translated_text, box_w, box_h, style=style
-            )
-            text_rgb, stroke_rgb = self._pick_text_and_stroke(image, original_image, region)
-
-            angle = getattr(region, "angle", 0.0)
-
-            if abs(angle) < 8:
-                bb = font.getbbox("آیگچ", stroke_width=sw)
-                glyph_h = bb[3] - bb[1]
-
-                n = max(1, len(lines))
-
                 
-                line_h = glyph_h + 1
-                if line_h * n + 2 * sw > box_h:
-                    line_h = max(4, (box_h - 2 * sw) // n)
-                total_h = line_h * n
-                start_y = y + pad + max(0, (box_h - total_h) // 2)
-                
-                start_y = max(start_y, y + 1)
-
-                bottom_limit = y + pad + box_h
-
-                for i, line in enumerate(lines):
-                    shaped = self._shape_farsi(line)
-                    line_w = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
-                    line_x = x + pad + max(0, (box_w - line_w) // 2)
-                    line_y = start_y + i * line_h
-                    if line_y + glyph_h > bottom_limit + sw:
-                        break
-                    draw.text(
-                        (line_x, line_y),
-                        shaped,
-                        font=font,
-                        fill=text_rgb,
-                        stroke_width=sw,
-                        stroke_fill=stroke_rgb,
-                    )
-            else:
-                line_h = font.getbbox("آی", stroke_width=sw)[3] + 6
-                tmp_h = line_h * len(lines) + 30
-                tmp_w = 0
-                for line in lines:
-                    shaped = self._shape_farsi(line)
-                    lw = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
-                    tmp_w = max(tmp_w, lw)
-                tmp_w += 40
-
-                tmp = Image.new("RGBA", (tmp_w, tmp_h), (0, 0, 0, 0))
-                tmp_draw = ImageDraw.Draw(tmp)
-
-                for i, line in enumerate(lines):
-                    shaped = self._shape_farsi(line)
-                    line_w = tmp_draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
-                    tx = (tmp_w - line_w) // 2
-                    ty = 15 + i * line_h
-                    tmp_draw.text(
-                        (tx, ty),
-                        shaped,
-                        font=font,
-                        fill=text_rgb + (255,),
-                        stroke_width=sw,
-                        stroke_fill=stroke_rgb + (255,),
-                    )
-
-                rotated = tmp.rotate(-angle, expand=True, resample=Image.BICUBIC)
-                cx = x + w // 2
-                cy = y + h // 2
-                rw, rh = rotated.size
-                paste_x = int(cx - rw / 2)
-                paste_y = int(cy - rh / 2)
-
-                pil_img.paste(rotated, (paste_x, paste_y), rotated)
+                print(f"  [!] رندر ناحیه {region.id} خطا داد ({e}) → رد شد.")
+                continue
 
         return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
@@ -4462,6 +4860,99 @@ class MangaTranslator:
       return vis
 
 
+    @staticmethod
+    def _skew_from_quads(core_bgr: np.ndarray, quads, ox: int, oy: int, inset: int) -> float:
+        
+        
+        
+        try:
+            g = cv2.cvtColor(core_bgr, cv2.COLOR_BGR2GRAY)
+            med = float(np.median(g))
+            ink = (g < max(60, med - 45)).astype(np.uint8) * 255
+            h_c, w_c = ink.shape[:2]
+            zone = np.zeros_like(ink)
+            got = False
+            for p in list(quads or []):
+                pts = np.asarray(p, dtype=np.float32).reshape(-1, 2).copy()
+                pts[:, 0] -= ox + inset
+                pts[:, 1] -= oy + inset
+                cv2.fillPoly(zone, [pts.astype(np.int32)], 255)
+                got = True
+            if not got:
+                return 0.0
+            zone = cv2.dilate(zone, np.ones((5, 5), np.uint8), iterations=1)
+            ink = cv2.bitwise_and(ink, zone)
+            ink = cv2.dilate(ink, np.ones((3, 3), np.uint8), iterations=1)
+            n, lab, st, cents = cv2.connectedComponentsWithStats(ink, connectivity=8)
+            pts_list = []
+            for i in range(1, n):
+                a = int(st[i, cv2.CC_STAT_AREA])
+                if a < 60:
+                    continue
+                pts_list.append(cents[i])
+            if len(pts_list) < 3:
+                return 0.0
+            data = np.asarray(pts_list, dtype=np.float32)
+            _, eig, _ = cv2.PCACompute2(data, mean=None)
+            v = eig[0]
+            a = float(np.degrees(np.arctan2(float(v[1]), float(v[0]))))
+            if a > 90:
+                a -= 180.0
+            elif a < -90:
+                a += 180.0
+            if abs(a) > 45:
+                return 0.0
+            return a
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _estimate_skew_angle(crop_bgr: np.ndarray) -> float:
+        
+        
+        
+        try:
+            g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+            med = float(np.median(g))
+            ink = (g < max(60, med - 45)).astype(np.uint8) * 255
+            ink = cv2.dilate(ink, np.ones((3, 3), np.uint8), iterations=2)
+            n, lab, st, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
+            crop_area = float(max(1, crop_bgr.shape[0] * crop_bgr.shape[1]))
+            angs: List[float] = []
+            for i in range(1, n):
+                a = int(st[i, cv2.CC_STAT_AREA])
+                bw = int(st[i, cv2.CC_STAT_WIDTH])
+                bh = int(st[i, cv2.CC_STAT_HEIGHT])
+                if a < 150 or max(bw, bh) < 40:
+                    continue
+                
+                if max(bw, bh) < 2.0 * max(1, min(bw, bh)):
+                    continue
+                if a > 0.5 * crop_area:
+                    continue
+                pts = np.column_stack(np.where(lab == i))[:, ::-1].astype(np.float32)
+                rect = cv2.minAreaRect(pts)
+                box = cv2.boxPoints(rect)
+                best_a, best_len = 0.0, 0.0
+                for k in range(4):
+                    p0, p1 = box[k], box[(k + 1) % 4]
+                    dx, dy = float(p1[0] - p0[0]), float(p1[1] - p0[1])
+                    ln = float(np.hypot(dx, dy))
+                    if ln > best_len:
+                        best_len = ln
+                        best_a = float(np.degrees(np.arctan2(dy, dx)))
+                if best_a > 90:
+                    best_a -= 180.0
+                elif best_a < -90:
+                    best_a += 180.0
+                if abs(best_a) <= 45:
+                    angs.append(best_a)
+            if not angs:
+                return 0.0
+            return float(np.median(angs))
+        except Exception:
+            return 0.0
+
     def _ocr_crop(self, image_bgr: np.ndarray, rect) -> Tuple[str, List[np.ndarray]]:
         
         x1, y1, x2, y2 = [int(v) for v in rect]
@@ -4474,7 +4965,7 @@ class MangaTranslator:
         crop0 = image_bgr[y1:y2, x1:x2]
         ch0, cw0 = crop0.shape[:2]
 
-        def _run(crop_bgr, scale: float):
+        def _run(crop_bgr, scale: float, apply_offset: bool = True):
             if scale > 1.01:
                 crop_bgr = cv2.resize(
                     crop_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
@@ -4482,10 +4973,10 @@ class MangaTranslator:
             try:
                 results = self.ocr.ocr(crop_bgr)
             except Exception:
-                return "", [], 0.0
+                return "", [], 0.0, []
             if not results or not results[0]:
-                return "", [], 0.0
-            lines, polys, confs = [], [], []
+                return "", [], 0.0, []
+            lines, polys, confs, entries = [], [], [], []
             for line in results[0]:
                 try:
                     if not (isinstance(line, (list, tuple)) and len(line) >= 2):
@@ -4502,18 +4993,26 @@ class MangaTranslator:
                         continue
                     lines.append(text)
                     confs.append(conf)
-                    if len(line) >= 1 and isinstance(line[0], (list, tuple)) and len(line[0]) >= 3:
+                    box0 = line[0] if len(line) >= 1 else None
+                    
+                    
+                    
+                    entry_poly = None
+                    if box0 is not None and isinstance(box0, (list, tuple, np.ndarray)) and len(box0) >= 3:
                         poly = np.array(line[0], dtype=np.float32).reshape(-1, 2)
                         if poly.min() >= -8 and poly.max() < 100000:
                             if scale > 1.01:
                                 poly = poly / scale
-                            poly = poly + np.array([x1, y1], dtype=np.float32)
+                            if apply_offset:
+                                poly = poly + np.array([x1, y1], dtype=np.float32)
                             polys.append(poly.astype(np.int32))
+                            entry_poly = poly.astype(np.float32)
+                    entries.append((text, conf, entry_poly))
                 except Exception:
                     continue
             joined = " ".join(lines).strip()
             avg_conf = float(np.mean(confs)) if confs else 0.0
-            return joined, polys, avg_conf
+            return joined, polys, avg_conf, entries
 
         def _score(txt: str, conf: float) -> float:
             if not txt:
@@ -4536,8 +5035,8 @@ class MangaTranslator:
             base_scale = 1.15  
 
         
-        inset = int(min(ch0, cw0) * 0.12)
-        if ch0 > 2 * inset + 20 and cw0 > 2 * inset + 20:
+        inset = int(min(ch0, cw0) * 0.06)
+        if min(ch0, cw0) >= 160 and ch0 > 2 * inset + 20 and cw0 > 2 * inset + 20:
             core = crop0[inset:ch0 - inset, inset:cw0 - inset]
         else:
             core = crop0
@@ -4559,28 +5058,123 @@ class MangaTranslator:
                 bw = cv2.bitwise_not(bw)
             bw = cv2.cvtColor(bw, cv2.COLOR_GRAY2BGR)
             variants.append(("otsu", bw, min(base_scale + 0.25, 2.2)))
+            
+            
+            if float(np.median(g)) < 110:
+                inv = cv2.cvtColor(cv2.bitwise_not(g), cv2.COLOR_GRAY2BGR)
+                variants.append(("inv", inv, min(base_scale + 0.4, 2.6)))
         except Exception:
             pass
 
+        
+        
+        
+        def _bb_of(poly):
+            if poly is None:
+                return None
+            p = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
+            return (float(p[:, 0].min()), float(p[:, 1].min()),
+                    float(p[:, 0].max()), float(p[:, 1].max()))
+
+        def _overlap_frac(a, b):
+            ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+            iy = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+            inter = ix * iy
+            if inter <= 0:
+                return 0.0
+            aa = max(1e-6, (a[2] - a[0]) * (a[3] - a[1]))
+            ab = max(1e-6, (b[2] - b[0]) * (b[3] - b[1]))
+            return inter / min(aa, ab)
+
+        merged: List[List] = []  
         best = ("", [], -1.0)
         inset_used = inset if core is not crop0 else 0
         for name, crop_v, sc in variants:
-            txt, polys, conf = _run(crop_v, sc)
+            txt, polys, conf, entries = _run(crop_v, sc)
+            if inset_used and entries:
+                for e in entries:
+                    if e[2] is not None:
+                        e[2][:, 0] += inset_used
+                        e[2][:, 1] += inset_used
+            for text, e_conf, e_poly in entries:
+                bb = _bb_of(e_poly)
+                hit = None
+                if bb is not None:
+                    for m_item in merged:
+                        mb = _bb_of(m_item[2])
+                        if mb is not None and _overlap_frac(bb, mb) > 0.35:
+                            hit = m_item
+                            break
+                if hit is None:
+                    merged.append([text, e_conf, e_poly])
+                elif e_conf > hit[1]:
+                    hit[0], hit[1] = text, e_conf
             
-            if inset_used and polys:
-                adj = []
-                for p in polys:
-                    pp = p.astype(np.int32).copy()
-                    pp[:, 0] += inset_used
-                    pp[:, 1] += inset_used
-                    adj.append(pp)
-                polys = adj
             scv = _score(txt, conf)
             if scv > best[2]:
                 best = (txt, polys, scv)
-            latin = sum(1 for c in (txt or "") if c.isascii() and c.isalpha())
-            if latin >= 4 and conf >= 0.35:
-                break
+
+        if merged:
+            hts = []
+            for m_item in merged:
+                mb = _bb_of(m_item[2])
+                if mb is not None:
+                    hts.append(mb[3] - mb[1])
+            row_h = max(8.0, (float(np.median(hts)) if hts else 8.0) * 1.25)
+            merged.sort(key=lambda m_item: (
+                ((_bb_of(m_item[2])[1] if m_item[2] is not None else 0.0) // row_h),
+                (_bb_of(m_item[2])[0] if m_item[2] is not None else 0.0),
+            ))
+            u_txt = " ".join(m_item[0] for m_item in merged).strip()
+            u_conf = float(np.mean([m_item[1] for m_item in merged])) if merged else 0.0
+            u_polys = [
+                np.rint(np.asarray(m_item[2], dtype=np.float32)).astype(np.int32)
+                for m_item in merged if m_item[2] is not None
+            ]
+            scv = _score(u_txt, u_conf)
+            if scv >= best[2]:
+                best = (u_txt, u_polys, scv)
+
+        
+        
+        
+        
+        best_txt = best[0] or ""
+        latin_n = len(re.sub(r"[^A-Za-z]", "", best_txt))
+        
+        skew = self._skew_from_quads(core, best[1], x1, y1, inset_used)
+        if skew == 0.0:
+            skew = self._estimate_skew_angle(core)
+        if skew != 0.0 and 4.0 <= abs(skew) <= 40.0 and (latin_n < 3 or abs(skew) >= 5.0):
+            try:
+                hc, wc = core.shape[:2]
+                M = cv2.getRotationMatrix2D((wc / 2.0, hc / 2.0), skew, 1.0)
+                desk = cv2.warpAffine(
+                    core, M, (wc, hc),
+                    flags=cv2.INTER_CUBIC,
+                    borderMode=cv2.BORDER_CONSTANT,
+                    borderValue=(255, 255, 255),
+                )
+                txt, polys, conf, _entries = _run(desk, base_scale, apply_offset=False)
+                if txt and polys:
+                    M_inv = cv2.getRotationMatrix2D((wc / 2.0, hc / 2.0), -skew, 1.0)
+                    off = np.array([x1, y1], dtype=np.float32)
+                    back_polys = []
+                    for p in polys:
+                        pp = p.astype(np.float32).reshape(-1, 2)
+                        ones = np.hstack([pp, np.ones((pp.shape[0], 1), dtype=np.float32)])
+                        backp = (M_inv @ ones.T).T + off[None, :]
+                        back_polys.append(np.rint(backp).astype(np.int32))
+                    if inset_used:
+                        for pp in back_polys:
+                            pp[:, 0] += inset_used
+                            pp[:, 1] += inset_used
+                    scv = _score(txt, conf)
+                    latin_d = len(re.sub(r"[^A-Za-z]", "", txt or ""))
+                    if scv > best[2] and latin_d >= latin_n:
+                        best = (txt, back_polys, scv)
+            except Exception:
+                pass
 
         return best[0], best[1]
 
@@ -4719,7 +5313,7 @@ class MangaTranslator:
                         boxes=list(cur.boxes or []) + list(b.boxes or []),
                         source_text=joined,
                         rect=(nx0, ny0, nx1 - nx0, ny1 - ny0),
-                        angle=0.0,
+                        angle=((cur.angle or 0.0) + (b.angle or 0.0)) / 2.0,
                         kind=cur.kind if cur.kind == "dialogue" else b.kind,
                         ocr_polys=list(getattr(cur, "ocr_polys", None) or [])
                         + list(getattr(b, "ocr_polys", None) or []),
@@ -4732,6 +5326,33 @@ class MangaTranslator:
         if n_merged:
             print(f"    [*] {n_merged} باکس هم‌پوشان/تودرتو ادغام شد.")
         return merged
+
+    @staticmethod
+    def _estimate_angle_from_polys(polys) -> float:
+        
+        
+        angs: List[float] = []
+        for p in list(polys or []):
+            try:
+                pts = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+            except Exception:
+                continue
+            if pts.shape[0] < 2:
+                continue
+            dx = float(pts[1][0] - pts[0][0])
+            dy = float(pts[1][1] - pts[0][1])
+            if abs(dx) < 1e-3 and abs(dy) < 1e-3:
+                continue
+            a = float(np.degrees(np.arctan2(dy, dx)))
+            if a > 90:
+                a -= 180.0
+            elif a < -90:
+                a += 180.0
+            if abs(a) <= 45:
+                angs.append(a)
+        if not angs:
+            return 0.0
+        return float(np.median(angs))
 
     def _extract_regions_from_bubbles(self, image: np.ndarray) -> List[TextRegion]:
         
@@ -4767,25 +5388,43 @@ class MangaTranslator:
                 continue
 
             kind = self._classify_text(text)
+
             
-            if kind in ("junk", "sfx", "promo"):
-                latin = re.sub(r"[^A-Za-z]", "", text)
-                if len(latin) >= 3 and any(c in "AEIOUaeiou" for c in latin):
-                    kind = "dialogue"
+            
+            
+            
+            if kind == "dialogue":
+                if MangaTranslator._is_watermark_text(text):
+                    kind = "promo"
+
+            
+            
+            
+            
+            if kind == "junk":
+                if not MangaTranslator._is_watermark_text(text):
+                    latin = re.sub(r"[^A-Za-z]", "", text)
+                    if len(latin) >= 3 and any(c in "AEIOUaeiou" for c in latin):
+                        kind = "dialogue"
             poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
             regions.append(TextRegion(
                 id=i,
                 boxes=[poly],
                 source_text=text,
                 rect=(x1, y1, bw, bh),
-                angle=0.0,
+                angle=self._estimate_angle_from_polys(line_polys),
                 kind=kind,
                 ocr_polys=line_polys,
+                det_class=b.get("class_name", "") or "",
             ))
 
         before = len(regions)
         regions = self._merge_overlapping_regions(regions, iou_thresh=0.35, contain_thresh=0.65)
         print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
+        for r in regions:
+            ang = float(getattr(r, "angle", 0.0) or 0.0)
+            if abs(ang) >= 1.0:
+                print(f"    [*] متن کج: [{r.id}] angle={ang:+.1f}° «{(r.source_text or '')[:30]}»")
         return regions
 
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
@@ -5378,7 +6017,7 @@ class MangaTranslator:
         return files
 
     @staticmethod
-    def _save_as_pdf(image_paths_in_order: List[str], out_path: str) -> None:
+    def _save_as_pdf(self, image_paths_in_order: List[str], out_path: str) -> None:
         images = []
         for p in image_paths_in_order:
             im = Image.open(p).convert("RGB")
@@ -5390,19 +6029,25 @@ class MangaTranslator:
         if not images:
             raise ValueError("هیچ تصویری برای ساخت PDF وجود نداره.")
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
+        
+        
+        q = max(92, int(np.clip(int(getattr(self, "img_quality", 90) or 90), 40, 100)))
         images[0].save(
             out_path,
             save_all=True,
             append_images=images[1:],
             resolution=150.0,
-            quality=88,
+            quality=q,
             optimize=True,
         )
+        print(f"  - PDF با quality={q} ذخیره شد.")
 
     @staticmethod
     def _save_as_zip(folder: str, out_path: str) -> None:
         os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        
+        
+        with zipfile.ZipFile(out_path, "w", zipfile.ZIP_STORED) as zf:
             for name in sorted(os.listdir(folder), key=MangaTranslator._natural_sort_key):
                 zf.write(os.path.join(folder, name), arcname=name)
 
@@ -6259,6 +6904,118 @@ html, body { background: #0a0a0b; }
             except Exception as e:
                 print(f"    [!] ساخت HTML همراه ناموفق: {e}")
 
+    def _render_one_region(self, pil_img, draw, image, original_image, region) -> None:
+        x, y, w, h = region.rect
+
+
+        short = len((region.translated_text or "").split()) <= 2
+        if short and (w < 90 or h < 50):
+            
+            expand = max(4, int(min(w, h) * 0.12))
+            x = max(0, x - expand // 2)
+            y = max(0, y - expand // 2)
+            w = w + expand
+            h = h + expand
+        
+        pad = max(3, int(min(w, h) * (0.05 if short else 0.08)))
+        box_w = max(14, w - 2 * pad)
+        box_h = max(14, h - 2 * pad)
+
+        style = (getattr(region, "bubble_style", None) or "").strip().lower()
+        
+        
+        max_font = self._max_font_for_region(region)
+        font, lines, sw = self._wrap_and_fit(
+            draw, region.translated_text, box_w, box_h, style=style, max_size=max_font
+        )
+        text_rgb, stroke_rgb = self._pick_text_and_stroke(image, original_image, region)
+
+        try:
+            angle = float(getattr(region, "angle", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            angle = 0.0
+        if angle != angle or angle in (float("inf"), float("-inf")):
+            angle = 0.0
+
+        if abs(angle) < 8:
+            bb = font.getbbox("آیگچ", stroke_width=sw)
+            glyph_h = bb[3] - bb[1]
+
+            n = max(1, len(lines))
+
+            
+            line_h = glyph_h + 1
+            if line_h * n + 2 * sw > box_h:
+                line_h = max(4, (box_h - 2 * sw) // n)
+            total_h = line_h * n
+            start_y = y + pad + max(0, (box_h - total_h) // 2)
+            
+            start_y = max(start_y, y + 1)
+
+            bottom_limit = y + pad + box_h
+
+            for i, line in enumerate(lines):
+                shaped = self._shape_farsi(line)
+                line_w = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
+                line_x = x + pad + max(0, (box_w - line_w) // 2)
+                line_y = start_y + i * line_h
+                
+                
+                draw.text(
+                    (line_x, line_y),
+                    shaped,
+                    font=font,
+                    fill=text_rgb,
+                    stroke_width=sw,
+                    stroke_fill=stroke_rgb,
+                )
+        else:
+            line_h = font.getbbox("آی", stroke_width=sw)[3] + 6
+            tmp_h = line_h * len(lines) + 30
+            tmp_w = 0
+            for line in lines:
+                shaped = self._shape_farsi(line)
+                lw = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
+                tmp_w = max(tmp_w, lw)
+            tmp_w += 40
+
+            tmp = Image.new("RGBA", (tmp_w, tmp_h), (0, 0, 0, 0))
+            tmp_draw = ImageDraw.Draw(tmp)
+
+            for i, line in enumerate(lines):
+                shaped = self._shape_farsi(line)
+                line_w = tmp_draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
+                tx = (tmp_w - line_w) // 2
+                ty = 15 + i * line_h
+                tmp_draw.text(
+                    (tx, ty),
+                    shaped,
+                    font=font,
+                    fill=text_rgb + (255,),
+                    stroke_width=sw,
+                    stroke_fill=stroke_rgb + (255,),
+                )
+
+            rotated = tmp.rotate(-angle, expand=True, resample=Image.BICUBIC)
+            
+            
+            max_rw = max(24, int(w * 1.08))
+            max_rh = max(24, int(h * 1.08))
+            rw0, rh0 = rotated.size
+            scale_fit = min(1.0, max_rw / max(1, rw0), max_rh / max(1, rh0))
+            if scale_fit < 0.99:
+                rotated = rotated.resize(
+                    (max(8, int(rw0 * scale_fit)), max(8, int(rh0 * scale_fit))),
+                    Image.LANCZOS,
+                )
+            cx = x + w // 2
+            cy = y + h // 2
+            rw, rh = rotated.size
+            paste_x = int(cx - rw / 2)
+            paste_y = int(cy - rh / 2)
+
+            pil_img.paste(rotated, (paste_x, paste_y), rotated)
+
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -6312,12 +7069,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--keep-old", action="store_true")
     p.add_argument("--request-delay", type=float, default=0.0)
+    p.add_argument("--bubbles-per-request", type=int, default=6,
+                   help="چند حباب در هر درخواست ترجمه (پیش‌فرض ۶ — تعداد "
+                        "درخواست‌ها را کم می‌کند تا گوگل timeout ندهد)")
     p.add_argument("--api-timeout", type=float, default=30.0,
                    help="سقف انتظار پاسخ AI به ثانیه (پیش‌فرض ۳۰). بعد از تایم‌اوت کلید/مدل بعدی")
     p.add_argument("--max-retries", type=int, default=8,
                    help="حداکثر تلاش ترجمه؛ برای پیمایش cascade همه مدل‌ها (پیش‌فرض ۱۲)")
-    p.add_argument("--det-confidence", type=float, default=0.28,
-                   help="آستانه اطمینان تشخیص حباب RT-DETR (پیش‌فرض 0.28)")
+    p.add_argument("--det-confidence", type=float, default=0.16,
+                   help="آستانه اطمینان تشخیص حباب RT-DETR (پیش‌فرض 0.16 — "
+                        "تگ‌های چرخیده/نیمه‌شفاف نمرهٔ پایین می‌گیرند؛ OCR جعبه‌های "
+                        "اضافی را خودش فیلتر می‌کند)")
     p.add_argument("--max-chunk-height", type=int, default=3600,
                    help="حداکثر ارتفاع هر تکه OCR داخل یک تصویر (پیکسل)")
     p.add_argument("--stitch-max-height", type=int, default=14000,
@@ -6409,6 +7171,7 @@ def main():
         max_retries=args.max_retries,
         det_confidence=getattr(args, "det_confidence", 0.28),
         request_delay=args.request_delay,
+        bubbles_per_request=max(1, int(getattr(args, "bubbles_per_request", 6) or 6)),
         api_timeout=getattr(args, "api_timeout", 10.0),
         max_chunk_height=args.max_chunk_height,
         img_format=args.img_format,
