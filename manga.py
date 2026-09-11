@@ -888,9 +888,9 @@ class RTDetrV2ONNXDetector:
 
     
     
-    TILE_HEIGHT = 3200
-    TILE_OVERLAP = 420
-    TILE_MIN_GAIN = 1.35  
+    TILE_HEIGHT = 1680
+    TILE_OVERLAP = 520
+    TILE_MIN_GAIN = 1.25  
 
     def detect(self, image_bgr: np.ndarray):
         h = int(image_bgr.shape[0])
@@ -902,7 +902,7 @@ class RTDetrV2ONNXDetector:
         h, w = image_bgr.shape[:2]
         tile_h = int(self.TILE_HEIGHT)
         overlap = int(self.TILE_OVERLAP)
-        step = max(600, tile_h - overlap)
+        step = max(500, tile_h - overlap)
 
         all_boxes: List[dict] = []
         core_start = 0
@@ -911,20 +911,23 @@ class RTDetrV2ONNXDetector:
             ys = max(0, core_start - (overlap if core_start > 0 else 0))
             ye = min(h, core_end + (overlap if core_end < h else 0))
             tile = image_bgr[ys:ye]
+
             for b in self._detect_plain(tile):
                 x1, y1, x2, y2 = b["rect"]
                 cy = ys + (y1 + y2) / 2.0
-                
-                if core_start <= cy < core_end:
+                margin = overlap * 0.35
+                if (core_start - margin) <= cy < (core_end + margin):
                     nb = dict(b)
                     nb["rect"] = [x1, y1 + ys, x2, y2 + ys]
                     all_boxes.append(nb)
+
             if core_end >= h:
                 break
             core_start += step
 
-        merged = self._nms(all_boxes, max(0.42, self.iou_thresh))
-        return MangaTranslator._drop_contained_boxes(merged, contain_thresh=0.68)
+        merged = self._nms(all_boxes, max(0.40, self.iou_thresh))
+        return MangaTranslator._drop_contained_boxes(merged, contain_thresh=0.65)
+
 
     def _detect_plain(self, image_bgr: np.ndarray):
         h, w = image_bgr.shape[:2]
@@ -1421,7 +1424,7 @@ class MangaTranslator:
         det_confidence: float = 0.16,
         max_retries: int = 8,
         request_delay: float = 0.0,
-        bubbles_per_request: int = 6,
+        bubbles_per_request: int = 12,
         api_timeout: float = 30.0,
         max_chunk_height: int = 3600,
         chunk_overlap: int = 300,
@@ -1432,8 +1435,8 @@ class MangaTranslator:
         translation_temperature: float = 0.85,
         two_pass_ocr: bool = True,
         max_output_width: Optional[int] = None,
-        stitch_max_height: int = 16000,
-        stitch_short_threshold: int = 6000,
+        stitch_max_height: int = 0,
+        stitch_short_threshold: int = 0,
         stitch_keep_first: bool = True,
         debug: bool = False,
         glossary_path: Optional[str] = None,
@@ -1508,7 +1511,7 @@ class MangaTranslator:
         self.max_retries = max_retries
         self.request_delay = request_delay
         
-        self.bubbles_per_request = 6
+        self.bubbles_per_request = max(1, int(bubbles_per_request or 12))
         
         self.erase_bubble_interior = False
         self.api_timeout = float(api_timeout) if api_timeout and api_timeout > 0 else 30.0
@@ -3518,145 +3521,121 @@ class MangaTranslator:
         ]
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
             return image.copy()
+
         try:
             ratio = float((mask > 0).sum()) / float(mask.size)
-            print(f"  [*] ماسک متن: {ratio*100:.2f}% پیکسل (فقط حروف)")
+            print(f"  [*] ماسک متن: {ratio*100:.2f}% پیکسل")
         except Exception:
             pass
 
         cleaned = image.copy()
         H, W = image.shape[:2]
-        
         dil = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
-
-        
-        
         onnx_done = np.zeros_like(dil)
 
-        
-        
-        
-        auto_inpaint = False
-        allow_flat = self.use_lama or auto_inpaint
-        if auto_inpaint:
-            print("  [*] پاکسازی خودکار: برای هر خوشه بهترین روش انتخاب می‌شود.")
-
-        if self.use_lama or auto_inpaint:
+        allow_flat = True
+        lama = None
+        if getattr(self, "use_lama", False):
             lama = self._get_lama()
-            if lama is not None:
-                try:
-                    fast_inpainter = None
-                    n_run = 0
-                    n_flat = 0
-                    for (cx0, cy0, cx1, cy1) in self._mask_clusters(dil):
-                        crop_img = image[cy0:cy1, cx0:cx1]
-                        crop_msk = dil[cy0:cy1, cx0:cx1]
 
-                        if int(np.count_nonzero(crop_msk)) < 40:
-                            continue
+        if lama is not None:
+            try:
+                n_run = 0
+                n_flat = 0
+                for (cx0, cy0, cx1, cy1) in self._mask_clusters(dil):
+                    crop_img = image[cy0:cy1, cx0:cx1]
+                    crop_msk = dil[cy0:cy1, cx0:cx1]
+                    if int(np.count_nonzero(crop_msk)) < 40:
+                        continue
 
-                        flat = (self._flat_fill_cluster(crop_img, crop_msk)
-                                if allow_flat else None)
-                        if flat is not None:
-                            mm = crop_msk > 0
-                            cleaned[cy0:cy1, cx0:cx1][mm] = flat[mm]
-                            onnx_done[cy0:cy1, cx0:cx1][mm] = 255
-                            n_flat += 1
-                            continue
-                        if auto_inpaint and not self.use_lama:
-                            gray_c = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
-                            crop_med = float(np.median(gray_c))
-                            m_cov = float(np.count_nonzero(crop_msk)) / float(max(1, crop_msk.size))
-                            need_quality = crop_med < 150 or m_cov > 0.15
-                        else:
-                            need_quality = True
-                        if need_quality:
-                            use_lama_c = lama
-                        else:
-                            if fast_inpainter is None:
-                                fast_inpainter = LamaONNX(prefer_gpu=self.use_gpu)
-                            use_lama_c = fast_inpainter
-                        result_pil = use_lama_c(crop_img, crop_msk)
-                        out = cv2.cvtColor(np.array(result_pil), cv2.COLOR_RGB2BGR)
-                        if out.shape[:2] != crop_img.shape[:2]:
-                            out = cv2.resize(out, (crop_img.shape[1], crop_img.shape[0]))
-                        m = cv2.dilate(crop_msk, np.ones((5, 5), np.uint8), iterations=1) > 0
-                        if m.any():
-                            cleaned[cy0:cy1, cx0:cx1][m] = out[m]
-                        onnx_done[cy0:cy1, cx0:cx1][crop_msk > 0] = 255
-                        n_run += 1
-                    if n_flat:
-                        print(f"  - {n_flat} خوشه روی پس‌زمینهٔ تخت → پرکردن مستقیم.")
-                    if n_run:
-                        print(
-                            f"  - پاکسازی با {getattr(self, '_inpainter_name', 'ONNX')} "
-                            f"({n_run} خوشهٔ جدا)."
-                        )
-                except Exception as e:
-                    print(f"  [!] {getattr(self, '_inpainter_name', 'ONNX')} خطا ({e}) → OpenCV")
+                    flat = self._flat_fill_cluster(crop_img, crop_msk) if allow_flat else None
+                    if flat is not None:
+                        mm = crop_msk > 0
+                        cleaned[cy0:cy1, cx0:cx1][mm] = flat[mm]
+                        onnx_done[cy0:cy1, cx0:cx1][mm] = 255
+                        n_flat += 1
+                        continue
+
+                    result_pil = lama(crop_img, crop_msk)
+                    result_np = np.array(result_pil)
+                    if result_np.ndim == 3 and result_np.shape[2] == 3:
+                        result_bgr = cv2.cvtColor(result_np, cv2.COLOR_RGB2BGR)
+                    else:
+                        result_bgr = result_np
+                    mm = crop_msk > 0
+                    cleaned[cy0:cy1, cx0:cx1][mm] = result_bgr[mm]
+                    onnx_done[cy0:cy1, cx0:cx1][mm] = 255
+                    n_run += 1
+
+                if n_run or n_flat:
+                    print(f"  - پاکسازی با {getattr(self, '_inpainter_name', 'LaMa')} "
+                          f"(LaMa={n_run}, flat={n_flat})")
+            except Exception as e:
+                print(f"  [!] LaMa خطا ({e}) → OpenCV")
+                lama = None
 
         remaining = cv2.bitwise_and(dil, cv2.bitwise_not(onnx_done))
         if np.any(remaining):
             cleaned = self._opencv_inpaint_hq(cleaned, remaining)
 
-        gray0 = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        g2 = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
         residual = np.zeros_like(dil)
         for region in regions:
             x, y, rw, rh = region.rect
             x0, y0 = max(0, int(x)), max(0, int(y))
-            x1 = min(image.shape[1], int(x + rw))
-            y1 = min(image.shape[0], int(y + rh))
-            if x1 - x0 < 8 or y1 - y0 < 8:
+            x1 = min(W, int(x + rw))
+            y1 = min(H, int(y + rh))
+            if x1 - x0 < 10 or y1 - y0 < 10:
                 continue
-            ch, cw = y1 - y0, x1 - x0
+
             zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
-            crop = g2[y0:y1, x0:x1]
-            orig = gray0[y0:y1, x0:x1]
-            diff = cv2.absdiff(crop, orig)
+            gray = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+            orig = gray[y0:y1, x0:x1]
             med = float(np.median(orig))
-            inky = (orig < med - 30) | (orig > med + 30)
-            ink = ((diff < 20) & inky).astype(np.uint8) * 255
-            
-            bgr = cleaned[y0:y1, x0:x1]
+            ch, cw = y1 - y0, x1 - x0
+
+            ink = ((orig < med - 40) | (orig < 70)).astype(np.uint8) * 255
             bright = (
-                (bgr[:, :, 0] > 200) & (bgr[:, :, 1] > 200) & (bgr[:, :, 2] > 200)
-                & (orig < med + 15)
-            )
-            
+                (cleaned[y0:y1, x0:x1, 0] > 200) &
+                (cleaned[y0:y1, x0:x1, 1] > 200) &
+                (cleaned[y0:y1, x0:x1, 2] > 200) &
+                (orig < med + 20)
+            ).astype(np.uint8) * 255
+
             if zone is not None:
-                near = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=8)
+                near = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=7)
                 near = cv2.bitwise_and(
                     near,
-                    cv2.dilate(dil[y0:y1, x0:x1], np.ones((3, 3), np.uint8), iterations=6),
+                    cv2.dilate(dil[y0:y1, x0:x1], np.ones((3, 3), np.uint8), iterations=5)
                 )
             else:
-                near = np.full_like(ink, 255)
-                border = max(5, min(16, min(ch, cw) // 7))
+                near = np.full((ch, cw), 255, np.uint8)
+                border = max(4, min(14, min(ch, cw) // 8))
                 near[:border, :] = 0
                 near[-border:, :] = 0
                 near[:, :border] = 0
                 near[:, -border:] = 0
+
             ink = cv2.bitwise_and(ink, near)
-            white_left = (bright.astype(np.uint8) * 255)
-            white_left = cv2.bitwise_and(white_left, near)
-            ink = cv2.bitwise_or(ink, white_left)
-            n, lab, st, _ = cv2.connectedComponentsWithStats(ink, connectivity=8)
-            keep = np.zeros_like(ink)
+            bright = cv2.bitwise_and(bright, near)
+            keep = cv2.bitwise_or(ink, bright)
+
+            n, lab, st, _ = cv2.connectedComponentsWithStats(keep, connectivity=8)
+            final_keep = np.zeros_like(keep)
             for i in range(1, n):
                 a = int(st[i, cv2.CC_STAT_AREA])
-                if a < 6 or a > 0.5 * ch * cw:
-                    continue
-                bx, by = int(st[i, cv2.CC_STAT_LEFT]), int(st[i, cv2.CC_STAT_TOP])
-                bw_, bh_ = int(st[i, cv2.CC_STAT_WIDTH]), int(st[i, cv2.CC_STAT_HEIGHT])
-                if bx == 0 or by == 0 or bx + bw_ >= cw or by + bh_ >= ch:
-                    continue
-                keep[lab == i] = 255
-            residual[y0:y1, x0:x1] = cv2.bitwise_or(residual[y0:y1, x0:x1], keep)
+                if 8 <= a <= 0.35 * ch * cw:
+                    bx = int(st[i, cv2.CC_STAT_LEFT])
+                    by = int(st[i, cv2.CC_STAT_TOP])
+                    bw = int(st[i, cv2.CC_STAT_WIDTH])
+                    bh = int(st[i, cv2.CC_STAT_HEIGHT])
+                    if bx > 1 and by > 1 and bx + bw < cw - 1 and by + bh < ch - 1:
+                        final_keep[lab == i] = 255
+
+            residual[y0:y1, x0:x1] = cv2.bitwise_or(residual[y0:y1, x0:x1], final_keep)
+
         if np.any(residual):
             residual = cv2.dilate(residual, np.ones((3, 3), np.uint8), iterations=1)
             cleaned = self._opencv_inpaint_hq(cleaned, residual)
@@ -3664,44 +3643,58 @@ class MangaTranslator:
         print("  - پاکسازی فقط متن تمام شد — دیوارهٔ حباب حفظ شد.")
         return cleaned
 
+
     def _opencv_inpaint_hq(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        
         if mask is None or not np.any(mask):
             return image
-        m = (mask > 0).astype(np.uint8) * 255
-        
-        pad = max(1, int(getattr(self, "mask_padding", 3) or 3))
-        if pad > 0:
-            k = 2 * pad + 1
-            m = cv2.dilate(m, np.ones((k, k), np.uint8), iterations=1)
 
-        base_r = max(2, int(getattr(self, "inpaint_radius", 3) or 3))
+        m = (mask > 0).astype(np.uint8) * 255
+
+        pad = max(4, int(getattr(self, "mask_padding", 3) or 3) + 2)
+        k = 2 * pad + 1
+        m = cv2.dilate(m, np.ones((k, k), np.uint8), iterations=1)
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+
+        base_r = max(3, int(getattr(self, "inpaint_radius", 3) or 3))
         ys, xs = np.where(m > 0)
         if len(xs) > 0:
-            bw = int(xs.max() - xs.min() + 1)
-            bh = int(ys.max() - ys.min() + 1)
-            span = max(bw, bh)
-            r_small = max(2, min(base_r, 4))
-            r_large = max(r_small + 1, min(base_r + 4, max(5, span // 18)))
+            span = max(int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
+            r_small = max(3, min(base_r + 1, 6))
+            r_large = max(r_small + 2, min(base_r + 6, max(7, span // 14)))
         else:
-            r_small, r_large = base_r, base_r + 2
+            r_small, r_large = base_r + 1, base_r + 4
 
         out = image.copy()
-        
         out = cv2.inpaint(out, m, inpaintRadius=r_small, flags=cv2.INPAINT_TELEA)
-        
+
         gray0 = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         gray1 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        still = ((cv2.absdiff(gray0, gray1) < 12) & (m > 0)).astype(np.uint8) * 255
-        if np.count_nonzero(still) > 30:
+        still = ((cv2.absdiff(gray0, gray1) < 18) & (m > 0)).astype(np.uint8) * 255
+        if np.count_nonzero(still) > 20:
             still = cv2.dilate(still, np.ones((3, 3), np.uint8), iterations=1)
             out = cv2.inpaint(out, still, inpaintRadius=r_large, flags=cv2.INPAINT_NS)
-        else:
-            out = cv2.inpaint(out, m, inpaintRadius=max(3, r_large - 1), flags=cv2.INPAINT_NS)
 
-        
         out = self._scrub_bright_residuals(out, m)
+        out = self._scrub_dark_residuals(out, m)
         return out
+
+    def _scrub_dark_residuals(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        if mask is None or not np.any(mask):
+            return image
+        m0 = (mask > 0).astype(np.uint8)
+        if int(m0.sum()) < 15:
+            return image
+
+        out = image.copy()
+        gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+        local_med = cv2.medianBlur(gray, 15)
+        dark = ((gray < local_med - 35) & (m0 > 0)).astype(np.uint8) * 255
+        dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+        if np.count_nonzero(dark) > 12:
+            dark = cv2.dilate(dark, np.ones((3, 3), np.uint8), iterations=1)
+            out = cv2.inpaint(out, dark, inpaintRadius=4, flags=cv2.INPAINT_TELEA)
+        return out
+
 
     def _scrub_bright_residuals(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         
@@ -7450,8 +7443,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--keep-old", action="store_true")
     p.add_argument("--request-delay", type=float, default=0.0)
-    p.add_argument("--bubbles-per-request", type=int, default=6,
-                   help="چند حباب در هر درخواست ترجمه (پیش‌فرض ۶ — تعداد "
+    p.add_argument("--bubbles-per-request", type=int, default=12,
+                   help="چند حباب در هر درخواست ترجمه (پیش‌فرض ۱۲ — تعداد "
                         "درخواست‌ها را کم می‌کند تا گوگل timeout ندهد)")
     p.add_argument("--batch-workers", type=int, default=3,
                    help="تعداد بستهٔ ترجمهٔ موازی (پیش‌فرض ۳ — هر بسته کلید جدا می‌گیرد)")
@@ -7465,12 +7458,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "اضافی را خودش فیلتر می‌کند)")
     p.add_argument("--max-chunk-height", type=int, default=3600,
                    help="حداکثر ارتفاع هر تکه OCR داخل یک تصویر (پیکسل)")
-    p.add_argument("--stitch-max-height", type=int, default=14000,
-                   help="ارتفاع هدف هر نوار چسبانده‌شده (پیش‌فرض ۱۴۰۰۰). تا این ارتفاع "
-                        "پر می‌شود، بعد تا ۵۰۰–۲۰۰۰px جلوتر خوانده می‌شود و اگر متن نبود "
-                        "برش امن، اگر بود بعد از متن برش زده می‌شود. ۰ = خاموش.")
-    p.add_argument("--stitch-short-threshold", type=int, default=6000,
-                   help="صفحاتی کوتاه‌تر از این ارتفاع (پیش‌فرض ۶۰۰۰px) با هم چسبانده "
+    p.add_argument("--stitch-max-height", type=int, default=0,
+                   help="۰ = چسباندن خاموش (ارتفاع هر عکس دست نمی‌خورد). عدد دیگر = هدف ارتفاع نوار")
+    p.add_argument("--stitch-short-threshold", type=int, default=0,
+                   help="صفحاتی کوتاه‌تر از این ارتفاع (پیش‌فرض ۰px) با هم چسبانده "
                         "می‌شوند تا به سقف --stitch-max-height برسند. "
                         "صفحات بلندتر جدا می‌مانند.")
     p.add_argument("--no-stitch-keep-first", action="store_true",
@@ -7561,7 +7552,7 @@ def main():
         max_retries=args.max_retries,
         det_confidence=getattr(args, "det_confidence", 0.28),
         request_delay=args.request_delay,
-        bubbles_per_request=max(1, int(getattr(args, "bubbles_per_request", 6) or 6)),
+        bubbles_per_request=max(1, int(getattr(args, "bubbles_per_request", 12) or 12)),
         api_timeout=getattr(args, "api_timeout", 10.0),
         max_chunk_height=args.max_chunk_height,
         img_format=args.img_format,
