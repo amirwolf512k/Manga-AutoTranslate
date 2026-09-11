@@ -591,43 +591,52 @@ class LamaONNX:
 
     def __call__(self, image, mask):
         if isinstance(image, np.ndarray):
-            if image.ndim == 3 and image.shape[2] == 3:
+            if image.ndim == 3 and image.shape[2] in (3, 4):
                 img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             else:
-                img_rgb = cv2.cvtColor(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2RGB)
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
         else:
-            arr = np.array(image.convert("RGB"))
-            img_rgb = arr
+            img_rgb = np.array(image.convert("RGB"))
         if isinstance(mask, np.ndarray):
-            mask_u8 = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY) if mask.ndim == 3 else mask
+            if mask.ndim == 3:
+                mask_u8 = mask[..., 0] if mask.shape[2] == 1 else cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+            else:
+                mask_u8 = mask
         else:
             mask_u8 = np.array(mask.convert("L"))
+        if mask_u8.shape != img_rgb.shape[:2]:
+            raise ValueError("Image and mask dimensions must match")
+        original_mask = mask_u8 > 0
+        if not np.any(original_mask):
+            return Image.fromarray(img_rgb.copy())
         orig_size = (img_rgb.shape[1], img_rgb.shape[0])
         run_size = self._pick_size(orig_size[0], orig_size[1])
         if not self.prefer_gpu and not getattr(self, "_fixed_size", False):
-            
-            
-            m0 = mask_u8 if mask_u8.ndim == 2 else cv2.cvtColor(mask_u8, cv2.COLOR_BGR2GRAY)
-            cov = float(np.count_nonzero(m0)) / float(max(1, m0.size))
+            cov = float(np.count_nonzero(original_mask)) / float(original_mask.size)
             if cov > 0.22:
                 run_size = 512
 
+        keyboardInlineButton
+        scale = run_size / max(orig_size)
+        rw, rh = (max(1, round(d * scale)) for d in orig_size)
         interp = cv2.INTER_AREA if max(img_rgb.shape[:2]) > run_size else cv2.INTER_CUBIC
-        img_np = cv2.resize(img_rgb, (run_size, run_size), interpolation=interp)
-        msk = cv2.resize(mask_u8, (run_size, run_size), interpolation=cv2.INTER_AREA)
-        msk = cv2.dilate(msk, np.ones((3, 3), np.uint8), iterations=1)
-        _, msk = cv2.threshold(msk, 64, 255, cv2.THRESH_BINARY)
-        img_np[msk > 127] = 0
+        img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
+        msk = cv2.resize(original_mask.astype(np.uint8), (rw, rh), interpolation=cv2.INTER_NEAREST)
+        img_np = cv2.copyMakeBorder(img_np, 0, run_size - rh, 0, run_size - rw, cv2.BORDER_REFLECT)
+        msk = cv2.copyMakeBorder(msk, 0, run_size - rh, 0, run_size - rw, cv2.BORDER_CONSTANT, value=0)
+        img_np[msk > 0] = 0
 
         img_in = img_np.astype(np.float32) / 255.0
-        mask_in = (msk.astype(np.float32) / 255.0)
+        mask_in = msk.astype(np.float32)
         img_in = img_in.transpose(2, 0, 1)[None]
         mask_in = mask_in[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
-        out = np.clip(out[0].transpose(1, 2, 0), 0, 1)
-        out = (out * 255).astype(np.uint8) if out.max() <= 1.01 else np.clip(out, 0, 255).astype(np.uint8)
+        keyboardInlineButton
+        out = np.clip(out[0].transpose(1, 2, 0), 0, 255).astype(np.uint8)
 
-        result = cv2.resize(out, orig_size, interpolation=cv2.INTER_LANCZOS4)
+        predicted = cv2.resize(out[:rh, :rw], orig_size, interpolation=cv2.INTER_LANCZOS4)
+        result = img_rgb.copy()
+        result[original_mask] = predicted[original_mask]
         return Image.fromarray(result)
 
 
@@ -681,34 +690,44 @@ class LamaMangaONNX:
 
     def __call__(self, image, mask):
         if isinstance(image, np.ndarray):
-            if image.ndim == 3 and image.shape[2] == 3:
+            if image.ndim == 3 and image.shape[2] in (3, 4):
                 img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
             else:
-                img_rgb = cv2.cvtColor(cv2.cvtColor(image, cv2.COLOR_GRAY2BGR), cv2.COLOR_BGR2RGB)
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
         else:
             img_rgb = np.array(image.convert("RGB"))
         if isinstance(mask, np.ndarray):
-            mask_u8 = cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY) if mask.ndim == 3 else mask
+            if mask.ndim == 3:
+                mask_u8 = mask[..., 0] if mask.shape[2] == 1 else cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+            else:
+                mask_u8 = mask
         else:
             mask_u8 = np.array(mask.convert("L"))
+        if mask_u8.shape != img_rgb.shape[:2]:
+            raise ValueError("Image and mask dimensions must match")
+        original_mask = mask_u8 > 0
+        if not np.any(original_mask):
+            return Image.fromarray(img_rgb.copy())
         oh, ow = img_rgb.shape[:2]
         s = self.SIZE
-        invert = float(np.median(cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY))) < 110
-        if invert:
-            img_rgb = 255 - img_rgb
-        img_np = cv2.resize(img_rgb, (s, s), interpolation=cv2.INTER_AREA)
-        msk = cv2.resize(mask_u8, (s, s), interpolation=cv2.INTER_AREA)
-        msk = cv2.dilate(msk, np.ones((3, 3), np.uint8), iterations=1)
-        img_np[msk > 127] = 0
-        msk = (msk > 64).astype(np.float32)
+        keyboardInlineButton
+        scale = s / max(ow, oh)
+        rw, rh = max(1, round(ow * scale)), max(1, round(oh * scale))
+        interp = cv2.INTER_AREA if max(ow, oh) > s else cv2.INTER_CUBIC
+        img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
+        msk = cv2.resize(original_mask.astype(np.uint8), (rw, rh), interpolation=cv2.INTER_NEAREST)
+        img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
+        msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_CONSTANT, value=0)
+        img_np[msk > 0] = 0
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
-        mask_in = msk[None, None]
+        mask_in = msk.astype(np.float32)[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
+        keyboardInlineButton
         o = np.clip(out[0].transpose(1, 2, 0), 0, 1)
         o = (o * 255).astype(np.uint8)
-        if invert:
-            o = 255 - o
-        result = cv2.resize(o, (ow, oh), interpolation=cv2.INTER_LANCZOS4)
+        predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
+        result = img_rgb.copy()
+        result[original_mask] = predicted[original_mask]
         return Image.fromarray(result)
 
 
@@ -2925,6 +2944,7 @@ class MangaTranslator:
                 continue
 
             rj.boxes = list(rj.boxes) + list(ri.boxes)
+            rj.ocr_polys = list(rj.ocr_polys) + list(ri.ocr_polys)
             
             parts = sorted(
                 [(rj.rect[1], rj.source_text.strip()), (ri.rect[1], ri.source_text.strip())],
@@ -3005,12 +3025,13 @@ class MangaTranslator:
                     is_dup = True
                     if len(r.source_text) > len(u.source_text):
                         u.source_text = r.source_text
-                        u.boxes = u.boxes + r.boxes
-                        x0 = min(u.rect[0], r.rect[0])
-                        y0 = min(u.rect[1], r.rect[1])
-                        x1 = max(u.rect[0] + u.rect[2], r.rect[0] + r.rect[2])
-                        y1 = max(u.rect[1] + u.rect[3], r.rect[1] + r.rect[3])
-                        u.rect = (x0, y0, x1 - x0, y1 - y0)
+                    u.boxes = u.boxes + r.boxes
+                    u.ocr_polys = list(u.ocr_polys) + list(r.ocr_polys)
+                    x0 = min(u.rect[0], r.rect[0])
+                    y0 = min(u.rect[1], r.rect[1])
+                    x1 = max(u.rect[0] + u.rect[2], r.rect[0] + r.rect[2])
+                    y1 = max(u.rect[1] + u.rect[3], r.rect[1] + r.rect[3])
+                    u.rect = (x0, y0, x1 - x0, y1 - y0)
                     u.kind = MangaTranslator._classify_text(u.source_text)
                     break
             if not is_dup:
@@ -3114,7 +3135,6 @@ class MangaTranslator:
         
         
         
-        zone = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=2)
         return zone
 
     @staticmethod
@@ -3314,160 +3334,81 @@ class MangaTranslator:
         return keep
 
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        
+        keyboardInlineButton
         h_img, w_img = image.shape[:2]
         text_mask = np.zeros((h_img, w_img), dtype=np.uint8)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        padding = max(0, int(getattr(self, "mask_padding", 3)))
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * padding + 1,) * 2)
 
         for region in regions:
             x, y, rw, rh = region.rect
-            x0 = max(0, int(x))
-            y0 = max(0, int(y))
-            x1 = min(w_img, int(x + rw))
-            y1 = min(h_img, int(y + rh))
+            polys = list(getattr(region, "ocr_polys", None) or [])
+            if polys:
+                pts = np.concatenate([np.asarray(p).reshape(-1, 2) for p in polys])
+                x, y = min(x, pts[:, 0].min()), min(y, pts[:, 1].min())
+                right = max(region.rect[0] + rw, pts[:, 0].max() + 1)
+                bottom = max(region.rect[1] + rh, pts[:, 1].max() + 1)
+            else:
+                right, bottom = x + rw, y + rh
+            x0 = max(0, int(x) - padding)
+            y0 = max(0, int(y) - padding)
+            x1 = min(w_img, int(right) + padding)
+            y1 = min(h_img, int(bottom) + padding)
             if x1 - x0 < 8 or y1 - y0 < 8:
                 continue
 
             zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
             ch, cw = y1 - y0, x1 - x0
-
-            
             det_class = (getattr(region, "det_class", "") or "")
-            
+            ink = zone
             if getattr(self, "erase_bubble_interior", False) and zone is not None and det_class in ("bubble", "text_bubble"):
                 interior = self._bubble_interior_mask(gray[y0:y1, x0:x1], zone)
                 if interior is not None and interior.max() > 0:
-                    text_mask[y0:y1, x0:x1] = cv2.bitwise_or(
-                        text_mask[y0:y1, x0:x1], interior
-                    )
-                    continue
-
-            ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
-
-            if zone is not None:
-                med_reg = float(np.median(gray[y0:y1, x0:x1]))
-                if med_reg < 120:
-                    
-                    letters = self._letters_mask_in_crop(
-                        gray[y0:y1, x0:x1], zone, ch, cw, wide=True, bright=True,
-                    )
-                    z_area = float(max(1, np.count_nonzero(zone)))
-                    if letters.max() > 0 and float(np.count_nonzero(letters)) >= 0.05 * z_area:
-                        ink = letters
-                    else:
-                        
-                        ink = zone
-                elif ink.max() == 0:
-                    
-                    
-                    ink = zone
-                else:
-                    ink = cv2.bitwise_and(ink, zone)
-            elif ink.max() > 0:
-                
+                    ink = interior
+            if ink is None:
+                keyboardInlineButton
+                ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
                 ink = self._drop_non_text_components(ink, ch, cw)
-
-            
-            
-            
-            
-            if zone is not None and ink.max() > 0 and med_reg < 120:
-                _ink_med = float(np.median(gray[y0:y1, x0:x1][ink > 0]))
-                letters = self._letters_mask_in_crop(
-                    gray[y0:y1, x0:x1], zone, ch, cw, wide=True,
-                    bright=(_ink_med > med_reg + 25),
-                )
-                if letters.max() > 0:
-                    ink = cv2.bitwise_or(ink, letters)
-
-            
-            
-            try:
-                _ang = abs(float(getattr(region, "angle", 0.0) or 0.0))
-            except (TypeError, ValueError):
-                _ang = 0.0
-            if ink.max() > 0 and _ang >= 8:
-                ink = cv2.dilate(ink, np.ones((3, 3), np.uint8), iterations=2)
-
-            if ink.max() == 0:
-                continue
-
-            if zone is None:
-                border = max(5, min(16, min(ch, cw) // 7))
-                ink[:border, :] = 0
-                ink[-border:, :] = 0
-                ink[:, :border] = 0
-                ink[:, -border:] = 0
                 ink = self._protect_bubble_wall(ink, gray[y0:y1, x0:x1])
-                if ink.max() == 0:
+                if np.count_nonzero(ink) > 0.45 * ch * cw:
                     continue
-
-            if ink.max() > 0:
-                ink = cv2.dilate(ink, np.ones((2, 2), np.uint8), iterations=1)
-            if ink.max() > 0:
-                cov = float(np.count_nonzero(ink)) / float(max(1, ch * cw))
-                if cov > 0.60:
-                    
-                    
-                    
-                    try:
-                        _ink_med2 = float(np.median(gray[y0:y1, x0:x1][ink > 0]))
-                        reduced = self._letters_mask_in_crop(
-                            gray[y0:y1, x0:x1], zone, ch, cw, wide=True,
-                            bright=(_ink_med2 > med_reg + 25),
-                        )
-                    except Exception:
-                        reduced = None
-                    if reduced is None or reduced.max() == 0:
-                        reduced = self._drop_non_text_components(ink, ch, cw)
-                    if reduced.max() > 0:
-                        ink = reduced
-                        print(
-                            f"    [!] ماسک ناحیه ({x0},{y0}) خیلی بزرگ بود "
-                            f"({cov*100:.0f}٪) → محدود به حروف شد."
-                        )
-
-
-
-            
-            
-            if zone is None:
-                cov = float(np.count_nonzero(ink)) / float(max(1, ch * cw))
-                if cov > 0.45:
-                    print(
-                        f"    [!] ماسک ناحیه ({x0},{y0}) غیرقابل‌اعتماد بود "
-                        f"({cov*100:.0f}٪) → پاک‌سازی این ناحیه رد شد."
-                    )
-                    continue
-
+            if padding:
+                ink = cv2.dilate(ink, kernel)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
 
         return text_mask
 
     def _flat_fill_cluster(self, crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[np.ndarray]:
-        
-        
-        
+        keyboardInlineButton
         m = crop_msk > 0
         if not m.any():
             return None
-        ring = cv2.dilate(crop_msk, np.ones((21, 21), np.uint8)) > 0
+        ring = cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0
         ring &= ~m
         if int(np.count_nonzero(ring)) < 60:
             return None
         ring_px = crop_img[ring].astype(np.float32)
-        if float(ring_px.std(axis=0).max()) > 14.0:
+        h, w = m.shape
+        yy, xx = np.mgrid[-1:1:complex(h), -1:1:complex(w)]
+        basis = np.stack((np.ones_like(xx), xx, yy, xx * yy, xx * xx, yy * yy), axis=-1)
+        samples = basis[ring]
+        keep = np.ones(len(samples), dtype=bool)
+        for _ in range(4):
+            fit = np.linalg.lstsq(samples[keep], ring_px[keep], rcond=None)[0]
+            error = np.max(np.abs(samples @ fit - ring_px), axis=1)
+            keep = error <= max(5.0, float(np.median(error)) * 2.5)
+            if keep.sum() < max(60, 0.8 * len(samples)):
+                return None
+        if float(np.percentile(error[keep], 90)) > 6.0:
             return None
-        
-        inv = (~m).astype(np.float32)
-        k = 31
-        out = crop_img.astype(np.float32).copy()
-        for c in range(3):
-            num = cv2.blur(out[:, :, c] * inv, (k, k))
-            den = cv2.blur(inv, (k, k))
-            est = num / np.maximum(den, 1e-4)
-            out[:, :, c][m] = est[m]
-        return np.clip(out, 0, 255).astype(np.uint8)
+        fill = basis[m] @ fit
+        keyboardInlineButton
+        if np.any(fill < ring_px[keep].min(axis=0) - 8) or np.any(fill > ring_px[keep].max(axis=0) + 8):
+            return None
+        out = crop_img.copy()
+        out[m] = np.clip(np.rint(fill), 0, 255).astype(np.uint8)
+        return out
 
     @staticmethod
     def _mask_clusters(mask: np.ndarray, pad: int = 18, max_clusters: int = 14) -> List[Tuple[int, int, int, int]]:
@@ -3532,150 +3473,51 @@ class MangaTranslator:
             pass
 
         cleaned = image.copy()
-        H, W = image.shape[:2]
-        dil = cv2.dilate(mask, np.ones((3, 3), np.uint8), iterations=1)
-        onnx_done = np.zeros_like(dil)
-
-        allow_flat = True
         lama = None
-        if getattr(self, "use_lama", False):
-            lama = self._get_lama()
+        lama_loaded = False
+        counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
+        keyboardInlineButton
+        for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
+            cx0, cy0 = max(0, bx0 - 29), max(0, by0 - 29)
+            cx1, cy1 = min(image.shape[1], bx1 + 29), min(image.shape[0], by1 + 29)
+            crop_img = image[cy0:cy1, cx0:cx1]
+            crop_msk = np.zeros((cy1 - cy0, cx1 - cx0), dtype=np.uint8)
+            ex1, ey1 = min(bx1, image.shape[1]), min(by1, image.shape[0])
+            crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
+            result = self._flat_fill_cluster(crop_img, crop_msk)
+            method = "flat"
+            if result is None and getattr(self, "use_lama", False) and not lama_loaded:
+                lama_loaded = True
+                lama = self._get_lama()
+            if result is None and lama is not None:
+                try:
+                    result = cv2.cvtColor(np.array(lama(crop_img, crop_msk)), cv2.COLOR_RGB2BGR)
+                    if result.shape != crop_img.shape:
+                        raise ValueError("LaMa returned an unexpected image shape")
+                    method = "LaMa"
+                except Exception as e:
+                    print(f"  [!] LaMa failed ({e}); using OpenCV for this crop.")
+                    result = None
+            if result is None:
+                result = self._opencv_inpaint_hq(crop_img, crop_msk)
+                method = "OpenCV"
+            mm = crop_msk > 0
+            keyboardInlineButton
+            cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
+            counts[method] += 1
 
-        if lama is not None:
-            try:
-                n_run = 0
-                n_flat = 0
-                for (cx0, cy0, cx1, cy1) in self._mask_clusters(dil):
-                    crop_img = image[cy0:cy1, cx0:cx1]
-                    crop_msk = dil[cy0:cy1, cx0:cx1]
-                    if int(np.count_nonzero(crop_msk)) < 40:
-                        continue
-
-                    flat = self._flat_fill_cluster(crop_img, crop_msk) if allow_flat else None
-                    if flat is not None:
-                        mm = crop_msk > 0
-                        cleaned[cy0:cy1, cx0:cx1][mm] = flat[mm]
-                        onnx_done[cy0:cy1, cx0:cx1][mm] = 255
-                        n_flat += 1
-                        continue
-
-                    result_pil = lama(crop_img, crop_msk)
-                    result_np = np.array(result_pil)
-                    if result_np.ndim == 3 and result_np.shape[2] == 3:
-                        result_bgr = cv2.cvtColor(result_np, cv2.COLOR_RGB2BGR)
-                    else:
-                        result_bgr = result_np
-                    mm = crop_msk > 0
-                    cleaned[cy0:cy1, cx0:cx1][mm] = result_bgr[mm]
-                    onnx_done[cy0:cy1, cx0:cx1][mm] = 255
-                    n_run += 1
-
-                if n_run or n_flat:
-                    print(f"  - پاکسازی با {getattr(self, '_inpainter_name', 'LaMa')} "
-                          f"(LaMa={n_run}, flat={n_flat})")
-            except Exception as e:
-                print(f"  [!] LaMa خطا ({e}) → OpenCV")
-                lama = None
-
-        remaining = cv2.bitwise_and(dil, cv2.bitwise_not(onnx_done))
-        if np.any(remaining):
-            cleaned = self._opencv_inpaint_hq(cleaned, remaining)
-
-        residual = np.zeros_like(dil)
-        for region in regions:
-            x, y, rw, rh = region.rect
-            x0, y0 = max(0, int(x)), max(0, int(y))
-            x1 = min(W, int(x + rw))
-            y1 = min(H, int(y + rh))
-            if x1 - x0 < 10 or y1 - y0 < 10:
-                continue
-
-            zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
-            gray = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
-            orig = gray[y0:y1, x0:x1]
-            med = float(np.median(orig))
-            ch, cw = y1 - y0, x1 - x0
-
-            ink = ((orig < med - 40) | (orig < 70)).astype(np.uint8) * 255
-            bright = (
-                (cleaned[y0:y1, x0:x1, 0] > 200) &
-                (cleaned[y0:y1, x0:x1, 1] > 200) &
-                (cleaned[y0:y1, x0:x1, 2] > 200) &
-                (orig < med + 20)
-            ).astype(np.uint8) * 255
-
-            if zone is not None:
-                near = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=7)
-                near = cv2.bitwise_and(
-                    near,
-                    cv2.dilate(dil[y0:y1, x0:x1], np.ones((3, 3), np.uint8), iterations=5)
-                )
-            else:
-                near = np.full((ch, cw), 255, np.uint8)
-                border = max(4, min(14, min(ch, cw) // 8))
-                near[:border, :] = 0
-                near[-border:, :] = 0
-                near[:, :border] = 0
-                near[:, -border:] = 0
-
-            ink = cv2.bitwise_and(ink, near)
-            bright = cv2.bitwise_and(bright, near)
-            keep = cv2.bitwise_or(ink, bright)
-
-            n, lab, st, _ = cv2.connectedComponentsWithStats(keep, connectivity=8)
-            final_keep = np.zeros_like(keep)
-            for i in range(1, n):
-                a = int(st[i, cv2.CC_STAT_AREA])
-                if 8 <= a <= 0.35 * ch * cw:
-                    bx = int(st[i, cv2.CC_STAT_LEFT])
-                    by = int(st[i, cv2.CC_STAT_TOP])
-                    bw = int(st[i, cv2.CC_STAT_WIDTH])
-                    bh = int(st[i, cv2.CC_STAT_HEIGHT])
-                    if bx > 1 and by > 1 and bx + bw < cw - 1 and by + bh < ch - 1:
-                        final_keep[lab == i] = 255
-
-            residual[y0:y1, x0:x1] = cv2.bitwise_or(residual[y0:y1, x0:x1], final_keep)
-
-        if np.any(residual):
-            residual = cv2.dilate(residual, np.ones((3, 3), np.uint8), iterations=1)
-            cleaned = self._opencv_inpaint_hq(cleaned, residual)
-
-        print("  - پاکسازی فقط متن تمام شد — دیوارهٔ حباب حفظ شد.")
+        print(f"  - Cleanup: {counts}")
         return cleaned
 
 
     def _opencv_inpaint_hq(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         if mask is None or not np.any(mask):
-            return image
-
+            return image.copy()
         m = (mask > 0).astype(np.uint8) * 255
-
-        pad = max(4, int(getattr(self, "mask_padding", 3) or 3) + 2)
-        k = 2 * pad + 1
-        m = cv2.dilate(m, np.ones((k, k), np.uint8), iterations=1)
-        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
-
-        base_r = max(3, int(getattr(self, "inpaint_radius", 3) or 3))
-        ys, xs = np.where(m > 0)
-        if len(xs) > 0:
-            span = max(int(xs.max() - xs.min() + 1), int(ys.max() - ys.min() + 1))
-            r_small = max(3, min(base_r + 1, 6))
-            r_large = max(r_small + 2, min(base_r + 6, max(7, span // 14)))
-        else:
-            r_small, r_large = base_r + 1, base_r + 4
-
-        out = image.copy()
-        out = cv2.inpaint(out, m, inpaintRadius=r_small, flags=cv2.INPAINT_TELEA)
-
-        gray0 = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-        gray1 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-        still = ((cv2.absdiff(gray0, gray1) < 18) & (m > 0)).astype(np.uint8) * 255
-        if np.count_nonzero(still) > 20:
-            still = cv2.dilate(still, np.ones((3, 3), np.uint8), iterations=1)
-            out = cv2.inpaint(out, still, inpaintRadius=r_large, flags=cv2.INPAINT_NS)
-
-        out = self._scrub_bright_residuals(out, m)
-        out = self._scrub_dark_residuals(out, m)
+        radius = max(1, int(getattr(self, "inpaint_radius", 3)))
+        keyboardInlineButton
+        out = cv2.inpaint(image, m, inpaintRadius=radius, flags=cv2.INPAINT_TELEA)
+        out[m == 0] = image[m == 0]
         return out
 
     def _scrub_dark_residuals(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
@@ -3688,10 +3530,11 @@ class MangaTranslator:
         out = image.copy()
         gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
         local_med = cv2.medianBlur(gray, 15)
-        dark = ((gray < local_med - 35) & (m0 > 0)).astype(np.uint8) * 255
+        dark = ((gray.astype(np.int16) < local_med.astype(np.int16) - 35) & (m0 > 0)).astype(np.uint8) * 255
         dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
         if np.count_nonzero(dark) > 12:
             dark = cv2.dilate(dark, np.ones((3, 3), np.uint8), iterations=1)
+            dark[m0 == 0] = 0
             out = cv2.inpaint(out, dark, inpaintRadius=4, flags=cv2.INPAINT_TELEA)
         return out
 
@@ -3743,7 +3586,6 @@ class MangaTranslator:
             
             if float(ring_px.std(axis=0).mean()) > 22.0:
                 local_m = (cm.astype(np.uint8) * 255)
-                local_m = cv2.dilate(local_m, np.ones((3, 3), np.uint8), iterations=1)
                 fixed = cv2.inpaint(crop, local_m, inpaintRadius=4, flags=cv2.INPAINT_TELEA)
                 out[y0:y1, x0:x1] = fixed
                 continue
@@ -3755,9 +3597,7 @@ class MangaTranslator:
             bg_lum = 0.114 * bg[0] + 0.587 * bg[1] + 0.299 * bg[2]
             in_lum = 0.114 * inside[:, 0] + 0.587 * inside[:, 1] + 0.299 * inside[:, 2]
             
-            bright = (in_lum > bg_lum + 18) | (
-                (inside[:, 0] > 200) & (inside[:, 1] > 200) & (inside[:, 2] > 200)
-            )
+            bright = in_lum > bg_lum + 18
             
             dark = in_lum < bg_lum - 28
             bad = bright | dark
@@ -3778,13 +3618,15 @@ class MangaTranslator:
             for c in range(3):
                 num = cv2.blur(filled[:, :, c] * inv, (k, k))
                 den = cv2.blur(inv, (k, k))
-                est = num / np.maximum(den, 1e-4)
+                est = np.full_like(num, bg[c])
+                np.divide(num, den, out=est, where=den > 1e-4)
                 filled[:, :, c][bad_full] = est[bad_full]
             filled = np.clip(filled, 0, 255).astype(np.uint8)
 
             
             bm = bad_full.astype(np.uint8) * 255
             bm = cv2.dilate(bm, np.ones((3, 3), np.uint8), iterations=1)
+            bm[~cm] = 0
             filled = cv2.inpaint(filled, bm, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
             out[y0:y1, x0:x1] = filled
 
@@ -5438,6 +5280,7 @@ class MangaTranslator:
         for name, crop_v, sc in variants:
             txt, polys, conf, entries = _run(crop_v, sc)
             if inset_used and entries:
+                polys = [p + inset_used for p in polys]
                 for e in entries:
                     if e[2] is not None:
                         e[2][:, 0] += inset_used
