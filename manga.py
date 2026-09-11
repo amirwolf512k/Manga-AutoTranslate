@@ -616,7 +616,7 @@ class LamaONNX:
             if cov > 0.22:
                 run_size = 512
 
-        keyboardInlineButton
+
         scale = run_size / max(orig_size)
         rw, rh = (max(1, round(d * scale)) for d in orig_size)
         interp = cv2.INTER_AREA if max(img_rgb.shape[:2]) > run_size else cv2.INTER_CUBIC
@@ -631,7 +631,7 @@ class LamaONNX:
         img_in = img_in.transpose(2, 0, 1)[None]
         mask_in = mask_in[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
-        keyboardInlineButton
+
         out = np.clip(out[0].transpose(1, 2, 0), 0, 255).astype(np.uint8)
 
         predicted = cv2.resize(out[:rh, :rw], orig_size, interpolation=cv2.INTER_LANCZOS4)
@@ -710,7 +710,7 @@ class LamaMangaONNX:
             return Image.fromarray(img_rgb.copy())
         oh, ow = img_rgb.shape[:2]
         s = self.SIZE
-        keyboardInlineButton
+
         scale = s / max(ow, oh)
         rw, rh = max(1, round(ow * scale)), max(1, round(oh * scale))
         interp = cv2.INTER_AREA if max(ow, oh) > s else cv2.INTER_CUBIC
@@ -722,7 +722,7 @@ class LamaMangaONNX:
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
         mask_in = msk.astype(np.float32)[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
-        keyboardInlineButton
+
         o = np.clip(out[0].transpose(1, 2, 0), 0, 1)
         o = (o * 255).astype(np.uint8)
         predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
@@ -3334,7 +3334,7 @@ class MangaTranslator:
         return keep
 
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
-        keyboardInlineButton
+
         h_img, w_img = image.shape[:2]
         text_mask = np.zeros((h_img, w_img), dtype=np.uint8)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -3367,7 +3367,7 @@ class MangaTranslator:
                 if interior is not None and interior.max() > 0:
                     ink = interior
             if ink is None:
-                keyboardInlineButton
+
                 ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
                 ink = self._drop_non_text_components(ink, ch, cw)
                 ink = self._protect_bubble_wall(ink, gray[y0:y1, x0:x1])
@@ -3380,7 +3380,7 @@ class MangaTranslator:
         return text_mask
 
     def _flat_fill_cluster(self, crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[np.ndarray]:
-        keyboardInlineButton
+
         m = crop_msk > 0
         if not m.any():
             return None
@@ -3403,7 +3403,7 @@ class MangaTranslator:
         if float(np.percentile(error[keep], 90)) > 6.0:
             return None
         fill = basis[m] @ fit
-        keyboardInlineButton
+
         if np.any(fill < ring_px[keep].min(axis=0) - 8) or np.any(fill > ring_px[keep].max(axis=0) + 8):
             return None
         out = crop_img.copy()
@@ -3476,7 +3476,7 @@ class MangaTranslator:
         lama = None
         lama_loaded = False
         counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
-        keyboardInlineButton
+
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             cx0, cy0 = max(0, bx0 - 29), max(0, by0 - 29)
             cx1, cy1 = min(image.shape[1], bx1 + 29), min(image.shape[0], by1 + 29)
@@ -3502,7 +3502,7 @@ class MangaTranslator:
                 result = self._opencv_inpaint_hq(crop_img, crop_msk)
                 method = "OpenCV"
             mm = crop_msk > 0
-            keyboardInlineButton
+
             cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
             counts[method] += 1
 
@@ -3515,7 +3515,7 @@ class MangaTranslator:
             return image.copy()
         m = (mask > 0).astype(np.uint8) * 255
         radius = max(1, int(getattr(self, "inpaint_radius", 3)))
-        keyboardInlineButton
+
         out = cv2.inpaint(image, m, inpaintRadius=radius, flags=cv2.INPAINT_TELEA)
         out[m == 0] = image[m == 0]
         return out
