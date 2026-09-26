@@ -154,10 +154,6 @@ except Exception:
     
 def _ensure_all_dependencies() -> None:
     if _IS_ANDROID:
-        # v1.11: روی اندروید همهٔ وابستگی‌ها (numpy/cv2/rapidocr/onnxruntime/
-        # openai/pydantic/…) داخل APK هست (vendored). اجرای بررسیِ pip در استارتاپ
-        # روی اینترنت گوشی دقیقه‌ها طول می‌کشد، گاهی هنگ/کرش می‌سازد و حتی
-        # مسیر os.execv خطرناک است — کلاً رد شو.
         print("[*] اندروید: وابستگی‌ها داخل APK موجود است — بررسی pip رد شد.")
         return
     print("[*] بررسی وابستگی‌ها ...")  
@@ -234,8 +230,6 @@ def _ensure_all_dependencies() -> None:
     if not _can_import("openai"):
         _pip_install("openai")
 
-    # v1.12: دسکتاپ/وب — اگر torch نیست، نسخهٔ CPU (سبک ~۲۰۰MB) نصب می‌شود
-    # تا پاک‌سازی big-lama.pt به‌صورت پیش‌فرض فعال باشد؛ اندروید نه (ONNX دارد).
     if not _IS_ANDROID and not _torch_available():
         print("[*] نصب torch CPU برای big-lama.pt — فقط بار اول (~۲۰۰MB) ...")
         try:
@@ -2091,10 +2085,6 @@ class MangaTranslator:
             print(f"[*] GPU هست ({name}, {vram:.1f} GB) ولی VRAM کم → OpenCV. "
                   f"برای اجبار: --lama یا --gpu")
             return False
-
-        # v1.12: دسکتاپ/وب → big-lama.pt پیش‌فرض فعال است (حتی روی CPU —
-        # کندتر ولی تمیزتر؛ فقط اندروید از LaMa ONNX استفاده می‌کند).
-        # غیرفعال‌سازی: --cpu
         if has_torch and not _on_android():
             print("[*] دسکتاپ/وب → پاک‌سازی پیش‌فرض با big-lama.pt "
                   "(روی CPU کندتر ولی تمیزتر). برای غیرفعال‌سازی: --cpu")
@@ -4262,9 +4252,6 @@ class MangaTranslator:
             ch, cw = y1 - y0, x1 - x0
             det_class = (getattr(region, "det_class", "") or "")
             ink = zone
-            # v1.12: متنِ روی هنر (غیر bubble) → ماسک فقط خودِ حروف، نه کل
-            # کادرِ خط — قبلاً مستطیلِ کاملِ خط ماسک می‌شد و صورت/دستِ زیرِ
-            # متن هم با آن پاک می‌شد.
             if ink is not None and det_class not in ("bubble", "text_bubble"):
                 try:
                     _gz = self._glyph_mask_in_zone(gray[y0:y1, x0:x1], ink)
@@ -4294,9 +4281,6 @@ class MangaTranslator:
                 if np.count_nonzero(ink) > 0.45 * ch * cw:
                     continue
             if _fill_poly is not None:
-                # v1.12: به‌جای پُرکردنِ کل مستطیلِ کج (که صورت/دستِ شخصیت را هم
-                # می‌خورد)، فقط جوهرِ خود حروف داخل آن ناحیه ماسک می‌شود؛
-                # اگر استخراج جوهر ناموفق بود → رفتار قدیمی (پُرکردن کامل)
                 _ink_t = self._tilted_ink_mask(gray, x0, y0, x1, y1,
                                                _fill_poly, _angs)
                 _fill = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
@@ -4312,8 +4296,6 @@ class MangaTranslator:
 
     def _tilted_ink_mask(self, gray: np.ndarray, x0: int, y0: int, x1: int, y1: int,
                          poly_abs: np.ndarray, ang: float) -> Optional[np.ndarray]:
-        """v1.12: ماسک دقیقِ حروف برای متن کج — فقط خودِ جوهرِ حروف، نه کل مستطیل.
-        خروجی: ماسک در مختصات برش (x0,y0)..(x1,y1) یا None برای fallback."""
         try:
             crop = gray[y0:y1, x0:x1]
             ch, cw = crop.shape[:2]
@@ -4358,9 +4340,6 @@ class MangaTranslator:
     @staticmethod
     def _glyph_mask_in_zone(crop_gray: np.ndarray,
                             zone: np.ndarray) -> Optional[np.ndarray]:
-        """v1.12: داخلِ کادرِ خط فقط جوهرِ حروف را نگه می‌دارد (برای متنِ
-        روی هنر). اگر استخراج خراب‌ازآب درآمد (cov نامتعارف) → None تا از
-        ماسکِ کاملِ خط استفاده شود."""
         try:
             z = (zone > 0)
             zc = int(z.sum())
@@ -4395,11 +4374,7 @@ class MangaTranslator:
         if int(np.count_nonzero(ring)) < 60:
             return None
         ring_px = crop_img[ring].astype(np.float32)
-        # v1.12: لنگرِ کاغذ — وقتی دورِ متن سفیدِ bubble هست (≥۳۵٪ حلقه روشن)،
-        # برازش فقط با نمونه‌های هم‌رنگِ کاغذ انجام می‌شود و پرشدگیِ نهایی هم
-        # باید روشن بماند. قبلاً اگر لباس/موِ شخصیتِ چسبیده به متن در حلقهٔ
-        # نمونه‌ها غالب می‌شد، سطحِ درجه‌دومِ خاکستری روی ناحیهٔ متن ریخته
-        # می‌شد (لکه‌های خاکستری بزرگ روی صورت/دست).
+
         _W = np.array([0.114, 0.587, 0.299], dtype=np.float32)
         _lum = ring_px @ _W
         _paper = ring_px[_lum >= 200.0]
@@ -4585,7 +4560,7 @@ class MangaTranslator:
                                     _g = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
                                     _bg_px = _g[_ring_m]
                                     _bright = _bg_px[_bg_px >= 160.0]
-                                    if _bright.size >= max(50, int(0.02 * _bg_px.size)) and _bright.size >= 0.55 * _bg_px.size:  # v1.12: فقط وقتی دورِ متن عمدتاً کاغذ روشن است
+                                    if _bright.size >= max(50, int(0.02 * _bg_px.size)) and _bright.size >= 0.55 * _bg_px.size:
                                         _bg_med = float(np.median(_bright))
                                         _fill_med = float(np.median(_g[_fm]))
                                         if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
@@ -4636,7 +4611,7 @@ class MangaTranslator:
                                     _g = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
                                     _bg_px = _g[_ring_m]
                                     _bright = _bg_px[_bg_px >= 160.0]
-                                    if _bright.size >= max(50, int(0.02 * _bg_px.size)) and _bright.size >= 0.55 * _bg_px.size:  # v1.12: فقط وقتی دورِ متن عمدتاً کاغذ روشن است
+                                    if _bright.size >= max(50, int(0.02 * _bg_px.size)) and _bright.size >= 0.55 * _bg_px.size:
                                         _bg_med = float(np.median(_bright))
                                         _fill_med = float(np.median(_g[_fm]))
                                         if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
@@ -4663,9 +4638,7 @@ class MangaTranslator:
                         (crop_msk > 0).astype(np.uint8), cv2.DIST_L2, 3).max())
                 except Exception:
                     _thick0 = 0.0
-                # v1.12: دیلیشنِ تطبیقی مهار شد — قبلاً تا ۲۰ پیکسل دور حروف را
-                # می‌گرفت (خط‌های کلفت → خوردنِ خطوط صورت/دستِ چسبیده به متن).
-                # حالا هاله ≈ ۵۵٪ ضخامتِ قلم و سقف ۱۲px — اندازهٔ متن، نه بیشتر.
+
                 _kd = int(np.clip(2 * int(round(max(3.0, _thick0 * 0.55))) + 1, 7, 25))
                 _oc_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_kd, _kd))
                 _dil = cv2.morphologyEx(
@@ -4744,8 +4717,6 @@ class MangaTranslator:
             if wall_m is not None:
                 wl = wall_m[y0:y1, x0:x1]
                 dm = (dm & raw_m) | (dm & ~wl)
-            # v1.12: کامپوننتِ بزرگِ متنی (پاراگراف کامل) → خط‌به‌خط inpaint؛
-            # TELEA روی بلوکِ ۱۰۰-۲۰۰هزار پیکسلی لکهٔ خاکستریِ ابری می‌سازد.
             if a > 9000:
                 try:
                     if self._inpaint_big_component_banded(out, sub_img,
@@ -4753,7 +4724,6 @@ class MangaTranslator:
                         continue
                 except Exception:
                     pass
-            # v1.12: وگرنه اول فقط خودِ حروف (ریزمسک گلیف) — نه کل بلوک
             _gm = None
             try:
                 _g = self._glyph_refine_mask(sub_img, (raw_m.astype(np.uint8) * 255))
@@ -4771,9 +4741,6 @@ class MangaTranslator:
 
     def _inpaint_big_component_banded(self, out: np.ndarray, sub_img: np.ndarray,
                                       raw_m: np.ndarray, y0: int, x0: int) -> bool:
-        """v1.12: کامپوننتِ متنیِ بزرگ را روی نوارهای خط (فاصله‌های خالیِ بین
-        خطوط) می‌شکند و هر خط را جداگانه inpaint می‌کند — نتیجه = اندازهٔ متن،
-        نه بیشتر. True یعنی همهٔ نوارها پردازش شد."""
         try:
             rh, rw = raw_m.shape
             if rh < 24:
