@@ -844,7 +844,6 @@ class MainActivity : AppCompatActivity() {
                     setPadding(dp(10), dp(4), dp(10), dp(4))
                 }
                 row.addView(valBox)
-                row.addView(row)
                 val sl = Slider(this).apply {
                     valueFrom = minV.toFloat()
                     valueTo = maxV.toFloat()
