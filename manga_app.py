@@ -1007,9 +1007,6 @@ def run_desktop():
     apibase_var = tk.StringVar(value=cfg.get("api_base", ""))
     ttk.Entry(row_ab, textvariable=apibase_var).pack(fill="x")
 
-    # v1.12: برچسبِ فیلد کلید را نگه می‌داریم تا ردیف دامنه با before= همیشه
-    # «بالای» کلید API جای بگیرد (قبلاً وقتی وسط اجرا custom انتخاب می‌شد،
-    # ردیف دامنه می‌رفت زیر کلید)
     _keys_label = ttk.Label(card_ai, text="کلید API (چند کلید = با کاما، چرخش خودکار)",
                             foreground=C_MUT)
     _keys_label.pack(fill="x", pady=(6, 2))
