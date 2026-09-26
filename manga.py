@@ -1589,8 +1589,6 @@ class MlKitBackend:
                 parts = str(item).split("|", 3)
                 if len(parts) < 3:
                     continue
-                # فرمت جدید: angle|conf|box|text  (ML Kit زاویهٔ خط را خودش می‌دهد)
-                # فرمت قدیمی: conf|box|text
                 def _is_f(s):
                     try:
                         float(s)
@@ -4512,7 +4510,6 @@ class MangaTranslator:
         for cx0, cy0, cx1, cy1, crop_msk, result, method in crops:
             if result is None:
                 crop_img = image[cy0:cy1, cx0:cx1]
-                # دیلیشن تطبیقی: هرچه متن کلفت‌تر، ماسک بزرگ‌تر تا لبه‌ها نماند
                 try:
                     _thick0 = float(cv2.distanceTransform(
                         (crop_msk > 0).astype(np.uint8), cv2.DIST_L2, 3).max())
@@ -4529,8 +4526,6 @@ class MangaTranslator:
                 except Exception:
                     _thick = _thick0
                 _thin = _thick <= 28.0
-                # ریفاین گلیف حتی برای متن کلفت روی بستر بافت‌دار —
-                # فقط خود حروف ماسک می‌شوند نه کل بلوک ← لکهٔ کمتر
                 if self._bg_is_textured(crop_img, _dil):
                     _refined = self._glyph_refine_mask(crop_img, _dil)
                     if _refined is not None:
@@ -4555,7 +4550,6 @@ class MangaTranslator:
                                                               crop_msk,
                                                               wall=page_wall)
                 method = "OpenCV"
-                # پاک‌سازی باقیماندهٔ حروف (گرستِ متن) داخل ماسک
                 try:
                     result = self._scrub_dark_residuals(result, crop_msk)
                 except Exception:
@@ -4701,7 +4695,6 @@ class MangaTranslator:
                                              cv2.DIST_L2, 3)
                 dmax = float(dist.max())
                 if dmax > 16.0:
-                    # متن کلفت: فقط وقتی بستر اطراف نرم/کم‌بافت است پرکردن نرم مجاز است
                     ring = (cv2.dilate(m0, np.ones((15, 15), np.uint8)) > 0) & ~(m0 > 0)
                     soft = False
                     if int(np.count_nonzero(ring)) >= 200:
@@ -7160,7 +7153,6 @@ class MangaTranslator:
                     if len(latin) >= 3 and any(c in "AEIOUaeiou" for c in latin):
                         kind = "dialogue"
             poly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.int32)
-            # زاویهٔ موتور OCR (ML Kit زاویهٔ واقعی خط را می‌دهد) در اولویت است
             eng_angs = []
             for _a in (line_angs or []):
                 try:
@@ -7232,7 +7224,6 @@ class MangaTranslator:
     def _verify_angle_signs(self, image: np.ndarray,
                             regions: List["TextRegion"]) -> None:
         for r in regions:
-            # زاویه‌ای که موتور OCR (RapidOCR/ML Kit) خودش داده را جوهر نقض نمی‌کند
             if str(getattr(r, "angle_src", "") or "") == "engine":
                 continue
             ang = float(getattr(r, "angle", 0.0) or 0.0)

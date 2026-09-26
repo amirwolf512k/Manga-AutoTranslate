@@ -30,7 +30,6 @@ KEY_ENV_ORDER = ("GEMINI_API_KEYS", "GEMINI_API_KEY", "GOOGLE_API_KEY",
                  "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY",
                  "XAI_API_KEY", "TOGETHER_API_KEY", "OPENROUTER_API_KEY", "API_KEY")
 PROVIDER_ALIASES = {"chatgpt": "openai", "grok": "xai"}
-# «gemini-openai» فقط fallback داخلی است — در منوها نشان داده نمی‌شود
 PROVIDERS = ["gemini", "openai", "deepseek", "groq",
              "xai", "together", "openrouter", "ollama", "custom"]
 
