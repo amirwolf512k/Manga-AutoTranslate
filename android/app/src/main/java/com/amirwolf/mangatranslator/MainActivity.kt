@@ -305,13 +305,21 @@ class MainActivity : AppCompatActivity() {
     private fun copyBundledSources() {
         try {
             val upd = File(filesDir, "updates").apply { mkdirs() }
-            val marker = File(upd, ".engine_offline_v2")
-            if (!marker.exists()) {
+            // v1.12: مهر نسخهٔ APK — با نصب هر APK جدید (versionCode بالاتر)،
+            // فایل‌های engine قدیمیِ دانلودشده حذف و نسخهٔ داخل خود APK جایگزین
+            // می‌شود تا فرم/زبان/اسلایدرها همیشه با engine همین نسخه ساخته شوند.
+            val marker = File(upd, ".engine_offline_v3")
+            val apkBuild = try {
+                @Suppress("DEPRECATION")
+                packageManager.getPackageInfo(packageName, 0).versionCode.toString()
+            } catch (_: Exception) { "0" }
+            if (!marker.exists() || marker.readText().trim() != apkBuild) {
                 upd.listFiles()?.forEach { f ->
-                    if (f.name.endsWith(".py") || f.name.startsWith(".ver_")) f.delete()
+                    if (f.name.endsWith(".py") || f.name.startsWith(".ver_") ||
+                        f.name.endsWith(".new")) f.delete()
                 }
-                marker.writeText("1")
-                android.util.Log.i("MangaApp", "engine reset → bundled copy (no net updates)")
+                marker.writeText(apkBuild)
+                android.util.Log.i("MangaApp", "engine reset → bundled copy (apk build $apkBuild)")
             }
             val names = assets.list("engine") ?: return
             for (name in names) {
@@ -626,7 +634,8 @@ class MainActivity : AppCompatActivity() {
 
         val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         card.addView(row)
-        if (lbl.isNotEmpty() && type != "bool") row.addView(label(lbl))
+        // v1.12: لیبل اسلایدر داخل ردیف افقی خودش می‌آید — اینجا تکراری نشود
+        if (lbl.isNotEmpty() && type != "bool" && type != "slider") row.addView(label(lbl))
         val visIf = f.optJSONObject("visible_if")
         if (visIf != null) {
             val depId = visIf.optString("field")
@@ -692,8 +701,11 @@ class MainActivity : AppCompatActivity() {
                 val saved = savedOr(id, dflt)?.toString()
                 var selected = items.indexOfFirst { it.second == saved }
                 if (selected < 0) selected = items.indexOfFirst { it.second == dflt?.toString() }
+                // v1.12: فلش ▾ برای اینکه دکمه‌ی select شبیه متن ساده به نظر نرسد
+                fun selText(name: String?): String =
+                    (name ?: "— انتخاب —") + "  ▾"
                 val btn = Button(this).apply {
-                    text = items.getOrNull(selected)?.first ?: "— انتخاب —"
+                    text = selText(items.getOrNull(selected)?.first)
                     setTextColor(TXT); textSize = 14f
                     background = rounded(CARD2, 10, 1)
                     gravity = Gravity.START or Gravity.CENTER_VERTICAL
@@ -705,7 +717,7 @@ class MainActivity : AppCompatActivity() {
                         .setTitle(lbl)
                         .setItems(items.map { it.first }.toTypedArray()) { _, w ->
                             saveVal(id, items[w].second)
-                            btn.text = items[w].first
+                            btn.text = selText(items[w].first)
                         }.show()
                 }
                 if (selected >= 0) values[id] = items[selected].second
@@ -831,11 +843,14 @@ class MainActivity : AppCompatActivity() {
                 fun apply(v: Float): Float = v.coerceIn(minV.toFloat(), maxV.toFloat())
                     .let { x -> Math.round(x / step.toFloat()) * step.toFloat() }
 
-                val row = LinearLayout(this).apply {
+                // v1.12 (رفع «فقط لیبل، بدون کنترل»): قبلاً این ردیف با نام row
+                // تعریف می‌شد و متغیر بیرونیِ row را shadow می‌کرد؛ نتیجه: ردیف
+                // اسلایدر هیچ‌وقت به فرم وصل نمی‌شد و فقط لیبل دیده می‌شد.
+                val sliderRow = LinearLayout(this).apply {
                     orientation = LinearLayout.HORIZONTAL
                     gravity = Gravity.CENTER_VERTICAL
                 }
-                row.addView(label(lbl), LinearLayout.LayoutParams(0,
+                sliderRow.addView(label(lbl), LinearLayout.LayoutParams(0,
                     ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
                 val valBox = TextView(this).apply {
                     text = fmt(apply((savedV ?: dfltV).toFloat()))
@@ -843,7 +858,7 @@ class MainActivity : AppCompatActivity() {
                     background = rounded(CARD2, 8, 1)
                     setPadding(dp(10), dp(4), dp(10), dp(4))
                 }
-                row.addView(valBox)
+                sliderRow.addView(valBox)
                 val sl = Slider(this).apply {
                     valueFrom = minV.toFloat()
                     valueTo = maxV.toFloat()
@@ -855,7 +870,8 @@ class MainActivity : AppCompatActivity() {
                         if (fromUser) saveVal(id, if (isFloat) vv.toDouble() else vv.toInt())
                     }
                 }
-                row.addView(sl)
+                sliderRow.addView(sl)
+                row.addView(sliderRow)
                 infoView()?.let { row.addView(it) }
                 fieldViews[id] = sl
             }
