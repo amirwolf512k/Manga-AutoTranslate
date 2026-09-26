@@ -567,7 +567,6 @@ class MainActivity : AppCompatActivity() {
             setPadding(dp(2), dp(3), dp(2), dp(4))
         } else null
 
-        // همهٔ اجزای فیلد داخل یک ردیف تا بشود شرطی مخفی/آشکارش کرد
         val row = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         card.addView(row)
         if (lbl.isNotEmpty() && type != "bool") row.addView(label(lbl))
@@ -1243,7 +1242,6 @@ class MainActivity : AppCompatActivity() {
         val f = File(path)
         val ext = f.extension.ifBlank { "bin" }
         Thread {
-            // اگر اسم فایل معنی‌دار است (مثل 9.pdf از لینک) همان حفظ می‌شود
             val nice = if (f.nameWithoutExtension.isBlank() ||
                         f.name.startsWith("output.")) "manga_${stampNow()}.$ext" else null
             val ok = saveAnyToDownloads(path, null, nice)

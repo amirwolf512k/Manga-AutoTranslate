@@ -60,8 +60,6 @@ object MlKitBridge {
                             bb.right + "," + bb.top + "," +
                             bb.right + "," + bb.bottom + "," +
                             bb.left + "," + bb.bottom)
-                    // زاویهٔ واقعی خط از خود ML Kit (درجه، مثبت = ساعتگرد)
-                    // → فرمت جدید: angle|conf|box|text
                     val ang = try { line.angle } catch (_: Exception) { 0f }
                     out.add(String.format("%.2f|%.4f|%s|%s", ang, conf, box, t))
                 }

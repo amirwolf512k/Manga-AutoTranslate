@@ -287,7 +287,6 @@ def manifest():
             if f.get("choices_from") == "PROVIDERS" or f.get("id") == "provider":
                 f["choices"] = [[p, p] for p in provs]
                 f.pop("choices_from", None)
-            # فیلد دامنهٔ API فقط وقتی provider = custom است نمایش داده می‌شود
             if f.get("id") in ("manga_api_base", "api_base"):
                 f["visible_if"] = {"field": "provider", "equals": "custom"}
                 f["label"] = "دامنهٔ API سفارشی (فقط برای custom — مثال: https://api.example.com/v1)"
@@ -356,7 +355,6 @@ def _resolve_tones(job, mf):
 
 
 def _out_stem_from_src(src: str) -> str:
-    """اسم خروجی از ورودی: لینک → نام فایل داخل لینک، فایل → نام خودش."""
     s = str(src or "").strip()
     if not s:
         return ""
@@ -383,7 +381,6 @@ def start_job(params_json, files_dir):
         out = os.path.join(work, "out")
         fmt = str(p.get("fmt", "PDF")).upper()
         ext = "pdf" if fmt == "PDF" else fmt.lower()
-        # نام خروجی از ورودی: لینک …/chapter-264/9.jpg ← 9.pdf
         _stem = _out_stem_from_src(p.get("src") or p.get("url") or "")
         out_file = os.path.join(out, (_stem or "manga") + "." + ext)
         job = {

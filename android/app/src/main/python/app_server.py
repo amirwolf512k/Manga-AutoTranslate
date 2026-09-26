@@ -14,7 +14,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 try:
-    from manga_app import (  # noqa: F401
+    from manga_app import (
         APP_NAME, APP_VER, PROVIDERS, WEB_CSS,
     )
 except Exception:
