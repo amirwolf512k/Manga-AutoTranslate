@@ -117,6 +117,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        installCrashLogger()
         window.decorView.setBackgroundColor(BG)
         window.navigationBarColor = BG
         window.statusBarColor = BG
@@ -235,6 +236,7 @@ class MainActivity : AppCompatActivity() {
         loadingRow.addView(TextView(this).apply {
             text = "  در حال آماده‌سازی موتور و دانلود فونت‌ها…"
             setTextColor(MUT); textSize = 12.5f
+            tag = "loading_text"
         })
         root.addView(loadingRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -243,6 +245,17 @@ class MainActivity : AppCompatActivity() {
 
         Thread {
             try {
+                // v1.11: اگر اجرای قبلی کرش کرده باشد، گزارشش را نشان بده
+                try {
+                    val cl = java.io.File(filesDir, "crash_log.txt")
+                    if (cl.exists()) {
+                        val prevTxt = cl.readText().take(4000)
+                        ui.post {
+                            logBox.text = "💥 گزارش کرش قبلی (این متن را برای سازنده بفرست):\n$prevTxt"
+                        }
+                    }
+                } catch (_: Exception) {
+                }
                 clearOldCaches()
                 copyBundledSources()
                 val launcher = Python.getInstance().getModule("launcher")
@@ -263,11 +276,29 @@ class MainActivity : AppCompatActivity() {
                 ui.post { buildForm() }
             } catch (e: PyException) {
                 ui.post {
+                    loadingRow.visibility = View.GONE
                     logBox.text = "❌ خطای موتور:\n" + e.message
                     Toast.makeText(this, "خطای موتور پایتون", Toast.LENGTH_LONG).show()
                 }
+            } catch (e: Throwable) {
+                // v1.11: هر خطای غیر PyException (که قبلاً اپ را کرش می‌کرد) نشان داده می‌شود
+                ui.post {
+                    loadingRow.visibility = View.GONE
+                    val sw = java.io.StringWriter()
+                    e.printStackTrace(java.io.PrintWriter(sw))
+                    logBox.text = "❌ خطای غیرمنتظره در آماده‌سازی:\n" + sw.toString().take(2500)
+                    Toast.makeText(this, "خطای غیرمنتظره", Toast.LENGTH_LONG).show()
+                }
             }
         }.start()
+
+        // v1.11: اگر بعد از ۲ دقیقه هنوز در حال لود بود، به کاربر توضیح بده
+        ui.postDelayed({
+            if (loadingRow.visibility == View.VISIBLE) {
+                val tv = loadingRow.findViewWithTag<TextView>("loading_text")
+                tv?.text = "  ⏳ بیشتر از حد انتظار طول کشیده (دانلود فونت‌ها/بررسی آپدیت). چند لحظه دیگر صبر کن؛ اگر اپ بسته شد دوباره بازش کن — این بار سریع لود می‌شود."
+            }
+        }, 120_000)
     }
 
 
@@ -294,10 +325,17 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 val diskVer = verOf { if (dst.exists()) dst.readText() else "" }
+                // v1.11: مهر نسخه (.ver_) هم لحاظ شود — آپدیت درون‌اپی که فایل
+                // جدیدتر را گذاشته، دیگر با نسخهٔ قدیمیِ داخل APK بازنویسی نمی‌شود
+                val stampVer = try {
+                    val sv = File(upd, ".ver_" + name)
+                    if (sv.exists()) sv.readText().trim() else "0"
+                } catch (_: Exception) { "0" }
                 val broken = dst.exists() && dst.length() < 1000L
-                val newer = verCmp(assetVer, diskVer) > 0
+                val effDisk = if (verCmp(stampVer, diskVer) > 0) stampVer else diskVer
+                val cmp = verCmp(assetVer, effDisk)
                 val differs = dst.exists() && !broken && md5Of(dst) != md5Of(assets, "engine/" + name)
-                if (!dst.exists() || broken || newer || differs) {
+                if (!dst.exists() || broken || cmp > 0 || (cmp == 0 && differs)) {
                     assets.open("engine/" + name).use { i ->
                         java.io.FileOutputStream(dst).use { o -> i.copyTo(o) }
                     }
@@ -542,6 +580,25 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+
+    private fun installCrashLogger() {
+        // v1.11: هر کرش در فایل ذخیره می‌شود و در باز شدن بعدی اپ در کادر لاگ
+        // نمایش داده می‌شود تا کرش «بی‌دلیل» دیگر بی‌جواب نماند
+        val prev = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { t, e ->
+            try {
+                val sw = java.io.StringWriter()
+                e.printStackTrace(java.io.PrintWriter(sw))
+                java.io.File(filesDir, "crash_log.txt").writeText(
+                    "زمان: " + java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
+                        java.util.Locale.US).format(java.util.Date()) +
+                        "\nthread: " + t.name + "\n" + sw.toString()
+                )
+            } catch (_: Exception) {
+            }
+            prev?.uncaughtException(t, e)
+        }
+    }
 
     private fun clearOldCaches() {
         try {

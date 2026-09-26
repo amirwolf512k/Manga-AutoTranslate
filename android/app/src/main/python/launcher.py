@@ -116,7 +116,8 @@ def apply_updates(files_dir):
         import urllib.request
         req = urllib.request.Request(
             _GITHUB_RAW + name, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=60) as r:
+        # v1.11: 60 ثانیه خیلی طولانی است (روی اینترنت فیلترشده اپ دقیقه‌ها معطل می‌ماند)
+        with urllib.request.urlopen(req, timeout=15) as r:
             data = r.read()
         if len(data) < 10000:
             raise RuntimeError("فایل ناقص (%d بایت)" % len(data))
@@ -167,6 +168,23 @@ def _pip_runtime(files_dir):
         sys.path.append(site)
     if os.path.isfile(os.path.join(site, ".pip_done")):
         return
+    # v1.11: هر ۹ بستهٔ لازم (pydantic/httpx/openai/…) از قبل داخل APK هست
+    # (vendored). pip روی اینترنت گوشی چند دقیقه طول می‌کشد و گاهی کرش/هنگ
+    # می‌سازد — اول import را امتحان کن، فقط اگر واقعاً چیزی نبود pip بزن.
+    missing = []
+    for mod in ("pydantic", "httpx", "openai"):
+        try:
+            __import__(mod)
+        except Exception:
+            missing.append(mod)
+    if not missing:
+        try:
+            open(os.path.join(site, ".pip_done"), "w").write("ok")
+        except Exception:
+            pass
+        _log("SDKها داخل APK موجودند — pip رد شد.")
+        return
+    _log("غایب: %s — نصب با pip …" % ", ".join(missing))
     try:
         from pip._internal.cli.main import main as _pipmain
     except Exception:
@@ -205,21 +223,28 @@ def main(files_dir=None):
     os.environ["MANGA_FILES_DIR"] = files_dir
     os.chdir(files_dir)
     os.environ.setdefault("HOME", files_dir)
+    # v1.11: سقف زمانی سراسری برای دانلودها تا لود اپ بی‌نهایت معطل نشود
+    try:
+        import socket
+        socket.setdefaulttimeout(20)
+    except Exception:
+        pass
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
         _pip_runtime(files_dir)
     except Exception:
         traceback.print_exc()
-    try:
-        upd_dir = apply_updates(files_dir)
-        if os.path.isdir(upd_dir):
-            sys.path.insert(0, upd_dir)
-    except Exception:
-        traceback.print_exc()
 
     try:
         import manga_app
+        # BaseException: اگر manga_app هنگام import حتی SystemExit بدهد،
+        # نباید به لایهٔ Kotlin برسد و لود را بکشد.
+    except BaseException:
+        traceback.print_exc()
+        _log("import manga_app ناموفق بود.")
+        return
+    try:
         fonts_dir = os.path.join(files_dir, "fonts")
         os.makedirs(fonts_dir, exist_ok=True)
         old_fonts = os.path.join(files_dir, "updates", "fonts")
@@ -233,6 +258,29 @@ def main(files_dir=None):
                         pass
             shutil.rmtree(old_fonts, ignore_errors=True)
         manga_app.FONT_DIR = fonts_dir
+    except Exception:
+        traceback.print_exc()
+
+    # v1.11: بررسی آپدیت و دانلود فونت‌ها به پس‌زمینه رفت —
+    # فرم برنامه بدون انتظارِ شبکه (فیلترشکن/تحریم) در چند ثانیه باز می‌شود
+    try:
+        import threading
+        threading.Thread(target=_bg_updates_fonts,
+                         args=(files_dir, ), daemon=True).start()
+    except Exception:
+        traceback.print_exc()
+
+
+def _bg_updates_fonts(files_dir):
+    # پس‌زمینه: آپدیت اینترنتی + فونت‌ها. به فرمِ استارتاپ گره نیست.
+    try:
+        upd_dir = apply_updates(files_dir)
+        if os.path.isdir(upd_dir) and upd_dir not in sys.path:
+            sys.path.append(upd_dir)  # از اجرای بعدی فعال می‌شود
+    except Exception:
+        traceback.print_exc()
+    try:
+        import manga_app
         n = manga_app.download_fonts(log=_log)
         if n:
             _log("%d فونت دانلود شد." % n)

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.10"
+APP_VER = "1.11"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم مانگا و مانهوا به فارسی گفتاری ایرانی هستی. کار تو دوبله است، نه ترجمه لغت‌به‌لغت.
@@ -153,6 +153,13 @@ except Exception:
     _IS_ANDROID = False
     
 def _ensure_all_dependencies() -> None:
+    if _IS_ANDROID:
+        # v1.11: روی اندروید همهٔ وابستگی‌ها (numpy/cv2/rapidocr/onnxruntime/
+        # openai/pydantic/…) داخل APK هست (vendored). اجرای بررسیِ pip در استارتاپ
+        # روی اینترنت گوشی دقیقه‌ها طول می‌کشد، گاهی هنگ/کرش می‌سازد و حتی
+        # مسیر os.execv خطرناک است — کلاً رد شو.
+        print("[*] اندروید: وابستگی‌ها داخل APK موجود است — بررسی pip رد شد.")
+        return
     print("[*] بررسی وابستگی‌ها ...")  
     core = []
     if not _can_import("numpy"):
