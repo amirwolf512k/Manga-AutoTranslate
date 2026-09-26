@@ -11,7 +11,7 @@ import traceback
 
 try:
     import manga
-except Exception:  # v1.12: اگر موقع لود هنوز در sys.path نبود، در _manga() دوباره تلاش می‌شود
+except Exception:
     manga = None
 from extract_ui import extract
 
@@ -19,7 +19,6 @@ import manga_app
 
 
 def _manga():
-    """v1.12: import تأخیری manga — وابسته به زمانِ درست شدن sys.path نیست"""
     global manga
     if manga is None:
         import importlib
