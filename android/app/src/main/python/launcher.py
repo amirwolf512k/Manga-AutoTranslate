@@ -231,6 +231,17 @@ def main(files_dir=None):
         pass
 
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    # v1.12 (رفع «No module named 'manga'»): manga.py فقط در updates/ هست
+    # (به‌عنوان ماژول داخل APK نیست) و health()/bridge.py بلافاصله بعد از
+    # main() آن را import می‌کنند — پس مسیر باید «همین‌جا و همگام» اضافه شود،
+    # نه در ترد پس‌زمینه.
+    try:
+        _upd0 = os.path.join(files_dir, "updates")
+        os.makedirs(_upd0, exist_ok=True)
+        if _upd0 not in sys.path:
+            sys.path.insert(0, _upd0)
+    except Exception:
+        traceback.print_exc()
     try:
         _pip_runtime(files_dir)
     except Exception:

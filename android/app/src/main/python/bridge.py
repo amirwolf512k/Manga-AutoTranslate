@@ -9,10 +9,22 @@ import threading
 import time
 import traceback
 
-import manga
+try:
+    import manga
+except Exception:  # v1.12: اگر موقع لود هنوز در sys.path نبود، در _manga() دوباره تلاش می‌شود
+    manga = None
 from extract_ui import extract
 
 import manga_app
+
+
+def _manga():
+    """v1.12: import تأخیری manga — وابسته به زمانِ درست شدن sys.path نیست"""
+    global manga
+    if manga is None:
+        import importlib
+        manga = importlib.import_module("manga")
+    return manga
 
 STATE = {"job": None, "lock": threading.Lock()}
 _MF_CACHE = {"mf": None}
@@ -226,7 +238,7 @@ def _slot_fields(mf):
 
 def _defaults(mf):
     try:
-        dflt_instr = manga.DEFAULT_SYSTEM_INSTRUCTION_STYLE.strip()
+        dflt_instr = _manga().DEFAULT_SYSTEM_INSTRUCTION_STYLE.strip()
     except Exception:
         dflt_instr = ""
     for sec in mf.get("sections", []):
@@ -579,7 +591,7 @@ def _run(job):
                     except Exception:
                         mf = {}
                 font_by_style, active = _resolve_tones(job, mf)
-                tr = manga.MangaTranslator(
+                tr = _manga().MangaTranslator(
                     api_key=keys or ["placeholder"],
                     provider=str(p.get("provider") or "gemini"),
                     model_name=(str(p.get("model")) or None) if p.get("model") else None,
