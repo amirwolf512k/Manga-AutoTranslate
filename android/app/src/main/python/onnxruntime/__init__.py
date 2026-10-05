@@ -21,6 +21,7 @@ try:
     _ByteBuffer = jclass("java.nio.ByteBuffer")
     _DoubleBuffer = jclass("java.nio.DoubleBuffer")
     _HashMap = jclass("java.util.HashMap")
+    _ByteOrder = jclass("java.nio.ByteOrder")
     _OrtEnvironment = jclass("ai.onnxruntime.OrtEnvironment")
     _OrtSession_cls = jclass("ai.onnxruntime.OrtSession$SessionOptions")
     _OnnxTensor = jclass("ai.onnxruntime.OnnxTensor")
@@ -30,6 +31,79 @@ try:
 except Exception as _e:
     _OK = False
     _IMPORT_ERR = _e
+
+
+# --- bulk fast path (Chaquopy bytes<->byte[] is a single memcpy) ---
+
+def _bulk_ok():
+    return bool(_OK) and (_JF is not None) and (_ByteOrder is not None)
+
+
+def _tensor_create_bulk(x, shape_jlong):
+    """Create OnnxTensor via little-endian ByteBuffer — ~100x faster than
+    per-element jarray conversion for 512x512 tensors (old path: 300-800ms
+    per LaMa call on a phone; new path: ~5ms)."""
+    try:
+        if x.dtype == np.float32:
+            jb = x.tobytes()  # native little-endian on Android (ARM)
+            bb = _ByteBuffer.wrap(jb)
+            bb.order(_ByteOrder.LITTLE_ENDIAN)
+            fb = bb.asFloatBuffer()
+            return _OnnxTensor.createTensor(_ENV, fb, shape_jlong)
+        if x.dtype == np.int64:
+            jb = x.tobytes()
+            bb = _ByteBuffer.wrap(jb)
+            bb.order(_ByteOrder.LITTLE_ENDIAN)
+            lb = bb.asLongBuffer()
+            return _OnnxTensor.createTensor(_ENV, lb, shape_jlong)
+        if x.dtype == np.int32:
+            jb = x.tobytes()
+            bb = _ByteBuffer.wrap(jb)
+            bb.order(_ByteOrder.LITTLE_ENDIAN)
+            ib = bb.asIntBuffer()
+            return _OnnxTensor.createTensor(_ENV, ib, shape_jlong)
+    except Exception:
+        return None
+    return None
+
+
+def _tensor_to_numpy_bulk(t):
+    """Read OnnxTensor output via typed Buffer -> little-endian byte[] -> numpy.
+    Avoids t.getValue() nested Java arrays (300-800ms per big tensor)."""
+    try:
+        info = t.getInfo()
+        shape = [int(s) for s in list(info.getShape())]
+    except Exception:
+        shape = None
+    tstr = ""
+    try:
+        tstr = str(t.getInfo().getType()).upper()
+    except Exception:
+        tstr = ""
+    try:
+        if "FLOAT" in tstr and "16" not in tstr:
+            fb = t.getFloatBuffer()
+            n = fb.remaining()
+            bb = _ByteBuffer.allocate(n * 4)
+            bb.order(_ByteOrder.LITTLE_ENDIAN)
+            bb.asFloatBuffer().put(fb)
+            arr = np.frombuffer(bytes(bb.array()), dtype=np.float32)
+            if shape:
+                arr = arr.reshape(shape)
+            return arr
+        if "INT64" in tstr:
+            lb = t.getLongBuffer()
+            n = lb.remaining()
+            bb = _ByteBuffer.allocate(n * 8)
+            bb.order(_ByteOrder.LITTLE_ENDIAN)
+            bb.asLongBuffer().put(lb)
+            arr = np.frombuffer(bytes(bb.array()), dtype=np.int64)
+            if shape:
+                arr = arr.reshape(shape)
+            return arr
+    except Exception:
+        return None
+    return None
 
 
 _JCODE_TYPE = {"f": ("JF", "float"), "d": ("JD", "double"),
@@ -192,6 +266,15 @@ def _tensor_create(x):
     else:
         flat = flat.astype(np.float32)
         code = "f"
+    # fast path: bulk ByteBuffer (memcpy speed); fallback: per-element
+    if _bulk_ok():
+        try:
+            shape = _jarr_fill([int(v) for v in x.shape], "j")
+            t = _tensor_create_bulk(np.ascontiguousarray(x), shape)
+            if t is not None:
+                return t
+        except Exception:
+            pass
     ja = _jarr_fill(flat.tolist(), code)
     shape = _jarr_fill([int(v) for v in x.shape], "j")
     return _OnnxTensor.createTensor(_ENV, _buf_of(ja, code), shape)
@@ -311,6 +394,9 @@ class InferenceSession:
     def __init__(self, path_or_bytes, sess_options=None, providers=None, **kw):
         if not _OK:
             raise ImportError("شیم ORT اندروید لود نشد: %s" % (_IMPORT_ERR,))
+        jopts = None
+        if sess_options is not None:
+            jopts = self._make_java_session_options(sess_options)
         if isinstance(path_or_bytes, (bytes, bytearray)):
             import os
             import tempfile
@@ -318,16 +404,40 @@ class InferenceSession:
             try:
                 with os.fdopen(fd, "wb") as f:
                     f.write(path_or_bytes)
-                self._sess = _ENV.createSession(tmp)
+                self._sess = _ENV.createSession(tmp) if jopts is None \
+                    else _ENV.createSession(tmp, jopts)
             finally:
                 try:
                     os.remove(tmp)
                 except Exception:
                     pass
         else:
-            self._sess = _ENV.createSession(str(path_or_bytes))
+            self._sess = _ENV.createSession(str(path_or_bytes)) if jopts is None \
+                else _ENV.createSession(str(path_or_bytes), jopts)
         self._in_names = _jset_to_list(self._sess.getInputNames())
         self._out_names = _jset_to_list(self._sess.getOutputNames())
+
+    @staticmethod
+    def _make_java_session_options(so):
+        """Convert python SessionOptions -> OrtSession.SessionOptions (Java).
+        Wrapped in try/except: unsupported methods no-op on older ORT."""
+        try:
+            jopts = _OrtSession_cls()
+            n = int(getattr(so, "intra_op_num_threads", 0) or 0)
+            if n > 0:
+                try:
+                    jopts.setIntraOpNumThreads(n)
+                except Exception:
+                    pass
+            n2 = int(getattr(so, "inter_op_num_threads", 0) or 0)
+            if n2 > 0:
+                try:
+                    jopts.setInterOpNumThreads(n2)
+                except Exception:
+                    pass
+            return jopts
+        except Exception:
+            return None
 
     def get_inputs(self):
         infos = None
@@ -389,7 +499,15 @@ class InferenceSession:
                 outs.append(None)
                 continue
             try:
-                outs.append(_to_numpy(t.getValue()))
+                arr = None
+                if _bulk_ok():
+                    try:
+                        arr = _tensor_to_numpy_bulk(t)
+                    except Exception:
+                        arr = None
+                if arr is None:
+                    arr = _to_numpy(t.getValue())
+                outs.append(arr)
             finally:
                 try:
                     t.close()

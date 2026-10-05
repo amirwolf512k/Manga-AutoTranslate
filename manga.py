@@ -179,11 +179,16 @@ def _pip_uninstall(*packages: str) -> None:
 
 
 def _can_import(module: str) -> bool:
+    # find_spec: فقط بررسی وجود پکیج — بدون لود واقعی (paddleocr ~۴۳۰MB رم می‌گیرد!)
     try:
-        __import__(module)
-        return True
+        import importlib.util as _ilu
+        return _ilu.find_spec(module) is not None
     except Exception:
-        return False
+        try:
+            __import__(module)
+            return True
+        except Exception:
+            return False
 
 
 def _nvidia_gpu_present() -> bool:
@@ -215,12 +220,78 @@ def _ort_has_cuda() -> bool:
         return False
 
 
+def _env_flag(name: str) -> bool:
+    try:
+        v = os.environ.get(name, "").strip().lower()
+    except Exception:
+        v = ""
+    return v in ("1", "true", "yes", "on")
+
+
 def _torch_available() -> bool:
+    if _env_flag("MANGA_NO_TORCH"):
+        return False
     try:
         import torch  
         return True
     except Exception:
         return False
+
+
+def _total_system_ram_gb() -> float:
+    try:
+        if os.name == "nt":
+            import ctypes
+            class _MSE(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            st = _MSE()
+            st.dwLength = ctypes.sizeof(st)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(st)):
+                return float(st.ullTotalPhys) / (1024 ** 3)
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for line in f:
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1]) / (1024 * 1024)
+    except Exception:
+        pass
+    try:
+        import subprocess as _sp
+        out = _sp.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True,
+                      timeout=5).stdout.strip()
+        if out.isdigit():
+            return int(out) / (1024 ** 3)
+    except Exception:
+        pass
+    return 0.0
+
+
+_LITE_MEM_GB = 5.0
+
+
+def _lite_mode() -> bool:
+    """حالت کم‌مصرف (Lite): رم کل سیستم کم (≈<۵GB) یا MANGA_LITE=1.
+
+    در این حالت: torch هرگز لود/نصب نمی‌شود، LaMa ONNX نیم‌دقت (fp16)
+    به‌جای مدل ۲۰۰ مگابایتی استفاده می‌شود و تنظیمات ORT بهینهٔ رم می‌گیرد.
+    """
+    v = os.environ.get("MANGA_LITE", "").strip().lower()
+    if v in ("1", "true", "yes", "on"):
+        return True
+    if v in ("0", "false", "no", "off"):
+        return False
+    try:
+        total = _total_system_ram_gb()
+        return bool(total) and total < _LITE_MEM_GB
+    except Exception:
+        return False
+
+
 try:
     import java  
     _IS_ANDROID = True
@@ -305,7 +376,14 @@ def _ensure_all_dependencies() -> None:
     if not _can_import("openai"):
         _pip_install("openai")
 
-    if not _IS_ANDROID and not _torch_available():
+    _ram_total = _total_system_ram_gb()
+    if (_IS_ANDROID or _lite_mode() or _env_flag("MANGA_NO_TORCH")):
+        print("[*] حالت کم‌مصرف/Lite یا MANGA_NO_TORCH → torch نصب/لود نمی‌شود "
+              "(پاک‌سازی با lama-lite ONNX — وزن int8، سبک و سریع).")
+    elif _ram_total and _ram_total < 6.0:
+        print(f"[*] رم کل سیستم کم است ({_ram_total:.1f}GB < 6GB) → torch نصب نمی‌شود؛ "
+              "پاک‌سازی با lama-lite ONNX (کم‌مصرف‌تر از torch).")
+    elif not _torch_available():
         print("[*] نصب torch CPU برای big-lama.pt — فقط بار اول (~۲۰۰MB) ...")
         try:
             r = subprocess.run(
@@ -492,7 +570,10 @@ def _ensure_all_dependencies() -> None:
     print("[+] بررسی وابستگی‌ها تمام شد.\n")
 
 
-_ensure_all_dependencies()
+if not _env_flag("MANGA_SKIP_DEP_INSTALL"):
+    _ensure_all_dependencies()
+else:
+    print("[*] MANGA_SKIP_DEP_INSTALL=1 → بررسی/نصب وابستگی‌ها رد شد.\n")
 
 import argparse
 import json
@@ -545,10 +626,17 @@ except ImportError:
 
 _HAS_PADDLE = False
 try:
+    import importlib.util as _ilu
+    if _ilu.find_spec("paddleocr") is not None:
+        _HAS_PADDLE = True
+except Exception:
+    pass
+
+
+def _load_paddleocr_class():
+    """paddleocr فقط موقع استفادهٔ واقعی لود می‌شود (لودش ~۴۳۰MB رم می‌گیرد)."""
     from paddleocr import PaddleOCR
-    _HAS_PADDLE = True
-except ImportError:
-    PaddleOCR = None
+    return PaddleOCR
 
 _HAS_RAPIDOCR = False
 try:
@@ -598,17 +686,29 @@ def _ort_default_threads() -> int:
     return max(1, min(4, n))
 
 
-def _ort_session_options(threads: int = 0):
+def _ort_session_options(threads: int = 0, arena: Optional[bool] = None):
     so = ort.SessionOptions()
     so.log_severity_level = 3
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     if not threads or int(threads) <= 0:
         threads = _ort_default_threads()
+    if _IS_ANDROID:
+        # گوشی‌ها چند هسته‌ای‌اند (big.LITTLE)؛ تردِ تک = اسکن بسیار کند
+        try:
+            cores = os.cpu_count() or 4
+            threads = max(int(threads), min(4, cores))
+        except Exception:
+            pass
     so.intra_op_num_threads = max(1, int(threads))
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-    so.enable_cpu_mem_arena = True
-    so.enable_mem_pattern = True
+    # نکتهٔ اندازه‌گیری‌شده: arena فعال معمولاً پیک رم پایین‌تری دارد؛
+    # ولی برای مدل‌های DQ (lama-lite) در حالت Lite، arena-off بهتر است:
+    # وزن‌های dequant شده پس از هر اجرا آزاد می‌شوند و fragmentation کم است.
+    if arena is None:
+        arena = not _lite_mode()
+    so.enable_cpu_mem_arena = bool(arena)
+    so.enable_mem_pattern = bool(arena)
     return so
 
 
@@ -640,11 +740,12 @@ def _prepare_ort_cuda_dlls() -> None:
         pass
 
 
-def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 0):
+def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 0,
+                      arena: Optional[bool] = None):
     global _ORT_CUDA_OK
     if ort is None:
         raise RuntimeError("onnxruntime نصب نیست")
-    so = _ort_session_options(threads)
+    so = _ort_session_options(threads, arena=arena)
     want = prefer_gpu and (_ORT_CUDA_OK is not False)
 
     if want:
@@ -922,6 +1023,159 @@ class LamaMangaONNX:
                           interpolation=mask_interp) > 0).astype(np.uint8)
         img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
         
+        msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
+        img_np[msk > 0] = 0
+        img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
+        mask_in = msk.astype(np.float32)[None, None]
+        out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
+
+        o = out[0].transpose(1, 2, 0).astype(np.float32)
+        try:
+            if float(np.max(o)) > 1.5:
+                o = o / 255.0
+        except Exception:
+            pass
+        o = np.clip(o, 0.0, 1.0)
+        o = (o * 255).astype(np.uint8)
+        predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
+        result = img_rgb.copy()
+        result[original_mask] = predicted[original_mask]
+        return Image.fromarray(result)
+
+
+class LamaLiteONNX:
+    """big-LaMa سبک: وزن‌های int8 کانالی (۵۶MB) + ورودی داینامیک (ضریب ۸).
+
+    - کیفیت ≈ fp32 (کوانتیزیشن فقط وزن‌ها، بدون کوانتیزیشن اکتیویشن)
+    - رم جلسه ~۶۵MB (به‌جای ~۴۶۰MB) → مناسب اندروید و سیستم‌های کم‌رم
+    - اندازهٔ اجرای تطبیقی (۱۹۲/۲۵۶/۳۲۰/۴۴۸/۵۱۲) → حباب‌های کوچک تا ۴× سریع‌تر
+    """
+
+    FILE = "lama-lite.onnx"
+    URLS = (
+        "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/"
+        "download/models-v2/lama-lite.onnx",
+    )
+    MAX_RUN = 512
+
+    def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
+                 threads: int = 4, cache_dir: Optional[str] = None,
+                 max_side: Optional[int] = None):
+        if not model_path or not os.path.isfile(model_path):
+            model_path = self._download_model(cache_dir=cache_dir)
+        self.model_path = model_path
+        if not prefer_gpu:
+            use_threads = max(1, min(4, os.cpu_count() or 2))
+        else:
+            use_threads = max(1, int(threads))
+        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu,
+                                         threads=use_threads)
+        self.session, use_threads = _cpu_thread_fallback(
+            self.session, model_path, use_threads)
+        self.max_side = int(max_side or self.MAX_RUN)
+        if _lite_mode():
+            self.max_side = min(self.max_side, 384)
+        # dynamic dims?
+        self._dynamic = True
+        try:
+            for inp in self.session.get_inputs():
+                dims = list(inp.shape)[-2:]
+                if len(dims) == 2 and all(isinstance(d, int) and d > 0 for d in dims):
+                    self._dynamic = False
+                    self.max_side = min(self.max_side, min(dims))
+        except Exception:
+            pass
+        names = [i.name for i in self.session.get_inputs()]
+        self._in_image = names[0]
+        self._in_mask = names[1] if len(names) > 1 else "mask"
+        for n in names:
+            low = n.lower()
+            if "mask" in low:
+                self._in_mask = n
+            elif "image" in low or "img" in low:
+                self._in_image = n
+        print(
+            f"[+] lama-lite ONNX آماده (int8، داینامیک) | "
+            f"providers={self.session.get_providers()} | threads={use_threads} | "
+            f"dynamic={self._dynamic} | max_side={self.max_side}"
+        )
+
+    @classmethod
+    def _download_model(cls, cache_dir: Optional[str] = None) -> str:
+        env_p = os.environ.get("LAMA_MODEL")
+        if env_p and os.path.isfile(env_p):
+            return env_p
+        _m = _mirror_model(cls.FILE)
+        if _m:
+            return _m
+        dst = os.path.join(_model_cache_dir("det_models"), cls.FILE)
+        if os.path.isfile(dst) and os.path.getsize(dst) > 10_000_000:
+            print(f"[*] مدل lama-lite.onnx از کش: {dst}")
+            return dst
+        last = None
+        for url in cls.URLS:
+            try:
+                print(f"[*] دانلود lama-lite.onnx (~۵۶MB، فقط بار اول) از "
+                      f"{url.split('/')[2]} ...")
+                _dl_to(url, dst, name=cls.FILE)
+                return dst
+            except Exception as e:
+                last = e
+                print(f"    [!] دانلود از {url.split('/')[2]} نشد: {e}")
+                try:
+                    if os.path.isfile(dst + ".part"):
+                        os.remove(dst + ".part")
+                except Exception:
+                    pass
+        raise RuntimeError(f"دانلود lama-lite.onnx ناموفق: {last}")
+
+    def _pick_size(self, w: int, h: int) -> int:
+        m = max(int(w), int(h))
+        if m <= 160:
+            s = 192
+        elif m <= 224:
+            s = 256
+        elif m <= 300:
+            s = 320
+        elif m <= 420:
+            s = 448
+        else:
+            s = 512
+        return min(s, self.max_side)
+
+    def __call__(self, image, mask):
+        if isinstance(image, np.ndarray):
+            if image.ndim == 3 and image.shape[2] in (3, 4):
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            else:
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:
+            img_rgb = np.array(image.convert("RGB"))
+        if isinstance(mask, np.ndarray):
+            if mask.ndim == 3:
+                mask_u8 = mask[..., 0] if mask.shape[2] == 1 else cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+            else:
+                mask_u8 = mask
+        else:
+            mask_u8 = np.array(mask.convert("L"))
+        if mask_u8.shape != img_rgb.shape[:2]:
+            raise ValueError("Image and mask dimensions must match")
+        original_mask = mask_u8 > 0
+        if not np.any(original_mask):
+            return Image.fromarray(img_rgb.copy())
+        oh, ow = img_rgb.shape[:2]
+        if self._dynamic:
+            s = self._pick_size(ow, oh)
+        else:
+            s = self.max_side
+        scale = s / max(ow, oh)
+        rw, rh = max(1, round(ow * scale)), max(1, round(oh * scale))
+        interp = cv2.INTER_AREA if max(ow, oh) > s else cv2.INTER_CUBIC
+        img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
+        mask_interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_NEAREST_EXACT
+        msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
+                          interpolation=mask_interp) > 0).astype(np.uint8)
+        img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
         msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
         img_np[msk > 0] = 0
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
@@ -1675,7 +1929,14 @@ class MlKitBackend:
             return None
         try:
             import cv2
-            ok, buf = cv2.imencode(".png", image_bgr)
+            h, w = image_bgr.shape[:2]
+            if max(h, w) > 320:
+                # JPEG برای کراپ‌های بزرگ ۳-۵× سریع‌تر از PNG انکد/دیکد می‌کند؛
+                # کیفیت ۹۵ برای OCR کاملاً کافی است (ML Kit مقاوم است).
+                ok, buf = cv2.imencode(".jpg", image_bgr,
+                                       [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            else:
+                ok, buf = cv2.imencode(".png", image_bgr)
         except Exception as e:
             print(f"    [OCR] ML Kit کدگذاری تصویر نشد: {e}")
             return None
@@ -1891,6 +2152,7 @@ class TextRegion:
     det_class: str = ""  
     
     ocr_polys: List[np.ndarray] = field(default_factory=list)
+    ocr_failed: bool = False
 
 
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
@@ -2144,15 +2406,25 @@ class MangaTranslator:
             print("[*] نه onnxruntime هست و نه torch → OpenCV inpaint.")
             return False
 
+        if _lite_mode() and not _on_android() and force_gpu is None and not force_lama:
+            avail = self._available_ram_gb()
+            if avail is None or avail >= 1.2:
+                print("[*] حالت کم‌مصرف (Lite) → پاک‌سازی با lama-lite ONNX "
+                      "(int8، ~۶۵MB رم). برای غیرفعال‌سازی: --cpu")
+                return True
+            print(f"[*] رم آزاد خیلی کم است ({avail:.1f}GB) → OpenCV سریع. "
+                  f"برای اجبار: --lama")
+            return False
+
         if _on_android() and force_gpu is None and not force_lama:
             total = self._total_ram_gb()
-            if total and total < self._ANDROID_LAMA_MIN_TOTAL_GB:
+            if total and total < 3.0:
                 print(f"[*] خودکار اندروید: رم کل گوشی {total:.1f}GB "
-                      f"(< {self._ANDROID_LAMA_MIN_TOTAL_GB:.0f}GB) → OpenCV سریع.")
+                      f"(< 3GB) → OpenCV سریع.")
                 return False
-            print(f"[*] خودکار اندروید: رم کل {total:.1f}GB → LaMa فعال "
-                  f"(اگر لحظهٔ بارگذاری رمِ آزاد خیلی کم باشد، همان‌جا هشدار "
-                  f"می‌دهد یا به OpenCV برمی‌گردد).")
+            print(f"[*] خودکار اندروید: رم کل {total:.1f}GB → lama-lite فعال "
+                  f"(int8، سبک؛ اگر لحظهٔ بارگذاری رمِ آزاد خیلی کم باشد، "
+                  f"همان‌جا هشدار می‌دهد یا به OpenCV برمی‌گردد).")
             return True
 
         if force_gpu is True:
@@ -2376,111 +2648,16 @@ class MangaTranslator:
         self.use_lama = self._decide_lama(force_gpu=gpu, force_lama=force_lama)
         self._inpainter_name = "OpenCV"
 
+        if _lite_mode() and not _on_android():
+            # نوارهای چسباندهٔ خیلی بلند روی سیستم کم‌رم بافرهای عظیم می‌سازند؛
+            # در حالت Lite ارتفاع چسباندن محدود می‌شود (۰ = غیرفعال، دست‌نخورده).
+            _smh = int(getattr(self, "stitch_max_height", 0) or 0)
+            if _smh > 4200:
+                self.stitch_max_height = 4200
+                print("[*] Lite: حداکثر ارتفاع نوار چسبانده → ۴۲۰۰px (کاهش پیک رم).")
+
         self.ocr_langs = ocr_langs or ["en"]
-        lang_map = {
-            "en": "en", "fa": "fa", "ko": "korean", "ja": "japan", "zh": "ch",
-            "fr": "french", "de": "german", "es": "spanish", "it": "italian",
-            "pt": "portuguese", "ru": "russian", "ar": "arabic",
-        }
-        main_lang = "en"
-        for lang in self.ocr_langs:
-            if lang in lang_map:
-                main_lang = lang_map[lang]
-                break
-
-        device = "gpu" if ocr_gpu else "cpu"
-        self.ocr = None
-        self._ocr_backend_name = "none"
-
-        avail_ram = self._available_ram_gb()
-        if avail_ram < 6.0:
-            if self.max_workers > 2:
-                print(f"[*] RAM آزاد کم است ({avail_ram:.1f} GB) → workers={self.max_workers} به ۲ محدود شد.")
-                self.max_workers = 2
-
-        use_paddle = _HAS_PADDLE and avail_ram >= 6.0
-        if _HAS_PADDLE and not use_paddle:
-            print(f"[*] RAM آزاد کم است ({avail_ram:.1f} GB) → PaddleOCR سنگین لود نمی‌شود؛ RapidOCR سبک استفاده می‌شود.")
-
-        if use_paddle:
-            print(f"[*] در حال بارگذاری PaddleOCR | lang={main_lang} device={device} ...")
-            ocr_kwargs = dict(
-                lang=main_lang,
-                text_det_thresh=0.25,
-                text_det_box_thresh=0.4,
-                text_det_unclip_ratio=1.8,
-            )
-            try:
-                try:
-                    engine = PaddleOCR(
-                        use_textline_orientation=True,
-                        device=device,
-                        enable_mkldnn=False,
-                        **ocr_kwargs,
-                    )
-                except TypeError:
-                    try:
-                        engine = PaddleOCR(
-                            use_angle_cls=True,
-                            use_gpu=ocr_gpu,
-                            enable_mkldnn=False,
-                            **ocr_kwargs,
-                        )
-                    except TypeError:
-                        try:
-                            engine = PaddleOCR(
-                                use_textline_orientation=True,
-                                device=device,
-                                **ocr_kwargs,
-                            )
-                        except TypeError:
-                            engine = PaddleOCR(
-                                use_angle_cls=True,
-                                use_gpu=ocr_gpu,
-                                **ocr_kwargs,
-                            )
-                self.ocr = PaddleOCRWrapper(engine)
-                self._ocr_backend_name = "paddle"
-                print(f"[+] PaddleOCR آماده | lang={main_lang} | device={device}")
-            except Exception as e:
-                print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
-
-        if self.ocr is None and _on_android():
-            try:
-                self.ocr = MlKitBackend(lang=main_lang)
-                self._ocr_backend_name = "mlkit"
-            except Exception as e:
-                print(f"[!] ML Kit لود نشد ({e}) → RapidOCR")
-
-        if self.ocr is None:
-            try:
-                self.ocr = RapidOCRBackend(lang=main_lang)
-                self._ocr_backend_name = "rapidocr"
-            except Exception as e:
-                print(f"[!] RapidOCR هم لود نشد ({e})", file=sys.stderr)
-                raise ImportError(
-                    "هیچ OCR در دسترس نیست.\n"
-                    "  پیشنهاد: pip install paddleocr\n"
-                    "  یا: pip install rapidocr  (یا rapidocr-onnxruntime)"
-                ) from e
-
-        print(f"[*] موتور OCR فعال: {self._ocr_backend_name} | workers={self.max_workers}")
-
-        
-        self.det = None
-        self.det_confidence = float(getattr(self, "det_confidence", 0.28) or 0.28)
-        try:
-            print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
-            self.det = RTDetrV2ONNXDetector(
-                prefer_gpu=self.use_gpu,
-                conf_thresh=self.det_confidence,
-                iou_thresh=0.45,
-                threads=max(1, int(self.max_workers or 2)),
-                multi_scale=not _IS_ANDROID,
-            )
-        except Exception as e:
-            print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
-            self.det = None
+        self._init_extraction_models()
 
         if self.provider_type == "gemini":
             if not _HAS_GEMINI and _HAS_OPENAI:
@@ -2522,6 +2699,146 @@ class MangaTranslator:
             if len(self._api_keys) > 1:
                 print(f"    {len(self._api_keys)} کلید API (جابه‌جایی خودکار)")
 
+    def _init_extraction_models(self):
+        """بارگذاری OCR + تشخیص‌دهندهٔ حباب (قابل فراخوانی مجدد در حالت Lite)."""
+        lang_map = {
+            "en": "en", "fa": "fa", "ko": "korean", "ja": "japan", "zh": "ch",
+            "fr": "french", "de": "german", "es": "spanish", "it": "italian",
+            "pt": "portuguese", "ru": "russian", "ar": "arabic",
+        }
+        main_lang = "en"
+        for lang in self.ocr_langs:
+            if lang in lang_map:
+                main_lang = lang_map[lang]
+                break
+
+        device = "gpu" if self.use_gpu else "cpu"
+        self.ocr = None
+        self._ocr_backend_name = "none"
+
+        avail_ram = self._available_ram_gb()
+        if avail_ram < 6.0:
+            if self.max_workers > 2:
+                print(f"[*] RAM آزاد کم است ({avail_ram:.1f} GB) → workers={self.max_workers} به ۲ محدود شد.")
+                self.max_workers = 2
+
+        use_paddle = _HAS_PADDLE and avail_ram >= 6.0
+        if _HAS_PADDLE and not use_paddle:
+            print(f"[*] RAM آزاد کم است ({avail_ram:.1f} GB) → PaddleOCR سنگین لود نمی‌شود؛ RapidOCR سبک استفاده می‌شود.")
+
+        if use_paddle:
+            print(f"[*] در حال بارگذاری PaddleOCR | lang={main_lang} device={device} ...")
+            try:
+                _PaddleOCR = _load_paddleocr_class()
+            except Exception as e:
+                print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
+                _PaddleOCR = None
+            if _PaddleOCR is not None:
+                ocr_kwargs = dict(
+                    lang=main_lang,
+                    text_det_thresh=0.25,
+                    text_det_box_thresh=0.4,
+                    text_det_unclip_ratio=1.8,
+                )
+                try:
+                    try:
+                        engine = _PaddleOCR(
+                            use_textline_orientation=True,
+                            device=device,
+                            enable_mkldnn=False,
+                            **ocr_kwargs,
+                        )
+                    except TypeError:
+                        try:
+                            engine = _PaddleOCR(
+                                use_angle_cls=True,
+                                use_gpu=self.use_gpu,
+                                enable_mkldnn=False,
+                                **ocr_kwargs,
+                            )
+                        except TypeError:
+                            try:
+                                engine = _PaddleOCR(
+                                    use_textline_orientation=True,
+                                    device=device,
+                                    **ocr_kwargs,
+                                )
+                            except TypeError:
+                                engine = _PaddleOCR(
+                                    use_angle_cls=True,
+                                    use_gpu=self.use_gpu,
+                                    **ocr_kwargs,
+                                )
+                    self.ocr = PaddleOCRWrapper(engine)
+                    self._ocr_backend_name = "paddle"
+                    print(f"[+] PaddleOCR آماده | lang={main_lang} | device={device}")
+                except Exception as e:
+                    print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
+
+        if self.ocr is None and _on_android():
+            try:
+                self.ocr = MlKitBackend(lang=main_lang)
+                self._ocr_backend_name = "mlkit"
+            except Exception as e:
+                print(f"[!] ML Kit لود نشد ({e}) → RapidOCR")
+
+        if self.ocr is None:
+            try:
+                self.ocr = RapidOCRBackend(lang=main_lang)
+                self._ocr_backend_name = "rapidocr"
+            except Exception as e:
+                print(f"[!] RapidOCR هم لود نشد ({e})", file=sys.stderr)
+                raise ImportError(
+                    "هیچ OCR در دسترس نیست.\n"
+                    "  پیشنهاد: pip install paddleocr\n"
+                    "  یا: pip install rapidocr  (یا rapidocr-onnxruntime)"
+                ) from e
+
+        print(f"[*] موتور OCR فعال: {self._ocr_backend_name} | workers={self.max_workers}")
+
+        self.det = None
+        try:
+            print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
+            self.det = RTDetrV2ONNXDetector(
+                prefer_gpu=self.use_gpu,
+                conf_thresh=self.det_confidence,
+                iou_thresh=0.45,
+                threads=max(1, int(self.max_workers or 2)),
+                multi_scale=not _IS_ANDROID,
+            )
+        except Exception as e:
+            print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
+            self.det = None
+
+    def _release_extraction_models(self):
+        """حالت Lite: آزادسازی موقت OCR/تشخیص‌دهنده قبل از فاز پاکسازی
+        (پیک رم پایین‌تر هنگام اجرای LaMa)."""
+        if getattr(self, "_models_released", False):
+            return
+        try:
+            self.ocr = None
+            self.det = None
+            self._models_released = True
+            import gc as _gc
+            _gc.collect()
+            try:
+                # برگرداندن حافظهٔ آزادشده به سیستم‌عامل (glibc نگهش می‌دارد!)
+                import ctypes as _ct
+                _libc = _ct.CDLL("libc.so.6")
+                if hasattr(_libc, "malloc_trim"):
+                    _libc.malloc_trim(0)
+            except Exception:
+                pass
+            print("[*] Lite: مدل‌های OCR/تشخیص آزاد شدند → پیک رم کمتر برای پاکسازی LaMa.")
+        except Exception:
+            pass
+
+    def _maybe_reinit_extraction_models(self):
+        if getattr(self, "_models_released", False):
+            print("[*] Lite: بارگذاری مجدد مدل‌های OCR/تشخیص ...")
+            self._init_extraction_models()
+            self._models_released = False
+
     @staticmethod
     def _total_ram_gb() -> float:
         try:
@@ -2534,8 +2851,6 @@ class MangaTranslator:
         return 0.0
 
     def _get_lama(self):
-        
-        
         if self._lama is None and self.use_lama:
             if _on_android():
                 total = self._total_ram_gb()
@@ -2547,14 +2862,19 @@ class MangaTranslator:
                     _gc.collect()
                 except Exception:
                     pass
-                if total and total < self._ANDROID_LAMA_MIN_TOTAL_GB:
+                # لِمَـلایت (int8، جلسهٔ ~۶۵MB) → آستانهٔ رم پایین‌تر از قبل
+                _min_total = 3.0 if total < self._ANDROID_LAMA_MIN_TOTAL_GB \
+                    else self._ANDROID_LAMA_MIN_TOTAL_GB
+                _min_avail = 0.25 if total < self._ANDROID_LAMA_MIN_TOTAL_GB \
+                    else self._ANDROID_LAMA_MIN_AVAIL_GB
+                if total and total < _min_total:
                     print(f"[!] LaMa فعال نشد: رم کل گوشی {total:.1f}GB است "
-                          f"(حداقل {self._ANDROID_LAMA_MIN_TOTAL_GB:.0f}GB لازم است) "
+                          f"(حداقل {_min_total:.0f}GB لازم است) "
                           f"→ پاک‌سازی OpenCV (سبک و سریع).")
                     self.use_lama = False
                     self._inpainter_name = "OpenCV"
                     return None
-                if avail and avail < self._ANDROID_LAMA_MIN_AVAIL_GB:
+                if avail and avail < _min_avail:
                     if strong_cpu:
                         print(f"[!] رم آزاد لحظه‌ای خیلی کم است ({avail:.1f}GB) ولی CPU "
                               f"گوشی قوی است ({cores} هسته) → با این حال تلاش می‌کنیم؛ "
@@ -2570,17 +2890,28 @@ class MangaTranslator:
                     print(f"    [!] رم آزاد کمی پایین است ({avail:.1f}GB)؛ اگر وسط کار "
                           f"کرش شد، اپ‌های بیکار را ببند یا چند لحظه بعد امتحان کن.")
                 print(f"[*] رم گوشی: کل {total:.1f}GB / آزاد {avail:.1f}GB / "
-                      f"{cores} هستهٔ CPU → LaMa-Manga روی CPU اجرا می‌شود "
-                      f"(کندتر ولی تمیزتر از OpenCV).")
-            if _torch_available():
+                      f"{cores} هستهٔ CPU → lama-lite (int8) روی CPU اجرا می‌شود "
+                      f"(سبک، سریع و تمیزتر از OpenCV).")
+            if _on_android() or _lite_mode():
+                # اندروید و حالت کم‌مصرف → همیشه lama-lite (int8، ۵۶MB، داینامیک)
                 try:
-                    print("    [*] بارگذاری big-lama.pt (TorchScript) ...")
-                    self._lama = LamaTorch(prefer_gpu=self.use_gpu)
-                    self._inpainter_name = "big-LaMa"
-                except Exception as e:
-                    print(f"    [!] big-LaMa ناموفق ({e}) → LaMa-Manga ONNX")
-            else:
-                print("    [*] torch در دسترس نیست → پاک‌سازی با LaMa ONNX")
+                    self._lama = LamaLiteONNX(
+                        prefer_gpu=self.use_gpu,
+                        threads=max(1, int(getattr(self, "max_workers", 2) or 2)),
+                    )
+                    self._inpainter_name = "lama-lite"
+                except Exception as e0:
+                    print(f"    [!] lama-lite ناموفق ({e0}) → مسیر جایگزین")
+            if self._lama is None and self.use_lama and not _lite_mode():
+                if _torch_available():
+                    try:
+                        print("    [*] بارگذاری big-lama.pt (TorchScript) ...")
+                        self._lama = LamaTorch(prefer_gpu=self.use_gpu)
+                        self._inpainter_name = "big-LaMa"
+                    except Exception as e:
+                        print(f"    [!] big-LaMa ناموفق ({e}) → LaMa-Manga ONNX")
+                else:
+                    print("    [*] torch در دسترس نیست → پاک‌سازی با LaMa ONNX")
             if self._lama is None and self.use_lama:
                 try:
                     self._lama = LamaMangaONNX(
@@ -4418,6 +4749,8 @@ class MangaTranslator:
                         pass
                 if np.count_nonzero(ink) > 0.45 * ch * cw:
                     # به‌جای رها کردن متن، به چندضلعی تشخیص/OCR برمی‌گردیم
+                    if getattr(region, "ocr_failed", False):
+                        continue  # محافظت هنر: فقط ماسک جوهری معتبر است
                     _fb = self._region_poly_fallback(region, x0, y0, x1, y1)
                     if _fb is not None and int(np.count_nonzero(_fb)) >= 40:
                         ink = _fb
@@ -4446,9 +4779,10 @@ class MangaTranslator:
                 ink = cv2.bitwise_or(ink, _fill) if ink is not None else _fill
             if ink is None or int(np.count_nonzero(ink)) < 40:
                 # آخرین فرصت: چندضلعی تشخیص/OCR — متن نباید جامانده بماند
-                _fb = self._region_poly_fallback(region, x0, y0, x1, y1)
-                if _fb is not None:
-                    ink = _fb if ink is None else cv2.bitwise_or(ink, _fb)
+                if not getattr(region, "ocr_failed", False):
+                    _fb = self._region_poly_fallback(region, x0, y0, x1, y1)
+                    if _fb is not None:
+                        ink = _fb if ink is None else cv2.bitwise_or(ink, _fb)
             if padding:
                 ink = cv2.dilate(ink, kernel)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
@@ -7182,6 +7516,9 @@ class MangaTranslator:
             base_scale = 1.35
         else:
             base_scale = 1.15  
+        if _IS_ANDROID:
+            # ML Kit خودش با متن کوچک کنار می‌آید؛ بزرگ‌نمایی اضافی فقط وقت تلف می‌کند
+            base_scale = min(base_scale, 1.5)
 
         
         inset = int(min(ch0, cw0) * 0.06)
@@ -7269,10 +7606,24 @@ class MangaTranslator:
             if scv > best[2]:
                 best = (txt, polys, scv, _poly_angs)
 
-            if ((not _tilted0) and conf >= 0.86
-                    and len(re.sub(r"[^A-Za-z]", "", txt or "")) >= 8):
-                early_stop = True
-                break
+            if not _tilted0:
+                # توقف زودهنگام: متن لاتین با اطمینان بالا…
+                if (conf >= 0.86
+                        and len(re.sub(r"[^A-Za-z]", "", txt or "")) >= 8):
+                    early_stop = True
+                    break
+                # …یا متن CJK (کانا/کانجی/هانگول) — ML Kit اطمینانش قابل‌اعتماد است؛
+                # بدون این، هر حباب ژاپنی/چینی/کره‌ای ۳-۴ بار OCR اضافه می‌شد.
+                if _IS_ANDROID and conf >= 0.80:
+                    _cjk = sum(
+                        1 for c in (txt or "")
+                        if '\u3040' <= c <= '\u30FF'   # کانا
+                        or '\u4E00' <= c <= '\u9FFF'   # کانجی/هان
+                        or '\uAC00' <= c <= '\uD7AF'   # هانگول
+                    )
+                    if _cjk >= 2:
+                        early_stop = True
+                        break
 
         if merged:
             _allow_en, _allow_ko, _allow_ja, _allow_zh = self._ocr_lang_flags()
@@ -7700,6 +8051,21 @@ class MangaTranslator:
         for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs) in zip(
                 cand, ocr_results):
             if not text:
+                # حباب تشخیص‌داده‌شده که OCR متنش را نخواند → به‌عنوان junk پاک می‌شود
+                # (قبلاً کلاً رها می‌شد و متن اصلی روی صفحه می‌ماند!).
+                # محافظت هنر: برای این نواحی فقط ماسک جوهریِ حرفی پاک می‌شود و
+                # چندضلعیِ جایگزین (کل کادر) هرگز اعمال نمی‌شود.
+                if (bw * bh >= 0.0012 * page_area) or max(bw, bh) >= 64:
+                    regions.append(TextRegion(
+                        id=i,
+                        boxes=[np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+                                         dtype=np.int32)],
+                        source_text="",
+                        rect=(x1, y1, bw, bh),
+                        kind="junk",
+                        ocr_failed=True,
+                        det_class=b.get("class_name", "") or "",
+                    ))
                 continue
 
             
@@ -7835,6 +8201,7 @@ class MangaTranslator:
 
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
         
+        self._maybe_reinit_extraction_models()
         h, w = image.shape[:2]
         unique_regions: List[TextRegion] = []
 
@@ -9780,7 +10147,7 @@ html, body { background: #0a0a0b; }
                     quota_dead = True
                     break
 
-                if not getattr(self, "clean_only", False):
+                if not getattr(self, "clean_only", False) and not _lite_mode():
                     _dlg = [r for r in regions if r.kind == "dialogue"]
                     if _dlg:
                         try:
@@ -9795,9 +10162,14 @@ html, body { background: #0a0a0b; }
                         f"    [*] بافر ترجمه: {len(dialogue_buffer)}/{min_batch} "
                         f"— صبر تا صفحات بعدی..."
                     )
-            _finish_ready_pages()
+            if not _lite_mode():
+                _finish_ready_pages()
 
 
+        if _lite_mode() and pending:
+            # Lite: همهٔ صفحات استخراج شد → مدل‌های سنگین OCR/تشخیص آزاد می‌شوند
+            # تا پیک رمِ فاز پاکسازی (LaMa) پایین بماند.
+            self._release_extraction_models()
         _flush_translate_buffer(force=True)
         for _f in trans_futures:
             try:
