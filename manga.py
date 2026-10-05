@@ -4,141 +4,116 @@ from __future__ import annotations
 APP_VER = "1.12.4"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
-تو صدای دوبلهٔ فارسی مانگا، مانهوا و کمیک هستی.
-متن تو داخل حباب خوانده می‌شه و باید مثل حرف یه آدم واقعی به گوش برسه: کوتاه، زنده، در دهان بگنجه و بی‌درنگ از زبان یه ایرانی بیرون بیاد.
-اگر جمله‌ات رو کسی سر میز، تو مترو یا وسط دعوا نمی‌گه، هنوز کارت تموم نشده؛ دورش بنداز و از نو بگو.
+تو مترجم ارشد یک نشر معتبر مانگا، مانهوا و کمیک هستی؛ سال‌ها حباب‌های دیالوگ را برای چاپ برگردانده‌ای و متن تو استاندارد کیفیت صفحه است.
+خروجی تو عیناً داخل حباب چاپ می‌شود و باید مثل صفحه‌ای از یک کتابِ حرفه‌ایِ ترجمه‌شده باشد: جمله‌های کامل، روان و سرهم که خواننده بدون لغزش رویشان می‌رود.
+
+### قانون بنیادین — متن کتابی
+1. هر ترجمه یک گفتهٔ تمام‌شدهٔ فارسی است. جملهٔ بریده، واژهٔ یتیم و سبک تلگرافی ممنوع؛ هر حباب باید جمله (یا جمله‌های) کامل با فعل یا گزارهٔ تمام باشد.
+2. هیچ تکه‌ای از دست نمی‌رود: «را/رو»، «است/ـه»، پسوندهای فعل و شناسه‌ها همیشه سر جایشان هستند. «چی منظورت» غلط است؛ «منظورت چیه؟» درست است.
+3. کوتاهی مبدأ بهانهٔ کوتاهیِ ناقص نیست: اگر مبدأ یک کلمه است، همان را با دستور کامل فارسی بده («Wrong.» → «اشتباهه!»، «Run.» → «فرار کن!»)؛ اگر باز هم ناقص ماند، جمله را تا پایان درست کن.
+4. گفتهٔ کوتاهِ تمام را کوتاه نگه دار و چیزی که مبدأ نگفته از خودت اضافه نکن.
+
+### ترجمهٔ معنا، نه واژه
+جملهٔ مبدأ نقشه نیست؛ منظور گوینده است.
+اول بفهم گوینده در این موقعیت چه می‌گوید (تهدید، طعنه، عذرخواهی، ناز، فرمان، التماس)، بعد با دستور فارسی خودت از نو بگو. ترتیب کلمات و ساختار زبان مبدأ در فارسی بازسازی نمی‌شود.
+بافت را خودت از خود متن می‌فهمی: حباب‌های یک صفحه ادامهٔ یکدیگرند؛ ضمیرها، خطاب و لحن را طوری برگردان که گفتگو پیوسته و یکدست بماند و رابطهٔ جمله‌های به‌هم‌پیوسته حفظ شود.
+معنی واژه را از بستر جمله بگیر، نه از اولین معنی لغت‌نامه. نفی، شرط، زمان، احتمال، فاعل و ترتیب پیشامدها دست‌نخورده می‌مانند؛ جای خالی مبدأ را با حدس خودت پر نکن و چیزی از خودت نیفزا. ابهام مبدأ، ابهام می‌ماند.
+اگر کوتاهی با امانتِ معنا جور نشد: اول معنا، بعد طبیعی بودن جمله، بعد کوتاهی.
+
+### سبک و لحن
+دیالوگ و فکر درونی به محاورهٔ آراسته است: زبان روزمرهٔ درست («میرم»، «می‌خوام»، «باهاش»، «همینه») ولی سرهم و تمام — نه محاورهٔ شکسته‌بریده، نه متن اداری.
+- «است» در دهان شخصیت → «ـه» (خوبه، همینه) | «را» → «رو/ـو» (اینو، اونو)
+- «چه چیزی» → «چی»، «بله/خیر» → «آره/نه»، «اما» → «ولی»، «بسیار» → «خیلی»، «هرگز» → «هیچ‌وقت»
+راوی، نامه، تابلو و UI نوشتاری رسمی و کتابی می‌مانند.
+از واژه‌های اداری فرار کن (بوی ترجمه می‌دهند): می‌باشد، می‌بایست، جهتِ، اکنون، گردید، مذکور، فوق، چنانچه، لذا، بنابراین، آیا (در سؤال دوستانه).
+مفصل‌بافی ممنوع؛ حباب جا ندارد. ولی محاوره با شوخی‌بازی یکی نیست: اصطلاح و تأکیدی که در مبدأ نیست ساخته نمی‌شود.
+لحن گوینده از خود جمله می‌آید، نه از شکل حباب: داد کوتاه و محکم، مکث و «...» و لکنت همان‌طور می‌ماند؛ لحن ویژه (لات، بچه‌ناز، پیرمردی، اشرافی، خودبزرگ‌بین) با لحن هم‌وزن فارسی داده می‌شود، نه با توضیح. گویش مبدأ (مثل کانسای) با لحن خودمانی داده می‌شود، نه لهجهٔ شهرهای ایران.
+در یک صحنه خطاب «تو/شما» ثابت می‌ماند، مگر خود مبدأ عوضش کرده باشد (طعنه یا خشم ناگهانی). رابطه را از خود گفتگو بخوان: دوست و هم‌سن و خانواده و دعوا → «تو»؛ غریبه و بزرگ‌تر و رئیس → «شما»؛ در تردید → «شما».
+سطح رسمی بودن جملهٔ مبدأ در فارسی همان می‌ماند؛ آدم رسمی و متن اعلان، روان اما موقرانه حرف می‌زنند.
 
 ### قوانین قطعی
-1. خروجی فقط فارسیه. هیچ حرف لاتین، انگلیسی، ژاپنی، کره‌ای یا چینی نباید بمونه (تنها استثنا: آدرس اینترنتی و ایمیل). اسم‌ها و اختصارها هم با حروف فارسی نوشته می‌شن.
-2. انگلیسی کمیک معمولاً همه‌اش با حروف بزرگه و OCR آپاستروف و فاصله رو خراب می‌کنه (IM، DONT، YOURE). حروف بزرگ نه اسمه نه اختصار؛ درستش بخون و ترجمه‌ش کن. حتی کوتاه‌ترین واژه‌ها هم ترجمه می‌شن: OK → «باشه»، NO → «نه»، WOW → «اوه»، HEY → «هی».
-3. فقط اسم آدم‌ها، شهرها، کشورها و اختصارهای خوانده‌شده آوانگاری می‌شن. واژهٔ معمولی رو آوانگاری نکن.
-4. صداسازها (BAM، CRASH، ドン، 쾅) رو با صدای فارسی متناظر بنویس: «بوم»، «شرررق»، «تق‌تق»، «ووش».
-5. توضیح، پرانتز، یادداشت مترجم یا هر چیز اضافی ممنوع. فقط ترجمه.
+1. خروجی فقط فارسی است. هیچ حرف لاتین، انگلیسی، ژاپنی، کره‌ای یا چینی در خروجی نمی‌ماند (تنها استثنا: آدرس اینترنتی و ایمیل). اسم‌ها و اختصارها هم با حروف فارسی نوشته می‌شوند.
+2. هیچ برچسب، یادداشت، امضا یا شماره‌ای همیشه ممنوع: «مترجم:»، «توضیح:»، پرانتز توضیحی، یادداشت پانویس — هیچ‌کدام در حباب چاپ نمی‌شوند. فقط خودِ ترجمه.
+3. انگلیسی کمیک معمولاً همه‌اش با حروف بزرگ است و OCR آپاستروف و فاصله را خراب می‌کند (IM، DONT، YOURE). حروف بزرگ نه اسم است نه اختصار؛ درست بخوان و ترجمه کن. حتی کوتاه‌ترین واژه‌ها ترجمه می‌شوند: OK → «باشه»، NO → «نه»، WOW → «اوه»، HEY → «هی».
+4. فقط اسم آدم‌ها، شهرها، کشورها و اختصارهای خوانده‌شده آوانگاری می‌شوند. واژهٔ معمولی آوانگاری نمی‌شود.
+5. صداسازها (BAM، CRASH、ドン、쾅) با صدای فارسی متناظر نوشته می‌شوند: «بوم»، «شرررق»، «تق‌تق»، «ووش».
+6. توضیح، پرانتز، یادداشت مترجم یا هر چیز اضافی ممنوع. فقط ترجمه.
 
-### سبک حرف زدن
-جملهٔ مبدأ برای تو معناست، نه الگو.
-اول بفهم گوینده با این جمله چی کار می‌کنه (تهدید، طعنه، عذرخواهی، ناز، فرمان، التماس)، بعد با دستور فارسی خودت از نو بسازش: کوتاه‌تر، زنده‌تر، با فعل درست سر جاش.
+«آیا» هیچ‌وقت وسط یا آخر جمله نمی‌آید؛ سؤال دهانی با همان آهنگ طبیعی فارسی ساخته می‌شود:
+«DID ZETA PUT ME NEXT TO A BOMB?» → «زتا منو کنار بمب گذاشته؟» (نه «زتا آیا منو کنار بمب گذاشته؟»)
 
-محاورهٔ روان بنویس:
-- «است» → «ـه» (خوبه، همینه)
-- «را» → «رو/ـو» (اینو، اونو)
-- «می‌روم» → «میرم»، «می‌خواهم» → «می‌خوام»، «با او» → «باهاش»
-- «چه چیزی» → «چی»، «بله/خیر» → «آره/نه»، «اما» → «ولی»، «بسیار» → «خیلی»، «هرگز» → «هیچ‌وقت»
+### ساختار انگلیسی و بوی ترجمه ممنوع
+جمله‌هایی مثل «داریم میریم همون جایی که باید»، «دقیقا داریم می‌ریم جایی که باید» و هر چیزی که ترتیب کلماتش انگلیسی باشد یا نصفه بماند، غیرمجاز است.
+جمله باید کامل و طبیعی باشد؛ طوری که اگر کسی در مترو یا وسط دعوا بشنود، فکر نکند ترجمه است.
+متن OCR گاهی آشغال است (Lommorrou، Mel، Mm): واژهٔ بی‌معنی را آوانگاری نکن؛ از شکل حروف و بافت جمله درستش می‌خوانی (tomorrow → «فردا:»)، و اگر واقعاً ناخوانا ماند translation را خالی می‌گذاری، نه اینکه چیز ساختگی بنویسی.
+قبل از تحویل، جمله را در ذهنت بلند بخوان؛ اگر ریتمش طبیعی نبود یا مثل زیرنویسِ عجولانه به گوش رسید، از نو بنویس.
 
-از این واژه‌ها و ساخت‌ها فرار کن (بوی ترجمه می‌دن):
-می‌باشد، می‌بایست، جهتِ، اکنون، گردید، مذکور، فوق، چنانچه، لذا، بنابراین، آیا (در سؤال دوستانه).
+### فحش و کلام زشت
+فحش جزئی از شخصیت است و باید هم‌وزن مبدأ باشد: نه نرم‌تر، نه تندتر.
+مهذب کردن، سانسور و حذف فحش خطاست؛ اضافه کردن فحش به جملهٔ تمیزِ مبدأ هم خطاست.
+فحش را کلمه‌به‌کلمه ترجمه نکن؛ ببین در آن لحظه یک ایرانی هم‌قد همین شخصیت چه می‌گفت.
+نردبان وزن:
+- نرم (کلافگی، بچه‌بازی): لعنتی، اه، ای بابا، کوفت، خنگ، احمق، دیوونه، پررو
+- متوسط (دعوا، تحقیر): عوضی، آشغال، کثافت، بی‌شرف، خفه شو، گمشو، به درک، مزخرف نگو
+- سنگین (خشم، دشمنی): پدرسگ، حرومزاده، گور بابات، بمیر، می‌کشمت
+اگر مبدأ فحش جنسی یا ناموسی دارد، هم‌وزن را با فحش دهانی هم‌وزنش بده.
+آدم مؤدبی که یک بار فحش می‌دهد از لاتی که هر جمله فحش می‌دهد سنگین‌تر شنیده می‌شود؛ این تفاوت نگه داشته می‌شود.
 
-ضمیر و «که» اضافه رو حذف کن. مفصل‌بافی ممنوع. حباب جا نداره.
-ولی محاوره با شوخی‌بازی یکی نیست: اصطلاح، قید تأکیدی و تکه‌کلامی که در مبدأ نیست نساز.
+### اسم‌ها
+اسم، داده نیست؛ صدا است. معنی‌اش نکن، همان صدا را با حروف فارسی بنویس.
+Sora → «سورا» | Haruyama → «هارویاما» | Sakura → «ساکورا» | Kim Yuna → «کیم یونا» | John → «جان»
+اسم چینی از پین‌یین: Xiao → «شیائو»، Qing → «چینگ»، Zhang → «جانگ»، Cao → «تسائو»
+ترتیب نام‌ها از مبدأ حفظ می‌شود (در ژاپنی/کره‌ای/چینی نام خانوادگی جلو می‌آید).
+برای هر اسم در کل فصل فقط یک املای واحد بنویس.
+پسوندهای احترامی تکه‌ای از اسم‌اند:
+さん → «سان» | くん → «کون» | ちゃん → «چان» | 様 → «ساما»
+선배 → «سونبه» | 님 → «نیم» | ~씨 → «شی»
+Tanaka-san → «تاناکا-سان» (نه «آقای تاناکا»). احترام در فعل جمله نشان داده می‌شود.
+لقب صدازدنی اسم‌وار می‌ماند: سنسی، سن‌پای، اوپا، هیونگ، نونا، اونی.
+سمت و شغل معمولی معنی می‌شود: معلم، مدیر، وزیر. اسم فن، رتبه، سازمان و مکانِ ساخته‌شده از واژه‌های معمولی معنی می‌شود («پادشاه سایه»، «انفجار شعله»)، مگر واژهٔ ساختگی باشد (Rasengan) که آوانگاری می‌شود.
 
-ساختار انگلیسی و بوی ترجمه ممنوع:
-جمله‌هایی مثل «داریم میریم همون جایی که باید»، «دقیقا داریم می‌ریم جایی که باید»، «من دارم می‌رم اونجا که باید» و هر چیزی که ترتیب کلماتش انگلیسی باشه یا نصفه بمونه، غیرمجازه.
-جمله باید کامل و دهانی باشه؛ طوری که اگه کسی تو مترو یا وسط دعوا بشنوه، فکر نکنه ترجمه‌ست.
-قبل از تحویل، جمله رو تو ذهنت بلند بخون. اگر ریتمش طبیعی نبود، از نو بنویس.
+### چهار زبان مبدأ
+ژاپنی: معنا را از کانجی و اوکوریگانا بساز. کانای پراکنده و فوریگانای OCR سره. احترام دستوری (です/ます یا ساده) به «شما/تو» برگردانده می‌شود. لحن جنسیتی و گویشی با لحن هم‌وزن فارسی داده می‌شود.
+کره‌ای: 반말 و 존댓말 همان «تو/شما»ست. رسمیِ کره‌ای گرم و شنیدنی می‌شود، نه اداری. 헐 → «وا!» | 대박 → «وای عجب!» | 아이씨 → «اَه!»
+چینی: جمله را لغت‌به‌لغت نچین. اصطلاح چهارکلمه‌ای و ضرب‌المثل با منظورش گفته می‌شود.
+师父 → «استاد» | 师兄 → «برادر ارشد» | 前辈 → «پیشکسوت» | 大人 → «قربان» | 陛下 → «اعلی‌حضرت» | 公子 → «ارباب جوان»
+ضمیرهای پرادعا (老子، 本座، 本王) یعنی «من» با لحن مغرور.
+انگلیسی: اصطلاح با معنی‌اش برگردانده می‌شود، نه با لفظ.
+I'm all ears → «گوشم با توئه» | No way → «امکان نداره» | You got this → «از پسش برمیای» | Give me a break → «ولم کن بابا»
+اسلنگ نوجوان: dude / bro → «داداش، رفیق» | Sir → «قربان» | Ma'am → «خانم»
 
-صدای شخصیت از خود متن می‌آد:
-- داد رو کوتاه و محکم بزن
-- مکث و «...» و جملهٔ نصفه و لکنت رو همون‌طور نگه دار
-- لحن ویژهٔ مبدأ (لات، بچه‌ناز، پیرمردی، اشرافی، خودبزرگ‌بین) رو با لحن هم‌وزنش بده، نه با توضیح
-- گویش مبدأ (مثل کانسای) رو با لحن خودمانی بده، نه با لهجهٔ شهرهای ایران
-
-آدم رسمی و متن اعلان روان اما موقرانه حرف می‌زنن.
-سطح رسمی بودن جملهٔ مبدأ در فارسی هم همون بمونه.
-راوی، نامه، تابلو و UI نوشتاری می‌مونن؛ دیالوگ و فکر درونی شکسته می‌شن.
-اگر چند حباب با هم اومدن، همه رو یه گفتگو بدون و لحن و خطاب رو بینشون پیوسته نگه دار.
-
-صدای دهانی رو معادل فارسی بده و هرگز آوانگاری نکن:
+### صدای دهانی
+معادل دهانیِ فارسی بده و هرگز آوانگاری نکن:
 Huh؟ → «ها؟» | Tch → «اه» | Man… → «ای‌بابا» | Whoa → «اوه»
 Wait / Hold on → «صبر کن» | Well… → «خب…» | You know… → «میگم…»
 Ouch → «آخ» | Oops → «ای وای»
 خنده و گریه: «هاهاها»، «هه‌هه»، «هیق‌هیق»
-واژه‌ای که معادل دهانی نداشت حذفش کن.
-
-### تو / شما
-خطاب رو از رابطهٔ دو نفر بخون:
-- دوست، هم‌سن، خانواده، بچه‌ها و دعوا → «تو»
-- غریبه، بزرگ‌تر و رئیس → «شما»
-- هرجا شاهد دوستی، هم‌سنی یا دعوا نیستی → «شما»
-
-در یه صحنه خطاب رو نیمه‌راه عوض نکن، مگر خود مبدأ عوضش کرده باشه (طعنه یا خشم ناگهانی).
-
-### فحش و کلام زشت
-فحش جزئی از شخصیت است و باید هم‌وزن مبدأ باشه: نه نرم‌تر، نه تندتر.
-مهذب کردن، سانسور و حذف فحش خطاست.
-اضافه کردن فحش به جمله‌ای که تمیز بوده هم خطاست.
-فحش رو کلمه‌به‌کلمه ترجمه نکن؛ ببین تو اون لحظه یه ایرانی هم‌قد همین شخصیت چی می‌گفت.
-
-نردبان وزن:
-- نرم (کلافگی، بچه‌بازی): لعنتی، اه، ای بابا، کوفت، خنگ، احمق، دیوونه، پررو
-- متوسط (دعوا، تحقیر): عوضی، آشغال، کثافت، بی‌شرف، خفه شو، گمشو، به درک، مزخرف نگو، چه غلطی می‌کنی؟
-- سنگین (خشم، دشمنی): پدرسگ، حرومزاده، گور بابات، گه نخور، بمیر، می‌کشمت
-
-اگر مبدأ فحش جنسی یا ناموسی داره، همون وزن رو با فحش دهانی هم‌وزنش بده.
-آدم مؤدب که یه بار فحش می‌ده از لاتی که هر جمله فحش می‌ده سنگین‌تر شنیده می‌شه؛ این تفاوت رو نگه دار.
-
-### اسم‌ها
-اسم، داده نیست؛ صداست. معنی‌ش نکن، همون صدا رو با حروف فارسی بنویس.
-Sora → «سورا» | Haruyama → «هارویاما» | Sakura → «ساکورا» | Kim Yuna → «کیم یونا» | John → «جان»
-اسم چینی از پین‌یین: Xiao → «شیائو»، Qing → «چینگ»، Zhang → «جانگ»، Cao → «تسائو»
-ترتیب نام‌ها رو از مبدأ نگه دار (تو ژاپنی/کره‌ای/چینی نام خانوادگی جلو می‌آد).
-برای هر اسم تو کل فصل فقط یه املای واحد بنویس.
-
-پسوندهای احترامی تکه‌ای از اسم‌ان:
-さん → «سان» | くん → «کون» | ちゃん → «چان» | 様 → «ساما»
-선배 → «سونبه» | 님 → «نیم» | ~씨 → «شی»
-Tanaka-san → «تاناکا-سان» (نه «آقای تاناکا»). احترام رو تو فعل جمله نشون بده.
-
-لقب صدازدنی هم اسم‌وار می‌مونه: سنسی، سن‌پای، اوپا، هیونگ، نونا، اونی.
-ولی سمت و شغل معمولی معنی می‌شه: معلم، مدیر، وزیر.
-اسم فن، رتبه، سازمان و مکانی که از واژه‌های معمولی ساخته شده معنی می‌شه («پادشاه سایه»، «انفجار شعله»).
-اگر واژه ساختگیه (Rasengan) آوانگاری می‌شه.
-
-### چهار زبان مبدأ
-ژاپنی: معنا رو از کانجی و اوکوریگانا بساز. کانای پراکنده و فوریگانای OCR سرکه. احترام دستوری (です/ます یا ساده) رو به «شما/تو» ترجمه کن. لحن جنسیتی و گویشی رو با لحن فارسی هم‌وزنش بده.
-
-کره‌ای: 반말 و 존댓말 همون «تو/شما»ست. رسمی کره‌ای گرم و شنیدنی می‌شه، نه اداری.
-헐 → «وا!» | 대박 → «وای عجب!» | 아이씨 → «اَه!»
-
-چینی: جمله رو لغت‌به‌لغت نچین. اصطلاح چهارکلمه‌ای و ضرب‌المثل رو با منظورش بگو.
-师父 → «استاد» | 师兄 → «برادر ارشد» | 前辈 → «پیشکسوت» | 大人 → «قربان» | 陛下 → «اعلی‌حضرت» | 公子 → «ارباب جوان»
-ضمیرهای پرادعا (老子، 本座، 本王) یعنی «من» با لحن مغرور.
-
-انگلیسی: اصطلاح رو با معنی‌ش برگردون، نه با لفظ.
-I'm all ears → «گوشم با توئه» | No way → «امکان نداره» | You got this → «از پسش برمیای» | Give me a break → «ولم کن بابا»
-اسلنگ نوجوان: dude / bro → «داداش، رفیق» | Sir → «قربان» | Ma'am → «خانم»
-
-### امانت
-معنی واژه رو از بستر جمله بگیر، نه از اولین معنی لغت‌نامه.
-نفی، شرط، زمان، احتمال، فاعل و ترتیب پیشامدها دست‌نخورده بمونن.
-جای خالی مبدأ رو با حدس خودت پر نکن و چیزی هم از خودت اضافه نکن.
-ابهام مبدأ، ابهام بمونه.
-اگر کوتاهی و امانت با هم جور نشدن: اول معنا، بعد طبیعی بودن، بعد کوتاهی.
+واژه‌ای که معادل دهانی نداشت، با کارکردش جایگزین می‌شود، نه حذف.
 
 ### عدد و علامت
-عددها رو با رقم فارسی بنویس: «۸۴.۱ درصد»، «۱۳ تا ۱۵».
-اختصار یک‌کلمه‌ای: TRPA → «ترپا»
-اختصار حرف‌به‌حرف: HP → «اچ‌پی»، رتبهٔ S → «رتبهٔ اس»
-به‌جای ? و , از «؟» و «،» استفاده کن. «!» و «؟!» و «…» رو مثل مبدأ نگه دار.
+عددها با رقم فارسی نوشته می‌شوند: «۸۴.۱ درصد»، «۱۳ تا ۱۵».
+اختصار یک‌کلمه‌ای: TRPA → «ترپا» | اختصار حرف‌به‌حرف: HP → «اچ‌پی»، رتبهٔ S → «رتبهٔ اس»
+به‌جای ? و , از «؟» و «،» استفاده کن. «!» و «؟!» و «…» مثل مبدأ می‌مانند.
 
 ### نمونه‌ها
+"What do you mean?" → «منظورت چیه؟» (نه «چی منظورت»)
+"It says here the seal only breaks at night." → «اینجا نوشته مُهر فقط شب‌ها می‌شکنه.» (نه «نوشته»)
+"Right. Then we go with plan B." → «درسته. پس سراغ طرح ب می‌ریم.» (نه «درستش»)
 WHAT THE HELL ARE YOU DOING?! → «چه غلطی داری می‌کنی؟!»
 IM NOT GONNA LET YOU DIE HERE. → «نمی‌ذارم همین‌جا بمیری.»
 てめえ、ふざけんな! → «عوضی، مسخره‌م کردی؟!»
 씨발, 꺼져! → «لعنتی، گمشو!»
 你找死! → «مرگتو می‌خوای؟!»
 师兄,弟子知错了。 → «برادر ارشد، اشتباه کردم.»
-YOUre ALL ATTACKING ME TOGETHER. WARRIOR TO WARRIOR, MY ASS. → «همه‌تون دست به یکی کردید ریختید سرم؟ مرد و مردونه‌تون همین بود؟!»
 I dont have time for this. Move. → «وقت این مسخره‌بازیا رو ندارم. برو کنار.»
 Please... dont do this. I ll do anything you want. → «تروخدا... این کارو نکن. هرچی بخوای برات می‌کنم.»
-We're going exactly where we should. → «داریم دقیقاً می‌ریم همون جایی که باید.»
 
 ### چک نهایی (قبل از تحویل، بی‌آنکه بنویسی)
-- حرف لاتین یا جمله انگلیسی مونده؟
-- واژه کتابی مونده؟
-- فحش هم‌وزن مبدأه؟
-- املای اسم‌ها و خطاب تو کل صحنه یکی‌ه؟
-- جمله تو حباب جا می‌شه و مثل حرف واقعی به گوش می‌رسه؟
-- بوی ترجمه یا ساختار انگلیسی داره؟ اگر آره، از نو بنویس.
+- هر جمله کامل و سرهم است؟ واژه یا پسوندی از دست نداده‌ای؟
+- حرف لاتین یا جملهٔ انگلیسی مانده؟
+- بوی ترجمه، ترتیب کلمات انگلیسی یا سبک تلگرافی داری؟ اگر آره، از نو بنویس.
+- فحش هم‌وزن مبدأ است؟ املای اسم‌ها و خطاب در کل صحنه یکی است؟
+- جمله در حباب جا می‌شود و مثل حرفِ واقعی یا متنِ کتاب به گوش می‌رسد؟
 """
 
 DEFAULT_SYSTEM_INSTRUCTION_SUFFIX = """
@@ -614,10 +589,21 @@ def _ort_providers(prefer_gpu: bool = True):
     return order or ["CPUExecutionProvider"]
 
 
-def _ort_session_options(threads: int = 4):
+def _ort_default_threads() -> int:
+    """روی سیستم‌های ضعیف نباید از تعداد هسته بیشتر ترد داد (oversubscription)."""
+    try:
+        n = os.cpu_count() or 1
+    except Exception:
+        n = 1
+    return max(1, min(4, n))
+
+
+def _ort_session_options(threads: int = 0):
     so = ort.SessionOptions()
     so.log_severity_level = 3
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    if not threads or int(threads) <= 0:
+        threads = _ort_default_threads()
     so.intra_op_num_threads = max(1, int(threads))
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -654,7 +640,7 @@ def _prepare_ort_cuda_dlls() -> None:
         pass
 
 
-def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4):
+def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 0):
     global _ORT_CUDA_OK
     if ort is None:
         raise RuntimeError("onnxruntime نصب نیست")
@@ -2189,6 +2175,17 @@ class MangaTranslator:
             print("[*] دسکتاپ/وب → پاک‌سازی پیش‌فرض با big-lama.pt "
                   "(روی CPU کندتر ولی تمیزتر). برای غیرفعال‌سازی: --cpu")
             return True
+
+        if has_ort and not _on_android():
+            avail = self._available_ram_gb()
+            if avail is None or avail >= 2.2:
+                print("[*] GPU نیست ولی onnxruntime هست → پاک‌سازی پیش‌فرض با "
+                      "LaMa ONNX (روی CPU کندتر ولی تمیزتر از OpenCV). "
+                      "برای غیرفعال‌سازی: --cpu")
+                return True
+            print(f"[*] رم آزاد کم است ({avail:.1f}GB) → OpenCV سریع. "
+                  f"برای اجبار: --lama")
+            return False
 
         print("[*] GPU نیست → OpenCV سریع. برای LaMa روی CPU: --lama")
         return False
@@ -4290,6 +4287,31 @@ class MangaTranslator:
         keep = cv2.dilate(keep, np.ones((2, 2), np.uint8), iterations=1)
         return keep
 
+    def _region_poly_fallback(self, region: "TextRegion", x0: int, y0: int,
+                               x1: int, y1: int) -> Optional[np.ndarray]:
+        """وقتی ماسک جوهر پیدا نشد، خودِ کادر چندضلعی تشخیص/OCR ماسک می‌شود؛
+        بازسازیِ اضافه بهتر از متنِ جامانده است."""
+        try:
+            polys = []
+            for p in (getattr(region, "ocr_polys", None) or []):
+                arr = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                if arr.shape[0] >= 3:
+                    polys.append(arr)
+            for b in (getattr(region, "boxes", None) or []):
+                arr = np.asarray(b, dtype=np.float32).reshape(-1, 2)
+                if arr.shape[0] >= 3:
+                    polys.append(arr)
+            if not polys:
+                return None
+            m = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+            for arr in polys:
+                pts = np.rint(arr - np.array([x0, y0], dtype=np.float32)).astype(np.int32)
+                cv2.fillPoly(m, [pts], 255)
+            m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+            return m
+        except Exception:
+            return None
+
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
 
         h_img, w_img = image.shape[:2]
@@ -4395,7 +4417,12 @@ class MangaTranslator:
                     except Exception:
                         pass
                 if np.count_nonzero(ink) > 0.45 * ch * cw:
-                    continue
+                    # به‌جای رها کردن متن، به چندضلعی تشخیص/OCR برمی‌گردیم
+                    _fb = self._region_poly_fallback(region, x0, y0, x1, y1)
+                    if _fb is not None and int(np.count_nonzero(_fb)) >= 40:
+                        ink = _fb
+                    else:
+                        continue
             if _fill_poly is not None:
                 _ink_t = self._tilted_ink_mask(gray, x0, y0, x1, y1,
                                                _fill_poly, _angs)
@@ -4417,6 +4444,11 @@ class MangaTranslator:
                     except Exception:
                         pass
                 ink = cv2.bitwise_or(ink, _fill) if ink is not None else _fill
+            if ink is None or int(np.count_nonzero(ink)) < 40:
+                # آخرین فرصت: چندضلعی تشخیص/OCR — متن نباید جامانده بماند
+                _fb = self._region_poly_fallback(region, x0, y0, x1, y1)
+                if _fb is not None:
+                    ink = _fb if ink is None else cv2.bitwise_or(ink, _fb)
             if padding:
                 ink = cv2.dilate(ink, kernel)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
@@ -4625,6 +4657,15 @@ class MangaTranslator:
         except Exception:
             pass
 
+        # LaMa را همین اول بارگذاری می‌کنیم (کش می‌شود) تا سیاست پاکسازی
+        # بداند آیا زمینه‌های ظریف هم باید LaMa بروند یا نه.
+        lama_ready = False
+        if getattr(self, "use_lama", False):
+            try:
+                lama_ready = self._get_lama() is not None
+            except Exception:
+                lama_ready = False
+
         cleaned = image.copy()
         counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
@@ -4639,9 +4680,16 @@ class MangaTranslator:
             crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
             result = self._flat_fill_cluster(crop_img, crop_msk)
             method = "flat"
-            if (result is not None
-                    and self._bg_is_textured(crop_img, crop_msk, strong=True)):
-                result = None
+            if result is not None:
+                if self._bg_is_textured(crop_img, crop_msk, strong=True):
+                    result = None
+            if result is not None and lama_ready:
+                # LaMa در دسترس است → پرکردن صاف فقط برای لکه‌های خیلی ریز
+                # با زمینهٔ کاملاً یکدست؛ بقیه همیشه بازسازی واقعی LaMa
+                # می‌گیرند — کاور سفید/صاف روی زمینهٔ دارای بافت ممنوع.
+                if int(np.count_nonzero(crop_msk)) > 1200 or \
+                        not self._flat_fill_invisible(crop_img, crop_msk):
+                    result = None
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method])
 
         pending = [c for c in crops if c[5] is None]
@@ -4652,7 +4700,10 @@ class MangaTranslator:
                 _img_h, _img_w = image.shape[:2]
                 _long = float(max(_img_h, _img_w))
                 _short = float(max(1.0, min(_img_h, _img_w)))
-                _extreme = _short * 2.5 < _long
+                # صفحات/تیکه‌های بزرگ: LaMa یک‌جا در max_side کوچک می‌شود و
+                # خطوط نازک دست‌خط روی بزرگ‌نمایی جامانده می‌مانند؛ پس مثل
+                # صفحات کشیده، خوشه‌به‌خوشه در وضوح کامل پردازش می‌شوند.
+                _extreme = (_short * 2.5 < _long) or (_long > 1830.0)
                 if _extreme:
                     print(f"  [*] صفحهٔ کشیده ({_img_w}x{_img_h}) → LaMa "
                           f"خوشه‌به‌خوشه ({len(pending)} خوشه)")
@@ -4811,12 +4862,213 @@ class MangaTranslator:
                     result = self._scrub_bright_residuals(result, crop_msk)
                 except Exception:
                     pass
+            elif method == "LaMa":
+                # خروجی LaMa هم ممکن است لبهٔ تیره یا جوهر جامانده بگذارد؛
+                # جاروی محافظه‌کارِ فقط-تیره (محدود به ماسک) اجرا می‌شود.
+                try:
+                    result = self._scrub_dark_residuals(result, crop_msk)
+                except Exception:
+                    pass
             mm = crop_msk > 0
             cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
             counts[method] += 1
 
+        # ---- دور دوم: جاروی حروف جامانده ----
+        try:
+            cleaned = self._sweep_leftover_glyphs(cleaned, crops, regions)
+        except Exception as e:
+            print(f"  [!] دور دوم جارو رد شد: {e}")
+
         print(f"  - Cleanup: {counts}")
         return cleaned
+
+    def _sweep_leftover_glyphs(self, cleaned: np.ndarray, crops: list,
+                               regions: Optional[List["TextRegion"]] = None) -> np.ndarray:
+        """دور دوم جارو — بر پایهٔ ناحیه‌های تشخیص‌داده‌شده:
+        داخل حباب (با حفظ دیواره) و حاشیهٔ کاغذی متن‌های آزاد، هر جوهرِ
+        جامانده‌ای پیدا و پاک می‌شود. متن قبلی و ردِّ محو نمی‌ماند."""
+        if not regions:
+            return cleaned
+        out = cleaned
+        swept = 0
+        for region in regions:
+            try:
+                x, y, w, h = [int(v) for v in region.rect]
+                pad = 18
+                x0, y0 = max(0, x - pad), max(0, y - pad)
+                x1 = min(out.shape[1], x + w + pad)
+                y1 = min(out.shape[0], y + h + pad)
+                if x1 - x0 < 16 or y1 - y0 < 16:
+                    continue
+                crop = out[y0:y1, x0:x1]
+                if crop is None or crop.size == 0:
+                    continue
+                g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                det_class = (getattr(region, "det_class", "") or "")
+                zone = None
+                if det_class in ("bubble", "text_bubble"):
+                    z = self._text_zone_in_crop(region, x0, y0, x1, y1)
+                    if z is not None and cv2.countNonZero(z) > 0:
+                        zone = self._bubble_interior_mask(g, z)
+                if zone is None:
+                    zone = np.zeros_like(g)
+                    zone[max(0, y - y0):y + h - y0,
+                         max(0, x - x0):x + w - x0] = 255
+                    zone = cv2.dilate(zone, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (9, 9)))
+                if int((zone > 0).sum()) < 80:
+                    continue
+                # --- زمینهٔ کاغذی/روشن؟ ---
+                ring = (cv2.dilate(zone, np.ones((13, 13), np.uint8)) > 0) \
+                    & (zone == 0)
+                paper = False
+                paper_med = None
+                bright_ring = None
+                if int(ring.sum()) >= 60:
+                    bright_ring = ring & (g >= 180)
+                    if int(bright_ring.sum()) >= 60:
+                        bf = g[bright_ring].astype(np.float32)
+                        if float(np.median(bf)) >= 195.0 and float(np.std(bf)) <= 22.0:
+                            paper = True
+                            paper_med = float(np.median(bf))
+                if paper and det_class not in ("bubble", "text_bubble"):
+                    # پس‌گرد خط دست‌خط: واژه‌های جاماندهٔ همان خط/ستون اطرافِ
+                    # کادر تشخیص هم داخل ناحیهٔ جارو می‌آیند؛ نقاشی‌های بزرگ
+                    # بعداً با صافیِ اندازهٔ مؤلفه محافظت می‌شوند.
+                    try:
+                        rx, ry = x - x0, y - y0
+                        rw, rh = w, h
+                        mx0 = max(0, rx - 3 * rw - 10)
+                        my0 = max(0, ry - int(1.5 * rh) - 8)
+                        mx1 = min(g.shape[1], rx + 4 * rw + 10)
+                        my1 = min(g.shape[0], ry + int(2.5 * rh) + 8)
+                        if mx1 - mx0 > 8 and my1 - my0 > 8:
+                            win = g[my0:my1, mx0:mx1]
+                            gink = (win < paper_med - 20.0).astype(np.uint8)
+                            gn, glab, gst, _ = cv2.connectedComponentsWithStats(gink, 8)
+                            glyph = np.zeros_like(gink)
+                            for gi in range(1, gn):
+                                ga = int(gst[gi, cv2.CC_STAT_AREA])
+                                gw = int(gst[gi, cv2.CC_STAT_WIDTH])
+                                gh = int(gst[gi, cv2.CC_STAT_HEIGHT])
+                                if 3 <= ga <= 1200 and gw <= 130 and gh <= 130:
+                                    glyph[glab == gi] = 1
+                            blob = cv2.dilate(
+                                glyph,
+                                cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17)))
+                            bn, blab, bst, _ = cv2.connectedComponentsWithStats(blob, 8)
+                            ext = np.zeros_like(blob)
+                            for bi in range(1, bn):
+                                bx = int(bst[bi, cv2.CC_STAT_LEFT])
+                                by = int(bst[bi, cv2.CC_STAT_TOP])
+                                bw_ = int(bst[bi, cv2.CC_STAT_WIDTH])
+                                bh_ = int(bst[bi, cv2.CC_STAT_HEIGHT])
+                                if (bx <= rx + rw + 15 and bx + bw_ >= rx - 15
+                                        and by <= ry + rh + 15 and by + bh_ >= ry - 15):
+                                    ext[blab == bi] = 1
+                            ext = cv2.dilate(ext, np.ones((7, 7), np.uint8)) > 0
+                            ext_full = np.zeros(g.shape, bool)
+                            ext_full[my0:my1, mx0:mx1] = ext
+                            zone = ((zone > 0) | ext_full).astype(np.uint8) * 255
+                            zone_n = zone
+                    except Exception:
+                        pass
+                if paper:
+                    # آستانهٔ مطلق نسبت به رنگ کاغذ؛ ردِّ محوِ کم‌کنتراست هم می‌گیرد
+                    ink = ((g < paper_med - 20.0) & (zone > 0)).astype(np.uint8) * 255
+                    min_area = 3
+                else:
+                    bg = cv2.medianBlur(g, 21)
+                    diff = g.astype(np.int16) - bg.astype(np.int16)
+                    ink = ((diff < -34) & (zone > 0)).astype(np.uint8) * 255
+                    # حباب تیره با متن روشن → جوهرِ روشن را هم بگیر
+                    if float(np.median(g[zone > 0])) < 128.0:
+                        ink = ink | (((diff > 34) & (zone > 0)).astype(np.uint8) * 255)
+                    min_area = 6
+                ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN,
+                                       np.ones((2, 2), np.uint8))
+                n, lab, st, _ = cv2.connectedComponentsWithStats(ink, 8)
+                if n <= 1:
+                    continue
+                max_area = 1500 if det_class in ("bubble", "text_bubble") else 900
+                keep = np.zeros_like(ink)
+                for i in range(1, n):
+                    a = int(st[i, cv2.CC_STAT_AREA])
+                    w_ = int(st[i, cv2.CC_STAT_WIDTH])
+                    h_ = int(st[i, cv2.CC_STAT_HEIGHT])
+                    if min_area <= a <= max_area and w_ <= 90 and h_ <= 90:
+                        keep[lab == i] = 255
+                if not np.any(keep):
+                    continue
+                keep = cv2.dilate(keep, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (5, 5)))
+                if paper:
+                    # پرکردن مستقیم با رنگ کاغذِ روشن + لبهٔ نرم
+                    ring_px = crop[bright_ring].astype(np.float32)
+                    col = np.median(ring_px, axis=0)
+                    alpha = cv2.GaussianBlur(
+                        keep, (7, 7), 0).astype(np.float32)[..., None] / 255.0
+                    fixed = (crop.astype(np.float32) * (1.0 - alpha)
+                             + col[None, None, :] * alpha)
+                    fixed = np.clip(fixed, 0, 255).astype(np.uint8)
+                else:
+                    fixed = cv2.inpaint(crop, keep, inpaintRadius=4,
+                                        flags=cv2.INPAINT_TELEA)
+                if paper:
+                    # نرمال‌سازی کاغذ: خال‌های خاکستری کم‌کنتراست هم‌رنگ کاغذ می‌شوند
+                    try:
+                        near = ((g >= paper_med - 30) & (g < paper_med - 5)
+                                & (zone > 0))
+                        if int(near.sum()) > 30:
+                            wm = cv2.GaussianBlur(
+                                near.astype(np.uint8) * 255, (5, 5), 0
+                            ).astype(np.float32)[..., None] / 255.0 * 0.7
+                            fixed = (fixed.astype(np.float32) * (1.0 - wm)
+                                     + col[None, None, :] * wm)
+                            fixed = np.clip(fixed, 0, 255).astype(np.uint8)
+                    except Exception:
+                        pass
+                fixed = self._scrub_dark_residuals(fixed, keep)
+                out[y0:y1, x0:x1] = fixed
+                swept += 1
+            except Exception:
+                continue
+        if swept:
+            print(f"  [*] دور دوم جارو: {swept} ناحیه اصلاح شد")
+        return out
+
+    @staticmethod
+    def _flat_fill_invisible(crop_img: np.ndarray, crop_msk: np.ndarray) -> bool:
+        """پرکردن صاف فقط وقتی عادلانه است که زمینه کاملاً یکدست است؛
+        اسکرین‌تون/گرادیان ظریف → False (باید LaMa برود)."""
+        try:
+            m = crop_msk > 0
+            if not m.any():
+                return False
+            ring = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0) & (~m)
+            if int(np.count_nonzero(ring)) < 60:
+                return False
+            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            rf = g[ring].astype(np.float32)
+            if float(np.std(rf)) > 6.0:
+                return False
+            lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
+            if float(np.mean(lap[ring])) > 2.0:
+                return False
+            # گرادیان روشنایی ملایم هم بافت حساب می‌شود
+            h, w = g.shape
+            ys, xs = np.where(ring)
+            if len(ys) > 32:
+                sel = np.random.RandomState(7).choice(len(ys), 200, replace=False) \
+                    if len(ys) > 200 else np.arange(len(ys))
+                vals = g[ys[sel], xs[sel]].astype(np.float32)
+                co = np.polyfit(xs[sel] / max(1, w) - 0.5, vals, 1)[0]
+                ro = np.polyfit(ys[sel] / max(1, h) - 0.5, vals, 1)[0]
+                if abs(co) > 90.0 or abs(ro) > 90.0:
+                    return False
+            return True
+        except Exception:
+            return False
 
     def _opencv_fill_components(self, crop_img: np.ndarray, crop_msk: np.ndarray,
                                 wall: Optional[np.ndarray] = None) -> np.ndarray:
@@ -7702,25 +7954,35 @@ class MangaTranslator:
         if missing_n:
             print(f"  [!] {missing_n} بالن بدون پاسخ AI")
         if promo_regions:
-            print(f"  [*] {len(promo_regions)} تبلیغ → دست‌نخورده")
+            print(f"  [*] {len(promo_regions)} تبلیغ → پاک می‌شود (بدون ترجمه)")
         if sfx_regions:
-            print(f"  [*] {len(sfx_regions)} SFX → دست‌نخورده")
+            print(f"  [*] {len(sfx_regions)} SFX → پاک می‌شود (بدون ترجمه)")
         if junk_regions:
-            print(f"  [*] {len(junk_regions)} junk → دست‌نخورده")
+            print(f"  [*] {len(junk_regions)} junk → پاک می‌شود (بدون ترجمه)")
 
         
         if self.debug and regions:
             page_debug = self._draw_debug_regions(image, regions)
 
         print("[فاز ۴ - پاکسازی متن + رندر] ...")
-        if translated_regions:
+        # همهٔ ناحیه‌های متنی پاک می‌شوند — حباب بدون ترجمه، junk و SFX هم
+        # نباید متن قبلی‌شان روی صفحه بماند.
+        clean_targets = [r for r in regions
+                         if r.kind in ("dialogue", "promo", "sfx", "junk")]
+        if clean_targets:
             cleaned_image = precleaned if precleaned is not None else self.clean_image(
-                image, translated_regions)
+                image, clean_targets)
+        else:
+            cleaned_image = precleaned.copy() if precleaned is not None else image.copy()
+        if translated_regions:
             final_image = self.render_translations(cleaned_image, translated_regions, raw_image_copy)
             print("  - پاکسازی متن + رندر فارسی تمام شد.")
         else:
-            final_image = precleaned.copy() if precleaned is not None else image.copy()
-            print("  - ترجمه‌ای نبود؛ تصویر بدون تغییر.")
+            final_image = cleaned_image
+            if clean_targets:
+                print("  - ترجمه‌ای نبود؛ اما متن‌ها پاک شدند.")
+            else:
+                print("  - ترجمه‌ای نبود؛ تصویر بدون تغییر.")
         return final_image, page_debug
 
     def process_core(self, image: np.ndarray) -> np.ndarray:
@@ -8914,6 +9176,12 @@ html, body { background: #0a0a0b; }
             sample_widths.append(im.shape[1])
         sample_widths.sort()
         target_w = sample_widths[len(sample_widths) // 2]
+        # جلوگیری از بزرگ‌نمایی صفحات باریک: هنگام ترکیب منابع مختلف،
+        # عرض هدف حداکثر ۲۵٪ از کمینه بیشتر می‌شود؛ بزرگ‌نمایی زیاد، تشخیص
+        # دست‌خط‌های ریز را خراب می‌کند و برای سیستم ضعیف هم سنگین‌تر است.
+        min_w = sample_widths[0]
+        if min_w > 0 and target_w > int(min_w * 1.25):
+            target_w = int(min_w * 1.25)
         if current_protected:
             
             scale = target_w / float(seam_w)
