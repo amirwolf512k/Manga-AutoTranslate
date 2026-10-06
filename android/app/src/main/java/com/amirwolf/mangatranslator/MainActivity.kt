@@ -616,6 +616,9 @@ class MainActivity : AppCompatActivity() {
     private fun addField(card: LinearLayout, f: JSONObject) {
         val id = f.optString("id")
         val type = f.optString("type")
+        // این فیلد فقط برای نسخهٔ وب است؛ در اندروید نتیجهٔ تست
+        // زیر خود دکمه ظاهر می‌شود و این کادر خالی فقط گیج‌کننده است.
+        if (id == "manga_test_keys_out") return
         val lbl = f.optString("label", "")
         val info = f.optString("info", "")
         val dfltRaw = f.opt("default")

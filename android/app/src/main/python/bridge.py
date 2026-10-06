@@ -240,21 +240,36 @@ def _defaults(mf):
         dflt_instr = _manga().DEFAULT_SYSTEM_INSTRUCTION_STYLE.strip()
     except Exception:
         dflt_instr = ""
+    # قلم پیش‌فرض هر نوع حباب داخل برچسب فیلدش دیده شود — بخش
+    # قلم‌ها نباید «خالی» به چشم بیاید؛ هر نوع حباب قلم آماده دارد.
+    try:
+        slots = {b[0]: b[1] for b in _bundles()}
+        present = {fn: _style_font_ready(fn) for fn in set(slots.values())}
+    except Exception:
+        slots, present = {}, {}
     for sec in mf.get("sections", []):
         for f in sec.get("fields", []):
             if not isinstance(f, dict):
                 continue
-            if f.get("id") == "instruction_text":
+            fid = f.get("id") or ""
+            if fid == "instruction_text":
                 cur = f.get("default")
                 cur = cur.get("default") if isinstance(cur, dict) else cur
                 if not (isinstance(cur, str) and cur.strip()):
                     f["default"] = dflt_instr or "خالی = متن پیش‌فرض داخل کد"
-            elif f.get("id") == "readord":
+            elif fid == "readord":
                 cur = f.get("default")
                 if isinstance(cur, dict):
                     cur.setdefault("default", "rtl")
                 elif cur not in ("rtl", "ltr"):
                     f["default"] = "rtl"
+            elif fid.startswith("up_") and fid[3:] in slots:
+                fname = slots[fid[3:]]
+                ok = present.get(fname, False)
+                cur_lbl = str(f.get("label") or "")
+                if "پیش‌فرض" not in cur_lbl:
+                    f["label"] = (cur_lbl + f" — پیش‌فرض: {fname}"
+                                  + ("" if ok else " (هنوز دانلود نشده)"))
 
 
 def _bundled_source(name):
