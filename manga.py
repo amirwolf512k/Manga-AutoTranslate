@@ -5134,6 +5134,98 @@ class MangaTranslator:
                                                      gray_crop=gray[y0:y1, x0:x1])
                     if _fb is not None:
                         ink = _fb if ink is None else cv2.bitwise_or(ink, _fb)
+            # ---- فیلتر میلهٔ هنر ----
+            # قاب پنجره/خط سرعت گاهی در ماسک حرفی می‌لغزد (OCR می‌خوانَدشان
+            # «I7/no») — مؤلفهٔ کشیدهٔ دراز که بیش از نصفِ کادر را می‌پوشاند
+            # حرف نیست؛ حذف می‌شود تا هنر بلعیده نشود.
+            try:
+                if ink is not None and int(np.count_nonzero(ink)) > 0:
+                    _in2, _il2, _is2, _ = cv2.connectedComponentsWithStats(
+                        (ink > 0).astype(np.uint8), 8)
+                    if _in2 > 1:
+                        _keep_ink = np.zeros_like(ink)
+                        _cd = float(max(ch, cw))
+                        for _ci in range(1, _in2):
+                            _cw2 = int(_is2[_ci, cv2.CC_STAT_WIDTH])
+                            _ch2 = int(_is2[_ci, cv2.CC_STAT_HEIGHT])
+                            _long = float(max(_cw2, _ch2))
+                            _short = float(max(1, min(_cw2, _ch2)))
+                            if _long >= 2.8 * _short and _long >= 0.55 * _cd:
+                                continue  # میله/قاب — هنر است
+                            _keep_ink[_il2 == _ci] = 255
+                        if int(np.count_nonzero(_keep_ink)) >= 40:
+                            ink = cv2.bitwise_and(ink, _keep_ink)
+            except Exception:
+                pass
+            # ---- برشِ سختِ «به اندازهٔ متن» ----
+            # ماسکِ هر ناحیه فقط تا اجتماعِ چندضلعی‌های خطِ OCR (+ حاشیهٔ
+            # متناسب با ارتفاعِ خط) مجاز است؛ هر ریزشِ ماسک به هنر/حباب
+            # (کادرِ کج، ماسک حرفی، پس‌زمینه) همین‌جا قطع می‌شود —
+            # «پاک‌کردن فقط به اندازهٔ خودِ متن».
+            try:
+                _apl = list(getattr(region, "ocr_polys", None) or [])
+                if not _apl:
+                    for _b in (getattr(region, "boxes", None) or []):
+                        try:
+                            _bp = np.asarray(_b, dtype=np.int32).reshape(-1, 2)
+                            if _bp.size >= 6:
+                                _apl.append(_bp)
+                        except Exception:
+                            continue
+                if (_apl and ink is not None
+                        and int(np.count_nonzero(ink)) > 0):
+                    _anch = np.zeros_like(ink)
+                    _lhs = []
+                    for _p in _apl:
+                        try:
+                            _pts = np.asarray(_p, dtype=np.int32).reshape(-1, 2).copy()
+                            _pts[:, 0] -= x0
+                            _pts[:, 1] -= y0
+                            cv2.fillPoly(_anch, [_pts], 255)
+                            _lhs.append(max(4, int(_pts[:, 1].max() - _pts[:, 1].min())))
+                        except Exception:
+                            continue
+                    if int(cv2.countNonZero(_anch)) > 0 and _lhs:
+                        _mh = int(np.clip(int(round(0.6 * float(np.median(_lhs)))), 4, 20))
+                        _kern2 = cv2.getStructuringElement(
+                            cv2.MORPH_ELLIPSE, (2 * _mh + 1, 2 * _mh + 1))
+                        _anch = cv2.dilate(_anch, _kern2)
+                        _pre_clip = ink.copy()
+                        ink = cv2.bitwise_and(ink, _anch)
+                        # نجاتِ «سطرِ جاماندهٔ متن»: اگر برشِ لنگر،
+                        # مؤلفه‌هایی را حذف کرده که خودشان یک سطرِ متنِ
+                        # هم‌ترازند (۳ حرف یا بیشتر در یک ردیف) — مثل سطر
+                        # سومی که OCR نگرفته — آن‌ها برمی‌گردند؛ لکه‌های
+                        # تک‌افتادهٔ هنر (بینی/سایه) برنمی‌گردند.
+                        try:
+                            _cut = cv2.subtract(_pre_clip, ink)
+                            if int(np.count_nonzero(_cut)) > 60:
+                                _lh = float(np.median(_lhs)) if _lhs else 20.0
+                                _lw = _lh * 3.0
+                                _cn, _cl, _cs, _cc = cv2.connectedComponentsWithStats(
+                                    (_cut > 0).astype(np.uint8), 8)
+                                _rows = {}
+                                for _ci in range(1, _cn):
+                                    _ca = int(_cs[_ci, cv2.CC_STAT_AREA])
+                                    _chh = int(_cs[_ci, cv2.CC_STAT_HEIGHT])
+                                    _cww = int(_cs[_ci, cv2.CC_STAT_WIDTH])
+                                    if _ca < 12 or not (0.25 * _lh <= _chh <= 2.2 * _lh):
+                                        continue
+                                    if _cww > max(60.0, 1.5 * _lw):
+                                        continue
+                                    _cy = float(_cc[_ci][1])
+                                    _key = int(round(_cy / max(6.0, 0.6 * _lh)))
+                                    _rows.setdefault(_key, []).append(_ci)
+                                for _k, _ids in _rows.items():
+                                    if len(_ids) >= 3:
+                                        for _ci in _ids:
+                                            ink[_cl == _ci] = np.maximum(
+                                                ink[_cl == _ci],
+                                                (_cut[_cl == _ci] > 0).astype(ink.dtype) * 255)
+                        except Exception:
+                            pass
+            except Exception:
+                pass
             if padding:
                 ink = cv2.dilate(ink, kernel)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
@@ -5881,10 +5973,22 @@ class MangaTranslator:
                 anchor = np.zeros_like(g)
                 _polys = list(getattr(region, "ocr_polys", None) or [])
                 if not _polys:
+                    # جعبه‌های تشخیص که خودِ کادرِ کامل‌اند (≥۷۵٪ مساحت)
+                    # لنگرِ متن نیستند — قبلاً همهٔ کادر لنگر می‌شد و
+                    # کلِ داخل حباب جارو می‌شد («پاک‌کردنِ به اندازهٔ متن»)
+                    _rect_area = max(1, w * h)
                     for b in (getattr(region, "boxes", None) or []):
-                        pts = np.asarray(b, dtype=np.int32).reshape(-1, 2)
-                        if pts.size >= 6:
+                        try:
+                            pts = np.asarray(b, dtype=np.int32).reshape(-1, 2)
+                            if pts.size < 6:
+                                continue
+                            _barea = max(1, (pts[:, 0].max() - pts[:, 0].min())
+                                         * (pts[:, 1].max() - pts[:, 1].min()))
+                            if _barea >= 0.75 * _rect_area:
+                                continue
                             _polys.append(pts)
+                        except Exception:
+                            continue
                 line_hs, line_ws = [], []
                 for p in _polys:
                     try:
@@ -5897,9 +6001,10 @@ class MangaTranslator:
                     except Exception:
                         continue
                 if not line_hs:
-                    anchor[max(0, y - y0):y + h - y0,
-                           max(0, x - x0):x + w - x0] = 255
-                    line_hs, line_ws = [max(4, h)], [max(4, w)]
+                    # بدون خطِ متن لنگری هست؟ نه → جارو ممنوع. قبلاً کلِ
+                    # کادر تشخیص لنگر می‌شد و کلِ داخل حباب/هنر جارو
+                    # می‌شد؛ حالا «پاک‌کردن فقط به اندازهٔ متن» است.
+                    continue
                 line_h = max(4.0, float(np.median(line_hs)))
                 line_w = max(4.0, float(np.median(line_ws)))
                 _am = int(np.clip(int(round(0.55 * line_h)), 6, 26))
@@ -5920,12 +6025,28 @@ class MangaTranslator:
                         z = self._text_zone_in_crop(region, x0, y0, x1, y1)
                         if z is not None and cv2.countNonZero(z) > 0:
                             zone = self._bubble_interior_mask(g, z)
+                    if zone is not None:
+                        # فقط همسایگیِ خطوطِ متن داخلِ حباب — کلِ داخلِ حباب
+                        # دامنه نیست؛ دُم/لبهٔ حباب که «خط‌مانند» است
+                        # بلعیده نمی‌شود. شعاع بر پایهٔ ارتفاعِ خط است تا
+                        # «خطِ کاملاً جامانده» (سطر بعدی متن) هم داخل
+                        # دامنه بماند و جارو شود.
+                        _zk = int(np.clip(1.4 * line_h, 24, 56))
+                        zone = cv2.bitwise_and(
+                            zone,
+                            cv2.dilate(anchor, cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE, (2 * _zk + 1, 2 * _zk + 1))))
                 if zone is None:
-                    zone = np.zeros_like(g)
-                    zone[max(0, y - y0):y + h - y0,
-                         max(0, x - x0):x + w - x0] = 255
-                    zone = cv2.dilate(zone, cv2.getStructuringElement(
-                        cv2.MORPH_ELLIPSE, (9, 9)))
+                    # متنِ آزاد (یا حباب بدون نقشهٔ داخل): دامنهٔ جارو فقط
+                    # همسایگیِ خودِ خطوطِ متن است — نه کلِ کادر تشخیص.
+                    # شعاع ۱.۵×ارتفاعِ خط تا «سطرِ کاملاً جامانده» (خطِ بعدی
+                    # که OCR نگرفته) هم داخل دامنه بیاید؛ امنیتش را
+                    # دروازهٔ «ردیفِ هم‌تراز» پایین‌تر تضمین می‌کند.
+                    _zk2 = int(np.clip(1.5 * line_h, 14, 64))
+                    zone = cv2.dilate(anchor, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (2 * _zk2 + 1, 2 * _zk2 + 1)))
+                    if int(cv2.countNonZero(zone)) < 80:
+                        continue
                 if int((zone > 0).sum()) < 80:
                     continue
                 zn = int((zone > 0).sum())
@@ -5983,7 +6104,11 @@ class MangaTranslator:
                             if _loc <= 5.5:
                                 paper = True
                                 paper_med = float(np.median(bf))
-                if paper and not is_bubble:
+                if False and paper and not is_bubble:
+                    # [خاموش شد] پس‌گرد خط دست‌خط اطراف کادر — پنجرهٔ پشتِ
+                    # کادر را باز می‌کرد و اجزای هنر (بینی/دهان/سایه) را
+                    # می‌بلعید. متن‌های بیرونِ کادر را جاروی OCR تمام‌صفحه
+                    # به‌عنوان ناحیهٔ جدا پیدا می‌کند — امن‌تر.
                     # پس‌گرد خط دست‌خط: واژه‌های جاماندهٔ همان خط/ستون اطرافِ
                     # کادر تشخیص هم داخل ناحیهٔ جارو می‌آیند؛ اندازهٔ هر
                     # مؤلفه نسبت به خودِ متنِ ناحیه سنجیده می‌شود (نه سقف
@@ -5991,10 +6116,12 @@ class MangaTranslator:
                     try:
                         rx, ry = x - x0, y - y0
                         rw, rh = w, h
-                        mx0 = max(0, rx - 3 * rw - 10)
-                        my0 = max(0, ry - int(1.5 * rh) - 8)
-                        mx1 = min(g.shape[1], rx + 4 * rw + 10)
-                        my1 = min(g.shape[0], ry + int(2.5 * rh) + 8)
+                        # پنجرهٔ پس‌گرد تنگ‌تر شد — قبلاً ۳-۴ برابرِ کادر
+                        # بود و اجزای هنر دور از متن را می‌بلعید
+                        mx0 = max(0, rx - int(1.2 * rw) - 6)
+                        my0 = max(0, ry - int(0.8 * rh) - 6)
+                        mx1 = min(g.shape[1], rx + int(2.2 * rw) + 6)
+                        my1 = min(g.shape[0], ry + int(1.6 * rh) + 6)
                         if mx1 - mx0 > 8 and my1 - my0 > 8:
                             win = g[my0:my1, mx0:mx1]
                             gink = (win < paper_med - 20.0).astype(np.uint8)
@@ -6143,6 +6270,10 @@ class MangaTranslator:
                     ss = max(1, min(w_, h_))
                     if ss <= 5 and ls >= int(0.30 * max(zone_h, zone_w)):
                         continue
+                    # میلهٔ هنر (قاب پنجره/خط سرعت): کشیدهٔ دراز که بیش از
+                    # نصفِ دامنه را می‌پوشاند — حرف نیست، بلعیده نشود
+                    if ls >= 2.8 * ss and ls >= int(0.55 * max(zone_h, zone_w)):
+                        continue
                     keep[lab == i] = 255
                 if not np.any(keep):
                     continue
@@ -6162,6 +6293,19 @@ class MangaTranslator:
                                       ka <= 0.10 * float(max(1, zn)))
                         if _on_anchor <= 0 and not _line_like:
                             keep[kmask] = 0
+                        elif _on_anchor <= 0 and _line_like:
+                            # دور از لنگر ولی خط‌مانند → فقط اگر عضو یک
+                            # «ردیفِ هم‌ترازِ ۳تایی» باشد (سطرِ متنِ جامانده)
+                            #؛ لکهٔ تک‌افتادهٔ هنر (بینی/سایه/قاب) حذف می‌شود
+                            _kys = float(ks[ki][1])
+                            _near = 0
+                            for _kj in range(1, kn):
+                                if _kj == ki or int(ks[_kj, cv2.CC_STAT_AREA]) <= 0:
+                                    continue
+                                if abs(float(ks[_kj][1]) - _kys) <= 0.6 * line_h + 4:
+                                    _near += 1
+                            if _near < 2:
+                                keep[kmask] = 0
                     if not np.any(keep):
                         continue
                 except Exception:
