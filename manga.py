@@ -8053,9 +8053,11 @@ class MangaTranslator:
             if not text:
                 # حباب تشخیص‌داده‌شده که OCR متنش را نخواند → به‌عنوان junk پاک می‌شود
                 # (قبلاً کلاً رها می‌شد و متن اصلی روی صفحه می‌ماند!).
-                # محافظت هنر: برای این نواحی فقط ماسک جوهریِ حرفی پاک می‌شود و
-                # چندضلعیِ جایگزین (کل کادر) هرگز اعمال نمی‌شود.
-                if (bw * bh >= 0.0012 * page_area) or max(bw, bh) >= 64:
+                # محافظت هنر: فقط کلاس‌های «حباب» (نه text_free مثل تیتر/SFX)؛
+                # فقط ماسک جوهریِ حرفی پاک می‌شود و چندضلعیِ جایگزین هرگز اعمال نمی‌شود.
+                _cls = str(b.get("class_name", "") or "")
+                if (_cls in ("bubble", "text_bubble") and (
+                        (bw * bh >= 0.0012 * page_area) or max(bw, bh) >= 64)):
                     regions.append(TextRegion(
                         id=i,
                         boxes=[np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
@@ -9604,7 +9606,7 @@ html, body { background: #0a0a0b; }
             strip = _stack_pages(current_pages)
             ih = int(strip.shape[0])
             protected = list(current_protected)
-            padding = max(40, int(round(target_w * 0.05)))
+            padding = max(40, int(round(strip.shape[1] * 0.05)))
             if ih >= work_h + min_strip:
 
 
@@ -9658,16 +9660,29 @@ html, body { background: #0a0a0b; }
                     raise RuntimeError("نوار بدون محل برش امن بیش از حد بلند شد؛ "
                                        "برای جلوگیری از قطع متن، پردازش متوقف شد.")
 
+        strip_base_w = 0
         for f in image_files[start_idx:]:
             im = cv2.imread(f)
             if im is None:
                 raise RuntimeError(f"خواندن تصویر ناموفق بود؛ صفحه حذف نشد: {f}")
             h, w = im.shape[:2]
-            if w != target_w and target_w > 0:
-                
-                new_h = max(1, int(round(h * (target_w / float(w)))))
-                interp = cv2.INTER_AREA if target_w < w else cv2.INTER_CUBIC
-                im = cv2.resize(im, (target_w, new_h), interpolation=interp)
+            # شکست عرض: اگر عرض صفحهٔ جدید خیلی متفاوت از نوار فعلی باشد
+            # (مثلاً مخلوط وب‌تون عمودی ۶۹۰px با مانگای ۲۵۶۰px)، نوار همان‌جا
+            # تمام می‌شود و نوار جدید با عرض خود صفحه شروع می‌شود — وگرنه
+            # صفحه‌های پهن تا ۰.۳۴× کوچک می‌شدند و متن‌شان ناخوانا/ناپیدا می‌شد.
+            if current_pages and strip_base_w and (
+                    w > strip_base_w * 1.25 or w < strip_base_w * 0.8):
+                print(f"    [*] تغییر عرض ({strip_base_w}→{w}px): نوار جدید شروع شد "
+                      f"(حفظ اندازهٔ متن).")
+                _cut_and_emit(final=True)
+                strip_base_w = 0
+            if not current_pages:
+                strip_base_w = w
+            elif w != strip_base_w and strip_base_w > 0:
+                tw = strip_base_w
+                new_h = max(1, int(round(h * (tw / float(w)))))
+                interp = cv2.INTER_AREA if tw < w else cv2.INTER_CUBIC
+                im = cv2.resize(im, (tw, new_h), interpolation=interp)
                 h, w = im.shape[:2]
             if current_pages:
                 current_bounds.append(current_h)
