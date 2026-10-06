@@ -1419,7 +1419,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                             }
                             name += ext
                         }
-                        name = name.replace(Regex("Regex("[\\\\/:*?\"<>|]")"), "_")
+                        name = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
                         val dest = if (dir != null) File(dir, name)
                             else File(cacheDir, "pick_" + System.currentTimeMillis() + "_" + name)
                         contentResolver.openInputStream(u)?.use { input ->
