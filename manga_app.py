@@ -73,65 +73,44 @@ C_ERR = "#ff6a5e"
 
 
 FONT_BUNDLES = [
-    ("normal",       "Vazirmatn-Regular.ttf", "متن عادی حباب", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Regular.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Regular.ttf",
+    ("normal",       "Vazirmatn-Bold.ttf", "کودک — متن عادی حباب", [
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Bold.ttf",
     ]),
     ("free_text",    "Vazirmatn-Regular.ttf", "متن بیرون حباب", [
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Regular.ttf",
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Regular.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Regular.ttf",
     ]),
-    ("system",       "Vazirmatn-Medium.ttf", "سیستم/تگ", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Medium.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Medium.ttf",
+    ("shout",        "Lalezar-Fixed.ttf", "داد خشم", [
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
     ]),
-    ("broadcast",    "Vazirmatn-Medium.ttf", "بی‌سیم/موبایل", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Medium.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Medium.ttf",
+    ("comedy_shout", "Gandom.ttf", "داد کمدی", [
+        "https://raw.githubusercontent.com/rastikerdar/gandom-font/master/dist/Gandom.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Gandom.ttf",
     ]),
-    ("whisper",      "Vazirmatn-Light.ttf", "زمزمه", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
+    ("whisper",      "Nahid.ttf", "زمزمه دست‌نویس", [
+        "https://raw.githubusercontent.com/rastikerdar/nahid-font/master/dist/Nahid.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Nahid.ttf",
     ]),
-    ("thought",      "Vazirmatn-Light.ttf", "تفکر ابری", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
+    ("thought",      "Samim-Bold.ttf", "تفکر ابری", [
+        "https://raw.githubusercontent.com/rastikerdar/samim-font/master/dist/Samim-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Samim-Bold.ttf",
     ]),
-    ("cry",          "Vazirmatn-Light.ttf", "گریه", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
-    ]),
-    ("fear",         "Vazirmatn-Light.ttf", "ترس", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
-    ]),
-    ("narrator",     "Vazirmatn-Bold.ttf", "راوی مستطیل", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Bold.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Bold.ttf",
-    ]),
-    ("black",        "Vazirmatn-Black.ttf", "حباب تیره", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Black.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Black.ttf",
-    ]),
-    ("shout",        "Vazirmatn-Black.ttf", "داد/خشم", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Black.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Black.ttf",
-    ]),
-    ("monster",      "Vazirmatn-Black.ttf", "صدای هیولا", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Black.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Black.ttf",
-    ]),
-    ("comedy_shout", "Lalezar-Regular.ttf", "داد کمدی", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Regular.ttf",
-        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Regular.ttf",
-    ]),
-    ("sfx",          "Lalezar-Regular.ttf", "افکت صوتی", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Regular.ttf",
-        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Regular.ttf",
+    ("system",       "Sahel-Bold.ttf", "UI سیستم/تگ", [
+        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Sahel-Bold.ttf",
     ]),
     ("letter",       "Amiri-Regular.ttf", "نامه/طومار", [
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Amiri-Regular.ttf",
         "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-Regular.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Amiri-Regular.ttf",
+    ]),
+    ("narrator",     "Shabnam-Bold.ttf", "راوی مستطیل", [
+        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Shabnam-Bold.ttf",
     ]),
 ]
 

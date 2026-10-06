@@ -2395,6 +2395,101 @@ def uncensor_swears(text: str) -> str:
     return result.strip()
 
 
+# ----------------------------------------------------------------------------
+# باندل قلم‌ها: هر نوع حباب قلم خودش را دارد؛ اگر فایل نبود، خودِ برنامه
+# از همین فهرست دانلودش می‌کند (نیازی به بسته‌بندی در ریلینز نیست).
+# ----------------------------------------------------------------------------
+FONT_BUNDLES = [
+    ("normal",       "Vazirmatn-Bold.ttf", "کودک — متن عادی حباب", [
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Bold.ttf",
+    ]),
+    ("free_text",    "Vazirmatn-Regular.ttf", "متن بیرون حباب", [
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Regular.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Regular.ttf",
+    ]),
+    ("shout",        "Lalezar-Fixed.ttf", "داد خشم", [
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
+    ]),
+    ("comedy_shout", "Gandom.ttf", "داد کمدی", [
+        "https://raw.githubusercontent.com/rastikerdar/gandom-font/master/dist/Gandom.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Gandom.ttf",
+    ]),
+    ("whisper",      "Nahid.ttf", "زمزمه دست‌نویس", [
+        "https://raw.githubusercontent.com/rastikerdar/nahid-font/master/dist/Nahid.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Nahid.ttf",
+    ]),
+    ("thought",      "Samim-Bold.ttf", "تفکر ابری", [
+        "https://raw.githubusercontent.com/rastikerdar/samim-font/master/dist/Samim-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Samim-Bold.ttf",
+    ]),
+    ("system",       "Sahel-Bold.ttf", "UI سیستم/تگ", [
+        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Sahel-Bold.ttf",
+    ]),
+    ("letter",       "Amiri-Regular.ttf", "نامه/طومار", [
+        "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-Regular.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Amiri-Regular.ttf",
+    ]),
+    ("narrator",     "Shabnam-Bold.ttf", "راوی مستطیل", [
+        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Shabnam-Bold.ttf",
+    ]),
+]
+
+# نام فایل → فهرست نشانی‌های دانلود (برای ensure_fonts)
+FONT_URLS = {fname: list(urls) for _slot, fname, _desc, urls in FONT_BUNDLES}
+
+
+def ensure_fonts(font_dir: str, log=print) -> int:
+    """قلم‌های تایپ هر نوع حباب: اگر فایلی نبود از FONT_BUNDLES دانلود
+    می‌شود (خودِ برنامه می‌گیرد؛ ریلینز جداگانه لازم نیست).
+    خروجی: تعداد فایل‌های دانلودشده."""
+    if os.environ.get("MANGA_NO_FONT_DL"):
+        return 0
+    os.makedirs(font_dir, exist_ok=True)
+    import urllib.request
+    got = 0
+    for fname, urls in FONT_URLS.items():
+        dst = os.path.join(font_dir, fname)
+        if os.path.isfile(dst) and os.path.getsize(dst) > 20_000:
+            continue
+        ok = False
+        for url in urls:
+            try:
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=120) as r, \
+                        open(dst, "wb") as f:
+                    shutil.copyfileobj(r, f)
+                if os.path.getsize(dst) > 20_000:
+                    ok = True
+                    break
+            except Exception:
+                ok = False
+            try:
+                if not ok and os.path.exists(dst):
+                    os.remove(dst)
+            except Exception:
+                pass
+        if ok:
+            got += 1
+            try:
+                log(f"  [+] قلم {fname} دانلود شد")
+            except Exception:
+                pass
+        else:
+            try:
+                log(f"  [-] قلم {fname} دانلود نشد (بدون این قلم، از قلم اصلی استفاده می‌شود)")
+            except Exception:
+                pass
+    return got
+
+
 class MangaTranslator:
     _LAMA_MIN_VRAM_GB = 3.5
     _ANDROID_LAMA_MIN_TOTAL_GB = 4.0
@@ -2499,7 +2594,18 @@ class MangaTranslator:
         name = self._cuda_device_name()
 
         if force_gpu is False and not force_lama:
-            print("[*] --cpu → پاک‌سازی OpenCV سریع.")
+            if has_ort:
+                # --cpu یعنی «بدون GPU»، نه «بدون بازسازی هوشمند» —
+                # lama-lite (int8، سبک) روی همان CPU تمیزکاری می‌کند؛
+                # OpenCV فقط برای آن دسته از زمینه‌ها می‌ماند که صافی‌اند.
+                print("[*] --cpu → پاک‌سازی با lama-lite ONNX روی CPU "
+                      "(تمیزتر از Telea؛ برای OpenCV سریع: --clean-method opencv).")
+                try:
+                    self._lama_prefer_lite = True
+                except Exception:
+                    pass
+                return True
+            print("[*] --cpu و بدون onnxruntime → پاک‌سازی OpenCV سریع.")
             return False
 
         if not has_ort and not has_torch:
@@ -3000,8 +3106,9 @@ class MangaTranslator:
                 print(f"[*] رم گوشی: کل {total:.1f}GB / آزاد {avail:.1f}GB / "
                       f"{cores} هستهٔ CPU → lama-lite (int8) روی CPU اجرا می‌شود "
                       f"(سبک، سریع و تمیزتر از OpenCV).")
-            if _on_android() or _lite_mode():
-                # اندروید و حالت کم‌مصرف → همیشه lama-lite (int8، ۵۶MB، داینامیک)
+            if _on_android() or _lite_mode() or getattr(self, "_lama_prefer_lite", False):
+                # اندروید و حالت کم‌مصرف (و --cpu) → همیشه lama-lite
+                # (int8، ۵۶MB، داینامیک، CPU)
                 try:
                     self._lama = LamaLiteONNX(
                         prefer_gpu=self.use_gpu,
@@ -3900,6 +4007,7 @@ class MangaTranslator:
         
         if (
             3 <= len(stripped) <= 12
+            and not has_cjk
             and stripped.isupper()
             and " " not in stripped
             and stripped.isalpha()
@@ -4871,11 +4979,63 @@ class MangaTranslator:
             ch, cw = y1 - y0, x1 - x0
             det_class = (getattr(region, "det_class", "") or "")
             ink = zone
+            _msrc = "zone"
             if ink is not None and det_class not in ("bubble", "text_bubble"):
+                # متن آزاد روی هنر: فقط حروفِ چسبیده به خودِ خطوط متن پاک
+                # می‌شوند؛ خطوط نقاشیِ اطراف بلعیده نمی‌شوند. ماسک حرفی
+                # چندلایه است و اگر هیچ کدام درنیامد، «کل کادر» پاک نمی‌شود.
+                _gz = None
                 try:
                     _gz = self._glyph_mask_in_zone(gray[y0:y1, x0:x1], ink)
                     if _gz is not None:
-                        ink = _gz
+                        _msrc = "glyph"
+                except Exception:
+                    _gz = None
+                if _gz is None:
+                    try:
+                        _gz = self._letters_mask_in_zone(
+                            gray[y0:y1, x0:x1], ink, ch, cw)
+                        if _gz is not None:
+                            _msrc = "letters"
+                    except Exception:
+                        _gz = None
+                if _gz is not None:
+                    _ga = self._anchor_glyphs_to_text(_gz, region, x0, y0)
+                    if _ga is not None:
+                        ink = _ga
+                        _msrc += "+anchored"
+                else:
+                    # هیچ ماسک حرفی درنیامد: در ناحیهٔ غیرصاف، پرکردنِ کل
+                    # کادر ممنوع است (سفیدسازی هنر) — فقط خودِ خطوطِ OCR
+                    # با کمی فرسایش، آن هم وقتی زمین صاف است
+                    try:
+                        _flat_z = self._zone_bg_is_flat(gray[y0:y1, x0:x1], ink)
+                    except Exception:
+                        _flat_z = True
+                    if _flat_z:
+                        _msrc = "zoneFlat"
+                    else:
+                        _pm = np.zeros_like(ink)
+                        for _p in (getattr(region, "ocr_polys", None) or []):
+                            try:
+                                _pts = np.asarray(_p, np.int32).reshape(-1, 2).copy()
+                                _pts[:, 0] -= x0
+                                _pts[:, 1] -= y0
+                                cv2.fillPoly(_pm, [_pts], 255)
+                            except Exception:
+                                continue
+                        if int(np.count_nonzero(_pm)) > 0:
+                            ink = cv2.erode(_pm, np.ones((3, 3), np.uint8))
+                            _msrc = "polyShrunk"
+                        else:
+                            ink = None
+                            _msrc = "skip"
+            if os.environ.get("MANGA_DBG_MASK"):
+                try:
+                    _za = int(np.count_nonzero(zone)) if zone is not None else 0
+                    print(f"    [msk-dbg] rect={region.rect} cls={det_class} src={_msrc} "
+                          f"zone={_za} ink={int(np.count_nonzero(ink)) if ink is not None else 0} "
+                          f"crop={ch}x{cw}")
                 except Exception:
                     pass
             if getattr(self, "erase_bubble_interior", False) and zone is not None and det_class in ("bubble", "text_bubble"):
@@ -4883,21 +5043,44 @@ class MangaTranslator:
                 if interior is not None and interior.max() > 0:
                     ink = interior
             elif zone is not None and det_class in ("bubble", "text_bubble"):
+                # داخل غیرصاف (گرادیان/هنر/سایهٔ رنگی) → فقط خودِ خطوطِ
+                # جوهر پاک می‌شوند، نه کل کادر؛ بافت داخل حباب زنده می‌ماند
+                # و «کل حباب پاک نمی‌شود». داخل صاف → مسیر کامل قبلی
+                # (پرکردن کل کادر متن با رنگ خودِ داخل، بی‌لکه و سریع).
                 try:
-                    extra = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
-                    extra = self._drop_non_text_components(extra, ch, cw)
-                    extra = self._protect_bubble_wall(extra, gray[y0:y1, x0:x1])
-                    _domain = self._bubble_interior_mask(gray[y0:y1, x0:x1], zone)
-                    if _domain is not None and _domain.max() > 0:
-                        extra = cv2.bitwise_and(extra, _domain)
-                    else:
-                        _zn = cv2.dilate(zone, np.ones((9, 9), np.uint8), iterations=1)
-                        extra = cv2.bitwise_and(extra, _zn)
-                    extra_area = int(np.count_nonzero(extra))
-                    if 0 < extra_area <= 0.30 * ch * cw:
-                        ink = cv2.bitwise_or(ink, extra)
+                    _flat_in = self._zone_bg_is_flat(
+                        gray[y0:y1, x0:x1], zone)
                 except Exception:
-                    pass
+                    _flat_in = True
+                if not _flat_in:
+                    try:
+                        _gm = self._letters_mask_in_zone(
+                            gray[y0:y1, x0:x1], zone, ch, cw)
+                        if _gm is not None and int(np.count_nonzero(_gm)) >= 30:
+                            _gm = cv2.dilate(_gm, np.ones((3, 3), np.uint8),
+                                             iterations=1)
+                            ink = cv2.bitwise_and(_gm, zone)
+                            if int(np.count_nonzero(ink)) < 30:
+                                ink = zone
+                        # اگر ماسک حرفی نیامد، همان zone (بهتر از جاماندن متن)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        extra = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
+                        extra = self._drop_non_text_components(extra, ch, cw)
+                        extra = self._protect_bubble_wall(extra, gray[y0:y1, x0:x1])
+                        _domain = self._bubble_interior_mask(gray[y0:y1, x0:x1], zone)
+                        if _domain is not None and _domain.max() > 0:
+                            extra = cv2.bitwise_and(extra, _domain)
+                        else:
+                            _zn = cv2.dilate(zone, np.ones((9, 9), np.uint8), iterations=1)
+                            extra = cv2.bitwise_and(extra, _zn)
+                        extra_area = int(np.count_nonzero(extra))
+                        if 0 < extra_area <= 0.30 * ch * cw:
+                            ink = cv2.bitwise_or(ink, extra)
+                    except Exception:
+                        pass
             if ink is None:
 
                 ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
@@ -5001,6 +5184,53 @@ class MangaTranslator:
             return None
 
     @staticmethod
+    def _anchor_glyphs_to_text(glyph_mask: np.ndarray, region: "TextRegion",
+                               x0: int, y0: int) -> Optional[np.ndarray]:
+        """ماسک حرفیِ متن آزاد فقط اجزایی را نگه می‌دارد که به خودِ خطوط
+        OCR/تشخیص چسبیده‌اند — خطوط نقاشی/هنرِ هم‌اندازهٔ حرفِ دورِ متن
+        آزاد بلعیده نمی‌شوند (سفیدسازی کل بلوک متن روی هنر)."""
+        try:
+            polys = list(getattr(region, "ocr_polys", None) or [])
+            if not polys:
+                for b in (getattr(region, "boxes", None) or []):
+                    pts = np.asarray(b, dtype=np.int32).reshape(-1, 2)
+                    if pts.size >= 6:
+                        polys.append(pts)
+            if not polys:
+                return None
+            anchor = np.zeros_like(glyph_mask)
+            hs = []
+            for p in polys:
+                try:
+                    pts = np.asarray(p, dtype=np.int32).reshape(-1, 2).copy()
+                    pts[:, 0] -= x0
+                    pts[:, 1] -= y0
+                    cv2.fillPoly(anchor, [pts], 255)
+                    hs.append(int(pts[:, 1].max() - pts[:, 1].min()) + 1)
+                except Exception:
+                    continue
+            if not hs:
+                return None
+            lh = max(4.0, float(np.median(hs)))
+            am = int(np.clip(int(round(0.6 * lh)), 5, 22))
+            anchor = cv2.dilate(anchor, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * am + 1, 2 * am + 1)))
+            n, lab, st, _ = cv2.connectedComponentsWithStats(
+                (glyph_mask > 0).astype(np.uint8), 8)
+            if n <= 1:
+                return None
+            keep = np.zeros_like(glyph_mask)
+            for i in range(1, n):
+                comp = (lab == i)
+                if cv2.countNonZero((comp & (anchor > 0)).astype(np.uint8)) > 0:
+                    keep[comp] = 255
+            if int(np.count_nonzero(keep)) < 60:
+                return None
+            return keep
+        except Exception:
+            return None
+
+    @staticmethod
     def _glyph_mask_in_zone(crop_gray: np.ndarray,
                             zone: np.ndarray) -> Optional[np.ndarray]:
         try:
@@ -5028,12 +5258,89 @@ class MangaTranslator:
         except Exception:
             return None
 
-    def _flat_fill_cluster(self, crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[np.ndarray]:
+    @staticmethod
+    def _zone_bg_is_flat(crop_gray: np.ndarray, zone: np.ndarray) -> bool:
+        """زمینِ اطراف متن (حلقهٔ داخل دامنه) صاف است؟
+        صاف → پرکردن کل کادر متن با رنگ زمینه بی‌لکه و سریع است؛
+        غیرصاف (هنر/گرادیان/سایه) → فقط خودِ خطوط جوهر پاک می‌شوند تا
+        بافت داخل حباب زنده بماند و «کل حباب» پاک نشود."""
+        try:
+            z = (zone > 0)
+            if int(z.sum()) < 150:
+                return True
+            ring = (cv2.dilate(zone, np.ones((15, 15), np.uint8)) > 0) & ~z
+            if int(ring.sum()) < 80:
+                return True
+            px = crop_gray[ring].astype(np.float32)
+            if float(np.std(px)) > 8.5:
+                return False
+            try:
+                gf = crop_gray.astype(np.float32)
+                _mb = cv2.boxFilter(gf, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                _sb = cv2.boxFilter(gf * gf, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                _lstd = np.sqrt(np.maximum(_sb - _mb * _mb, 0.0))
+                if float(np.median(_lstd[ring])) > 6.5:
+                    return False
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return True
+
+    def _build_interior_map(self, image: np.ndarray,
+                            regions: List["TextRegion"]) -> Optional[np.ndarray]:
+        """نقشهٔ داخلِ حباب‌ها در سطح صفحه (یک‌بار محاسبه، همه‌جا استفاده):
+        پرکردن‌ها و جاروها نمونهٔ رنگ زمینه را فقط از داخلِ همین ناحیه
+        برمی‌دارند تا رنگِ آن‌سوی دیواره (کاغذ بیرون/هنر) به داخل نچکد."""
+        try:
+            bubble_regions = [r for r in regions
+                              if (getattr(r, "det_class", "") or "")
+                              in ("bubble", "text_bubble")]
+            if not bubble_regions:
+                return None
+            h, w = image.shape[:2]
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            fmap = np.zeros((h, w), dtype=np.uint8)
+            any_hit = False
+            for r in bubble_regions:
+                try:
+                    x, y, rw, rh = [int(v) for v in r.rect]
+                    pad = 16
+                    x0, y0 = max(0, x - pad), max(0, y - pad)
+                    x1, y1 = min(w, x + rw + pad), min(h, y + rh + pad)
+                    if x1 - x0 < 16 or y1 - y0 < 16:
+                        continue
+                    z = self._text_zone_in_crop(r, x0, y0, x1, y1)
+                    if z is None or cv2.countNonZero(z) == 0:
+                        z = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+                        z[max(0, y - y0):y + rh - y0,
+                          max(0, x - x0):x + rw - x0] = 255
+                    interior = self._bubble_interior_mask(
+                        gray[y0:y1, x0:x1], z)
+                    if interior is not None and interior.max() > 0:
+                        fmap[y0:y1, x0:x1] = cv2.bitwise_or(
+                            fmap[y0:y1, x0:x1], interior)
+                        any_hit = True
+                except Exception:
+                    continue
+            return fmap if any_hit else None
+        except Exception:
+            return None
+
+    def _flat_fill_cluster(self, crop_img: np.ndarray, crop_msk: np.ndarray,
+                            domain: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
         m = crop_msk > 0
         if not m.any():
             return None
         ring = cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0
         ring &= ~m
+        if domain is not None:
+            try:
+                _rd = ring & (domain > 0)
+                if int(np.count_nonzero(_rd)) >= 60:
+                    ring = _rd   # حلقه از همان سمتِ دیوارهٔ حباب
+            except Exception:
+                pass
         if int(np.count_nonzero(ring)) < 60:
             return None
         ring_px = crop_img[ring].astype(np.float32)
@@ -5221,6 +5528,7 @@ class MangaTranslator:
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         page_wall = self._wall_lines(image)
         page_band = self._bubble_border_band(image, regions)
+        page_interior = self._build_interior_map(image, regions)
         crops = []
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             self._check_cancel()
@@ -5233,14 +5541,22 @@ class MangaTranslator:
             result = None
             method = "flat"
             _mdl = None
+            _dom = None
+            if page_interior is not None:
+                try:
+                    _dc = page_interior[cy0:cy1, cx0:cx1]
+                    if _dc.shape == crop_img.shape[:2] and _dc.any():
+                        _dom = _dc
+                except Exception:
+                    _dom = None
             if use_flat:
-                result = self._flat_fill_cluster(crop_img, crop_msk)
+                result = self._flat_fill_cluster(crop_img, crop_msk, domain=_dom)
                 if mode != "flat":
                     # سنجش بر پایهٔ زمینهٔ خودِ حفره (بین حروف) + نوار
                     # بلافصل است، نه حلقه‌ای که از دیوار حباب/اسکرین‌تون
                     # بیرون می‌زند — قبلاً همین باعث می‌شد حباب‌های ساده هم
                     # بی‌جهت به LaMa بروند (کندی + لکه).
-                    _mdl = self._region_bg_model(crop_img, crop_msk)
+                    _mdl = self._region_bg_model(crop_img, crop_msk, domain=_dom)
                     _near = _mdl.get("near_std") if _mdl else None
                     _ok_flat = bool(
                         _mdl is not None
@@ -5265,7 +5581,7 @@ class MangaTranslator:
                 # ---- کاشی‌کاری بافت (اسکرین‌تون): سریع، بدون ONNX، و
                 # دقیقاً همان نقطه‌چین زمینه — قبل از LaMa امتحان می‌شود.
                 if _mdl is None:
-                    _mdl = self._region_bg_model(crop_img, crop_msk)
+                    _mdl = self._region_bg_model(crop_img, crop_msk, domain=_dom)
                 if _mdl is not None and (
                         _mdl["std"] >= 8.0
                         or _mdl.get("tex_local", 0.0) >= 6.0
@@ -5493,7 +5809,7 @@ class MangaTranslator:
                     result, method = self._verify_or_repair_fill(
                         crop_img, result, crop_msk, method,
                         page_img=image, page_mask=mask,
-                        box=(cx0, cy0, cx1, cy1))
+                        box=(cx0, cy0, cx1, cy1), domain=_dom)
                 except Exception:
                     pass
             mm = crop_msk > 0
@@ -5503,9 +5819,12 @@ class MangaTranslator:
 
         # ---- دور دوم: جاروی حروف جامانده (دوگذر — ردِّ پرکردنِ خود دور دوم هم پاک می‌شود) ----
         try:
-            cleaned = self._sweep_leftover_glyphs(cleaned, crops, regions)
-            cleaned = self._sweep_leftover_glyphs(cleaned, crops, regions)
-            cleaned = self._sweep_leftover_glyphs(cleaned, crops, regions)
+            cleaned = self._sweep_leftover_glyphs(
+                cleaned, crops, regions, interior_map=page_interior)
+            cleaned = self._sweep_leftover_glyphs(
+                cleaned, crops, regions, interior_map=page_interior)
+            cleaned = self._sweep_leftover_glyphs(
+                cleaned, crops, regions, interior_map=page_interior)
         except Exception as e:
             print(f"  [!] دور دوم جارو رد شد: {e}")
 
@@ -5513,10 +5832,16 @@ class MangaTranslator:
         return cleaned
 
     def _sweep_leftover_glyphs(self, cleaned: np.ndarray, crops: list,
-                               regions: Optional[List["TextRegion"]] = None) -> np.ndarray:
-        """دور دوم جارو — بر پایهٔ ناحیه‌های تشخیص‌داده‌شده:
-        داخل حباب (با حفظ دیواره) و حاشیهٔ کاغذی متن‌های آزاد، هر جوهرِ
-        جامانده‌ای پیدا و پاک می‌شود. متن قبلی و ردِّ محو نمی‌ماند."""
+                               regions: Optional[List["TextRegion"]] = None,
+                               interior_map: Optional[np.ndarray] = None) -> np.ndarray:
+        """دور دوم جارو — فقط به اندازهٔ خودِ متن:
+        هر مؤلفهٔ جوهرِ جامانده باید به خطوطِ متنِ همان ناحیه چسبیده
+        باشد (لنگرگاه متن) یا در اندازهٔ خودِ خط باشد؛ پس‌زمینهٔ رنگی/
+        گرادیان/هنر هرگز «جوهر» شمرده نمی‌شود و کل حباب یا اطرافش
+        پاک نمی‌شود. رنگِ پرکردن از داخلِ خودِ ناحیه می‌آید (حباب تیره
+        → تیره؛ حباب کاغذی → هم‌رنگ کاغذِ خودش) و در ناحیهٔ غیرصاف
+        به‌جای رنگ ثابت از Telea استفاده می‌شود. متن قبلی و ردِّ محو
+        نمی‌ماند ولی دیواره و بافت حباب زنده می‌ماند."""
         if not regions:
             return cleaned
         out = cleaned
@@ -5535,11 +5860,51 @@ class MangaTranslator:
                     continue
                 g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
                 det_class = (getattr(region, "det_class", "") or "")
+                is_bubble = det_class in ("bubble", "text_bubble")
+
+                # ---------- لنگرگاه متن: خودِ خطوط OCR/تشخیص ----------
+                anchor = np.zeros_like(g)
+                _polys = list(getattr(region, "ocr_polys", None) or [])
+                if not _polys:
+                    for b in (getattr(region, "boxes", None) or []):
+                        pts = np.asarray(b, dtype=np.int32).reshape(-1, 2)
+                        if pts.size >= 6:
+                            _polys.append(pts)
+                line_hs, line_ws = [], []
+                for p in _polys:
+                    try:
+                        pts = np.asarray(p, dtype=np.int32).reshape(-1, 2).copy()
+                        pts[:, 0] -= x0
+                        pts[:, 1] -= y0
+                        cv2.fillPoly(anchor, [pts], 255)
+                        line_hs.append(int(pts[:, 1].max() - pts[:, 1].min()) + 1)
+                        line_ws.append(int(pts[:, 0].max() - pts[:, 0].min()) + 1)
+                    except Exception:
+                        continue
+                if not line_hs:
+                    anchor[max(0, y - y0):y + h - y0,
+                           max(0, x - x0):x + w - x0] = 255
+                    line_hs, line_ws = [max(4, h)], [max(4, w)]
+                line_h = max(4.0, float(np.median(line_hs)))
+                line_w = max(4.0, float(np.median(line_ws)))
+                _am = int(np.clip(int(round(0.55 * line_h)), 6, 26))
+                anchor = cv2.dilate(anchor, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (2 * _am + 1, 2 * _am + 1)))
+
+                # ---------- دامنهٔ جارو ----------
                 zone = None
-                if det_class in ("bubble", "text_bubble"):
-                    z = self._text_zone_in_crop(region, x0, y0, x1, y1)
-                    if z is not None and cv2.countNonZero(z) > 0:
-                        zone = self._bubble_interior_mask(g, z)
+                if is_bubble:
+                    if interior_map is not None:
+                        try:
+                            _im = interior_map[y0:y1, x0:x1]
+                            if _im.shape == g.shape and cv2.countNonZero(_im) > 0:
+                                zone = _im
+                        except Exception:
+                            zone = None
+                    if zone is None:
+                        z = self._text_zone_in_crop(region, x0, y0, x1, y1)
+                        if z is not None and cv2.countNonZero(z) > 0:
+                            zone = self._bubble_interior_mask(g, z)
                 if zone is None:
                     zone = np.zeros_like(g)
                     zone[max(0, y - y0):y + h - y0,
@@ -5548,21 +5913,49 @@ class MangaTranslator:
                         cv2.MORPH_ELLIPSE, (9, 9)))
                 if int((zone > 0).sum()) < 80:
                     continue
-                # --- زمینهٔ کاغذی/روشن؟ ---
+                zn = int((zone > 0).sum())
+                _zys, _zxs = np.where(zone > 0)
+                zone_w = int(_zxs.max() - _zxs.min()) + 1
+                zone_h = int(_zys.max() - _zys.min()) + 1
+                dim_cap = int(max(140.0, 0.62 * float(max(zone_w, zone_h))))
+
+                # ---------- حالت زمینه: صاف؟ تیره؟ ----------
+                # صافی بودنِ «کاغذِ خودِ ناحیه»: پیکسل‌های روشنِ داخلِ
+                # دامنه باید هم‌رنگ باشند (کاغذ/داخلِ صاف). حلقهٔ بیرونی
+                # ملاک نیست چون دورِ متن آزاد، هنر خطی هست و همیشه
+                # «ناصاف» دیده می‌شود — ولی خودِ جعبهٔ متن کاغذ تمیز است.
+                zone_flat = True
+                zone_paper_med0 = 0.0
+                try:
+                    _zp0 = g[zone > 0]
+                    if _zp0.size >= 400:
+                        _zpm0 = float(np.median(
+                            _zp0[_zp0 >= float(np.percentile(_zp0, 50))]))
+                        _zb0 = (zone > 0) & (g >= _zpm0 - 12)
+                        if int(_zb0.sum()) >= 120:
+                            if float(np.std(g[_zb0].astype(np.float32))) > 10.0:
+                                zone_flat = False
+                            zone_paper_med0 = _zpm0
+                except Exception:
+                    pass
+                dark_zone = False
+                try:
+                    if float(np.median(g[zone > 0])) < 128.0:
+                        dark_zone = True
+                except Exception:
+                    pass
+
+                # ---------- کاغذی/روشن؟ (فقط آستانهٔ جوهر) ----------
                 ring = (cv2.dilate(zone, np.ones((13, 13), np.uint8)) > 0) \
                     & (zone == 0)
                 paper = False
                 paper_med = None
                 bright_ring = None
-                if int(ring.sum()) >= 60:
+                if (not dark_zone) and int(ring.sum()) >= 60:
                     bright_ring = ring & (g >= 180)
                     if int(bright_ring.sum()) >= 60:
                         bf = g[bright_ring].astype(np.float32)
                         if float(np.median(bf)) >= 195.0 and float(np.std(bf)) <= 22.0:
-                            # بافت محلی: اسکرین‌تونِ کم‌کنتراست در std کلی
-                            # بی‌درز جا می‌زند ولی واریانس پنجره‌ای آن را
-                            # می‌بیند — نقطه‌چین «کاغذ» حساب نمی‌شود و با
-                            # رنگ صاف پر نمی‌شود (لکه نمی‌ماند).
                             try:
                                 _mb = cv2.boxFilter(g, -1, (9, 9),
                                                     borderType=cv2.BORDER_REFLECT)
@@ -5575,10 +5968,11 @@ class MangaTranslator:
                             if _loc <= 5.5:
                                 paper = True
                                 paper_med = float(np.median(bf))
-                if paper and det_class not in ("bubble", "text_bubble"):
+                if paper and not is_bubble:
                     # پس‌گرد خط دست‌خط: واژه‌های جاماندهٔ همان خط/ستون اطرافِ
-                    # کادر تشخیص هم داخل ناحیهٔ جارو می‌آیند؛ نقاشی‌های بزرگ
-                    # بعداً با صافیِ اندازهٔ مؤلفه محافظت می‌شوند.
+                    # کادر تشخیص هم داخل ناحیهٔ جارو می‌آیند؛ اندازهٔ هر
+                    # مؤلفه نسبت به خودِ متنِ ناحیه سنجیده می‌شود (نه سقف
+                    # ثابت) تا نقاشیِ اطراف متن آزاد بلعیده نشود.
                     try:
                         rx, ry = x - x0, y - y0
                         rw, rh = w, h
@@ -5591,11 +5985,13 @@ class MangaTranslator:
                             gink = (win < paper_med - 20.0).astype(np.uint8)
                             gn, glab, gst, _ = cv2.connectedComponentsWithStats(gink, 8)
                             glyph = np.zeros_like(gink)
+                            _gcw = max(46, int(2.0 * line_w))
+                            _gch = max(26, int(2.2 * line_h))
                             for gi in range(1, gn):
                                 ga = int(gst[gi, cv2.CC_STAT_AREA])
                                 gw = int(gst[gi, cv2.CC_STAT_WIDTH])
                                 gh = int(gst[gi, cv2.CC_STAT_HEIGHT])
-                                if 3 <= ga <= 1200 and gw <= 130 and gh <= 130:
+                                if 3 <= ga <= 1200 and gw <= _gcw and gh <= _gch:
                                     glyph[glab == gi] = 1
                             blob = cv2.dilate(
                                 glyph,
@@ -5614,28 +6010,18 @@ class MangaTranslator:
                             ext_full = np.zeros(g.shape, bool)
                             ext_full[my0:my1, mx0:mx1] = ext
                             zone = ((zone > 0) | ext_full).astype(np.uint8) * 255
-                            zone_n = zone
                     except Exception:
                         pass
-                # سقف اندازهٔ مؤلفه‌ها نسبت به خود ناحیه — فونت‌های
-                # تزئینی/فشردهٔ کمیک حروفشان به‌هم می‌چسبند و یک خط کامل
-                # یک مؤلفهٔ عریض می‌شود؛ سقف ثابت ۹۰ پیکسل خط را می‌انداخت.
-                zn = int((zone > 0).sum())
-                zone_h, zone_w = (zone > 0).shape[:2]
-                dim_cap = int(max(140.0, 0.62 * float(max(zone_w, zone_h))))
+                # ---------- جوهرِ جامانده (تشخیص‌گرهای چندلایه) ----------
                 if paper:
-                    # آستانهٔ مطلق نسبت به رنگ کاغذ؛ ردِّ محوِ کم‌کنتراست هم می‌گیرد
                     ink = ((g < paper_med - 20.0) & (zone > 0)).astype(np.uint8) * 255
                     min_area = 3
                 else:
                     bg = cv2.medianBlur(g, 21)
                     diff = g.astype(np.int16) - bg.astype(np.int16)
                     ink = ((diff < -34) & (zone > 0)).astype(np.uint8) * 255
-                    # حباب تیره با متن روشن → جوهرِ روشن را هم بگیر
-                    if float(np.median(g[zone > 0])) < 128.0:
+                    if dark_zone:
                         ink = ink | (((diff > 34) & (zone > 0)).astype(np.uint8) * 255)
-                    # متن خاکستری کم‌کنتراست (فونت محو/آنتی‌الیاس‌شده) —
-                    # فقط مؤلفه‌های در اندازهٔ حرف تا اسکرین‌تون پریده نشود
                     try:
                         faint = ((diff <= -13) & (zone > 0)).astype(np.uint8) * 255
                         fn, flab, fst, _ = cv2.connectedComponentsWithStats(faint, 8)
@@ -5649,9 +6035,6 @@ class MangaTranslator:
                         ink = cv2.bitwise_or(ink, faint_keep)
                     except Exception:
                         pass
-                    # لکهٔ متراکم: وقتی ردِ متن بخش بزرگی از پنجرهٔ میانه را
-                    # گرفته باشد، میانهٔ محلی خودش تیره می‌شود و diff چیزی
-                    # نمی‌بیند؛ سنجش مطلق نسبت به «کاغذِ» خودِ ناحیه
                     try:
                         zp = g[zone > 0]
                         if zp.size >= 400:
@@ -5675,10 +6058,6 @@ class MangaTranslator:
                                 ink = cv2.bitwise_or(ink, _pk)
                     except Exception:
                         pass
-                    # هالهٔ بسیار کم‌رنگ (Δ<۲۰ از کاغذ) که فقط چشم می‌بیند:
-                    # فقط وقتی پاک می‌شود که مؤلفه‌ها «ردیفِ متن» بسازند
-                    # (≥۳ حرف هم‌ردیف، بلندیِ حرف‌مانند) — نقطه‌چینِ
-                    # اسکرین‌تونِ ریز ردیف نمی‌سازد این‌قدر منظم.
                     try:
                         zp = g[zone > 0]
                         if zp.size >= 400:
@@ -5723,26 +6102,60 @@ class MangaTranslator:
                 n, lab, st, _ = cv2.connectedComponentsWithStats(ink, 8)
                 if n <= 1:
                     continue
-                # داخل ناحیهٔ متن هستیم و دامنه از هنر جدا شده؛ اجزای بزرگِ
-                # متنی (خط چسبیده/کلمهٔ درشت) هم باید پاک شوند، نه فقط حرف‌های ریز
+                # ---------- دروازه‌های مؤلفه: به‌اندازهٔ خودِ متن ----------
                 max_area = max(2200.0, 0.05 * float(max(1, zn)))
-                if det_class in ("bubble", "text_bubble"):
-                    max_area = max(3600.0, 0.12 * float(max(1, zn)))
+                if is_bubble:
+                    max_area = min(max_area, max(2600.0, 0.12 * float(max(1, zn))))
+                comp_cap = 0.16 * float(max(1, zn)) if is_bubble \
+                    else 0.30 * float(max(1, zn))
                 keep = np.zeros_like(ink)
                 for i in range(1, n):
                     a = int(st[i, cv2.CC_STAT_AREA])
                     w_ = int(st[i, cv2.CC_STAT_WIDTH])
                     h_ = int(st[i, cv2.CC_STAT_HEIGHT])
-                    if (min_area <= a <= max_area
-                            and w_ <= dim_cap and h_ <= dim_cap):
-                        # دیواره/دُم حباب: خطِ نازکِ کشیده را نبلعد
-                        ls = max(w_, h_)
-                        ss = max(1, min(w_, h_))
-                        if ss <= 5 and ls >= int(0.30 * max(zone_h, zone_w)):
-                            continue
-                        keep[lab == i] = 255
+                    if a < min_area or a > max_area or a > comp_cap:
+                        continue
+                    if w_ > dim_cap or h_ > dim_cap:
+                        continue
+                    # بلندتر/پهن‌تر از چند خطِ متن = پس‌زمینه است نه جوهر
+                    if h_ > 2.8 * line_h + 10 and a > 0.05 * zn:
+                        continue
+                    if w_ > 2.2 * line_w + 40 and h_ > 1.5 * line_h + 6 \
+                            and a > 0.05 * zn:
+                        continue
+                    # دیواره/دُم حباب: خطِ نازکِ کشیده را نبلعد
+                    ls = max(w_, h_)
+                    ss = max(1, min(w_, h_))
+                    if ss <= 5 and ls >= int(0.30 * max(zone_h, zone_w)):
+                        continue
+                    keep[lab == i] = 255
                 if not np.any(keep):
                     continue
+                # لنگرگاه متن: جوهرِ جامانده یا به خودِ خطوط چسبیده است
+                # یا در اندازهٔ یک خطِ کامل است (خطِ جاافتادهٔ تشخیص)
+                try:
+                    kn, kl, ks, _ = cv2.connectedComponentsWithStats(keep, 8)
+                    for ki in range(1, kn):
+                        kmask = (kl == ki)
+                        ka = int(ks[ki, cv2.CC_STAT_AREA])
+                        kh = int(ks[ki, cv2.CC_STAT_HEIGHT])
+                        if ka <= 0:
+                            continue
+                        _on_anchor = int(cv2.countNonZero(
+                            (kmask & (anchor > 0)).astype(np.uint8)))
+                        _line_like = (kh <= 1.3 * line_h + 6 and
+                                      ka <= 0.10 * float(max(1, zn)))
+                        if _on_anchor <= 0 and not _line_like:
+                            keep[kmask] = 0
+                    if not np.any(keep):
+                        continue
+                except Exception:
+                    pass
+                # سقف پوشش: متنِ جامانده هیچ‌وقت نیمی از داخل حباب را نمی‌گیرد
+                if is_bubble and int((keep > 0).sum()) > 0.45 * zn:
+                    keep = cv2.bitwise_and(keep, anchor)
+                    if int((keep > 0).sum()) > 0.45 * zn:
+                        continue
                 # دُم/تیز حباب که از لبهٔ دامنه رد می‌شود: مؤلفهٔ نازکی که
                 # به مرز داخل-حباب چسبیده و بیرونش ادامه دارد، دیوار است نه
                 # حرف — چنین مؤلفه‌ای حذف می‌شود تا دُم حباب نپوپد.
@@ -5750,12 +6163,12 @@ class MangaTranslator:
                     zedge = cv2.subtract(
                         zone, cv2.erode(zone, np.ones((5, 5), np.uint8)))
                     if cv2.countNonZero(zedge) > 0:
-                        kn, kl, ks, _ = cv2.connectedComponentsWithStats(keep, 8)
-                        for ki in range(1, kn):
-                            kmask = (kl == ki)
-                            ka = int(ks[ki, cv2.CC_STAT_AREA])
-                            kw = int(ks[ki, cv2.CC_STAT_WIDTH])
-                            kh = int(ks[ki, cv2.CC_STAT_HEIGHT])
+                        kn2, kl2, ks2, _ = cv2.connectedComponentsWithStats(keep, 8)
+                        for ki in range(1, kn2):
+                            kmask = (kl2 == ki)
+                            ka = int(ks2[ki, cv2.CC_STAT_AREA])
+                            kw = int(ks2[ki, cv2.CC_STAT_WIDTH])
+                            kh = int(ks2[ki, cv2.CC_STAT_HEIGHT])
                             if ka <= 0:
                                 continue
                             if min(kw, kh) <= 8 and cv2.countNonZero(
@@ -5769,57 +6182,65 @@ class MangaTranslator:
                     cv2.MORPH_ELLIPSE, (5, 5)))
                 if os.environ.get("MANGA_DBG_SWEEP"):
                     print(f"    [swp-dbg] region={region.rect} paper={paper} "
+                          f"flat={zone_flat} dark={dark_zone} "
                           f"zone={int((zone>0).sum())} ink={int((ink>0).sum())} "
-                          f"keep={int((keep>0).sum())} L0keep={int(keep[91:124, 25:155].sum()/255) if keep.shape[0]>124 else -1}")
-                # کاغذِ خودِ ناحیه (حتی وقتی حلقهٔ بیرونی هنر دارد و «کاغذی»
-                # شمرده نشد) — داخل حباب روشن، پرکردنِ هم‌رنگِ کاغذ تمیزتر
-                # از Telea است و هاله نمی‌گذارد.
-                zone_paper_col = None
-                zone_paper_med = 0.0
-                if not paper:
-                    try:
-                        _zp = g[zone > 0]
-                        if _zp.size >= 400:
-                            _zpm = float(np.median(
-                                _zp[_zp >= float(np.percentile(_zp, 50))]))
-                            if _zpm >= 195.0:
-                                zone_paper_med = _zpm
-                                _zbright = (zone > 0) & (g >= _zpm - 12)
-                                if int(_zbright.sum()) >= 100:
-                                    zone_paper_col = np.median(
-                                        crop[_zbright].astype(np.float32), axis=0)
-                    except Exception:
-                        zone_paper_col = None
-                if paper or zone_paper_col is not None:
-                    # پرکردن مستقیم با رنگ کاغذِ روشن + لبهٔ نرم
-                    if paper:
-                        ring_px = crop[bright_ring].astype(np.float32)
-                        col = np.median(ring_px, axis=0)
-                        _pmed = paper_med
-                    else:
-                        col = zone_paper_col
-                        _pmed = zone_paper_med
-                    alpha = cv2.GaussianBlur(
-                        keep, (7, 7), 0).astype(np.float32)[..., None] / 255.0
-                    fixed = (crop.astype(np.float32) * (1.0 - alpha)
-                             + col[None, None, :] * alpha)
-                    fixed = np.clip(fixed, 0, 255).astype(np.uint8)
-                    # نرمال‌سازی کاغذ: خال‌های خاکستری کم‌کنتراست هم‌رنگ کاغذ می‌شوند
-                    try:
-                        near = ((g >= _pmed - 30) & (g < _pmed - 5)
-                                & (zone > 0))
-                        if int(near.sum()) > 30:
-                            wm = cv2.GaussianBlur(
-                                near.astype(np.uint8) * 255, (5, 5), 0
-                            ).astype(np.float32)[..., None] / 255.0 * 0.7
-                            fixed = (fixed.astype(np.float32) * (1.0 - wm)
-                                     + col[None, None, :] * wm)
-                            fixed = np.clip(fixed, 0, 255).astype(np.uint8)
-                    except Exception:
-                        pass
-                else:
+                          f"keep={int((keep>0).sum())}")
+                # ---------- پرکردن: با رنگِ خودِ ناحیه، به‌اندازهٔ متن ----------
+                if not zone_flat:
+                    # هنر/گرادیان → Telea؛ رنگِ ثابت اینجا «لکهٔ صاف» می‌سازد
                     fixed = cv2.inpaint(crop, keep, inpaintRadius=4,
                                         flags=cv2.INPAINT_TELEA)
+                elif dark_zone:
+                    # حباب تیره: پرکردن با رنگِ خودِ داخل، نه حلقهٔ بیرون
+                    _zm = (zone > 0)
+                    _col = np.median(crop[_zm].astype(np.float32), axis=0)
+                    alpha = cv2.GaussianBlur(
+                        keep, (7, 7), 0).astype(np.float32)[..., None] / 255.0
+                    fixed = np.clip(
+                        crop.astype(np.float32) * (1.0 - alpha)
+                        + _col[None, None, :] * alpha, 0, 255).astype(np.uint8)
+                else:
+                    # داخل روشن: رنگ کاغذِ خودِ ناحیه (ترجیحاً از داخلِ
+                    # دامنه، وگرنه حلقه) + لبهٔ نرم؛ خال‌های خاکستریِ
+                    # کم‌کنتراست هم هم‌رنگ کاغذ می‌شوند.
+                    col = None
+                    _pmed = 0.0
+                    try:
+                        _zpm = zone_paper_med0
+                        if _zpm >= 170.0:
+                            _zbright = (zone > 0) & (g >= _zpm - 12)
+                            if int(_zbright.sum()) >= 100:
+                                col = np.median(
+                                    crop[_zbright].astype(np.float32), axis=0)
+                                _pmed = _zpm
+                    except Exception:
+                        col = None
+                    if col is None and paper and bright_ring is not None:
+                        col = np.median(
+                            crop[bright_ring].astype(np.float32), axis=0)
+                        _pmed = paper_med or 0.0
+                    if col is not None:
+                        alpha = cv2.GaussianBlur(
+                            keep, (7, 7), 0).astype(np.float32)[..., None] / 255.0
+                        fixed = (crop.astype(np.float32) * (1.0 - alpha)
+                                 + col[None, None, :] * alpha)
+                        fixed = np.clip(fixed, 0, 255).astype(np.uint8)
+                        if _pmed > 0:
+                            try:
+                                near = ((g >= _pmed - 30) & (g < _pmed - 5)
+                                        & (zone > 0))
+                                if int(near.sum()) > 30:
+                                    wm = cv2.GaussianBlur(
+                                        near.astype(np.uint8) * 255, (5, 5), 0
+                                    ).astype(np.float32)[..., None] / 255.0 * 0.7
+                                    fixed = (fixed.astype(np.float32) * (1.0 - wm)
+                                             + col[None, None, :] * wm)
+                                    fixed = np.clip(fixed, 0, 255).astype(np.uint8)
+                            except Exception:
+                                pass
+                    else:
+                        fixed = cv2.inpaint(crop, keep, inpaintRadius=4,
+                                            flags=cv2.INPAINT_TELEA)
                 fixed = self._scrub_dark_residuals(fixed, keep)
                 out[y0:y1, x0:x1] = fixed
                 swept += 1
@@ -5871,10 +6292,13 @@ class MangaTranslator:
     # لکه، آن را ترمیم یا با روش درست جایگزین می‌کند.
 
     @staticmethod
-    def _region_bg_model(crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[dict]:
+    def _region_bg_model(crop_img: np.ndarray, crop_msk: np.ndarray,
+                          domain: Optional[np.ndarray] = None) -> Optional[dict]:
         """مدل زمینهٔ ناحیه: از پیکسل‌های بین جوهر در خودِ حفره؛ اگر ماسک
         تنگ بود و جوهر اکثریت بود، از نوار بلافصلِ اطراف ماسک (بدون
-        دیواره/خط). رنگ/انحراف/بافت زمینهٔ «مورد انتظار» را می‌دهد."""
+        دیواره/خط). رنگ/انحراف/بافت زمینهٔ «مورد انتظار» را می‌دهد.
+        domain (اختیاری): دامنهٔ داخل حباب — حلقهٔ نمونه‌گیری از آن بیرون
+        نمی‌زند تا رنگِ پُر کردن از آن‌سوی دیواره/کاغذِ بیرون نیاید."""
         try:
             m = (crop_msk > 0)
             hole_n = int(np.count_nonzero(m))
@@ -5884,21 +6308,19 @@ class MangaTranslator:
             lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
             hole_px = g[m].astype(np.float32)
 
-            # ---------- ۱) زمینهٔ داخل حفره (بین جوهر) ----------
-            thr = float(np.percentile(hole_px, 45.0))
-            bright = hole_px[hole_px >= thr]
-            dark = hole_px[hole_px < thr]
-            bg_sel = (hole_px >= thr) if bright.size >= dark.size else (hole_px < thr)
-            mm = np.zeros_like(m)
-            mm[m] = bg_sel
-            bg_px = g[mm].astype(np.float32)
-            hole_ok = bg_px.size >= 30 and float(np.std(bg_px)) <= 7.5
-
             # ---------- ۲) نوار بلافصل اطراف ماسک (۵..۱۵px) ----------
             near = (cv2.dilate(crop_msk, np.ones((15, 15), np.uint8)) > 0) & \
                    ~(cv2.dilate(crop_msk, np.ones((5, 5), np.uint8)) > 0)
+            if domain is not None:
+                try:
+                    _nd = near & (domain > 0)
+                    if int(np.count_nonzero(_nd)) >= 60:
+                        near = _nd   # نمونه‌گیری فقط از همین سمت دیواره
+                except Exception:
+                    pass
             near_std = None
             near_sel2d = None
+            near_med = None
             grad_slope = 0.0
             if int(np.count_nonzero(near)) >= 60:
                 nf = g[near].astype(np.float32)
@@ -5907,6 +6329,7 @@ class MangaTranslator:
                 sel = (nf >= lo) & (nf <= hi)
                 if int(sel.sum()) >= 40:
                     near_std = float(np.std(nf[sel]))
+                    near_med = float(np.median(nf[sel]))
                     sel2d = np.zeros_like(m)
                     sel2d[near] = sel
                     near_sel2d = sel2d
@@ -5919,6 +6342,26 @@ class MangaTranslator:
                         grad_slope = float(max(abs(co), abs(ro)))
                     except Exception:
                         grad_slope = 0.0
+
+            # ---------- ۱) زمینهٔ داخل حفره (بین جوهر) ----------
+            thr = float(np.percentile(hole_px, 45.0))
+            bright = hole_px[hole_px >= thr]
+            dark = hole_px[hole_px < thr]
+            bg_sel = (hole_px >= thr) if bright.size >= dark.size else (hole_px < thr)
+            if near_med is not None:
+                # قطبیت جوهر از راه حلقهٔ بلافصل: حلقه خودش زمینه است؛
+                # سمتِ هم‌رنگِ حلقه در حفره «زمینه» است و سمت دیگر «جوهر».
+                # (قبلاً متنِ روشنِ متراکم در حباب تیره خودش زمینه فرض می‌شد
+                # و داخل سیاه با سفید پر می‌شد!)
+                hole_med = float(np.median(hole_px))
+                if near_med - hole_med > 22.0:
+                    bg_sel = hole_px >= thr       # جوهر تیره است
+                elif hole_med - near_med > 22.0:
+                    bg_sel = hole_px < thr        # جوهر روشن است (حباب تیره)
+            mm = np.zeros_like(m)
+            mm[m] = bg_sel
+            bg_px = g[mm].astype(np.float32)
+            hole_ok = bg_px.size >= 30 and float(np.std(bg_px)) <= 7.5
 
             # ---------- انتخاب منبع مدل ----------
             if hole_ok:
@@ -6303,13 +6746,14 @@ class MangaTranslator:
                                msk: np.ndarray, method: str,
                                page_img: Optional[np.ndarray] = None,
                                page_mask: Optional[np.ndarray] = None,
-                               box=None) -> Tuple[Optional[np.ndarray], str]:
+                               box=None,
+                               domain: Optional[np.ndarray] = None) -> Tuple[Optional[np.ndarray], str]:
         """راستی‌آزمایی پرکردن در برابر زمینهٔ واقعی؛ در صورت لکه:
         ترمیم ته‌رنگ → پرکردن ثابت (زمینهٔ یکدست) → کاشی‌کاری بافت
         (اسکرین‌تون). اگر هیچ‌کدام قبول نشد، همان پرکردن اولیه نگه داشته
         می‌شود (به جا ماندن متن بدترین حالت است)."""
         try:
-            model = self._region_bg_model(crop_img, msk)
+            model = self._region_bg_model(crop_img, msk, domain=domain)
             if model is None:
                 return fill_img, method
             ok, why = self._fill_matches_bg(fill_img, model, msk)
@@ -6747,24 +7191,24 @@ class MangaTranslator:
     # نوع حباب → فایل فونت. هر نوع قلم خودش را می‌گیرد؛
     # فایل‌ها کنار فونت اصلی جست‌وجا می‌شوند، نبودند همان فونت اصلی می‌ماند.
     STYLE_FONT_FILES = {
-        "normal":         "Vazirmatn-Regular.ttf",
+        "normal":         "Vazirmatn-Bold.ttf",
         "free_text":      "Vazirmatn-Regular.ttf",
-        "system":         "Vazirmatn-Medium.ttf",
-        "broadcast":      "Vazirmatn-Medium.ttf",
-        "whisper":        "Vazirmatn-Light.ttf",
-        "thought":        "Vazirmatn-Light.ttf",
-        "sun_thought":    "Vazirmatn-Light.ttf",
-        "square_thought": "Vazirmatn-Light.ttf",
-        "cry":            "Vazirmatn-Light.ttf",
-        "fear":           "Vazirmatn-Light.ttf",
-        "narrator":       "Vazirmatn-Bold.ttf",
-        "black":          "Vazirmatn-Black.ttf",
-        "shout":          "Vazirmatn-Black.ttf",
-        "monster":        "Vazirmatn-Black.ttf",
-        "explosion":      "Vazirmatn-Black.ttf",
-        "comedy_shout":   "Lalezar-Regular.ttf",
-        "sfx":            "Lalezar-Regular.ttf",
+        "shout":          "Lalezar-Fixed.ttf",
+        "black":          "Lalezar-Fixed.ttf",
+        "monster":        "Lalezar-Fixed.ttf",
+        "explosion":      "Lalezar-Fixed.ttf",
+        "comedy_shout":   "Gandom.ttf",
+        "sfx":            "Gandom.ttf",
+        "whisper":        "Nahid.ttf",
+        "cry":            "Nahid.ttf",
+        "fear":           "Nahid.ttf",
+        "thought":        "Samim-Bold.ttf",
+        "sun_thought":    "Samim-Bold.ttf",
+        "square_thought": "Samim-Bold.ttf",
+        "system":         "Sahel-Bold.ttf",
+        "broadcast":      "Sahel-Bold.ttf",
         "letter":         "Amiri-Regular.ttf",
+        "narrator":       "Shabnam-Bold.ttf",
     }
 
     def _setup_style_fonts(self) -> None:
@@ -6775,6 +7219,15 @@ class MangaTranslator:
             base = os.path.dirname(os.path.abspath(self.font_path))
         if not base or not os.path.isdir(base):
             base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+        # قلم نبود؟ خودمان از FONT_BUNDLES دانلودش می‌کنیم
+        missing = sorted({f for f in self.STYLE_FONT_FILES.values()
+                          if not os.path.isfile(os.path.join(base, f))})
+        if missing:
+            try:
+                print(f"[*] {len(missing)} قلم انواع حباب نیست → دانلود خودکار از FONT_BUNDLES ...")
+                ensure_fonts(base)
+            except Exception as _e:
+                print(f"  [!] دانلود قلم‌ها رد شد: {_e}")
         found = set()
         for st, fname in self.STYLE_FONT_FILES.items():
             p = os.path.join(base, fname)
@@ -9640,7 +10093,7 @@ class MangaTranslator:
                         continue
                     _is_wm = self._is_watermark_text(text)
                     # واترمارک حتی با اطمینانِ کمتر پذیرفته می‌شود (متنِ کم‌رنگ)
-                    _min_conf = 0.50 if _is_wm else 0.70
+                    _min_conf = 0.50 if _is_wm else 0.62
                     if conf < _min_conf or len(text) < (2 if _is_wm else 3):
                         continue
                     if not any(ch.isalnum() for ch in text) and not _is_wm:
@@ -9664,15 +10117,27 @@ class MangaTranslator:
                         continue
                     # متن غیر-واترمارکی باید واقعاً متن‌مانند باشد (≥۴ حرف، ≥۲ توکن)
                     # — جلوی پاک‌کردن بافت هنری با خطاهای مثبت OCR را می‌گیرد
-                    _looks_text = _is_wm or (len(text) >= 4 and len(toks) >= 2)
+                    # تک‌واژه‌های بلند (تابلوها/برچسب صحنه: «SCHOOL»،
+                    # «SURVEY») هم متن‌اند — با اطمینان بالاتر پذورفته می‌شوند
+                    _single_word = (len(toks) == 1 and len(text) >= 6
+                                    and conf >= 0.70)
+                    _looks_text = _is_wm or (len(text) >= 4 and len(toks) >= 2) \
+                        or _single_word
                     if not _looks_text:
                         # فونت‌های تزئینی/دست‌خط OCR را گنگ می‌کنند؛ اگر باکسِ
                         # متن داخل حبابِ روشنِ بسته نشسته باشد باز هم متن است
                         # و باید پاک شود (تبلیغ روی هنر می‌ماند؛ متنِ داخل
                         # حباب هرگز نمی‌ماند).
-                        if conf >= 0.42 and self._box_inside_bubble(
+                        if conf >= 0.38 and self._box_inside_bubble(
                                 image, (px1, py1, px2, py2)):
-                            _looks_text = True
+                            # «888»/«131»/«mmmt» روی هنر (خوانش اشتباهِ
+                            # جواهر و خطوط تزئینی) نباید ناحیهٔ پاک‌شونده
+                            # بسازد؛ ارقام خالص باید خیلی مطمئن و خوانشِ
+                            # کوتاه باید کمی بلندتر باشد
+                            _has_letter = any(ch.isalpha() for ch in text)
+                            if ((_has_letter and len(text) >= 5)
+                                    or conf >= 0.85):
+                                _looks_text = True
                     if not _looks_text:
                         continue
                     kind = "promo"
@@ -9787,6 +10252,51 @@ class MangaTranslator:
                 raise
             except Exception as e:
                 print(f"    [!] جاروی OCR ناموفق: {e}")
+
+        # ---- دروازهٔ برق‌های تزئینی: خوانشِ بی‌معنای کوتاه روی هنر
+        # (جواهرها/خطوط تزئینی که OCR حرف‌شان می‌خواند) وقتی چندضلعی‌های
+        # OCR فقط چند درصدِ کادر را می‌گیرند، متن نیست — نگه داشته می‌شود
+        # (هنر سالم می‌ماند) نه اینکه پاک شود. متنِ واقعی حتی با OCR خراب،
+        # بیشترِ کادرش را می‌گیرد و واژه‌ماننده است.
+        try:
+            _kept_sparkle = 0
+            for r in unique_regions:
+                if r.kind not in ("dialogue", "junk"):
+                    continue
+                if (r.det_class or "") in ("bubble", "text_bubble"):
+                    continue
+                t = (r.source_text or "").strip()
+                if not t or len(t) > 7:
+                    continue
+                if self._is_watermark_text(t):
+                    continue
+                _letters = [c for c in t if c.isalpha()]
+                _vow = sum(1 for c in t if c in "aeiouAEIOU")
+                _rep = bool(re.search(r"(.)\1{2,}", t))
+                if _letters and not _rep and (_vow >= 2 or len(_letters) >= 6):
+                    continue  # خوانشِ واژه‌مانند — متن واقعی ممکن است باشد
+                if not _letters and not t.isdigit():
+                    continue  # نه حرف دارد نه رقم — علامت/نقطه‌چین است
+                rx, ry, rw, rh = r.rect
+                _rect_a = max(1, int(rw) * int(rh))
+                _poly_a = 0
+                _src_polys = list(r.ocr_polys or []) or list(r.boxes or [])
+                for p in _src_polys:
+                    try:
+                        pts = np.asarray(p, np.int32).reshape(-1, 2)
+                        _poly_a += max(1, int(
+                            (pts[:, 0].max() - pts[:, 0].min())
+                            * (pts[:, 1].max() - pts[:, 1].min())))
+                    except Exception:
+                        pass
+                if _poly_a and _poly_a < 0.08 * _rect_a:
+                    r.kind = "promo"
+                    _kept_sparkle += 1
+            if _kept_sparkle:
+                print(f"    [*] {_kept_sparkle} خوانشِ بی‌معنا روی هنر "
+                      f"(برق/تزئین) دست‌نخورده ماند")
+        except Exception:
+            pass
 
         if self.reading_order == "rtl":
             unique_regions.sort(key=lambda r: (r.rect[1] // 80, -(r.rect[0] + r.rect[2])))
@@ -12235,22 +12745,22 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="آدرس پایه API (اختیاری)")
     p.add_argument("--font", required=True,
                    help="فونت پیش‌فرض فارسی / بالن عادی (کودک) و fallback")
-    p.add_argument("--font-normal", default=None, help="بالن عادی گرد — کودک")
-    p.add_argument("--font-shout", default=None, help="داد خشم دندانه — افسانه")
-    p.add_argument("--font-comedy-shout", default=None, help="داد کمدی — کروش")
-    p.add_argument("--font-whisper", default=None, help="زمزمه موج‌دار — دست‌نویس")
+    p.add_argument("--font-normal", default=None, help="کودک — متن عادی حباب (پیش‌فرض: Vazirmatn-Bold)")
+    p.add_argument("--font-shout", default=None, help="داد خشم (پیش‌فرض: Lalezar-Fixed)")
+    p.add_argument("--font-comedy-shout", default=None, help="داد کمدی (پیش‌فرض: Gandom)")
+    p.add_argument("--font-whisper", default=None, help="زمزمه دست‌نویس (پیش‌فرض: Nahid)")
     p.add_argument("--font-sun-thought", default=None, help="تفکر خورشیدی — مهر")
-    p.add_argument("--font-thought", default=None, help="تفکر ابری — مروارید")
+    p.add_argument("--font-thought", default=None, help="تفکر ابری (پیش‌فرض: Samim-Bold)")
     p.add_argument("--font-free", default=None, help="متن بیرون بالن — ارامکو/هوما/تهران")
     p.add_argument("--font-free-text", default=None,
                    help="نام مستعار --font-free (سازگاری با اپ قدیمی)")
-    p.add_argument("--font-system", default=None, help="UI سیستم — اصفهان/فرناز")
+    p.add_argument("--font-system", default=None, help="UI سیستم/تگ (پیش‌فرض: Sahel-Bold)")
     p.add_argument("--font-monster", default=None, help="صدای هیولا — کردی")
     p.add_argument("--font-cry", default=None, help="گریه — موج/هاله")
     p.add_argument("--font-fear", default=None, help="ترس — صحرا")
     p.add_argument("--font-broadcast", default=None, help="بی‌سیم/تلویزیون/موبایل — اکبر/اسمان/مثلث")
-    p.add_argument("--font-letter", default=None, help="نامه/طومار — آندالوس/فورات")
-    p.add_argument("--font-narrator", default=None, help="راوی مستطیل — الهام")
+    p.add_argument("--font-letter", default=None, help="نامه/طومار (پیش‌فرض: Amiri-Regular)")
+    p.add_argument("--font-narrator", default=None, help="راوی مستطیل (پیش‌فرض: Shabnam-Bold)")
     p.add_argument("--font-square-thought", default=None, help="فکر مربعی — یکان")
     p.add_argument("--font-black", default=None, help="دارک تیره — اتابای/فرزیانی/زنگار")
     
