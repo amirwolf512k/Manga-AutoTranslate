@@ -5349,7 +5349,9 @@ class MangaTranslator:
         _lum = ring_px @ _W
         _paper = ring_px[_lum >= 200.0]
         _paper_share = float(_paper.shape[0]) / float(max(1, ring_px.shape[0]))
-        if _paper_share >= 0.35:
+        if _paper_share >= 0.55:
+            # اکثریتِ قاطعِ حلقه روشن باشد وگرنه لنگرِ کاغذ، پرکردنِ حبابِ
+            # تینت‌دار/گرادیانی را سفید می‌کرد (لکهٔ مربعی)
             _anchor = np.median(_paper, axis=0)
             _sel = (np.abs(ring_px - _anchor[None, :]).max(axis=1) <= 20.0)
             if int(_sel.sum()) < 60:
@@ -5370,7 +5372,7 @@ class MangaTranslator:
         if float(np.percentile(error[keep], 90)) > 6.0:
             return None
         fill = basis[m] @ fit
-        if _paper_share >= 0.35:
+        if _paper_share >= 0.55:
             _fill_lum = float(np.median(fill @ _W))
             _anchor_lum = float(np.median(_paper @ _W))
             if _fill_lum < 170.0 or _fill_lum < _anchor_lum - 25.0:
@@ -5804,7 +5806,9 @@ class MangaTranslator:
                     pass
             # ---- راستی‌آزمایی ضدلکه: رنگ/بافتِ پرکردن باید با زمینهٔ
             # خودِ ناحیه بخواند؛ در غیر این صورت ترمیم/جایگزینی می‌شود.
-            if result is not None and method not in ("flat", "tone"):
+            # (برای همهٔ روش‌ها از جمله flat/tone — چکِ محلیِ گرادیان روی
+            # پرکردنِ تختِ روی زمینهٔ تینت‌دار هم لکه را می‌گیرد)
+            if result is not None:
                 try:
                     result, method = self._verify_or_repair_fill(
                         crop_img, result, crop_msk, method,
@@ -5812,9 +5816,20 @@ class MangaTranslator:
                         box=(cx0, cy0, cx1, cy1), domain=_dom)
                 except Exception:
                     pass
-            mm = crop_msk > 0
+            mm = (crop_msk > 0)
             if result is not None and mm.any() and result.shape[:2] == crop_img.shape[:2]:
-                cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
+                # چسباندنِ محوشونده (feather): هیچ لبهٔ مستطیلی سختی روی تصویر
+                # نمی‌ماند — لبهٔ پرکردن با خودِ زمینه ترکیب می‌شود
+                try:
+                    _al = cv2.GaussianBlur(mm.astype(np.float32), (0, 0), 2.0)
+                    _al = np.clip(_al * 1.8, 0.0, 1.0)[..., None]
+                    _base = cleaned[cy0:cy1, cx0:cx1].astype(np.float32)
+                    _resf = result.astype(np.float32)
+                    _blended = _base * (1.0 - _al) + _resf * _al
+                    cleaned[cy0:cy1, cx0:cx1] = np.clip(
+                        np.rint(_blended), 0, 255).astype(np.uint8)
+                except Exception:
+                    cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
             counts[method] = counts.get(method, 0) + 1
 
         # ---- دور دوم: جاروی حروف جامانده (دوگذر — ردِّ پرکردنِ خود دور دوم هم پاک می‌شود) ----
@@ -6515,6 +6530,170 @@ class MangaTranslator:
             return None
 
     @staticmethod
+    def _bg_guide(crop_img: np.ndarray, msk: np.ndarray,
+                  domain: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+        """راهنمای پس‌زمینهٔ کم‌بسامد (گرادیان/ته‌رنگ محلی) — از inpaint
+        ارزانِ مقیاس‌کوچک ساخته می‌شود تا «رنگِ درستِ همان نقطه» را بدهد.
+        روی زمینهٔ گرادیانی/تینت‌دار، پرکردنِ تخت باعث لکهٔ مربعی می‌شد؛
+        این راهنما پرکردن را به گرادیانِ خودِ ناحیه قفل می‌کند."""
+        try:
+            m = (msk > 0)
+            if not m.any() or crop_img.ndim != 3:
+                return None
+            h, w = m.shape[:2]
+            sc = min(1.0, 360.0 / float(max(h, w)))
+            sw = max(12, int(round(w * sc)))
+            sh = max(12, int(round(h * sc)))
+            small = cv2.resize(crop_img, (sw, sh), interpolation=cv2.INTER_AREA)
+            msmall = cv2.resize(
+                m.astype(np.uint8), (sw, sh),
+                interpolation=cv2.INTER_NEAREST) * 255
+            msmall = cv2.dilate(msmall, np.ones((3, 3), np.uint8), iterations=1)
+            if domain is not None:
+                try:
+                    dsmall = cv2.resize(
+                        (domain > 0).astype(np.uint8), (sw, sh),
+                        interpolation=cv2.INTER_NEAREST) * 255
+                    # نوار باریکِ اطراف ماسک که بیرونِ دامنه است حفره شود تا
+                    # Telea رنگ هنر/دیواره را به داخل حباب نکشد
+                    band = (cv2.dilate(msmall, np.ones((7, 7), np.uint8)) > 0)
+                    msmall[band & (dsmall == 0)] = 255
+                except Exception:
+                    pass
+            guide = cv2.inpaint(small, msmall, 4, cv2.INPAINT_TELEA)
+            guide = cv2.GaussianBlur(guide, (0, 0), 2.0)
+            guide = cv2.resize(guide, (w, h), interpolation=cv2.INTER_CUBIC)
+            guide = cv2.GaussianBlur(guide, (0, 0), 4.0)
+            return guide
+        except Exception:
+            return None
+
+    @staticmethod
+    def _grid_mismatch(fill_img: np.ndarray, guide: np.ndarray, msk: np.ndarray,
+                       cells: int = 4, tol: float = 9.0) -> Tuple[float, float]:
+        """ناهماهنگی محلیِ پرکردن با راهنما (شبکهٔ سلولی داخل ماسک):
+        (نسبتِ سلول‌های بد، میانگین انحراف) — میانگینِ کلی گرادیان را
+        نمی‌بیند؛ این چکِ محلی لکهٔ مربعی روی زمینهٔ تینت‌دار را می‌گیرد."""
+        try:
+            m = (msk > 0)
+            ys, xs = np.where(m)
+            if len(ys) < 200:
+                return 0.0, 0.0
+            y0, y1 = int(ys.min()), int(ys.max()) + 1
+            x0, x1 = int(xs.min()), int(xs.max()) + 1
+            bh = max(1, (y1 - y0) // cells)
+            bw = max(1, (x1 - x0) // cells)
+            d = np.abs(fill_img.astype(np.float32)
+                       - guide.astype(np.float32)).max(axis=2)
+            bad = 0
+            total = 0
+            devs: List[float] = []
+            for gy in range(cells):
+                for gx in range(cells):
+                    yy0 = y0 + gy * bh
+                    yy1 = min(y1, yy0 + bh)
+                    xx0 = x0 + gx * bw
+                    xx1 = min(x1, xx0 + bw)
+                    cm = m[yy0:yy1, xx0:xx1]
+                    area = int(np.count_nonzero(cm))
+                    if area < 40:
+                        continue
+                    total += 1
+                    dev = float(np.mean(d[yy0:yy1, xx0:xx1][cm > 0]))
+                    devs.append(dev)
+                    if dev > tol:
+                        bad += 1
+            if total == 0:
+                return 0.0, 0.0
+            return bad / float(total), float(np.mean(devs))
+        except Exception:
+            return 0.0, 0.0
+
+    def _transplant_bg(self, fill_img: np.ndarray, crop_img: np.ndarray,
+                       msk: np.ndarray, domain: Optional[np.ndarray] = None,
+                       textured: bool = False) -> Optional[np.ndarray]:
+        """پیوندِ پس‌زمینهٔ کم‌بسامد: بسامدِ پایینِ پرکردن با راهنمای گرادیانِ
+        خودِ ناحیه جایگزین می‌شود (بافت/جزئیات پرکردن حفظ می‌شود). لبه‌ها
+        با آلفای محوشونده ترکیب می‌شوند تا هیچ لبهٔ مستطیلی سختی نماند."""
+        try:
+            guide = self._bg_guide(crop_img, msk, domain)
+            if guide is None:
+                return None
+            m = (msk > 0)
+            if not m.any():
+                return None
+            fillf = fill_img.astype(np.float32)
+            lf = cv2.GaussianBlur(fillf, (0, 0), 7.0)
+            trans = fillf - lf + guide.astype(np.float32)
+            w_guide = 0.35 if textured else 0.90
+            mixed = (1.0 - w_guide) * trans + w_guide * guide.astype(np.float32)
+            alpha = cv2.GaussianBlur(
+                m.astype(np.float32), (0, 0), 2.5)
+            alpha = np.clip(alpha * 1.8, 0.0, 1.0)[..., None]
+            out = fillf * (1.0 - alpha) + mixed * alpha
+            return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+        except Exception:
+            return None
+
+    def _scrub_ghost_residuals(self, result: np.ndarray, guide: np.ndarray,
+                               msk: np.ndarray,
+                               max_frac: float = 0.30) -> np.ndarray:
+        """جاروی متن‌شبح: اجزای داخل ماسک که نسبت به راهنمای پس‌زمینه
+        انحراف محسوس دارند و اندازهٔ خودِ حرف‌اند، با رنگِ راهنما بازرنگ
+        می‌شوند — هر قطبیت (روشن/تیره) و بدون آسیب به ساختار بزرگ."""
+        try:
+            m = (msk > 0)
+            if not m.any() or guide is None or result is None:
+                return result
+            h, w = m.shape[:2]
+            mask_area = int(np.count_nonzero(m))
+            if mask_area < 120:
+                return result
+            dev = np.abs(result.astype(np.float32)
+                         - guide.astype(np.float32)).max(axis=2)
+            cand = ((dev > 13.0) & m).astype(np.uint8)
+            cand = cv2.morphologyEx(cand, cv2.MORPH_OPEN,
+                                    np.ones((2, 2), np.uint8))
+            n, lab, st, _ = cv2.connectedComponentsWithStats(cand, 8)
+            ghost = np.zeros_like(cand)
+            cap = int(max(60, max_frac * mask_area))
+            long_cap = int(0.55 * max(h, w))
+            for i in range(1, n):
+                area = int(st[i, cv2.CC_STAT_AREA])
+                if area < 24 or area > cap:
+                    continue
+                bw = int(st[i, cv2.CC_STAT_WIDTH])
+                bh = int(st[i, cv2.CC_STAT_HEIGHT])
+                if max(bw, bh) > long_cap:
+                    continue
+                ghost[lab == i] = 255
+            if np.count_nonzero(ghost) < 24:
+                return result
+            ghost = cv2.dilate(ghost, np.ones((3, 3), np.uint8), iterations=1)
+            ghost[m == 0] = 0
+            out = result.copy()
+            gm = cv2.GaussianBlur(ghost.astype(np.float32), (0, 0), 1.2)
+            gm = np.clip(gm, 0.0, 1.0)[..., None]
+            outf = out.astype(np.float32) * (1.0 - gm) \
+                + guide.astype(np.float32) * gm
+            return np.clip(np.rint(outf), 0, 255).astype(np.uint8)
+        except Exception:
+            return result
+
+    def _fill_local_ok(self, fill_img: np.ndarray, guide: Optional[np.ndarray],
+                       msk: np.ndarray, textured: bool = False,
+                       tol: float = 9.0) -> bool:
+        """چکِ محلیِ گرادیان — روی زمینهٔ بافت‌دار معنا ندارد (تکنهٔ راهنما
+        صاف است) و رد می‌شود تا پرکردنِ بافت‌دار اشتباهی رد نشود."""
+        if textured or guide is None:
+            return True
+        bad_frac, dev = self._grid_mismatch(fill_img, guide, msk, tol=tol)
+        if bad_frac >= 0.40 and dev > 10.0:
+            return False
+        return True
+
+
+    @staticmethod
     def _mirror_tile(patch: np.ndarray, th: int, tw: int) -> np.ndarray:
         ph, pw = patch.shape[:2]
         yi = np.arange(th) % (2 * ph)
@@ -6754,51 +6933,112 @@ class MangaTranslator:
         می‌شود (به جا ماندن متن بدترین حالت است)."""
         try:
             model = self._region_bg_model(crop_img, msk, domain=domain)
-            if model is None:
-                return fill_img, method
-            ok, why = self._fill_matches_bg(fill_img, model, msk)
+            textured = bool(model is not None and
+                            (model.get("tex_local", 0.0) >= 6.0
+                             or model.get("hf", 0.0) >= 6.0))
+            guide = self._bg_guide(crop_img, msk, domain)
+            if model is not None:
+                ok, why = self._fill_matches_bg(fill_img, model, msk)
+                if ok:
+                    # چکِ محلیِ گرادیان: میانگینِ کلیِ چکِ قبلی، لکهٔ مربعیِ
+                    # پرکردنِ تخت روی زمینهٔ گرادیانی/تینت‌دار را نمی‌بیند
+                    if not self._fill_local_ok(fill_img, guide, msk,
+                                               textured=textured):
+                        ok = False
+                        why = "local-gradient"
+            else:
+                # بدون مدلِ حلقه (حفره/نوار نامعتبر): فقط چکِ محلی با راهنما —
+                # توهمِ رنگیِ LaMa (لکهٔ سبز/آبی روی زمینهٔ تیره) همین‌جا گیر می‌افتد
+                ok = self._fill_local_ok(fill_img, guide, msk,
+                                         textured=textured)
+                why = "local-gradient(no-model)"
             if ok:
                 return fill_img, method
             # --- لکه پیدا شد؛ ترمیم ---
+            def _guide_mean_ok(cand: Optional[np.ndarray]) -> bool:
+                """برای کاندیدِ پیوندی: مقایسه با خودِ راهنما (نه مدلِ حلقه —
+                حلقه ممکن است با رگه‌ی براق/هایلایت بایاسِ سفید داشته باشد)."""
+                if cand is None or guide is None:
+                    return cand is not None
+                m = (msk > 0)
+                me = cv2.erode(m.astype(np.uint8),
+                               np.ones((5, 5), np.uint8)) > 0
+                if int(np.count_nonzero(me)) < 24:
+                    me = m
+                d = np.abs(cand.astype(np.float32)
+                           - guide.astype(np.float32)).max(axis=2)
+                return bool(float(np.mean(d[me])) <= 12.0)
+
+            def _accept(cand: Optional[np.ndarray],
+                        from_guide: bool = False) -> bool:
+                if cand is None:
+                    return False
+                if from_guide or model is None:
+                    if not _guide_mean_ok(cand):
+                        if os.environ.get("MANGA_DBG_VERIFY"):
+                            print("      [verify-dbg] guide-mean reject")
+                        return False
+                else:
+                    ok2, w2 = self._fill_matches_bg(cand, model, msk)
+                    if not ok2:
+                        if os.environ.get("MANGA_DBG_VERIFY"):
+                            print(f"      [verify-dbg] global reject: {w2}")
+                        return False
+                lok = self._fill_local_ok(cand, guide, msk, textured=textured)
+                if not lok and os.environ.get("MANGA_DBG_VERIFY"):
+                    bf, dv = self._grid_mismatch(cand, guide, msk)
+                    print(f"      [verify-dbg] local reject: bad={bf:.2f} dev={dv:.1f}")
+                return lok
+            # ۰) پیوندِ پس‌زمینهٔ کم‌بسامد: پرکردن را به گرادیانِ خودِ ناحیه
+            # قفل می‌کند (لکهٔ مربعی + متن‌شبح را با هم می‌کُشد) — سریع و بی‌لبه
+            if guide is None:
+                guide = self._bg_guide(crop_img, msk, domain)
+            tr = self._transplant_bg(fill_img, crop_img, msk, domain=domain,
+                                     textured=textured)
+            if tr is not None and guide is not None and not textured:
+                tr = self._scrub_ghost_residuals(tr, guide, msk)
+                tr = self._scrub_ghost_residuals(tr, guide, msk)
+            if _accept(tr, from_guide=True):
+                return tr, method + "+grad"
             # ۱) زمینۀ کاملاً یکدست → پرکردن ثابت همیشه بی‌لکه است
-            near_std = model.get("near_std")
-            flat_bg = (model["std"] <= 7.0 and
-                       model.get("tex_local", 0.0) <= 6.0 and
+            near_std = model.get("near_std") if model is not None else None
+            _m_std = model["std"] if model is not None else 0.0
+            _m_tex = model.get("tex_local", 0.0) if model is not None else 0.0
+            _m_gsl = model.get("grad_slope", 0.0) if model is not None else 0.0
+            flat_bg = (model is not None and
+                       _m_std <= 7.0 and
+                       _m_tex <= 6.0 and
                        (near_std is None or near_std <= 12.0) and
-                       model.get("grad_slope", 0.0) <= 130.0)
+                       _m_gsl <= 130.0)
             if flat_bg:
                 fc = self._flat_const_fill(crop_img, msk, model)
                 if fc is not None:
-                    ok2, _ = self._fill_matches_bg(fc, model, msk)
-                    if ok2:
+                    if _accept(fc):
                         return fc, "flat"
             # ۲) جابه‌جایی ملایم ته‌رنگ → ترمیم ساختارحافظ
             _base_for_regrain = fill_img
-            if not flat_bg or model["std"] > 7.0:
+            if not flat_bg or (model is not None and _m_std > 7.0):
                 rl = self._relevel_fill(fill_img, model, msk)
                 if rl is not None:
-                    ok2, _ = self._fill_matches_bg(rl, model, msk)
-                    if ok2:
+                    if _accept(rl):
                         return rl, method + "+fix"
                     _base_for_regrain = rl
             # ۲.۵) بافتِ صاف‌شده → بازگرداندن دانه تا واریانس زمینه
-            if model.get("tex_local", 0.0) >= 5.0 or model["std"] >= 8.0:
+            if model is not None and (_m_tex >= 5.0 or _m_std >= 8.0):
                 rg = self._regrain_fill(_base_for_regrain, model, msk)
                 if rg is not None:
-                    ok2, _ = self._fill_matches_bg(rg, model, msk)
-                    if ok2:
+                    if _accept(rg):
                         return rg, method + "+grain"
             # ۳) بافت تکراری (اسکرین‌تون) → کاشی‌کاری (ترجیحاً در سطح صفحه)
-            if model["hf"] >= 5.0 or model["std"] >= 8.0 or \
-                    model.get("tex_local", 0.0) >= 6.0:
+            _m_hf = model.get("hf", 0.0) if model is not None else 0.0
+            if model is not None and (_m_hf >= 5.0 or _m_std >= 8.0 or _m_tex >= 6.0):
                 tt = None
                 if page_img is not None and page_mask is not None and box is not None:
                     tt = self._tone_tile_fill_page(page_img, page_mask, box, model)
                 if tt is None:
                     tt = self._tone_tile_fill(crop_img, msk, model)
                 if tt is not None:
-                    ok2, _ = self._fill_matches_bg(tt, model, msk)
-                    if ok2:
+                    if _accept(tt):
                         return tt, "tone"
             # هیچ ترمیمی قبول نشد → پرکردن اولیه بهتر از جا ماندن متن است
             try:
