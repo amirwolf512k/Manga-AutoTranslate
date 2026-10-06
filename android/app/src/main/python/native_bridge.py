@@ -233,6 +233,15 @@ def cancel():
     return bridge.cancel()
 
 
+def test_keys(params_json):
+    # تست کلیدهای API / لینک سفارشی (دکمهٔ «تست کلید» اندروید)
+    import bridge
+    try:
+        return bridge.test_keys(params_json)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+
+
 def status():
     try:
         import launcher

@@ -14,6 +14,7 @@ _WIDGETS = {
     "Slider": "slider",
     "File": "file",
     "Number": "number",
+    "Button": "button",
 }
 _HTML = "HTML"
 _ACC = "Accordion"
@@ -389,7 +390,14 @@ def extract(path_or_source, is_source=False):
             fid = _lit(kw.get("elem_id")) or _assign_name(stack) or ("f%d" % node.lineno)
             if tag and not str(fid).endswith("_" + tag):
                 fid = "%s_%s" % (fid, tag)
+            if kind == "Button":
+                # فقط دکمهٔ «تست کلید» به اندروید می‌رسد (دکمه‌های دیگرِ وب
+                # مثل شروع ترجمه، معادل بومی خودشان را دارند)
+                if str(fid) not in ("manga_test_keys_btn", "test_keys_btn"):
+                    continue
             label = _str_of(kw.get("label"), env_snap) or ""
+            if kind == "Button":
+                label = label or "تست کلیدها / لینک"
             info = _str_of(kw.get("info"), env_snap) or ""
             value, cfg_key = _default(kw.get("value"))
             choices = _choices(kw.get("choices"))
@@ -436,6 +444,8 @@ def extract(path_or_source, is_source=False):
                     field["accept"] = " ".join(ft)
                 if str(_lit(kw.get("file_count")) or "") == "multiple":
                     field["multiple"] = True
+            if kind == "Button":
+                field["action"] = "test_keys"
             items.append(field)
 
         elif kind == _HTML:

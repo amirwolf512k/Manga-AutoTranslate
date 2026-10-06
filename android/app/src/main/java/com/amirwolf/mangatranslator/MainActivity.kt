@@ -877,6 +877,24 @@ class MainActivity : AppCompatActivity() {
                     setPadding(dp(12), dp(18), dp(12), dp(18))
                     stateListAnimator = null
                 }
+                // ✕ لغو فایل انتخاب‌شده — کاربر می‌تواند به حالت لینک برگردد
+                val clearBtn = Button(this).apply {
+                    text = "✕"
+                    setTextColor(Color.rgb(255, 120, 120)); textSize = 15f
+                    background = rounded(CARD2, 10, 1)
+                    setPadding(dp(14), dp(6), dp(14), dp(6))
+                    visibility = View.GONE
+                    stateListAnimator = null
+                }
+                fun resetPick() {
+                    pickedFiles.remove(id)
+                    try { prefs.edit().remove(id + "_path").apply() } catch (_: Exception) {}
+                    nameView.text = "فایلی انتخاب نشده"
+                    btn.text = if (multi) "⬆  آپلود فایل‌ها (چندتایی) — کلیک کن"
+                               else "⬆  آپلود فایل — کلیک کن"
+                    clearBtn.visibility = View.GONE
+                }
+                clearBtn.setOnClickListener { resetPick() }
                 btn.setOnClickListener {
                     pickerField = id
                     startActivityForResult(
@@ -886,23 +904,85 @@ class MainActivity : AppCompatActivity() {
                             if (multi) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                         }, if (multi) "انتخاب فایل‌ها" else "انتخاب فایل"), REQ_FILE)
                 }
-                row.addView(btn)
+                val btnRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                btnRow.addView(btn, LinearLayout.LayoutParams(0,
+                    ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                val clearLp = LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT)
+                clearLp.setMargins(dp(8), 0, 0, 0)
+                btnRow.addView(clearBtn, clearLp)
+                row.addView(btnRow)
                 row.addView(nameView)
                 fieldViews[id] = nameView
                 fieldViews[id + "_btn"] = btn
+                fieldViews[id + "_clear"] = clearBtn
                 val prev = prefs.getString(id + "_path", null)
                 if (prev != null && File(prev).isFile()) {
                     pickedFiles[id] = prev
                     nameView.text = "✔ ${File(prev).name}"
                     (fieldViews[id + "_btn"] as? Button)?.text = "✓ ${File(prev).name}"
+                    clearBtn.visibility = View.VISIBLE
                 } else if (prev != null && File(prev).isDirectory) {
                     val n = try { File(prev).listFiles()?.size ?: 0 } catch (_: Exception) { 0 }
                     if (n > 0) {
                         pickedFiles[id] = prev
                         nameView.text = "✔ $n فایل"
                         (fieldViews[id + "_btn"] as? Button)?.text = "✓ $n فایل"
+                        clearBtn.visibility = View.VISIBLE
                     }
                 }
+            }
+            "button" -> {
+                // دکمهٔ عمل (فعلاً فقط «تست کلیدها / لینک»)
+                val action = f.optString("action", "")
+                val b = Button(this).apply {
+                    text = "🧪  " + (if (lbl.isNotEmpty()) lbl else "تست کلیدها / لینک")
+                    setTextColor(ACC); textSize = 13f
+                    background = rounded(CARD2, 10, 1)
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                    stateListAnimator = null
+                }
+                b.setOnClickListener {
+                    if (action != "test_keys") return@setOnClickListener
+                    val p = collect()
+                    val tp = JSONObject()
+                    tp.put("keys", p.optString("keys", ""))
+                    tp.put("provider", p.optString("provider", "gemini"))
+                    tp.put("api_base", p.optString("api_base", ""))
+                    b.isEnabled = false
+                    b.text = "⏳ در حال تست کلیدها…"
+                    Thread {
+                        var res: JSONObject? = null
+                        var err: String? = null
+                        try {
+                            res = JSONObject(bridge.callAttr("test_keys", tp.toString()).toString())
+                        } catch (e: Exception) {
+                            err = e.message ?: e.toString()
+                        }
+                        ui.post {
+                            b.isEnabled = true
+                            b.text = "🧪  " + (if (lbl.isNotEmpty()) lbl else "تست کلیدها / لینک")
+                            val okTxt = res?.optString("text")?.takeIf { it.isNotBlank() }
+                            val msg = okTxt
+                                ?: ("❌ " + (res?.optString("error")?.takeIf { it.isNotBlank() }
+                                    ?: (err ?: "خطا")))
+                            try {
+                                AlertDialog.Builder(this)
+                                    .setTitle("نتیجهٔ تست کلیدها")
+                                    .setMessage(msg)
+                                    .setPositiveButton("باشه", null)
+                                    .show()
+                            } catch (_: Exception) {
+                                logBox.text = msg
+                            }
+                        }
+                    }.start()
+                }
+                row.addView(b)
             }
             "header" -> row.addView(TextView(this).apply {
                 text = lbl; setTextColor(ACC); textSize = 12.5f
@@ -1440,6 +1520,7 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                         val label = if (saved.size > 1) "✔ ${saved.size} فایل انتخاب شد"
                             else "✔ ${saved[0].name}"
                         (fieldViews[fid] as? TextView)?.text = label
+                        (fieldViews[fid + "_clear"] as? Button)?.visibility = View.VISIBLE
                         if (fid.startsWith("up_") || fid == "font_upload") {
                             (fieldViews[fid + "_btn"] as? Button)?.text = label
                         }

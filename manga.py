@@ -2102,6 +2102,87 @@ def normalize_api_base(url: str) -> str:
     return u
 
 
+def test_api_keys(keys_text: str, provider: str = "gemini",
+                  api_base: str = "", timeout: float = 15.0) -> list:
+    """تست سریع کلیدهای API (تکی/چندتایی) و لینک سفارشی — برای دکمهٔ
+    «تست کلید» در همهٔ پلتفرم‌ها (وب/پی‌سی/اندروید). هر کلید با یک
+    درخواست سبک (لیست مدل‌ها) بررسی می‌شود؛ نتیجهٔ هر کلید جدا
+    برمی‌گردد: [{'key': 'مخفی‌شده', 'ok': True/False, 'error': '...',
+    'ms': 123}, ...]"""
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    import time as _time
+
+    keys = [k.strip() for k in re.split(r"[\s,;\n]+", str(keys_text or ""))
+            if k.strip()]
+    if not keys:
+        return [{"key": "", "ok": False, "error": "کلیدی وارد نشده", "ms": 0}]
+
+    prov = str(provider or "gemini").strip().lower()
+    if prov not in PROVIDER_PRESETS:
+        prov = "gemini"
+    preset = PROVIDER_PRESETS[prov]
+    base = normalize_api_base(api_base) or (preset.get("base_url") or "")
+
+    def _mask(k: str) -> str:
+        if len(k) <= 12:
+            return "***"
+        return k[:7] + "…" + k[-4:]
+
+    results = []
+    for k in keys:
+        r = {"key": _mask(k), "ok": False, "error": "", "ms": 0}
+        t0 = _time.time()
+        try:
+            if preset["type"] == "gemini" and not api_base:
+                url = ("https://generativelanguage.googleapis.com/"
+                       "v1beta/models?key=" + urllib.parse.quote(k)
+                       + "&pageSize=1")
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    r["ok"] = (getattr(resp, "status", 200) == 200)
+                    r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+            else:
+                # سازگار با OpenAI (لینک سفارشی یا ارائه‌دهنده‌های دیگر)
+                if not base:
+                    raise ValueError("لینک (Base URL) وارد نشده")
+                url = base.rstrip("/")
+                if not url.endswith("/v1"):
+                    url += "/v1"
+                url += "/models"
+                req = urllib.request.Request(
+                    url, headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "Authorization": "Bearer " + k,
+                    })
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    r["ok"] = (getattr(resp, "status", 200) == 200)
+                    r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                r["error"] = "کلید نامعتبر/رد شد (401/403)"
+            elif e.code == 429:
+                r["ok"] = True  # کلید معتبر است؛ فقط محدودیت نرخ
+                r["error"] = "معتبر ولی Rate-limit (429)"
+            else:
+                r["error"] = f"HTTP {e.code}"
+                try:
+                    detail = (e.read() or b"")[:180].decode("utf-8", "ignore")
+                    if detail:
+                        r["error"] += " — " + " ".join(detail.split())[:120]
+                except Exception:
+                    pass
+        except urllib.error.URLError as e:
+            r["error"] = f"اتصال برقرار نشد: {getattr(e, 'reason', e)}"
+        except Exception as e:
+            r["error"] = str(e)[:160]
+        r["ms"] = int((_time.time() - t0) * 1000)
+        results.append(r)
+    return results
+
+
 def _ask(prompt: str) -> str:
     try:
         return input(prompt).strip()
@@ -3794,6 +3875,16 @@ class MangaTranslator:
             return "promo"
 
         
+        # ---- SFX ژاپنی: کاتاکانا/هیراگانای تکرارشونده (ゴゴゴ، ドドド، ザーザー) ----
+        core_ja = re.sub(r"[\s!!?\uff1f\u2026\u3001\u3002\u30fb~\uff5e\-\u30f6]+", "", stripped)
+        if len(core_ja) >= 3 and re.fullmatch(r"[\u3041-\u3096\u30a1-\u30fa\u30fc]+", core_ja):
+            body = core_ja.replace("\u30fc", "")
+            unit = body[:2] if len(body) >= 6 else body[:1]
+            if unit and (unit * (len(body) // len(unit))) == body:
+                return "sfx"
+            if re.search(r"(.)\1{2,}", core_ja):
+                return "sfx"
+
         if len(words) >= 2 or len(stripped) > 10:
             return "dialogue"
 
@@ -5118,14 +5209,51 @@ class MangaTranslator:
             crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
             result = None
             method = "flat"
+            _mdl = None
             if use_flat:
                 result = self._flat_fill_cluster(crop_img, crop_msk)
-                if result is not None and mode != "flat":
-                    # در حالت ترکیبی، پرکردن صاف فقط وقتی مجاز است که
-                    # زمینه واقعاً صاف/یکدست باشد (دیوار حباب و بافت محفوظ).
-                    if self._bg_is_textured(crop_img, crop_msk, strong=True) or \
-                            not self._flat_fill_invisible(crop_img, crop_msk):
+                if mode != "flat":
+                    # سنجش بر پایهٔ زمینهٔ خودِ حفره (بین حروف) + نوار
+                    # بلافصل است، نه حلقه‌ای که از دیوار حباب/اسکرین‌تون
+                    # بیرون می‌زند — قبلاً همین باعث می‌شد حباب‌های ساده هم
+                    # بی‌جهت به LaMa بروند (کندی + لکه).
+                    _mdl = self._region_bg_model(crop_img, crop_msk)
+                    _near = _mdl.get("near_std") if _mdl else None
+                    _ok_flat = bool(
+                        _mdl is not None
+                        and _mdl["std"] <= 7.0
+                        and _mdl.get("tex_local", 0.0) <= 6.0
+                        and (_near is None or _near <= 12.0)
+                        and _mdl.get("grad_slope", 0.0) <= 130.0
+                    )
+                    if result is not None and not _ok_flat:
                         result = None
+                    if result is not None and os.environ.get("MANGA_DBG_FLAT"):
+                        print(f"    [flat2-dbg] box=({cx0},{cy0},{cx1},{cy1}) std={_mdl['std']:.1f} texloc={_mdl.get('tex_local',0):.1f} near={_mdl.get('near_std')} src={_mdl.get('src')} mean={_mdl['gray_mean']:.0f}")
+                    if result is None and _mdl is not None and _ok_flat:
+                        # زمینهٔ یکدست ولی برازش درجه‌۲ نشد (حلقهٔ کوتاه و…)
+                        # → پرکردن ثابت با رنگ خودِ زمینه (دقیق و بی‌لکه)
+                        _fc = self._flat_const_fill(crop_img, crop_msk, _mdl)
+                        if _fc is not None:
+                            result = _fc
+                            if os.environ.get("MANGA_DBG_FLAT"):
+                                print(f"    [flat-dbg] box=({cx0},{cy0},{cx1},{cy1}) std={_mdl['std']:.1f} texloc={_mdl.get('tex_local',0):.1f} near={_mdl.get('near_std')} src={_mdl.get('src')} mean={_mdl['gray_mean']:.0f}")
+            if result is None and mode != "flat":
+                # ---- کاشی‌کاری بافت (اسکرین‌تون): سریع، بدون ONNX، و
+                # دقیقاً همان نقطه‌چین زمینه — قبل از LaMa امتحان می‌شود.
+                if _mdl is None:
+                    _mdl = self._region_bg_model(crop_img, crop_msk)
+                if _mdl is not None and (
+                        _mdl["std"] >= 8.0
+                        or _mdl.get("tex_local", 0.0) >= 6.0
+                        or _mdl["hf"] >= 5.0):
+                    _tt = self._tone_tile_fill_page(
+                        image, mask, (cx0, cy0, cx1, cy1), _mdl)
+                    if _tt is not None:
+                        _ok_tt, _ = self._fill_matches_bg(_tt, _mdl, crop_msk)
+                        if _ok_tt:
+                            result = _tt
+                            method = "tone"
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method])
 
         pending = [c for c in crops if c[5] is None]
@@ -5202,7 +5330,7 @@ class MangaTranslator:
                 else:
                     try:
                         page_mask = cv2.dilate(mask, page_kernel)
-                        _wall = self._wall_lines(image)
+                        _wall = page_wall  # یک‌بار بالای همین تابع محاسبه شده
                         _prot = None
                         if _wall is not None:
                             _prot = _wall > 0
@@ -5258,8 +5386,8 @@ class MangaTranslator:
                 print("  [!] LaMa در دسترس نیست → OpenCV برای خوشه‌های باقی‌مانده")
 
         for cx0, cy0, cx1, cy1, crop_msk, result, method in crops:
+            crop_img = image[cy0:cy1, cx0:cx1]
             if result is None:
-                crop_img = image[cy0:cy1, cx0:cx1]
                 # نوار قاب حباب و دیوارهای همین کراپ (محافظت در حالت OpenCV)
                 _cband = None
                 if page_band is not None:
@@ -5335,9 +5463,20 @@ class MangaTranslator:
                     result = self._scrub_dark_residuals(result, crop_msk)
                 except Exception:
                     pass
+            # ---- راستی‌آزمایی ضدلکه: رنگ/بافتِ پرکردن باید با زمینهٔ
+            # خودِ ناحیه بخواند؛ در غیر این صورت ترمیم/جایگزینی می‌شود.
+            if result is not None and method not in ("flat", "tone"):
+                try:
+                    result, method = self._verify_or_repair_fill(
+                        crop_img, result, crop_msk, method,
+                        page_img=image, page_mask=mask,
+                        box=(cx0, cy0, cx1, cy1))
+                except Exception:
+                    pass
             mm = crop_msk > 0
-            cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
-            counts[method] += 1
+            if result is not None and mm.any() and result.shape[:2] == crop_img.shape[:2]:
+                cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
+            counts[method] = counts.get(method, 0) + 1
 
         # ---- دور دوم: جاروی حروف جامانده ----
         try:
@@ -5395,8 +5534,22 @@ class MangaTranslator:
                     if int(bright_ring.sum()) >= 60:
                         bf = g[bright_ring].astype(np.float32)
                         if float(np.median(bf)) >= 195.0 and float(np.std(bf)) <= 22.0:
-                            paper = True
-                            paper_med = float(np.median(bf))
+                            # بافت محلی: اسکرین‌تونِ کم‌کنتراست در std کلی
+                            # بی‌درز جا می‌زند ولی واریانس پنجره‌ای آن را
+                            # می‌بیند — نقطه‌چین «کاغذ» حساب نمی‌شود و با
+                            # رنگ صاف پر نمی‌شود (لکه نمی‌ماند).
+                            try:
+                                _mb = cv2.boxFilter(g, -1, (9, 9),
+                                                    borderType=cv2.BORDER_REFLECT)
+                                _sb = cv2.boxFilter(g * g, -1, (9, 9),
+                                                    borderType=cv2.BORDER_REFLECT)
+                                _lstd = np.sqrt(np.maximum(_sb - _mb * _mb, 0.0))
+                                _loc = float(np.median(_lstd[bright_ring]))
+                            except Exception:
+                                _loc = 0.0
+                            if _loc <= 5.5:
+                                paper = True
+                                paper_med = float(np.median(bf))
                 if paper and det_class not in ("bubble", "text_bubble"):
                     # پس‌گرد خط دست‌خط: واژه‌های جاماندهٔ همان خط/ستون اطرافِ
                     # کادر تشخیص هم داخل ناحیهٔ جارو می‌آیند؛ نقاشی‌های بزرگ
@@ -5535,6 +5688,515 @@ class MangaTranslator:
             return True
         except Exception:
             return False
+
+    # ================= مدل زمینه + راستی‌آزمایی پرکردن (ضد لکه) =================
+    # منبع «لکهٔ سیاه/سفید/رنگی» این است که LaMa یا TELEA رنگ/بافتِ زمینه را
+    # درست بازسازی نمی‌کند: روی کاغذ سفید خاکستری می‌گذارد، روی اسکرین‌تون
+    # بافت را صاف می‌کند (لکهٔ بدون نقطه) یا روی مانهوای رنگی ته‌رنگ را
+    # جابه‌جا می‌کند. این مجموعه، پرکردنِ هر خوشه را با «زمینهٔ واقعی خودِ
+    # ناحیه» (پیکسل‌های بین حروف + نوار بلافصل اطراف ماسک) می‌سنجد و در صورت
+    # لکه، آن را ترمیم یا با روش درست جایگزین می‌کند.
+
+    @staticmethod
+    def _region_bg_model(crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[dict]:
+        """مدل زمینهٔ ناحیه: از پیکسل‌های بین جوهر در خودِ حفره؛ اگر ماسک
+        تنگ بود و جوهر اکثریت بود، از نوار بلافصلِ اطراف ماسک (بدون
+        دیواره/خط). رنگ/انحراف/بافت زمینهٔ «مورد انتظار» را می‌دهد."""
+        try:
+            m = (crop_msk > 0)
+            hole_n = int(np.count_nonzero(m))
+            if hole_n < 40 or crop_img.size < 256:
+                return None
+            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
+            hole_px = g[m].astype(np.float32)
+
+            # ---------- ۱) زمینهٔ داخل حفره (بین جوهر) ----------
+            thr = float(np.percentile(hole_px, 45.0))
+            bright = hole_px[hole_px >= thr]
+            dark = hole_px[hole_px < thr]
+            bg_sel = (hole_px >= thr) if bright.size >= dark.size else (hole_px < thr)
+            mm = np.zeros_like(m)
+            mm[m] = bg_sel
+            bg_px = g[mm].astype(np.float32)
+            hole_ok = bg_px.size >= 30 and float(np.std(bg_px)) <= 7.5
+
+            # ---------- ۲) نوار بلافصل اطراف ماسک (۵..۱۵px) ----------
+            near = (cv2.dilate(crop_msk, np.ones((15, 15), np.uint8)) > 0) & \
+                   ~(cv2.dilate(crop_msk, np.ones((5, 5), np.uint8)) > 0)
+            near_std = None
+            near_sel2d = None
+            grad_slope = 0.0
+            if int(np.count_nonzero(near)) >= 60:
+                nf = g[near].astype(np.float32)
+                # حذف ۳۰٪ تیره‌ترین (دیواره/خط) و ۵٪ روشن‌ترین (نویز)
+                lo, hi = np.percentile(nf, 30.0), np.percentile(nf, 95.0)
+                sel = (nf >= lo) & (nf <= hi)
+                if int(sel.sum()) >= 40:
+                    near_std = float(np.std(nf[sel]))
+                    sel2d = np.zeros_like(m)
+                    sel2d[near] = sel
+                    near_sel2d = sel2d
+                    ys, xs = np.where(near)
+                    ys, xs = ys[sel], xs[sel]
+                    h, w = g.shape
+                    try:
+                        co = np.polyfit(xs / max(1, w) - 0.5, nf[sel], 1)[0]
+                        ro = np.polyfit(ys / max(1, h) - 0.5, nf[sel], 1)[0]
+                        grad_slope = float(max(abs(co), abs(ro)))
+                    except Exception:
+                        grad_slope = 0.0
+
+            # ---------- انتخاب منبع مدل ----------
+            if hole_ok:
+                src_mask = mm
+                model = {
+                    "gray_mean": float(np.mean(bg_px)),
+                    "std": float(np.std(bg_px)),
+                    "src": "hole",
+                }
+            elif near_sel2d is not None and near_std is not None and near_std <= 9.0:
+                # ماسک تنگ/جوهر-اکثریت → نوار اطراف معتبرتر است
+                nf = g[near_sel2d].astype(np.float32)
+                src_mask = near_sel2d
+                model = {
+                    "gray_mean": float(np.mean(nf)),
+                    "std": float(np.std(nf)),
+                    "src": "near",
+                }
+            else:
+                # هیچ برآورد قابل‌اعتمادی نیست (هنر/بافت پیچیده)
+                return None
+            px_sel = src_mask
+            model["n"] = int(np.count_nonzero(px_sel))
+            ch_means = []
+            for c in range(3):
+                cp = crop_img[:, :, c][px_sel].astype(np.float32)
+                ch_means.append(float(np.mean(cp)) if cp.size else model["gray_mean"])
+            model["ch_means"] = ch_means
+            # hf هم مثل tex_local از نوار خام اطراف ماسک: پیکسل‌های زمینهٔ
+            # چسبیده به قلم در خودِ حفره، لپلاسینِ لبهٔ قلم را می‌گیرند و
+            # بی‌جهت بالا می‌روند (پرکردنِ کاملاً سالم هم رد می‌شد).
+            _hf_mask = near if (near is not None and near.any()) else px_sel
+            model["hf"] = float(np.mean(lap[_hf_mask])) if _hf_mask.any() else 0.0
+            # بافت محلی (واریانس پنجره‌ای ۹×۹) — اسکرین‌تونِ کم‌کنتراست را هم
+            # می‌بیند (توزیع دومُدی نقطه/کاغذ که در std کلی و تریم بی‌درز جا
+            # می‌زند ولی در هر پنجرهٔ کوچک دیده می‌شود). ترجیحاً از نوار خامِ
+            # اطراف ماسک (بدون تریم): پنجره‌های چسبیده به قلم در خودِ حفره
+            # را بی‌جهت بالا می‌برند.
+            try:
+                _mb = cv2.boxFilter(g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                _sb = cv2.boxFilter(g * g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                _lstd = np.sqrt(np.maximum(_sb - _mb * _mb, 0.0))
+                _tex_src_mask = near if (near is not None and near.any()) else px_sel
+                model["tex_local"] = float(np.median(_lstd[_tex_src_mask])) \
+                    if _tex_src_mask.any() else 0.0
+            except Exception:
+                model["tex_local"] = 0.0
+            model["near_std"] = near_std
+            model["grad_slope"] = grad_slope
+            return model
+        except Exception:
+            return None
+
+    @staticmethod
+    def _fill_matches_bg(fill_img: np.ndarray, model: Optional[dict],
+                         msk: np.ndarray, tol_mean: float = 7.0) -> Tuple[bool, str]:
+        """آیا پرکردن با زمینهٔ واقعی ناحیه می‌خواند؟ (رنگ، ته‌رنگ، بافت)"""
+        try:
+            if model is None:
+                return True, ""
+            m = (msk > 0)
+            if not m.any():
+                return True, ""
+            # ماسک ارزیابی: کمی فرسوده تا لحاظِ مخلوط‌شدن لبه با حلقه نباشد
+            me = cv2.erode(m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+            if int(np.count_nonzero(me)) < 24:
+                me = m
+            g = cv2.cvtColor(fill_img, cv2.COLOR_BGR2GRAY)
+            fill_px = g[me].astype(np.float32)
+            fill_mean = float(np.mean(fill_px))
+            fill_std = float(np.std(fill_px))
+            # ۱) جابه‌جایی روشنایی (لکهٔ خاکستری/تیره روی کاغذ روشن یا برعکس)
+            if abs(fill_mean - model["gray_mean"]) > tol_mean:
+                return False, f"mean {fill_mean:.0f}!={model['gray_mean']:.0f}"
+            # ۲) جابه‌جایی رنگ (مانهوای رنگی)
+            for c in range(3):
+                fc = float(np.mean(fill_img[:, :, c][me].astype(np.float32)))
+                if abs(fc - model["ch_means"][c]) > tol_mean + 2.0:
+                    return False, f"ch{c} {fc:.0f}!={model['ch_means'][c]:.0f}"
+            # ۳) بافت کشته‌شده (اسکرین‌تون → لکهٔ صاف) — هم توزیع کلی، هم بافت
+            # محلی پنجره‌ای (نقطه‌چین کم‌کنتراست)
+            _tex_src = max(model["std"], model.get("tex_local", 0.0))
+            if _tex_src >= 6.5 and fill_std < 0.45 * _tex_src:
+                return False, f"tex {fill_std:.0f}<{0.45 * _tex_src:.0f}"
+            lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
+            fhf = float(np.mean(lap[me]))
+            if model["hf"] >= 6.0 and fhf < 0.15 * model["hf"]:
+                return False, f"hf {fhf:.1f}<{0.15 * model['hf']:.1f}"
+            try:
+                _mb = cv2.boxFilter(g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                _sb = cv2.boxFilter(g * g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                _flstd = np.sqrt(np.maximum(_sb - _mb * _mb, 0.0))
+                _fl_loc = float(np.median(_flstd[me]))
+            except Exception:
+                _fl_loc = 0.0
+            _mtl = model.get("tex_local", 0.0)
+            if _mtl >= 6.0 and _fl_loc < 0.5 * _mtl:
+                return False, f"texloc {_fl_loc:.1f}<{0.5 * _mtl:.1f}"
+            # ۴) نویز/آثار اضافه (چرک LaMa روی برخی کاغذها)
+            if fill_std > model["std"] + 14.0:
+                return False, f"noisy {fill_std:.0f}>{model['std']:.0f}+14"
+            return True, ""
+        except Exception:
+            return True, ""
+
+    @staticmethod
+    def _relevel_fill(fill_img: np.ndarray, model: dict, msk: np.ndarray,
+                      max_shift: float = 48.0) -> Optional[np.ndarray]:
+        """جابه‌جایی ملایم ته‌رنگِ پرکردن به رنگ زمینه — ساختار LaMa حفظ
+        می‌شود ولی لکهٔ رنگی/خاکستری از بین می‌رود (فقط داخل ماسک، با
+        محو تدریجی لبه)."""
+        try:
+            m = (msk > 0)
+            if not m.any():
+                return None
+            shifts = []
+            for c in range(3):
+                fc = float(np.mean(fill_img[:, :, c][m].astype(np.float32)))
+                d = model["ch_means"][c] - fc
+                if abs(d) < 0.8:
+                    d = 0.0
+                shifts.append(float(np.clip(d, -max_shift, max_shift)))
+            if all(abs(s) < 0.8 for s in shifts):
+                return None
+            h, w = m.shape
+            alpha = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 4.0)
+            alpha = np.clip(alpha, 0.0, 1.0)[..., None]
+            out = fill_img.astype(np.float32)
+            shifted = out.copy()
+            for c in range(3):
+                shifted[:, :, c] += shifts[c]
+            out = out * (1.0 - alpha) + shifted * alpha
+            return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _flat_const_fill(crop_img: np.ndarray, msk: np.ndarray,
+                         model: dict) -> Optional[np.ndarray]:
+        """پرکردن با رنگ ثابتِ زمینهٔ خودِ ناحیه — برای زمینهٔ کاملاً یکدست
+        (داخل حباب) دقیق‌ترین و سریع‌ترین راه است؛ هیچ لکه‌ای ممکن نیست."""
+        try:
+            m = (msk > 0)
+            if not m.any():
+                return None
+            out = crop_img.copy()
+            color = tuple(int(round(v)) for v in model["ch_means"])
+            out[m] = np.array(color, dtype=np.uint8)
+            return out
+        except Exception:
+            return None
+
+    @staticmethod
+    def _mirror_tile(patch: np.ndarray, th: int, tw: int) -> np.ndarray:
+        ph, pw = patch.shape[:2]
+        yi = np.arange(th) % (2 * ph)
+        yi = np.where(yi >= ph, 2 * ph - 1 - yi, yi)
+        xi = np.arange(tw) % (2 * pw)
+        xi = np.where(xi >= pw, 2 * pw - 1 - xi, xi)
+        return patch[np.ix_(yi, xi)]
+
+    def _tone_tile_fill(self, crop_img: np.ndarray, crop_msk: np.ndarray,
+                        model: Optional[dict] = None) -> Optional[np.ndarray]:
+        """پرکردن حفره با کاشی‌کاریِ الگوی زمینهٔ کنارِ حفره (اسکرین‌تون و
+        بافت‌های تکراری): نوار تمیزِ همان بافت از کنارِ حفره برداشته و
+        آینه‌ای کاشی می‌شود — نتیجه دقیقاً همان نقطه‌چین/بافت زمینه است،
+        نه لکهٔ صافِ LaMa/TELEA."""
+        try:
+            m = (crop_msk > 0)
+            if not m.any():
+                return None
+            h, w = m.shape
+            ys, xs = np.where(m)
+            y0, y1 = int(ys.min()), int(ys.max()) + 1
+            x0, x1 = int(xs.min()), int(xs.max()) + 1
+            hole_h, hole_w = y1 - y0, x1 - x0
+
+            def band_clean(bx0, by0, bx1, by1):
+                if bx1 - bx0 < 12 or by1 - by0 < 12:
+                    return None
+                bx0, by0 = max(0, bx0), max(0, by0)
+                bx1, by1 = min(w, bx1), min(h, by1)
+                if bx1 - bx0 < 12 or by1 - by0 < 12:
+                    return None
+                bm = m[by0:by1, bx0:bx1]
+                if bm.any():
+                    return None
+                return crop_img[by0:by1, bx0:bx1]
+
+            cands = []
+            # نوار عمودی چپ/راست (ارتفاع ناحیه + کمی حاشیه)
+            vy0, vy1 = y0 - 10, y1 + 10
+            lw = min(64, x0)
+            if lw >= 14:
+                s = band_clean(x0 - lw, vy0, x0 - 1, vy1)
+                if s is not None:
+                    cands.append(("v", s))
+            rw = min(64, w - x1 - 1)
+            if rw >= 14:
+                s = band_clean(x1 + 1, vy0, x1 + rw, vy1)
+                if s is not None:
+                    cands.append(("v", s))
+            # نوار افقی بالا/پایین
+            hx0, hx1 = x0 - 10, x1 + 10
+            th_ = min(64, y0)
+            if th_ >= 14:
+                s = band_clean(hx0, y0 - th_, hx1, y0 - 1)
+                if s is not None:
+                    cands.append(("h", s))
+            bh_ = min(64, h - y1 - 1)
+            if bh_ >= 14:
+                s = band_clean(hx0, y1 + 1, hx1, y1 + bh_)
+                if s is not None:
+                    cands.append(("h", s))
+            if not cands:
+                return None
+            # بهترین نوار: نزدیک‌ترین آمار به زمینهٔ ناحیه
+            best, best_score = None, None
+            tgt_std = float(model["std"]) if model else None
+            for orient, s in cands:
+                sg = cv2.cvtColor(s, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                sc_std = float(np.std(sg))
+                sc_mean = float(np.mean(sg))
+                score = 0.0
+                if tgt_std is not None:
+                    score += abs(sc_std - tgt_std) / max(4.0, tgt_std)
+                if model is not None:
+                    score += abs(sc_mean - model["gray_mean"]) / 24.0
+                # بزرگ‌تر بهتر (بافت بیشتر)
+                score -= min(0.5, (s.shape[0] * s.shape[1]) / 40000.0)
+                if best_score is None or score < best_score:
+                    best, best_score = (orient, s), score
+            orient, strip = best
+            out = crop_img.copy()
+            if orient == "v":
+                # نوار کنارِ حفره → ستون‌ها ادامه‌دار کاشی می‌شوند
+                tile = self._mirror_tile(strip, hole_h + 8, hole_w + 8)
+                region = out[y0 - 4:y1 + 4, x0 - 4:x1 + 4]
+                if tile.shape[:2] != region.shape[:2]:
+                    tile = tile[:region.shape[0], :region.shape[1]]
+                region[:] = tile
+            else:
+                tile = self._mirror_tile(strip, hole_h + 8, hole_w + 8)
+                region = out[y0 - 4:y1 + 4, x0 - 4:x1 + 4]
+                if tile.shape[:2] != region.shape[:2]:
+                    tile = tile[:region.shape[0], :region.shape[1]]
+                region[:] = tile
+            # محو لبهٔ ۴ پیکسلی روی مرز ماسک
+            alpha = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 2.5)
+            alpha = np.clip(alpha, 0.0, 1.0)[..., None]
+            base = crop_img.astype(np.float32)
+            outf = out.astype(np.float32)
+            out = np.clip(np.rint(base * (1.0 - alpha) + outf * alpha),
+                          0, 255).astype(np.uint8)
+            return out
+        except Exception:
+            return None
+
+    def _tone_tile_fill_page(self, page_img: np.ndarray, page_mask: np.ndarray,
+                             box, model: Optional[dict] = None) -> Optional[np.ndarray]:
+        """کاشی‌کاری در سطح صفحه: نوار تمیزِ بافت زمینه را از اطرافِ کادرِ
+        خوشه (تا ۷۲ پیکسل دورتر) برمی‌دارد و آینه‌ای کاشی می‌کند — ماسکِ
+        همهٔ خوشه‌های صفحه محترم است تا متنِ خوشه‌های دیگر دزدیده نشود.
+        خروجی: کراپِ پرشدهٔ همان کادر (برای نوشتن در crops)."""
+        try:
+            H, W = page_img.shape[:2]
+            x0, y0 = max(0, int(box[0])), max(0, int(box[1]))
+            x1, y1 = min(W, int(box[2])), min(H, int(box[3]))
+            bw, bh = x1 - x0, y1 - y0
+            if bw < 8 or bh < 8:
+                return None
+            m_all = (page_mask > 0)
+            if not m_all[y0:y1, x0:x1].any():
+                return None
+
+            def band_clean(bx0, by0, bx1, by1):
+                bx0, by0 = max(0, bx0), max(0, by0)
+                bx1, by1 = min(W, bx1), min(H, by1)
+                if bx1 - bx0 < 14 or by1 - by0 < 14:
+                    return None
+                if m_all[by0:by1, bx0:bx1].any():
+                    return None
+                return page_img[by0:by1, bx0:bx1]
+
+            reach = 72
+            cands = []
+            vy0, vy1 = y0 - 12, y1 + 12
+            if x0 >= 14:
+                s = band_clean(x0 - reach, vy0, x0 - 1, vy1)
+                if s is not None:
+                    cands.append(("v", s))
+            if W - x1 - 1 >= 14:
+                s = band_clean(x1 + 1, vy0, x1 + reach, vy1)
+                if s is not None:
+                    cands.append(("v", s))
+            hx0, hx1 = x0 - 12, x1 + 12
+            if y0 >= 14:
+                s = band_clean(hx0, y0 - reach, hx1, y0 - 1)
+                if s is not None:
+                    cands.append(("h", s))
+            if H - y1 - 1 >= 14:
+                s = band_clean(hx0, y1 + 1, hx1, y1 + reach)
+                if s is not None:
+                    cands.append(("h", s))
+            if not cands:
+                return None
+            best, best_score = None, None
+            tgt_std = float(model["std"]) if model else None
+            for orient, s in cands:
+                sg = cv2.cvtColor(s, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                sc_std = float(np.std(sg))
+                sc_mean = float(np.mean(sg))
+                score = 0.0
+                if tgt_std is not None:
+                    score += abs(sc_std - tgt_std) / max(4.0, tgt_std)
+                if model is not None:
+                    score += abs(sc_mean - model["gray_mean"]) / 24.0
+                score -= min(0.5, (s.shape[0] * s.shape[1]) / 60000.0)
+                if best_score is None or score < best_score:
+                    best, best_score = (orient, s), score
+            _orient, strip = best
+            tile = self._mirror_tile(strip, bh + 8, bw + 8)
+            # ناحیهٔ کادر + ۴px حاشیه کاشی می‌شود؛ فقط پیکسل‌های ماسک عوض می‌شوند
+            ry0, rx0 = max(0, y0 - 4), max(0, x0 - 4)
+            ry1, rx1 = min(H, y1 + 4), min(W, x1 + 4)
+            region = tile[:ry1 - ry0, :rx1 - rx0]
+            if region.shape[0] < (ry1 - ry0) or region.shape[1] < (rx1 - rx0):
+                return None
+            out = page_img.copy()
+            out[ry0:ry1, rx0:rx1] = region
+            box_m = m_all[y0:y1, x0:x1]
+            alpha = cv2.GaussianBlur(box_m.astype(np.float32), (0, 0), 3.0)
+            alpha = np.clip(alpha, 0.0, 1.0)[..., None]
+            base = page_img[y0:y1, x0:x1].astype(np.float32)
+            fill = out[y0:y1, x0:x1].astype(np.float32)
+            res = np.clip(np.rint(base * (1.0 - alpha) + fill * alpha),
+                          0, 255).astype(np.uint8)
+            return res
+        except Exception:
+            return None
+
+    @staticmethod
+    def _regrain_fill(fill_img: np.ndarray, model: dict, msk: np.ndarray) -> Optional[np.ndarray]:
+        """تزریق دانهٔ بافت به پرکردنِ صاف‌شده با واریانسِ زمینهٔ اطراف:
+        ساختار کم‌بسامدِ خودِ پرکردن (LaMa/TELEA) حفظ می‌شود، ته‌رنگ به
+        زمینه جابه‌جا می‌شود و دانهٔ مصنوعیِ هم‌واریانس اضافه می‌شود —
+        «لکهٔ صاف» بافت‌دار و بی‌لکه دیده می‌شود. رنگ حفظ می‌شود."""
+        try:
+            m = (msk > 0)
+            if not m.any():
+                return None
+            tgt = max(model.get("tex_local", 0.0), min(model["std"], 30.0))
+            if tgt < 5.0:
+                return None
+            # فقط داخل ماسک (با محو لبه) — پیکسل‌های اطراف دست‌نخورده
+            alpha = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 3.0)
+            alpha = np.clip(alpha, 0.0, 1.0)[..., None]
+            # دانهٔ مصنوعی با std محلی ≈ ۱ (نویز سفید، کمی نرم‌شده)
+            g0 = cv2.cvtColor(fill_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            rng = np.random.RandomState(31)
+            n = rng.randn(*g0.shape).astype(np.float32)
+            n = cv2.GaussianBlur(n, (0, 0), 0.8)
+            _nb = cv2.boxFilter(n, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+            _nsb = cv2.boxFilter(n * n, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+            _nl = np.sqrt(np.maximum(_nsb - _nb * _nb, 0.0))
+            _nl = np.maximum(_nl, 0.05)
+            n = n / _nl  # std محلی ≈ ۱ (دقیق)
+            # ته‌رنگ هم‌زمان اصلاح شود (لکهٔ خاکستری/رنگی LaMa)
+            shift = [0.0, 0.0, 0.0]
+            for c in range(3):
+                fc = float(np.mean(fill_img[:, :, c][m].astype(np.float32)))
+                d = model["ch_means"][c] - fc
+                shift[c] = float(np.clip(d, -48.0, 48.0))
+            base = fill_img.astype(np.float32)
+            base = base + np.array(shift, np.float32)[None, None, :]
+            out = base + (n * tgt)[..., None] * alpha
+            return np.clip(np.rint(out), 0, 255).astype(np.uint8)
+        except Exception:
+            return None
+
+    def _verify_or_repair_fill(self, crop_img: np.ndarray, fill_img: np.ndarray,
+                               msk: np.ndarray, method: str,
+                               page_img: Optional[np.ndarray] = None,
+                               page_mask: Optional[np.ndarray] = None,
+                               box=None) -> Tuple[Optional[np.ndarray], str]:
+        """راستی‌آزمایی پرکردن در برابر زمینهٔ واقعی؛ در صورت لکه:
+        ترمیم ته‌رنگ → پرکردن ثابت (زمینهٔ یکدست) → کاشی‌کاری بافت
+        (اسکرین‌تون). اگر هیچ‌کدام قبول نشد، همان پرکردن اولیه نگه داشته
+        می‌شود (به جا ماندن متن بدترین حالت است)."""
+        try:
+            model = self._region_bg_model(crop_img, msk)
+            if model is None:
+                return fill_img, method
+            ok, why = self._fill_matches_bg(fill_img, model, msk)
+            if ok:
+                return fill_img, method
+            # --- لکه پیدا شد؛ ترمیم ---
+            # ۱) زمینۀ کاملاً یکدست → پرکردن ثابت همیشه بی‌لکه است
+            near_std = model.get("near_std")
+            flat_bg = (model["std"] <= 7.0 and
+                       model.get("tex_local", 0.0) <= 6.0 and
+                       (near_std is None or near_std <= 12.0) and
+                       model.get("grad_slope", 0.0) <= 130.0)
+            if flat_bg:
+                fc = self._flat_const_fill(crop_img, msk, model)
+                if fc is not None:
+                    ok2, _ = self._fill_matches_bg(fc, model, msk)
+                    if ok2:
+                        return fc, "flat"
+            # ۲) جابه‌جایی ملایم ته‌رنگ → ترمیم ساختارحافظ
+            _base_for_regrain = fill_img
+            if not flat_bg or model["std"] > 7.0:
+                rl = self._relevel_fill(fill_img, model, msk)
+                if rl is not None:
+                    ok2, _ = self._fill_matches_bg(rl, model, msk)
+                    if ok2:
+                        return rl, method + "+fix"
+                    _base_for_regrain = rl
+            # ۲.۵) بافتِ صاف‌شده → بازگرداندن دانه تا واریانس زمینه
+            if model.get("tex_local", 0.0) >= 5.0 or model["std"] >= 8.0:
+                rg = self._regrain_fill(_base_for_regrain, model, msk)
+                if rg is not None:
+                    ok2, _ = self._fill_matches_bg(rg, model, msk)
+                    if ok2:
+                        return rg, method + "+grain"
+            # ۳) بافت تکراری (اسکرین‌تون) → کاشی‌کاری (ترجیحاً در سطح صفحه)
+            if model["hf"] >= 5.0 or model["std"] >= 8.0 or \
+                    model.get("tex_local", 0.0) >= 6.0:
+                tt = None
+                if page_img is not None and page_mask is not None and box is not None:
+                    tt = self._tone_tile_fill_page(page_img, page_mask, box, model)
+                if tt is None:
+                    tt = self._tone_tile_fill(crop_img, msk, model)
+                if tt is not None:
+                    ok2, _ = self._fill_matches_bg(tt, model, msk)
+                    if ok2:
+                        return tt, "tone"
+            # هیچ ترمیمی قبول نشد → پرکردن اولیه بهتر از جا ماندن متن است
+            try:
+                print(f"    [!] لکهٔ پرکردن ({why}) → ترمیم نشد؛ همان روش {method} نگه داشته شد")
+            except Exception:
+                pass
+            return fill_img, method
+        except Exception as _e:
+            import traceback
+            try:
+                print("    [verify-repair EXC]", repr(_e))
+                traceback.print_exc()
+            except Exception:
+                pass
+            return fill_img, method
 
     def _opencv_fill_components(self, crop_img: np.ndarray, crop_msk: np.ndarray,
                                 wall: Optional[np.ndarray] = None) -> np.ndarray:
@@ -8669,35 +9331,107 @@ class MangaTranslator:
 
     def _postclean_ocr_sweep(self, cleaned: np.ndarray,
                              regions_done: List["TextRegion"]) -> np.ndarray:
-        """دور آخرِ راستی‌آزمایی روی تصویرِ پاک‌شده: متن‌های کم‌رنگ
-        (مثل واترمارک گوشهٔ سایت) فقط وقتی برای OCR پیدا می‌شوند که
-        متن‌های بلندِ اطراف‌شان پاک شده باشند — این دور همان‌جا می‌گردد.
-        هنر با گیت‌های سخت (≥۴ حرف + ≥۲ توکن یا الگوی واترمارک) محفوظ می‌ماند."""
+        """دور آخرِ راستی‌آزمایی: فقط پیکسل‌های داخل ناحیه‌های پاک‌شده
+        تغییر کرده‌اند، پس متنِ جامانده فقط همان‌جا می‌تواند باشد —
+        همین کراپ‌ها (نه کل صفحه) دوباره OCR می‌شوند (سریع).
+        واترمارک/تبلیغ که عمداً دست‌نخورده مانده‌اند اینجا هم پاک نمی‌شوند."""
         try:
+            if not regions_done:
+                return cleaned
             if self.ocr is None:
                 self._maybe_reinit_extraction_models()
             if self.ocr is None:
                 return cleaned
-            _extra = self._ocr_gap_sweep(cleaned, [], scale_override=1.0)
-            if not _extra:
-                return cleaned
-            boxes = [r.rect for r in (regions_done or [])]
-            keep = []
-            for r in _extra:
-                x, y, w, h = r.rect
-                hit = False
-                for (rx, ry, rw, rh) in boxes:
-                    ix = max(0, min(x + w, rx + rw) - max(x, rx))
-                    iy = max(0, min(y + h, ry + rh) - max(y, ry))
-                    if ix * iy > 0.55 * max(1, w * h):
-                        hit = True
+            engines = [(None, self.ocr)]
+            try:
+                for lang_key in self._alt_ocr_langs():
+                    eng = self._get_alt_ocr(lang_key)
+                    if eng is not None:
+                        engines.append((lang_key, eng))
+            except Exception:
+                pass
+            h, w = cleaned.shape[:2]
+            found: List[TextRegion] = []
+            for r in regions_done:
+                rx, ry, rw, rh = r.rect
+                if rw < 10 or rh < 10:
+                    continue
+                pad = 46
+                x0 = max(0, rx - pad)
+                y0 = max(0, ry - pad)
+                x1 = min(w, rx + rw + pad)
+                y1 = min(h, ry + rh + pad)
+                if x1 - x0 < 16 or y1 - y0 < 16:
+                    continue
+                piece = cleaned[y0:y1, x0:x1]
+                ph, pw = piece.shape[:2]
+                _base_scale = 1.0
+                if max(ph, pw) < 1000:
+                    _base_scale = min(1.6, 1000.0 / max(1, max(ph, pw)))
+                _crop_hit = False
+                for _lkey, eng in engines:
+                    if _crop_hit:
                         break
-                if not hit:
-                    keep.append(r)
-            if not keep:
+                    try:
+                        _sc = _base_scale
+                        if _sc > 1.01:
+                            piece_up = cv2.resize(piece, None, fx=_sc, fy=_sc,
+                                                  interpolation=cv2.INTER_CUBIC)
+                        else:
+                            piece_up, _sc = piece, 1.0
+                        res = eng.ocr(piece_up)
+                    except Exception:
+                        continue
+                    if not res or not res[0]:
+                        continue
+                    for line in res[0]:
+                        try:
+                            poly = (np.asarray(line[0], dtype=np.float32) / _sc).astype(np.int32)
+                            text = str(line[1][0]).strip()
+                            conf = float(line[1][1])
+                        except Exception:
+                            continue
+                        # واترمارک/تبلیغ → عمداً نگه داشته می‌شود
+                        if self._is_watermark_text(text):
+                            continue
+                        if conf < 0.60 or len(text) < 3:
+                            continue
+                        if not any(ch.isalnum() for ch in text):
+                            continue
+                        toks = [t for t in re.findall(r"[A-Za-z0-9]+", text) if len(t) >= 2]
+                        if len(text) < 4 and len(toks) < 2 and \
+                                not re.search(r"[\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7a3]", text):
+                            continue
+                        px1 = int(poly[:, 0].min())
+                        py1 = int(poly[:, 1].min())
+                        px2 = int(poly[:, 0].max()) + 1
+                        py2 = int(poly[:, 1].max()) + 1
+                        if px2 - px1 < 10 or py2 - py1 < 8:
+                            continue
+                        # فقط داخل خودِ ناحیهٔ پاک‌شده (گرنه متن همسایه است)
+                        if px1 < rx - 10 or py1 < ry - 10 or \
+                                px2 > rx + rw + 10 or py2 > ry + rh + 10:
+                            continue
+                        poly_page = poly.copy()
+                        poly_page[:, 0] += x0
+                        poly_page[:, 1] += y0
+                        found.append(TextRegion(
+                            id=0,
+                            boxes=[poly_page],
+                            source_text=text,
+                            rect=(px1 + x0, py1 + y0, px2 - px1, py2 - py1),
+                            kind=self._classify_text(text),
+                            det_class="text_free",
+                        ))
+                        _crop_hit = True
+            if not found:
                 return cleaned
-            print(f"  [*] دور آخر: {len(keep)} متن جامانده (واترمارک/…) دوباره پاک شد")
-            return self.clean_image(cleaned, keep)
+            # SFX/تبلیغِ پیدا‌شده را پاک نکن (سیاست دست‌نخورده)
+            found = [r for r in found if r.kind in ("dialogue", "junk")]
+            if not found:
+                return cleaned
+            print(f"  [*] دور آخر: {len(found)} متن جامانده داخل ناحیه‌های پاک‌شده دوباره پاک شد")
+            return self.clean_image(cleaned, found)
         except Exception as e:
             print(f"  [!] دور آخرِ راستی‌آزمایی رد شد: {e}")
             return cleaned
@@ -8719,14 +9453,20 @@ class MangaTranslator:
 
         if getattr(self, "clean_only", False):
             print("[فاز ۳ - پاکسازی بدون ترجمه] API زده نمی‌شود.")
-            clean_targets = [r for r in regions if r.kind in ("dialogue", "promo", "sfx", "junk")]
+            # تبلیغ/واترمارک و SFX دست نخورده می‌مانند (سیاست کاربر)؛
+            # فقط دیالوگ و متن‌های خرد (junk) پاک می‌شوند. SFX داخل
+            # حبابِ گفت‌وگو استثناست — حباب نباید متن جامانده داشته باشد.
+            clean_targets = [r for r in regions
+                             if r.kind in ("dialogue", "junk")
+                             or (r.kind == "sfx"
+                                 and r.det_class in ("bubble", "text_bubble"))]
             for r in dialogue_regions:
                 src_t = (r.source_text or "").replace("\n", " ").strip()
                 print(f"  [بالن {r.id}] OCR: {src_t}")
             if promo_regions:
-                print(f"  [*] {len(promo_regions)} تبلیغ هم پاک می‌شود")
+                print(f"  [*] {len(promo_regions)} تبلیغ/واترمارک دست‌نخورده می‌ماند")
             if sfx_regions:
-                print(f"  [*] {len(sfx_regions)} SFX هم پاک می‌شود")
+                print(f"  [*] {len(sfx_regions)} SFX دست‌نخورده می‌ماند")
             if self.debug and regions:
                 page_debug = self._draw_debug_regions(image, regions)
             print("[فاز ۴ - فقط پاکسازی متن] ...")
@@ -8766,9 +9506,9 @@ class MangaTranslator:
         if missing_n:
             print(f"  [!] {missing_n} بالن بدون پاسخ AI")
         if promo_regions:
-            print(f"  [*] {len(promo_regions)} تبلیغ → پاک می‌شود (بدون ترجمه)")
+            print(f"  [*] {len(promo_regions)} تبلیغ/واترمارک → دست‌نخورده می‌ماند (بدون ترجمه)")
         if sfx_regions:
-            print(f"  [*] {len(sfx_regions)} SFX → پاک می‌شود (بدون ترجمه)")
+            print(f"  [*] {len(sfx_regions)} SFX → دست‌نخورده می‌ماند (بدون ترجمه)")
         if junk_regions:
             print(f"  [*] {len(junk_regions)} junk → پاک می‌شود (بدون ترجمه)")
 
@@ -8777,10 +9517,13 @@ class MangaTranslator:
             page_debug = self._draw_debug_regions(image, regions)
 
         print("[فاز ۴ - پاکسازی متن + رندر] ...")
-        # همهٔ ناحیه‌های متنی پاک می‌شوند — حباب بدون ترجمه، junk و SFX هم
-        # نباید متن قبلی‌شان روی صفحه بماند.
+        # تبلیغ/واترمارک و SFX دست‌نخورده می‌مانند (سیاست کاربر)؛
+        # حباب‌های بدون ترجمه و junk پاک می‌شوند تا متنی جا نماند.
+        # SFX داخل حبابِ گفت‌وگو استثناست — حباب نباید متن جامانده داشته باشد.
         clean_targets = [r for r in regions
-                         if r.kind in ("dialogue", "promo", "sfx", "junk")]
+                         if r.kind in ("dialogue", "junk")
+                         or (r.kind == "sfx"
+                             and r.det_class in ("bubble", "text_bubble"))]
         if clean_targets:
             cleaned_image = precleaned if precleaned is not None else self.clean_image(
                 image, clean_targets)

@@ -302,6 +302,20 @@ def download_fonts(log=print) -> int:
 GITHUB_RAW_BASE = ("https://raw.githubusercontent.com/"
                    "amirwolf5122/Manga-AutoTranslate/main/")
 UPDATE_FILES = ("manga.py", "manga_app.py")
+
+_MANGA_SHARED = None
+
+def _manga_shared():
+    """بارِ تنبلِ manga.py به‌عنوان ماژول (برای توابع کمکی مثل تست کلید)."""
+    global _MANGA_SHARED
+    if _MANGA_SHARED is None:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location("manga_shared", MANGA_PY)
+        mod = importlib.util.module_from_spec(spec)
+        sys.modules["manga_shared"] = mod
+        spec.loader.exec_module(mod)
+        _MANGA_SHARED = mod
+    return _MANGA_SHARED
 UPDATE_INTERVAL_S = 12 * 3600
 UPD_DIR = os.path.join(WORK_DIR, "updates")
 
@@ -1061,6 +1075,35 @@ def run_desktop():
     keys_var = tk.StringVar(value=cfg.get("api_keys") or default_keys())
     keys_entry = ttk.Entry(card_ai, textvariable=keys_var, show="•")
     keys_entry.pack(fill="x")
+
+    # ---- دکمهٔ تست کلیدها (پی‌سی) ----
+    row_testk = ttk.Frame(card_ai); row_testk.pack(fill="x", pady=(6, 0))
+    testk_out = tk.StringVar(value="")
+    def _run_test_keys_pc():
+        testk_out.set("⏳ در حال تست کلیدها…")
+        def _worker():
+            try:
+                res = _manga_shared().test_api_keys(
+                    keys_var.get() or "", str(prov_var.get() or "gemini"),
+                    apibase_var.get() or "")
+                out = []
+                for i, r in enumerate(res, 1):
+                    mark = "✅" if r.get("ok") else ("⚠️" if r.get("error") and r.get("ok") else "❌")
+                    err = f" — {r['error']}" if r.get("error") else ""
+                    out.append(f"{mark} کلید {i} ({r.get('key', '')}): "
+                               + ("سالم است" if r.get("ok") else "کار نمی‌کند")
+                               + err + f"  [{r.get('ms', 0)}ms]")
+                msg = "\n".join(out) if out else "کلیدی وارد نشده"
+            except Exception as e:
+                msg = f"خطا در تست: {e}"
+            root.after(0, lambda: testk_out.set(msg))
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+    ttk.Button(row_testk, text="🧪 تست کلیدها / لینک",
+               command=_run_test_keys_pc).pack(side="right", padx=(0, 6))
+    ttk.Label(row_testk, textvariable=testk_out, foreground=C_MUT,
+              wraplength=520, justify="right").pack(side="right", fill="x",
+                                                    expand=True)
 
     def _toggle_custom_fields(*_a):
         if str(prov_var.get()).strip() == "custom":
@@ -2538,6 +2581,14 @@ def run_web():
                                   elem_id="manga_api_base",
                                   visible=False,
                                   scale=3)
+            with gr.Row():
+                test_keys_btn = gr.Button(
+                    "🧪 تست کلیدها / لینک (هر کلید جداگانه بررسی می‌شود)",
+                    scale=1, elem_id="manga_test_keys_btn")
+                test_keys_out = gr.Textbox(
+                    label="نتیجهٔ تست", value="", interactive=False, scale=3,
+                    elem_id="manga_test_keys_out",
+                    placeholder="بعد از کلیک، وضعیت هر کلید اینجا نمایش داده می‌شود")
             gr.Markdown("<div class='hint'>کلید از aistudio.google.com (Gemini) یا "
                         "platform.openai.com (ChatGPT) یا console.groq.com بگیرید. "
                         "تنظیمات وب فقط در مرورگر ذخیره می‌شود.</div>")
@@ -3765,6 +3816,38 @@ def run_web():
                 run_btn.click(run_translation, show_progress=False, **_click_kw)
             except TypeError:
                 run_btn.click(run_translation, **_click_kw)
+
+        # ---- تست کلیدها / لینک (دکمهٔ 🧪) ----
+        def _test_keys_fn(provider_v, api_keys_v, api_base_v):
+            try:
+                res = _manga_shared().test_api_keys(
+                    api_keys_v or "", provider_v or "gemini",
+                    api_base_v or "")
+                out_lines = []
+                for i, r in enumerate(res, 1):
+                    mark = "✅" if r.get("ok") else "❌"
+                    if r.get("ok") and r.get("error"):
+                        mark = "⚠️"
+                    err = f" — {r['error']}" if r.get("error") else ""
+                    out_lines.append(
+                        f"{mark} کلید {i} ({r.get('key', '')}): "
+                        + ("سالم است" if r.get("ok") else "کار نمی‌کند")
+                        + err + f"  [{r.get('ms', 0)}ms]")
+                return "\n".join(out_lines) if out_lines else "کلیدی وارد نشده"
+            except Exception as e:
+                return f"خطا در تست: {e}"
+
+        try:
+            test_keys_btn.click(
+                _test_keys_fn,
+                inputs=[provider, api_keys, api_base],
+                outputs=[test_keys_out],
+            )
+        except Exception as _e:
+            try:
+                print(f"[!] اتصال دکمهٔ تست کلید ناموفق: {_e}")
+            except Exception:
+                pass
 
         _save_inputs = [
             session_id, sid_box, inp_path, provider, api_keys, model, out_fmt, quality,

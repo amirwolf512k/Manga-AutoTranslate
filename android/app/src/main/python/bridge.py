@@ -785,3 +785,34 @@ def cancel():
     if job and not job.get("done"):
         _log(job, "⏹ درخواست توقف ثبت شد (پایان مرحله فعلی)")
     return json.dumps({"ok": True}, ensure_ascii=False)
+
+
+def test_keys(params_json):
+    """تست کلیدهای API / لینک سفارشی برای دکمهٔ «تست کلید» اندروید.
+    params_json: {"keys": "...", "provider": "...", "api_base": "..."}"""
+    try:
+        p = json.loads(params_json or "{}")
+    except Exception:
+        p = {}
+    keys = str(p.get("keys") or "")
+    provider = str(p.get("provider") or "gemini")
+    api_base = str(p.get("api_base") or "")
+    try:
+        m = _manga()
+        if hasattr(m, "test_api_keys"):
+            res = m.test_api_keys(keys, provider, api_base)
+        else:
+            return json.dumps({"error": "نسخهٔ manga.py دکمهٔ تست کلید را ندارد — "
+                                        "manga.py را به‌روز کنید."},
+                              ensure_ascii=False)
+        lines = []
+        for i, r in enumerate(res, 1):
+            mark = "✅" if r.get("ok") else ("⚠️" if r.get("error") and r.get("ok") else "❌")
+            err = (" — " + str(r.get("error"))) if r.get("error") else ""
+            lines.append("%s کلید %d (%s): %s%s  [%dms]" % (
+                mark, i, r.get("key", ""),
+                "سالم است" if r.get("ok") else "کار نمی‌کند",
+                err, int(r.get("ms") or 0)))
+        return json.dumps({"ok": True, "text": "\n".join(lines)}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
