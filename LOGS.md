@@ -38,6 +38,25 @@
 - ✅ راو کره‌ای Naver سولو لولینگ (پیدا شده) — پرکردن بی‌نقص جعبه شش‌ضلعی
 - ✅ رندر کامل فارسی (fake-translate)
 
+### نتیجه بیلد APK (همان session، چند دقیقه بعد)
+- ✅ Workflow «Build Android APK» run **#10** — وضعیت: **success**
+  `https://github.com/amirwolf512k/Manga-AutoTranslate/actions/runs/37529646125`
+- ✅ بیلد از commit `ca47d0c` (main) — شامل فیکس + سینک موتور اندروید
+- ✅ ۳ APK روی Release `apk`:
+  | فایل | حجم |
+  |---|---|
+  | MangaTranslator-universal.apk | 129.9MB |
+  | MangaTranslator-arm64.apk | 86.4MB |
+  | MangaTranslator-armv7a.apk | 70.9MB |
+- ✅ **راستی‌آزمایی داخل APK**: `assets/engine/manga.py` استخراج شد —
+  md5 یکسان با manga.py فیکس‌شده (`ddd19ac6…`)، ۱۲ نشانه از فیکس‌ها داخلش هست
+- ✅ Release `files` (میرور آپدیت درون‌اپ) هم با manga.py فیکس‌شده به‌روز شد
+  → اپ‌هایی که قبلاً نصب شده با آپدیت درون‌اپ فیکس را می‌گیرند
+
+### نتیجه بیلد APK (جمع‌بندی)
+- APK آماده و راستی‌آزمایی‌شده: فیکس پاکسازی «مربع مربع» داخل بیلد است
+- لینک نصب: `https://github.com/amirwolf512k/Manga-AutoTranslate/releases/tag/apk`
+
 ### لینک‌ها
 - فیکس: `https://github.com/amirwolf512k/Manga-AutoTranslate/tree/main`
 - شاخه فیکس: `https://github.com/amirwolf512k/Manga-AutoTranslate/tree/fix/inpaint-gradient-fill`
