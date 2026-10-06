@@ -301,6 +301,25 @@ def manifest():
             if f.get("id") in ("manga_api_base", "api_base"):
                 f["visible_if"] = {"field": "provider", "equals": "custom"}
                 f["label"] = "دامنهٔ API سفارشی (فقط برای custom — مثال: https://api.example.com/v1)"
+    # اندروید: PSD حذف شد — خروجی PSD فقط روی PC/وب هست
+    try:
+        for sec in mf.get("sections", []):
+            for f in sec.get("fields", []):
+                ch = f.get("choices")
+                if not isinstance(ch, list):
+                    continue
+                def _is_psd(c):
+                    if isinstance(c, (list, tuple)) and len(c) >= 2:
+                        return str(c[1]).strip().lower() == "psd"
+                    return isinstance(c, str) and c.strip().lower() == "psd"
+                keep = [c for c in ch if not _is_psd(c)]
+                if len(keep) != len(ch):
+                    f["choices"] = keep
+                    if str(f.get("default", "")).strip().lower() == "psd":
+                        f["default"] = (keep[0][1] if keep and isinstance(keep[0], (list, tuple))
+                                        and len(keep[0]) >= 2 else "PDF")
+    except Exception:
+        traceback.print_exc()
     try:
         _defaults(mf)
     except Exception:
@@ -382,6 +401,34 @@ def _out_stem_from_src(src: str) -> str:
     return stem[:80]
 
 
+def _release_engine(tr=None):
+    """اندروید: آزادسازی حافظهٔ موتور بعد از هر کار — جلوی کرشِ اپ در
+    استخراج‌های پشت‌سرهم را می‌گیرد (جلسه‌های ORT/OCR/LaMa + gc)."""
+    try:
+        if tr is not None:
+            for attr in ("det", "ocr", "_lama"):
+                try:
+                    setattr(tr, attr, None)
+                except Exception:
+                    pass
+            try:
+                tr.client = None
+            except Exception:
+                pass
+            try:
+                tr.openai_client = None
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        import gc
+        gc.collect()
+        gc.collect()
+    except Exception:
+        pass
+
+
 def start_job(params_json, files_dir):
     with STATE["lock"]:
         if STATE["job"] and not STATE["job"].get("done"):
@@ -390,7 +437,9 @@ def start_job(params_json, files_dir):
         work = os.path.join(files_dir, "work")
         os.makedirs(work, exist_ok=True)
         out = os.path.join(work, "out")
-        fmt = str(p.get("fmt", "PDF")).upper()
+        fmt = str(p.get("fmt", "PDF") or "PDF").upper()
+        if fmt == "PSD":
+            fmt = "PDF"  # اندروید: PSD حذف شد — فقط PC/وب
         ext = "pdf" if fmt == "PDF" else fmt.lower()
         _stem = _out_stem_from_src(p.get("src") or p.get("url") or "")
         out_file = os.path.join(out, (_stem or "manga") + "." + ext)
@@ -606,6 +655,7 @@ def _run(job):
                     story_brief=bool(p.get("story_brief", True)),
                     fake_translate=bool(p.get("fake")),
                     clean_only=bool(p.get("clean_only")),
+                    clean_method=str(p.get("clean_method", "auto") or "auto"),
                     max_workers=_i("workers", 2),
                     bubbles_per_request=_i("bubbles", 6),
                     api_timeout=_f("timeout", 40.0),
@@ -635,7 +685,11 @@ def _run(job):
                     tr.style_fonts = True
                     _log(job, "🎨 لحن‌های فعال: %s" % "، ".join(active))
                 _log(job, "🎬 موتور شروع شد — استخراج صفحات و فازها از این‌جا در لاگ می‌آید")
-                tr.run(str(p.get("src")), job["out_file_path"], resume=False)
+                try:
+                    tr.run(str(p.get("src")), job["out_file_path"], resume=False)
+                finally:
+                    _release_engine(tr)
+                    del tr
         finally:
             _detach_log_handlers(handlers)
 

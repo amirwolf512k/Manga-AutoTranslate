@@ -2389,6 +2389,28 @@ class MangaTranslator:
             pass
         return 8.0
 
+    _CLEAN_METHODS = ("auto", "flat", "lama", "opencv",
+                      "flat+lama", "flat+opencv")
+
+    @classmethod
+    def _normalize_clean_method(cls, value) -> str:
+        """نرمال‌سازی روش پاکسازی: auto / flat / lama / opencv /
+        flat+lama / flat+opencv (غلط‌های رایج هم پذیرفته می‌شود)."""
+        v = str(value or "auto").strip().lower().replace(" ", "")
+        v = v.replace("−", "-").replace("＋", "+").replace("_", "+")
+        aliases = {
+            "flat+openvc": "flat+opencv", "flat+open-cv": "flat+opencv",
+            "flat+cv": "flat+opencv", "opencv+flat": "flat+opencv",
+            "lama+flat": "flat+lama", "flatlama": "flat+lama",
+            "flatopencv": "flat+opencv", "flatonly": "flat",
+            "hybrid": "flat+lama", "smart": "auto", "پیش‌فرض": "auto",
+        }
+        v = aliases.get(v, v)
+        if v not in cls._CLEAN_METHODS:
+            print(f"[!] روش پاکسازی ناشناخته «{value}» → auto")
+            v = "auto"
+        return v
+
     def _decide_lama(self, force_gpu: Optional[bool],
                      force_lama: bool = False) -> bool:
 
@@ -2504,7 +2526,12 @@ class MangaTranslator:
         active_tones: Optional[List[str]] = None,
         instruction_text: Optional[str] = None,
         repair_page_seams: bool = True,
+        clean_method: str = "auto",
     ):
+        # روش پاکسازی: اگر لحن LaMa بخواهد، مثل --lama رفتار می‌کنیم
+        self.clean_method = self._normalize_clean_method(clean_method)
+        if self.clean_method in ("lama", "flat+lama"):
+            force_lama = True
         self.fake_translate = bool(fake_translate)
         self.clean_only = bool(clean_only)
         self.style_fonts = bool(style_fonts)
@@ -4619,9 +4646,12 @@ class MangaTranslator:
         return keep
 
     def _region_poly_fallback(self, region: "TextRegion", x0: int, y0: int,
-                               x1: int, y1: int) -> Optional[np.ndarray]:
+                               x1: int, y1: int,
+                               gray_crop: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
         """وقتی ماسک جوهر پیدا نشد، خودِ کادر چندضلعی تشخیص/OCR ماسک می‌شود؛
-        بازسازیِ اضافه بهتر از متنِ جامانده است."""
+        بازسازیِ اضافه بهتر از متنِ جامانده است.
+        برای حباب‌ها: قاب/دیوارهٔ حباب از ماسک کنار گذاشته می‌شود تا
+        بازسازی فقط داخل حباب انجام شود و قاب حباب پاک نشود."""
         try:
             polys = []
             for p in (getattr(region, "ocr_polys", None) or []):
@@ -4639,6 +4669,23 @@ class MangaTranslator:
                 pts = np.rint(arr - np.array([x0, y0], dtype=np.float32)).astype(np.int32)
                 cv2.fillPoly(m, [pts], 255)
             m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9)))
+            det_class = (getattr(region, "det_class", "") or "")
+            if det_class in ("bubble", "text_bubble") and gray_crop is not None \
+                    and m.shape == gray_crop.shape[:2]:
+                try:
+                    # ۱) محدودهٔ داخل حباب (بدون قاب) اگر پیدا شود
+                    interior = self._bubble_interior_mask(gray_crop, m)
+                    if interior is not None and int(np.count_nonzero(interior)) >= 40:
+                        m2 = cv2.bitwise_and(m, interior)
+                        if int(np.count_nonzero(m2)) >= 40:
+                            m = m2
+                    # ۲) نوار لبه‌ها (قاب حباب + خطوط) از ماسک کم شود
+                    edges = cv2.dilate(cv2.Canny(gray_crop, 50, 120),
+                                       np.ones((2, 2), np.uint8), iterations=1)
+                    m = cv2.bitwise_and(m, cv2.bitwise_not(edges))
+                    m = cv2.erode(m, np.ones((3, 3), np.uint8), iterations=1)
+                except Exception:
+                    pass
             return m
         except Exception:
             return None
@@ -4751,7 +4798,8 @@ class MangaTranslator:
                     # به‌جای رها کردن متن، به چندضلعی تشخیص/OCR برمی‌گردیم
                     if getattr(region, "ocr_failed", False):
                         continue  # محافظت هنر: فقط ماسک جوهری معتبر است
-                    _fb = self._region_poly_fallback(region, x0, y0, x1, y1)
+                    _fb = self._region_poly_fallback(region, x0, y0, x1, y1,
+                                                     gray_crop=gray[y0:y1, x0:x1])
                     if _fb is not None and int(np.count_nonzero(_fb)) >= 40:
                         ink = _fb
                     else:
@@ -4780,7 +4828,8 @@ class MangaTranslator:
             if ink is None or int(np.count_nonzero(ink)) < 40:
                 # آخرین فرصت: چندضلعی تشخیص/OCR — متن نباید جامانده بماند
                 if not getattr(region, "ocr_failed", False):
-                    _fb = self._region_poly_fallback(region, x0, y0, x1, y1)
+                    _fb = self._region_poly_fallback(region, x0, y0, x1, y1,
+                                                     gray_crop=gray[y0:y1, x0:x1])
                     if _fb is not None:
                         ink = _fb if ink is None else cv2.bitwise_or(ink, _fb)
             if padding:
@@ -4980,6 +5029,34 @@ class MangaTranslator:
         except Exception:
             return None
 
+    def _bubble_border_band(self, image: np.ndarray,
+                            regions: List["TextRegion"]) -> Optional[np.ndarray]:
+        """نوار نازک لبه‌های داخل باکس حباب‌ها (کلاس bubble/text_bubble).
+        این نوار نباید در ماسک inpaint بیاید تا قاب/دیوارهٔ حباب پاک نشود
+        (مشکل «حباب می‌پَكه»): بازسازی باید داخل حباب انجام شود، نه دوروش."""
+        try:
+            h, w = image.shape[:2]
+            band = np.zeros((h, w), dtype=np.uint8)
+            g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            edges = cv2.dilate(cv2.Canny(g, 50, 120),
+                               np.ones((2, 2), np.uint8), iterations=1)
+            any_hit = False
+            for region in regions:
+                dc = (getattr(region, "det_class", "") or "")
+                if dc not in ("bubble", "text_bubble"):
+                    continue
+                x, y, rw, rh = [int(v) for v in region.rect]
+                x0, y0 = max(0, x - 6), max(0, y - 6)
+                x1, y1 = min(w, x + rw + 6), min(h, y + rh + 6)
+                if x1 - x0 < 8 or y1 - y0 < 8:
+                    continue
+                band[y0:y1, x0:x1] = cv2.bitwise_or(
+                    band[y0:y1, x0:x1], edges[y0:y1, x0:x1])
+                any_hit = True
+            return band if any_hit else None
+        except Exception:
+            return None
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
@@ -5000,10 +5077,30 @@ class MangaTranslator:
             except Exception:
                 lama_ready = False
 
+        # ---- سیاست پاکسازی (روش انتخابی کاربر + در دسترس بودن LaMa) ----
+        # auto      → flat+lama اگر LaMa آماده باشد، وگرنه flat+opencv
+        # flat      → پرکردن صاف همه‌جا (fallback: OpenCV فقط وقتی صاف نشد)
+        # lama      → همه‌جا LaMa (بدون flat)
+        # opencv    → همه‌جا OpenCV (بدون flat)
+        # flat+lama → زمینه صاف = پرکردن صاف، بقیه = LaMa
+        # flat+opencv → زمینه صاف = پرکردن صاف، بقیه = OpenCV
+        mode = self._normalize_clean_method(getattr(self, "clean_method", "auto"))
+        mode_is_auto = (getattr(self, "clean_method", "auto") == "auto")
+        if mode == "auto":
+            mode = "flat+lama" if lama_ready else "flat+opencv"
+        elif mode in ("flat+lama", "lama") and not lama_ready:
+            print("  [!] LaMa در دسترس نیست → بازسازی این خوشه‌ها با OpenCV")
+            mode = "flat+opencv" if mode == "flat+lama" else "opencv"
+        use_flat = mode in ("flat", "flat+lama", "flat+opencv")
+        use_lama_now = mode in ("flat+lama", "lama")
+        print(f"  [*] روش پاکسازی: {mode}"
+              + (" (خودکار)" if mode_is_auto else ""))
+
         cleaned = image.copy()
         counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         page_wall = self._wall_lines(image)
+        page_band = self._bubble_border_band(image, regions)
         crops = []
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             cx0, cy0 = max(0, bx0 - 29), max(0, by0 - 29)
@@ -5012,22 +5109,20 @@ class MangaTranslator:
             crop_msk = np.zeros((cy1 - cy0, cx1 - cx0), dtype=np.uint8)
             ex1, ey1 = min(bx1, image.shape[1]), min(by1, image.shape[0])
             crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
-            result = self._flat_fill_cluster(crop_img, crop_msk)
+            result = None
             method = "flat"
-            if result is not None:
-                if self._bg_is_textured(crop_img, crop_msk, strong=True):
-                    result = None
-            if result is not None and lama_ready:
-                # LaMa در دسترس است → پرکردن صاف فقط برای لکه‌های خیلی ریز
-                # با زمینهٔ کاملاً یکدست؛ بقیه همیشه بازسازی واقعی LaMa
-                # می‌گیرند — کاور سفید/صاف روی زمینهٔ دارای بافت ممنوع.
-                if int(np.count_nonzero(crop_msk)) > 1200 or \
-                        not self._flat_fill_invisible(crop_img, crop_msk):
-                    result = None
+            if use_flat:
+                result = self._flat_fill_cluster(crop_img, crop_msk)
+                if result is not None and mode != "flat":
+                    # در حالت ترکیبی، پرکردن صاف فقط وقتی مجاز است که
+                    # زمینه واقعاً صاف/یکدست باشد (دیوار حباب و بافت محفوظ).
+                    if self._bg_is_textured(crop_img, crop_msk, strong=True) or \
+                            not self._flat_fill_invisible(crop_img, crop_msk):
+                        result = None
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method])
 
         pending = [c for c in crops if c[5] is None]
-        if pending and getattr(self, "use_lama", False):
+        if pending and use_lama_now and lama_ready:
             lama = self._get_lama()
             if lama is not None:
                 _qc_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
@@ -5052,10 +5147,16 @@ class MangaTranslator:
                             if ex1 - ex0 < 16 or ey1 - ey0 < 16:
                                 continue
                             sub_img = image[ey0:ey1, ex0:ex1]
+                            _dsub = cv2.dilate(crop_msk, page_kernel)
+                            if page_band is not None:
+                                # قاب حباب محفوظ: گشادگی ماسک نباید دیواره را بخورد
+                                _pb = (page_band[cy0:cy1, cx0:cx1] > 0)
+                                if _pb.shape == _dsub.shape:
+                                    _dsub = (((_dsub > 0) & (crop_msk > 0)) |
+                                             ((_dsub > 0) & ~_pb)).astype(np.uint8) * 255
                             sub_msk = np.zeros(sub_img.shape[:2], dtype=np.uint8)
                             sub_msk[cy0 - ey0:cy1 - ey0,
-                                    cx0 - ex0:cx1 - ex0] = \
-                                cv2.dilate(crop_msk, page_kernel)
+                                    cx0 - ex0:cx1 - ex0] = _dsub
                             out = lama(sub_img, sub_msk)
                             sub_bgr = out if isinstance(out, np.ndarray) \
                                 else np.array(out)
@@ -5082,7 +5183,7 @@ class MangaTranslator:
                             except Exception:
                                 pass
                             if result is not None:
-                                c[4] = cv2.dilate(crop_msk, page_kernel)
+                                c[4] = _dsub
                                 c[5] = result
                                 c[6] = "LaMa"
                         except Exception:
@@ -5095,11 +5196,16 @@ class MangaTranslator:
                     try:
                         page_mask = cv2.dilate(mask, page_kernel)
                         _wall = self._wall_lines(image)
+                        _prot = None
                         if _wall is not None:
+                            _prot = _wall > 0
+                        if page_band is not None:
+                            _pb = page_band > 0
+                            _prot = _pb if _prot is None else (_prot | _pb)
+                        if _prot is not None:
                             pm = page_mask > 0
                             mk = mask > 0
-                            wl = _wall > 0
-                            page_mask = ((pm & mk) | (pm & ~wl)).astype(np.uint8) * 255
+                            page_mask = ((pm & mk) | (pm & ~_prot)).astype(np.uint8) * 255
                         t0 = time.time()
                         page_out = lama(image, page_mask)
                         dt = time.time() - t0
@@ -5147,6 +5253,21 @@ class MangaTranslator:
         for cx0, cy0, cx1, cy1, crop_msk, result, method in crops:
             if result is None:
                 crop_img = image[cy0:cy1, cx0:cx1]
+                # نوار قاب حباب و دیوارهای همین کراپ (محافظت در حالت OpenCV)
+                _cband = None
+                if page_band is not None:
+                    try:
+                        _cband = (page_band[cy0:cy1, cx0:cx1] > 0)
+                        if not _cband.any():
+                            _cband = None
+                    except Exception:
+                        _cband = None
+                _wall_crop = None
+                if page_wall is not None:
+                    try:
+                        _wall_crop = page_wall[cy0:cy1, cx0:cx1]
+                    except Exception:
+                        _wall_crop = None
                 try:
                     _thick0 = float(cv2.distanceTransform(
                         (crop_msk > 0).astype(np.uint8), cv2.DIST_L2, 3).max())
@@ -5158,6 +5279,11 @@ class MangaTranslator:
                 _dil = cv2.morphologyEx(
                     cv2.dilate(crop_msk, _oc_k, iterations=1),
                     cv2.MORPH_CLOSE, _oc_k)
+                if _cband is not None:
+                    # قاب حباب محفوظ: ماسکِ گشادشده دیواره را نبلعد
+                    _dm = (_dil > 0)
+                    _dil = ((_dm & (crop_msk > 0)) |
+                            (_dm & ~_cband)).astype(np.uint8) * 255
                 try:
                     _thick = float(cv2.distanceTransform(
                         (_dil > 0).astype(np.uint8), cv2.DIST_L2, 3).max())
@@ -5184,9 +5310,8 @@ class MangaTranslator:
                                 crop_msk = _refined
                                 result = _sm2
                     if result is None:
-                        result = self._opencv_fill_components(crop_img,
-                                                              crop_msk,
-                                                              wall=page_wall)
+                        result = self._opencv_fill_components(
+                            crop_img, crop_msk, wall=_wall_crop)
                 method = "OpenCV"
                 try:
                     result = self._scrub_dark_residuals(result, crop_msk)
@@ -8006,11 +8131,68 @@ class MangaTranslator:
             return 0.0
         return float(np.median(angs))
 
+    def _detect_boxes_chunked(self, image: np.ndarray) -> List[dict]:
+        """تشخیص حباب روی نوارهای خیلی بلند (وب‌تون ۸۰۰×۸۰۰۰+): یک‌جا مدلی
+        کوچک‌نمایی شدید می‌شود و متن‌های ریز (واترمارک سایت و…) گم می‌شوند؛
+        پس پنجره‌های هم‌پوشان تشخیص و باکس‌ها ادغام می‌شوند."""
+        h, w = image.shape[:2]
+        win = 1800
+        ov = 320
+        all_boxes: List[dict] = []
+        y = 0
+        while True:
+            y2 = min(h, y + win)
+            chunk = image[max(0, y - 8):y2]
+            off = max(0, y - 8)
+            try:
+                for b in self.det.detect(chunk):
+                    b2 = dict(b)
+                    r = list(b["rect"])
+                    b2["rect"] = [r[0], r[1] + off, r[2], r[3] + off]
+                    all_boxes.append(b2)
+            except Exception:
+                pass
+            if y2 >= h:
+                break
+            y += win - ov
+
+        def _area(r):
+            return max(1.0, (r[2] - r[0]) * (r[3] - r[1]))
+
+        def _iou(a, b):
+            ix1, iy1 = max(a[0], b[0]), max(a[1], b[1])
+            ix2, iy2 = min(a[2], b[2]), min(a[3], b[3])
+            if ix2 <= ix1 or iy2 <= iy1:
+                return 0.0
+            inter = (ix2 - ix1) * (iy2 - iy1)
+            return inter / float(_area(a) + _area(b) - inter)
+
+        # بیش‌ترین اطمینان اول؛ تکراری‌های هم‌پوشان (نافص در لبهٔ پنجره) حذف
+        all_boxes.sort(key=lambda b: -float(b.get("confidence", 0.0)))
+        kept: List[dict] = []
+        for b in all_boxes:
+            dup = False
+            for k in kept:
+                if _iou(b["rect"], k["rect"]) > 0.45 and \
+                        b.get("class_name") == k.get("class_name"):
+                    dup = True
+                    break
+            if not dup:
+                kept.append(b)
+        return kept
+
     def _extract_regions_from_bubbles(self, image: np.ndarray) -> List[TextRegion]:
         
         if self.det is None:
             return []
-        boxes = self.det.detect(image)
+        h_img, w_img = image.shape[:2]
+        _tall = h_img > 2400 and h_img > w_img * 1.6
+        if _tall:
+            print(f"    [*] نوار بلند ({w_img}x{h_img}) → تشخیص پنجره‌ای "
+                  f"(متن‌های ریز مثل واترمارک هم پیدا می‌شوند)")
+            boxes = self._detect_boxes_chunked(image)
+        else:
+            boxes = self.det.detect(image)
         if not boxes:
             return []
         n0 = len(boxes)
@@ -8201,6 +8383,83 @@ class MangaTranslator:
             except Exception:
                 continue
 
+    def _ocr_gap_sweep(self, image: np.ndarray,
+                       regions: List["TextRegion"]) -> List["TextRegion"]:
+        """جاروی OCR سبک روی کل صفحه: متن‌هایی که تشخیص‌دهندهٔ حباب نگرفته
+        (واترمارک سایت اسکن، متن ریز روی هنر، متنِ نصفه‌شده) پیدا و به‌عنوان
+        ناحیهٔ پاک‌شونده اضافه می‌شوند — هیچ متنی جامانده نماند.
+        فقط یک پاسِ OCR (بدون واریانت‌های سنگین) + گیت‌های سخت اطمینان."""
+        if self.ocr is None or not regions:
+            return []
+        h, w = image.shape[:2]
+        chunk_h = 3600
+        found: List[TextRegion] = []
+        boxes = [r.rect for r in regions]
+        for y0 in range(0, h, chunk_h):
+            y1 = min(h, y0 + chunk_h + 160)
+            piece = image[y0:y1]
+            scale = float(getattr(self, "mag_ratio", 1.35) or 1.35)
+            if max(piece.shape[:2]) > 5200:
+                scale = 1.0
+            if _IS_ANDROID:
+                scale = min(scale, 1.5)
+            try:
+                if scale > 1.01:
+                    piece_up = cv2.resize(piece, None, fx=scale, fy=scale,
+                                          interpolation=cv2.INTER_CUBIC)
+                else:
+                    piece_up = piece
+                    scale = 1.0
+                res = self.ocr.ocr(piece_up)
+            except Exception:
+                continue
+            if not res or not res[0]:
+                continue
+            for line in res[0]:
+                try:
+                    poly = (np.asarray(line[0], dtype=np.float32) / scale).astype(np.int32)
+                    text = str(line[1][0]).strip()
+                    conf = float(line[1][1])
+                except Exception:
+                    continue
+                if conf < 0.70 or len(text) < 3:
+                    continue
+                if not any(ch.isalnum() for ch in text):
+                    continue
+                px1 = int(poly[:, 0].min())
+                py1 = int(poly[:, 1].min()) + y0
+                px2 = int(poly[:, 0].max()) + 1
+                py2 = int(poly[:, 1].max()) + 1 + y0
+                if px2 - px1 < 10 or py2 - py1 < 8:
+                    continue
+                inside = False
+                for (rx, ry, rw, rh) in boxes:
+                    if px1 >= rx - 12 and py1 >= ry - 12 and \
+                            px2 <= rx + rw + 12 and py2 <= ry + rh + 12:
+                        inside = True
+                        break
+                if inside:
+                    continue
+                toks = [t for t in re.findall(r"[A-Za-z0-9]+", text) if len(t) >= 2]
+                if not toks:
+                    continue
+                kind = "promo"
+                if not self._is_watermark_text(text) and len(text) >= 14 and \
+                        len(toks) >= 3 and text[-1] in ".!?…\"'":
+                    kind = "dialogue"
+                poly_page = poly.copy()
+                poly_page[:, 1] += y0
+                found.append(TextRegion(
+                    id=0,
+                    boxes=[poly_page],
+                    source_text=text,
+                    rect=(px1, py1, px2 - px1, py2 - py1),
+                    kind=kind,
+                    det_class="text_free",
+                ))
+                boxes.append((px1, py1, px2 - px1, py2 - py1))
+        return found
+
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
         
         self._maybe_reinit_extraction_models()
@@ -8236,6 +8495,16 @@ class MangaTranslator:
 
         if unique_regions:
             self._verify_angle_signs(image, unique_regions)
+            # ---- جاروی OCR: متن‌های جامانده از تشخیص (واترمارک/متن ریز) ----
+            try:
+                _extra = self._ocr_gap_sweep(image, unique_regions)
+                if _extra:
+                    _wm = sum(1 for r in _extra if r.kind == "promo")
+                    unique_regions.extend(_extra)
+                    print(f"    [*] جاروی OCR: {len(_extra)} متنِ جامانده اضافه شد "
+                          f"({_wm} واترمارک/تبلیغ)")
+            except Exception as e:
+                print(f"    [!] جاروی OCR ناموفق: {e}")
 
         if self.reading_order == "rtl":
             unique_regions.sort(key=lambda r: (r.rect[1] // 80, -(r.rect[0] + r.rect[2])))
@@ -10544,6 +10813,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="اجبار به CPU (OpenCV inpaint)")
     p.add_argument("--lama", action="store_true", default=False,
                    help="حتی روی CPU هم پاک‌سازی big-lama.pt را فعال کن (کندتر، تمیزتر)")
+    p.add_argument("--clean-method", dest="clean_method", default="auto",
+                   choices=["auto", "flat", "lama", "opencv", "flat+lama", "flat+opencv"],
+                   help="روش پاکسازی متن: auto (خودکار: flat+lama یا flat+opencv) | "
+                        "flat (پرکردن صاف) | lama | opencv | "
+                        "flat+lama | flat+opencv — پیش‌فرض auto")
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--keep-old", action="store_true")
     p.add_argument("--request-delay", type=float, default=0.0)
@@ -10733,6 +11007,7 @@ def main():
         fake_translate=bool(getattr(args, "fake_translate", False)),
         clean_only=bool(getattr(args, "clean_only", False)),
         style_fonts=not getattr(args, "no_style_fonts", False),
+        clean_method=str(getattr(args, "clean_method", "auto") or "auto"),
         instruction_text=(
             open(args.instruction, encoding="utf-8").read()
             if getattr(args, "instruction", None) and os.path.isfile(args.instruction) else None
@@ -10743,6 +11018,11 @@ def main():
     if getattr(args, "lama", False):
         translator.use_lama = True
         print("[*] --lama → پاک‌سازی باکیفیت LaMa ONNX فعال (کندتر از OpenCV).")
+    _cm = getattr(args, "clean_method", "auto") or "auto"
+    if _cm != "auto":
+        print(f"[*] روش پاکسازی انتخابی: {_cm}")
+        if _cm in ("lama", "flat+lama"):
+            translator.use_lama = True
     translator.batch_workers = max(1, int(getattr(args, "batch_workers", 3) or 3))
     translator.min_translate_batch = max(1, int(getattr(args, "min_translate_batch", 15) or 15))
     

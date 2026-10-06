@@ -21,6 +21,29 @@ MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
 UPLOAD_DIR = os.path.join(WORK_DIR, "input")
 OUT_DIR = os.path.join(WORK_DIR, "output")
+
+
+def bundle_multi_files(paths):
+    """چند فایل انتخاب‌شده → یک پوشهٔ موقت؛ مترجم پوشه را مثل یک فصل می‌گیرد.
+    (ورودی چند-فایلی در وب / دسکتاپ / اندروید)"""
+    try:
+        files = [str(p) for p in (paths if isinstance(paths, (list, tuple)) else [paths]) if p]
+        if not files:
+            return ""
+        if len(files) == 1:
+            return files[0]
+        import uuid
+        stem = os.path.splitext(os.path.basename(files[0]))[0][:40] or "chapter"
+        d = os.path.join(UPLOAD_DIR, "multi_" + stem + "_" + uuid.uuid4().hex[:6])
+        os.makedirs(d, exist_ok=True)
+        for f in files:
+            try:
+                shutil.copy2(f, os.path.join(d, os.path.basename(f)))
+            except Exception:
+                pass
+        return d
+    except Exception:
+        return ""
 FONT_DIR = os.path.join(HERE, "fonts")
 CFG_PATH = os.path.join(WORK_DIR, "config.json")
 HIST_PATH = os.path.join(WORK_DIR, "history.jsonl")
@@ -681,6 +704,11 @@ def run_cli_interactive():
     f = input("انتخاب [1-5] (پیش‌فرض 1): ").strip() or "1"
     ext = {"1": ".pdf", "2": ".zip", "3": ".html", "4": "", "5": ".psd"}.get(f, ".pdf")
 
+    print("\nروش پاکسازی:  1) خودکار  2) flat+lama  3) flat+opencv  4) فقط flat  5) فقط lama  6) فقط opencv")
+    cm = input("انتخاب [1-6] (پیش‌فرض 1): ").strip() or "1"
+    clean_m = {"1": "auto", "2": "flat+lama", "3": "flat+opencv",
+               "4": "flat", "5": "lama", "6": "opencv"}.get(cm, "auto")
+
     print("\nارائه‌دهندهٔ AI را انتخاب کنید:")
     prov_menu = [
         ("gemini", "Google Gemini - رایگان با سهمیه"),
@@ -765,7 +793,7 @@ def run_cli_interactive():
         cmd += ["--model", model]
     if provider == "custom" and api_base_v:
         cmd += ["--api-base", api_base_v]
-    cmd += ["--lama", "--cpu"]
+    cmd += ["--clean-method", clean_m, "--cpu"]
 
     print("\n▶ " + " ".join(cmd) + "\n")
     proc = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE,
@@ -974,12 +1002,25 @@ def run_desktop():
     ttk.Entry(row_in, textvariable=inp_var).pack(side="left", fill="x", expand=True)
 
     def pick_input():
-        p = filedialog.askopenfilename(
+        paths = filedialog.askopenfilenames(
             initialdir=UPLOAD_DIR if os.path.isdir(UPLOAD_DIR) else HERE,
             filetypes=[("مانگا", "*.pdf *.zip *.cbz *.webp *.jpg *.jpeg *.png *.html"),
                        ("همه", "*.*")])
-        if p:
-            inp_var.set(p)
+        if not paths:
+            return
+        if len(paths) == 1:
+            inp_var.set(paths[0])
+        else:
+            d = bundle_multi_files(list(paths))
+            if d:
+                inp_var.set(d)
+                try:
+                    messagebox.showinfo(
+                        "ورودی چندفایلی",
+                        f"{len(paths)} فایل انتخاب شد و در یک پوشهٔ موقت کنار هم "
+                        f"گذاشته شدند:\n{d}")
+                except Exception:
+                    pass
     ttk.Button(row_in, text="📁 انتخاب", command=pick_input).pack(side="left", padx=(6, 0))
 
     row_out = ttk.Frame(card_io); row_out.pack(fill="x", pady=(8, 0))
@@ -990,6 +1031,13 @@ def run_desktop():
     quality_var = tk.IntVar(value=int(cfg.get("quality", 92)))
     ttk.Label(row_out, text="کیفیت:").pack(side="left", padx=(0, 4))
     ttk.Spinbox(row_out, from_=60, to=100, textvariable=quality_var, width=5).pack(side="left")
+
+    row_cm = ttk.Frame(card_io); row_cm.pack(fill="x", pady=(8, 0))
+    ttk.Label(row_cm, text="روش پاکسازی متن:").pack(side="right", padx=(0, 4))
+    clean_var = tk.StringVar(value=str(cfg.get("clean_method", "auto") or "auto"))
+    ttk.Combobox(row_cm, textvariable=clean_var, state="readonly", width=15,
+                 values=("auto", "flat+lama", "flat+opencv",
+                         "flat", "lama", "opencv")).pack(side="right")
 
     
     card_ai = ttk.LabelFrame(tab_body, text=" حساب و مدل ", padding=12)
@@ -1688,6 +1736,7 @@ def run_desktop():
         out_v = os.path.join(OUT_DIR, smart_output_base(src) + ext)
 
         save_config({"last_input": src, "out_fmt": fmt_var.get(),
+                     "clean_method": clean_var.get(),
                      "quality": quality_var.get(), "api_keys": keys_var.get(),
                      "model": model_var.get(), "font": font_v,
                      "provider": prov_var.get(),
@@ -1714,7 +1763,8 @@ def run_desktop():
                "--max-retries", str(maxre_var.get()),
                "--request-delay", str(reqdelay_var.get()),
                "--temperature", str(temp_var.get()),
-               "--reading-order", str(readord_var.get())]
+               "--reading-order", str(readord_var.get()),
+               "--clean-method", str(clean_var.get() or "auto")]
         
         cli_font = {"free_text": "free"}
         active_tones = ["normal"]
@@ -2460,8 +2510,8 @@ def run_web():
         
         with gr.Group(elem_classes=["stepcard"]):
             gr.HTML('<div class="steptitle"><span class="stepnum">۱</span> ورودی — فایل یا لینک مانهوا</div>')
-            inp_upload = gr.File(label="آپلود فایل (pdf / zip / cbz / تصویر / html)",
-                                 file_count="single", type="filepath",
+            inp_upload = gr.File(label="آپلود فایل‌ها — چندتایی (pdf / zip / cbz / تصویر / html)",
+                                 file_count="multiple", type="filepath",
                                  elem_classes=["compact-upload"])
             inp_path = gr.Textbox(label="یا URL تصویر/مانهوا",
                                   placeholder="https://cdn.example.com/chapter/1/001.webp")
@@ -2582,6 +2632,15 @@ def run_web():
                 force_cpu = gr.Checkbox(label="اجبار CPU (خالی = GPU اگر بود)",
                                         value=False)
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
+            clean_method = gr.Radio(
+                choices=[("خودکار (flat + LaMa/OpenCV)", "auto"),
+                         ("flat + LaMa", "flat+lama"),
+                         ("flat + OpenCV", "flat+opencv"),
+                         ("فقط flat — پرکردن صاف", "flat"),
+                         ("فقط LaMa", "lama"),
+                         ("فقط OpenCV", "opencv")],
+                value=str(cfg.get("clean_method", "auto")) or "auto",
+                label="روش پاکسازی متن (حذف متن اصلی از تصویر)")
             with gr.Row():
                 fake_test = gr.Checkbox(label="حالت تست — متن فارسی الکی (بدون API)",
                                         value=bool(cfg.get("fake_test", False)))
@@ -3469,7 +3528,7 @@ def run_web():
                             out_fmt_v, quality_v, font_up,
                             workers_v, bubbles_v, timeout_v,
                             batchw_v, maxre_v, reqdelay_v, temp_v, readord_v,
-                            use_lama_v, force_cpu_v, two_pass_v,
+                            use_lama_v, force_cpu_v, two_pass_v, clean_method_v,
                             fake_test_v, clean_only_v, web_debug_v, instruction_text_v,
                             glossary_text_v, story_brief_v, api_base_v,
                             *tone_args):
@@ -3508,7 +3567,7 @@ def run_web():
                 msg = job.get("log") or "⏹ ترجمه متوقف شد.\n(پروسه manga.py بسته شد)"
                 return _pack("🚀  شروع ترجمه", msg)
 
-            src = upload or (inp_path_v or "").strip()
+            src = bundle_multi_files(upload) or (inp_path_v or "").strip()
 
             if not src:
                 return _pack("🚀  شروع ترجمه",
@@ -3565,7 +3624,8 @@ def run_web():
                    "--max-retries", str(int(maxre_v)),
                    "--request-delay", str(float(reqdelay_v)),
                    "--temperature", str(float(temp_v)),
-                   "--reading-order", str(readord_v)]
+                   "--reading-order", str(readord_v),
+                   "--clean-method", str(clean_method_v or "auto")]
             if prov_s == "custom" and str(api_base_v or "").strip():
                 cmd += ["--api-base", str(api_base_v).strip()]
             cmd += font_args()
@@ -3691,7 +3751,7 @@ def run_web():
                     out_fmt, quality, font_upload,
                     workers, bubbles, timeout,
                     batchw, maxre, reqdelay, temp, readord,
-                    use_lama, force_cpu, two_pass,
+                    use_lama, force_cpu, two_pass, clean_method,
                     fake_test, clean_only, web_debug, instruction_text,
                     glossary_text, story_brief, api_base] + tone_uploads + tone_enables,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,

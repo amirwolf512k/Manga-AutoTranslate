@@ -867,8 +867,10 @@ class MainActivity : AppCompatActivity() {
                     text = "فایلی انتخاب نشده"
                     setTextColor(MUT); textSize = 11f; setPadding(dp(12), dp(2), dp(12), dp(2))
                 }
+                val multi = f.optBoolean("multiple", false)
                 val btn = Button(this).apply {
-                    text = "⬆  آپلود فایل — کلیک کن"
+                    text = if (multi) "⬆  آپلود فایل‌ها (چندتایی) — کلیک کن"
+                           else "⬆  آپلود فایل — کلیک کن"
                     setTextColor(MUT); textSize = 13f
                     background = dashed()
                     gravity = Gravity.CENTER
@@ -881,7 +883,8 @@ class MainActivity : AppCompatActivity() {
                         Intent.createChooser(Intent(Intent.ACTION_GET_CONTENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
                             setType("*/*")
-                        }, "انتخاب فایل"), REQ_FILE)
+                            if (multi) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }, if (multi) "انتخاب فایل‌ها" else "انتخاب فایل"), REQ_FILE)
                 }
                 row.addView(btn)
                 row.addView(nameView)
@@ -892,6 +895,13 @@ class MainActivity : AppCompatActivity() {
                     pickedFiles[id] = prev
                     nameView.text = "✔ ${File(prev).name}"
                     (fieldViews[id + "_btn"] as? Button)?.text = "✓ ${File(prev).name}"
+                } else if (prev != null && File(prev).isDirectory) {
+                    val n = try { File(prev).listFiles()?.size ?: 0 } catch (_: Exception) { 0 }
+                    if (n > 0) {
+                        pickedFiles[id] = prev
+                        nameView.text = "✔ $n فایل"
+                        (fieldViews[id + "_btn"] as? Button)?.text = "✓ $n فایل"
+                    }
                 }
             }
             "header" -> row.addView(TextView(this).apply {
@@ -925,7 +935,9 @@ class MainActivity : AppCompatActivity() {
         map.put("model", firstNonEmpty(o, "manga_model", "model") ?: "")
         map.put("api_base", firstNonEmpty(o, "manga_api_base", "api_base") ?: "")
         map.put("ocr_lang", firstNonEmpty(o, "manga_ocr_lang", "ocr_lang") ?: "en")
-        map.put("fmt", firstNonEmpty(o, "out_fmt", "fmt") ?: "PDF")
+        val fmtV = (firstNonEmpty(o, "out_fmt", "fmt") ?: "PDF").trim()
+        map.put("fmt", if (fmtV.equals("PSD", ignoreCase = true)) "PDF" else fmtV)
+        map.put("clean_method", firstNonEmpty(o, "clean_method") ?: "auto")
         map.put("quality", optInt(o, "quality", 92))
         map.put("debug", optBool(o, "web_debug", "debug"))
         map.put("fake", optBool(o, "fake_test", "fake"))
@@ -1252,7 +1264,6 @@ class MainActivity : AppCompatActivity() {
                     "webp" -> "image/webp"
                     "pdf" -> "application/pdf"
                     "zip" -> "application/zip"
-                    "psd" -> "image/vnd.adobe.photoshop"
                     "html" -> "text/html"
                     else -> "application/octet-stream"
                 }
@@ -1369,39 +1380,76 @@ class MainActivity : AppCompatActivity() {
 
 override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_FILE && resultCode == Activity.RESULT_OK && data?.data != null) {
-            val uri = data.data!!
-            val fid0 = pickerField ?: ""
-            var name = queryDisplayName(uri)
-            if (name.isNullOrBlank()) name = uri.lastPathSegment ?: "input.bin"
-            name = name.substringAfterLast('/')
-            if (!name.contains('.')) {
-                val mime = try { contentResolver.getType(uri) } catch (_: Exception) { null }
-                val ext = when {
-                    mime?.startsWith("image/") == true ->
-                        "." + mime.removePrefix("image/").substringBefore('+')
-                            .replace("jpeg", "jpg")
-                    mime == "application/pdf" -> ".pdf"
-                    mime == "application/zip" || mime == "application/x-zip-compressed" -> ".zip"
-                    mime?.startsWith("font/") == true || mime == "application/x-font-ttf" -> ".ttf"
-                    fid0.contains("font") -> ".ttf"
-                    else -> ".png"
+        if (requestCode == REQ_FILE && resultCode == Activity.RESULT_OK && data != null) {
+            // پشتیبانی چند-فایلی: clipData هر تعداد فایل انتخابی را می‌آورد
+            val uris = ArrayList<Uri>()
+            try {
+                val clip = data.clipData
+                if (clip != null) {
+                    for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) }
                 }
-                name += ext
+            } catch (_: Exception) {
             }
-            name = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-            val dest = File(cacheDir, "pick_" + System.currentTimeMillis() + "_" + name)
-            contentResolver.openInputStream(uri)?.use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
-            }
-            val fid = pickerField ?: return
-            pickedFiles[fid] = dest.absolutePath
-            saveVal(fid + "_path", dest.absolutePath)
-            (fieldViews[fid] as? TextView)?.text = "✔ ${dest.name}"
-            if (fid.startsWith("up_") || fid == "font_upload") {
-                (fieldViews[fid + "_btn"] as? Button)?.text = "✓ ${dest.name}"
-            }
-            saveVal("last_file_name", dest.name)
+            if (uris.isEmpty()) data.data?.let { uris.add(it) }
+            if (uris.isEmpty()) return
+            val fid0 = pickerField ?: ""
+            Thread {
+                val saved = ArrayList<File>()
+                var dir: File? = null
+                if (uris.size > 1) {
+                    dir = File(cacheDir, "pick_multi_" + System.currentTimeMillis())
+                    dir.mkdirs()
+                }
+                for (u in uris) {
+                    try {
+                        var name = queryDisplayName(u)
+                        if (name.isNullOrBlank()) name = u.lastPathSegment ?: "input.bin"
+                        name = name.substringAfterLast('/')
+                        if (!name.contains('.')) {
+                            val mime = try { contentResolver.getType(u) } catch (_: Exception) { null }
+                            val ext = when {
+                                mime?.startsWith("image/") == true ->
+                                    "." + mime.removePrefix("image/").substringBefore('+')
+                                        .replace("jpeg", "jpg")
+                                mime == "application/pdf" -> ".pdf"
+                                mime == "application/zip" || mime == "application/x-zip-compressed" -> ".zip"
+                                mime?.startsWith("font/") == true || mime == "application/x-font-ttf" -> ".ttf"
+                                fid0.contains("font") -> ".ttf"
+                                else -> ".png"
+                            }
+                            name += ext
+                        }
+                        name = name.replace(Regex("Regex("[\\\\/:*?\"<>|]")"), "_")
+                        val dest = if (dir != null) File(dir, name)
+                            else File(cacheDir, "pick_" + System.currentTimeMillis() + "_" + name)
+                        contentResolver.openInputStream(u)?.use { input ->
+                            dest.outputStream().use { output -> input.copyTo(output) }
+                        }
+                        if (dest.isFile && dest.length() > 0) saved.add(dest)
+                    } catch (_: Exception) {
+                    }
+                }
+                ui.post {
+                    try {
+                        val fid = pickerField ?: return@post
+                        if (saved.isEmpty()) return@post
+                        val target = if (dir != null && saved.size > 1)
+                            dir!!.absolutePath else saved[0].absolutePath
+                        pickedFiles[fid] = target
+                        saveVal(fid + "_path", target)
+                        val label = if (saved.size > 1) "✔ ${saved.size} فایل انتخاب شد"
+                            else "✔ ${saved[0].name}"
+                        (fieldViews[fid] as? TextView)?.text = label
+                        if (fid.startsWith("up_") || fid == "font_upload") {
+                            (fieldViews[fid + "_btn"] as? Button)?.text = label
+                        }
+                        saveVal("last_file_name",
+                            if (saved.size > 1) "${saved.size} فایل" else saved[0].name)
+                    } catch (e: Exception) {
+                        android.util.Log.e("MangaApp", "pick result", e)
+                    }
+                }
+            }.start()
         }
     }
 

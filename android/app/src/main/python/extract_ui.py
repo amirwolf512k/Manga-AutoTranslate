@@ -434,6 +434,8 @@ def extract(path_or_source, is_source=False):
                 ft = _lit(kw.get("file_types"))
                 if ft:
                     field["accept"] = " ".join(ft)
+                if str(_lit(kw.get("file_count")) or "") == "multiple":
+                    field["multiple"] = True
             items.append(field)
 
         elif kind == _HTML:
