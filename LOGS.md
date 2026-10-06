@@ -113,3 +113,10 @@
 
 ### نکته
 - تست با `--ocr-lang` درست مهم است؛ بدون آن OCR کره‌ای/ژاپنی را درست نمی‌بیند (مثل تست اول من!)
+
+### بیلد APK شامل این فیکس
+- Workflow run **#11** — success — commit `7698afa`
+  `https://github.com/amirwolf512k/Manga-AutoTranslate/actions/runs/37539206546`
+- راستی‌آزمایی: `assets/engine/manga.py` داخل APK — md5 یکسان با manga.py فیکس‌شده (`44124228…`)، نشانه‌های فیکس جدید حاضر
+- Release `files` (میرور آپدیت درون‌اپ) هم به‌روز شد → اپ نصب‌شده قبلی با آپدیت درون‌اپ فیکس جدید را می‌گیرد
+- APK: `https://github.com/amirwolf512k/Manga-AutoTranslate/releases/tag/apk`
