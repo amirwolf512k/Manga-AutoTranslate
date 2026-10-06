@@ -204,7 +204,7 @@ def _pip_runtime(files_dir):
             _log("pip install: " + " ".join(args))
             rc = _pipmain(["install", "--no-cache-dir", "--no-deps",
                            "--target", site, "--quiet"] + args)
-            _log(("✔ " if rc == 0 else "✘ نشد: ") + " ".join(args))
+            _log(("[ok] " if rc == 0 else "[ناکام] ") + " ".join(args))
         except SystemExit as e:
             _log("pip exit: %s" % e)
         except Exception as e:

@@ -208,7 +208,7 @@ def _font_dir():
         return os.path.join(os.getcwd(), "fonts")
 
 
-def _tone_ready(fname):
+def _style_font_ready(fname):
     p = os.path.join(_font_dir(), fname)
     try:
         return os.path.isfile(p) and os.path.getsize(p) > 20_000
@@ -217,7 +217,8 @@ def _tone_ready(fname):
 
 
 def _slot_fields(mf):
-
+    """شناسهٔ فیلد فایل هر نوع حباب را از فرم می‌کشد
+    (نوع حباب خود برنامه تشخیص می‌دهد؛ اینجا فقط قلم هر نوع عوض می‌شود)."""
     slots = [b[0] for b in _bundles()]
     if not slots:
         return {}
@@ -225,13 +226,12 @@ def _slot_fields(mf):
     for sec in mf.get("sections", []):
         for f in sec.get("fields", []):
             fid = f.get("id") or ""
+            if f.get("type") != "file":
+                continue
             for slot in slots:
                 if fid.endswith("_" + slot):
-                    m = mapping.setdefault(slot, {})
-                    if f.get("type") == "file":
-                        m["file"] = fid
-                    elif f.get("type") == "bool":
-                        m["en"] = fid
+                    slot_map = mapping.setdefault(slot, {})
+                    slot_map['file'] = fid
     return mapping
 
 
@@ -338,7 +338,7 @@ def _cfg(key, dflt=None):
 def _resolve_main_font(job):
     custom = job["params"].get("font_upload_file") or job["params"].get("font_file")
     if custom and os.path.isfile(custom):
-        _log(job, "🔤 فونت اصلی (آپلودی): %s" % os.path.basename(custom))
+        _log(job, "فونت اصلی (آپلودی): %s" % os.path.basename(custom))
         return custom
     fp = ""
     try:
@@ -347,11 +347,11 @@ def _resolve_main_font(job):
         pass
     if fp:
         return fp
-    _log(job, "⬇ فونت روی دستگاه نیست — دانلود خودکار…")
+    _log(job, "فونت روی دستگاه نیست — دانلود خودکار…")
     try:
         manga_app.download_fonts(log=lambda m: _log(job, str(m)))
     except Exception as e:
-        _log(job, "⚠ دانلود فونت ناموفق: %s" % e)
+        _log(job, "دانلود فونت ناموفق: %s" % e)
     try:
         fp = manga_app.find_font() or ""
     except Exception:
@@ -359,29 +359,20 @@ def _resolve_main_font(job):
     return fp
 
 
-def _resolve_tones(job, mf):
-
+def _resolve_style_fonts(job, mf):
+    """قلم هر نوع حباب را از فرم/فایل‌های آماده درمی‌آورد.
+    تشخیص نوع حباب با کد خود برنامه است؛ اینجا فقط قلم‌ها جمع می‌شوند."""
     slot_map = _slot_fields(mf)
     p = job["params"]
-    font_by_style, active = {}, []
+    font_by_style = {}
     for slot, fname, _desc, _u in _bundles():
-        ids = slot_map.get(slot, {})
-        en_fid = ids.get("en")
-        on = True if en_fid is None else bool(p.get(en_fid, True))
-        file_fid = ids.get("file")
+        file_fid = slot_map.get(slot, {}).get("file")
         custom = p.get(file_fid + "_file") if file_fid else None
         path = custom if (custom and os.path.isfile(custom)) \
             else os.path.join(_font_dir(), fname)
-        lbl = slot
-        if not on:
-            _log(job, "🔇 لحن خاموش: %s" % lbl)
-            continue
         if path and os.path.isfile(path) and os.path.getsize(path) > 20_000:
             font_by_style[slot] = path
-            active.append(slot)
-        else:
-            _log(job, "⚠ فونت لحن «%s» پیدا نشد — با فونت اصلی رندر می‌شود" % lbl)
-    return font_by_style, active
+    return font_by_style
 
 
 def _out_stem_from_src(src: str) -> str:
@@ -444,7 +435,7 @@ def start_job(params_json, files_dir):
         _stem = _out_stem_from_src(p.get("src") or p.get("url") or "")
         out_file = os.path.join(out, (_stem or "manga") + "." + ext)
         job = {
-            "done": False, "log": "⏳ آماده‌سازی…", "error": None,
+            "done": False, "log": "آماده‌سازی…", "error": None, "cancel": False, "cancelled": False,
             "out_file": None, "images": [], "debug_images": [],
             "params": p, "out": out, "out_file_path": out_file,
         }
@@ -534,7 +525,7 @@ def _heartbeat(job):
                 return
             cur = len(str(job.get("log") or ""))
         if cur == last:
-            _log(job, "⏳ موتور در حال کار است… %d ثانیه از شروع — صفحه‌های سنگین/دانلود مدل طول می‌کشد" % int(time.time() - t0))
+            _log(job, "موتور در حال کار است… %d ثانیه از شروع — صفحه‌های سنگین/دانلود مدل طول می‌کشد" % int(time.time() - t0))
         last = cur
 
 
@@ -589,10 +580,10 @@ def _run(job):
         _src1 = _fix_input_ext(_src0)
         if _src1 != _src0:
             p["src"] = _src1
-            _log(job, "🧩 پسوند ورودی اصلاح شد → %s" % os.path.basename(_src1))
+            _log(job, "پسوند ورودی اصلاح شد → %s" % os.path.basename(_src1))
         keys = [k.strip() for k in str(p.get("keys") or "").split(",") if k.strip()]
         if not keys and not (bool(p.get("fake")) or bool(p.get("clean_only"))):
-            _log(job, "❌ حداقل یک کلید API لازم است — کلید بده یا "
+            _log(job, "خطا: حداقل یک کلید API لازم است — کلید بده یا "
                       "«حالت تست» / «فقط پاکسازی» را در تنظیمات پیشرفته فعال کن.")
             with STATE["lock"]:
                 job["done"] = True
@@ -606,7 +597,7 @@ def _run(job):
 
         fp = _resolve_main_font(job)
         if not fp:
-            _log(job, "❌ فونت اصلی پیدا نشد — اینترنت را چک کن یا فونت .ttf آپلود کن.")
+            _log(job, "خطا: فونت اصلی پیدا نشد — اینترنت را چک کن یا فونت .ttf آپلود کن.")
             with STATE["lock"]:
                 job["done"] = True
                 job["error"] = True
@@ -630,7 +621,7 @@ def _run(job):
         handlers = _attach_log_handlers(tee)
         try:
             with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
-                _log(job, "🚀 در حال بارگذاری موتور و مدل‌ها…"
+                _log(job, "در حال بارگذاری موتور و مدل‌ها…"
                           " (بار اول دانلود مدل چند دقیقه طول می‌کشد)")
                 mf = _MF_CACHE["mf"]
                 if mf is None:
@@ -638,7 +629,7 @@ def _run(job):
                         mf = json.loads(manifest())
                     except Exception:
                         mf = {}
-                font_by_style, active = _resolve_tones(job, mf)
+                font_by_style = _resolve_style_fonts(job, mf)
                 tr = _manga().MangaTranslator(
                     api_key=keys or ["placeholder"],
                     provider=str(p.get("provider") or "gemini"),
@@ -664,8 +655,7 @@ def _run(job):
                     translation_temperature=_f("temp", 0.85),
                     img_quality=_i("quality", 92),
                     img_format=_resolve_img_format(p),
-                    style_fonts=bool(active),
-                    active_tones=active or None,
+                    style_fonts=bool(font_by_style),
                     instruction_text=(str(p["instruction"]).strip() or None)
                     if p.get("instruction") else None,
                 )
@@ -674,20 +664,29 @@ def _run(job):
                         and getattr(tr, "det", None) is not None):
                     tr.stitch_max_height = 4000
                 tr.batch_workers = _i("batchw", 3)
+                tr.cancel_check = lambda: bool(job.get("cancel"))
 
                 if bool(p.get("use_lama")):
                     tr.use_lama = True
-                    _log(job, "🩹 پاک‌سازی LaMa-Manga فعال شد (تنظیمات) — بار اول "
-                              "مدل ~۱۹۸MB دانلود می‌شود؛ کندتر ولی تمیزتر از OpenCV."
+                    _log(job, "پاک‌سازی LaMa فعال شد (تنظیمات) — بار اول "
+                              "مدل دانلود می‌شود؛ کندتر ولی تمیزتر از OpenCV."
                               " اگر رم گوشی کم باشد خودکار به OpenCV برمی‌گردد.")
                 if font_by_style:
                     tr.font_by_style = font_by_style
                     tr.style_fonts = True
-                    _log(job, "🎨 لحن‌های فعال: %s" % "، ".join(active))
-                _log(job, "🎬 موتور شروع شد — استخراج صفحات و فازها از این‌جا در لاگ می‌آید")
+                _log(job, "موتور شروع شد — استخراج صفحات و فازها در لاگ می‌آید")
                 try:
                     tr.run(str(p.get("src")), job["out_file_path"], resume=False)
+                except manga.MangaCancelled:
+                    pass
                 finally:
+                    # موتور لغو را داخل خودش مهربانانه مدیریت می‌کند و برمی‌گردد؛
+                    # این‌جا فقط پرچم را برای رابط می‌گذاریم
+                    if job.get("cancel"):
+                        with STATE["lock"]:
+                            job["cancelled"] = True
+                        _log(job, "کار لغو شد — خروجی صفحات آماده (اگر بود) ذخیره شد")
+                    tr.cancel_check = None
                     _release_engine(tr)
                     del tr
         finally:
@@ -745,9 +744,9 @@ def _run(job):
             job["debug_images"] = dbg
             job["out_file"] = dl
             job["done"] = True
-        _log(job, "✅ تمام شد — %d صفحه، خروجی: %s" % (len(imgs), dl or "-"))
+        _log(job, "تمام شد — %d صفحه، خروجی: %s" % (len(imgs), dl or "-"))
         if bool(p.get("debug")) and not dbg:
-            _log(job, "🔍 دیباگ روشن بود ولی تصویر دیباگی ساخته نشد — "
+            _log(job, "دیباگ روشن بود ولی تصویر دیباگی ساخته نشد — "
                       "تصویر دیباگ فقط برای صفحه‌هایی که متن/حباب دارند تولید می‌شود.")
     except BaseException:
         try:
@@ -756,10 +755,17 @@ def _run(job):
                 _log(job, "…" + _txt[-4000:])
         except Exception:
             pass
-        _log(job, "❌ خطا:\n" + traceback.format_exc()[-2500:])
+        if job.get("cancel"):
+            with STATE["lock"]:
+                job["cancelled"] = True
+                job["error"] = False
+            _log(job, "کار لغو شد")
+        else:
+            _log(job, "خطا:\n" + traceback.format_exc()[-2500:])
+            with STATE["lock"]:
+                job["error"] = True
         with STATE["lock"]:
             job["done"] = True
-            job["error"] = True
 
 
 def poll():
@@ -771,6 +777,7 @@ def poll():
             "idle": False,
             "done": bool(job.get("done")),
             "error": bool(job.get("error")),
+            "cancelled": bool(job.get("cancelled")),
             "log": job.get("log", ""),
             "images": job.get("images", []),
             "debug_images": job.get("debug_images", []),
@@ -782,8 +789,10 @@ def poll():
 def cancel():
     with STATE["lock"]:
         job = STATE["job"]
+        if job and not job.get("done"):
+            job["cancel"] = True
     if job and not job.get("done"):
-        _log(job, "⏹ درخواست توقف ثبت شد (پایان مرحله فعلی)")
+        _log(job, "درخواست لغو ثبت شد — در پایان مرحلهٔ فعلی متوقف می‌شود")
     return json.dumps({"ok": True}, ensure_ascii=False)
 
 
@@ -807,11 +816,15 @@ def test_keys(params_json):
                               ensure_ascii=False)
         lines = []
         for i, r in enumerate(res, 1):
-            mark = "✅" if r.get("ok") else ("⚠️" if r.get("error") and r.get("ok") else "❌")
+            if r.get("ok") and r.get("error"):
+                state = "سالم (با هشدار)"
+            elif r.get("ok"):
+                state = "سالم است"
+            else:
+                state = "کار نمی‌کند"
             err = (" — " + str(r.get("error"))) if r.get("error") else ""
-            lines.append("%s کلید %d (%s): %s%s  [%dms]" % (
-                mark, i, r.get("key", ""),
-                "سالم است" if r.get("ok") else "کار نمی‌کند",
+            lines.append("کلید %d (%s): %s%s  [%dms]" % (
+                i, r.get("key", ""), state,
                 err, int(r.get("ms") or 0)))
         return json.dumps({"ok": True, "text": "\n".join(lines)}, ensure_ascii=False)
     except Exception as e:

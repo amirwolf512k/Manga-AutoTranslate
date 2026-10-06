@@ -104,7 +104,7 @@ function syncCustom(){
 }
 syncCustom();
 async function start(){
-  const run=document.getElementById('run'); run.disabled=true; run.textContent='⏳ در حال ارسال…';
+  const run=document.getElementById('run'); run.disabled=true; run.textContent='در حال ارسال…';
   const fd=new FormData();
   const f=document.getElementById('f').files[0];
   if(f) fd.append('file', f);
@@ -130,9 +130,9 @@ function poll(sid){
     if(j.done){
       let h='';
       if(j.images) for(const u of j.images) h+='<img src="'+u+'" style="width:100%%;margin:6px 0;border-radius:10px">';
-      if(j.debug_images) h+='<div style="color:#97948c;margin-top:8px">🔍 دیباگ:</div>';
+      if(j.debug_images) h+='<div style="color:#97948c;margin-top:8px">دیباگ:</div>';
       if(j.debug_images) for(const u of j.debug_images) h+='<img src="'+u+'" style="width:100%%;margin:6px 0;border-radius:10px;outline:1px solid #1f1f24">';
-      if(j.download) h+='<a href="'+j.download+'" download style="color:#ff4a3d">⬇ دانلود خروجی</a>';
+      if(j.download) h+='<a href="'+j.download+'" download style="color:#ff4a3d">دانلود خروجی</a>';
       out.innerHTML=h;
     } else setTimeout(()=>poll(sid), 1500);
   }).catch(()=>setTimeout(()=>poll(sid),2000));
@@ -213,9 +213,9 @@ def _run_job(sid, cfg):
             job["debug_images"] = dbg_imgs
             job["download"] = dl
             job["done"] = True
-        log("✅ تمام شد")
+        log("تمام شد")
     except Exception:
-        log("❌ خطا:\n" + traceback.format_exc()[-3000:])
+        log("خطا:\n" + traceback.format_exc()[-3000:])
         with LOCK:
             job["done"] = True
 

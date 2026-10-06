@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.12.3"
+APP_VER = "1.13.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -73,35 +73,65 @@ C_ERR = "#ff6a5e"
 
 
 FONT_BUNDLES = [
-    ("normal",       "Vazirmatn-Bold.ttf", "کودک — متن عادی حباب", [
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Bold.ttf",
+    ("normal",       "Vazirmatn-Regular.ttf", "متن عادی حباب", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Regular.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Regular.ttf",
     ]),
     ("free_text",    "Vazirmatn-Regular.ttf", "متن بیرون حباب", [
-        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Regular.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Regular.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Regular.ttf",
     ]),
-    ("shout",        "Lalezar-Fixed.ttf", "داد خشم", [
+    ("system",       "Vazirmatn-Medium.ttf", "سیستم/تگ", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Medium.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Medium.ttf",
+    ]),
+    ("broadcast",    "Vazirmatn-Medium.ttf", "بی‌سیم/موبایل", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Medium.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Medium.ttf",
+    ]),
+    ("whisper",      "Vazirmatn-Light.ttf", "زمزمه", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
+    ]),
+    ("thought",      "Vazirmatn-Light.ttf", "تفکر ابری", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
+    ]),
+    ("cry",          "Vazirmatn-Light.ttf", "گریه", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
+    ]),
+    ("fear",         "Vazirmatn-Light.ttf", "ترس", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Light.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Light.ttf",
+    ]),
+    ("narrator",     "Vazirmatn-Bold.ttf", "راوی مستطیل", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Bold.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Bold.ttf",
+    ]),
+    ("black",        "Vazirmatn-Black.ttf", "حباب تیره", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Black.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Black.ttf",
+    ]),
+    ("shout",        "Vazirmatn-Black.ttf", "داد/خشم", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Black.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Black.ttf",
+    ]),
+    ("monster",      "Vazirmatn-Black.ttf", "صدای هیولا", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Black.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/v33.003/fonts/ttf/Vazirmatn-Black.ttf",
+    ]),
+    ("comedy_shout", "Lalezar-Regular.ttf", "داد کمدی", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Regular.ttf",
         "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
     ]),
-    ("comedy_shout", "Gandom.ttf", "داد کمدی", [
-        "https://raw.githubusercontent.com/rastikerdar/gandom-font/master/dist/Gandom.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
-    ]),
-    ("whisper",      "Nahid.ttf", "زمزمه دست‌نویس", [
-        "https://raw.githubusercontent.com/rastikerdar/nahid-font/master/dist/Nahid.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel.ttf",
-    ]),
-    ("thought",      "Samim-Bold.ttf", "تفکر ابری", [
-        "https://raw.githubusercontent.com/rastikerdar/samim-font/master/dist/Samim-Bold.ttf",
-    ]),
-    ("system",       "Sahel-Bold.ttf", "UI سیستم/تگ", [
-        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Bold.ttf",
+    ("sfx",          "Lalezar-Regular.ttf", "افکت صوتی", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Regular.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
     ]),
     ("letter",       "Amiri-Regular.ttf", "نامه/طومار", [
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Amiri-Regular.ttf",
         "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-Regular.ttf",
-    ]),
-    ("narrator",     "Shabnam-Bold.ttf", "راوی مستطیل", [
-        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
     ]),
 ]
 
@@ -127,19 +157,8 @@ def _read_py_triple_string(src: str, name: str) -> str:
     return text.strip()
 
 
-def strip_locked_instruction_tail(text: str) -> str:
-    t = (text or "").strip()
-    if not t:
-        return ""
-    for marker in ("۷) ورودی و خروجی", "7) ورودی و خروجی", "{TONE_RULE}", "فقط آرایه JSON معتبر"):
-        idx = t.find(marker)
-        if idx > 0:
-            t = t[:idx].rstrip()
-            break
-    return t.strip()
 
-
-def load_default_system_instruction(tone_list=None) -> str:
+def load_default_system_instruction() -> str:
     path = MANGA_PY
     if not os.path.isfile(path):
         return ""
@@ -148,11 +167,7 @@ def load_default_system_instruction(tone_list=None) -> str:
             src = f.read()
     except Exception:
         return ""
-    text = _read_py_triple_string(src, "DEFAULT_SYSTEM_INSTRUCTION_STYLE")
-    if text:
-        return text
-    full = _read_py_triple_string(src, "DEFAULT_SYSTEM_INSTRUCTION")
-    return strip_locked_instruction_tail(full)
+    return _read_py_triple_string(src, "DEFAULT_SYSTEM_INSTRUCTION_STYLE")
 
 
 _DEFAULT_INSTR_CACHE = None
@@ -286,7 +301,7 @@ def download_fonts(log=print) -> int:
         dst = os.path.join(FONT_DIR, fname)
         if os.path.isfile(dst) and os.path.getsize(dst) > 20_000:
             continue
-        log(f"  ⬇ {fname} ({desc}) ...")
+        log(f"  دانلود {fname} ({desc}) ...")
         ok = False
         for url in urls:
             if _download(url, dst):
@@ -294,9 +309,9 @@ def download_fonts(log=print) -> int:
                 break
         if ok:
             n += 1
-            log(f"  ✔ {fname}")
+            log(f"  [‎+] {fname}")
         else:
-            log(f"  ✖ {fname} ناموفق — بعداً خودتان در fonts/ بگذارید")
+            log(f"  [-] {fname} ناموفق — بعداً خودتان در fonts/ بگذارید")
     return n
 
 GITHUB_RAW_BASE = ("https://raw.githubusercontent.com/"
@@ -387,10 +402,10 @@ def check_updates(force: bool = False, log=print) -> dict:
         pass
     if rep.get("checked"):
         if rep.get("update_available"):
-            log("🔄 آپدیت جدید پیدا شد: " + ", ".join(
+            log("آپدیت جدید پیدا شد: " + ", ".join(
                 f"{n} v{i['remote']}" for n, i in rep["files"].items() if i["newer"]))
         else:
-            log("✔ برنامه به‌روز است.")
+            log("برنامه به‌روز است.")
     return rep
 
 
@@ -409,11 +424,11 @@ def apply_updates(report: Optional[dict] = None, log=print) -> list:
                 shutil.copyfile(dst, bak)
             os.replace(staged, dst)
             installed.append(f"{name} → v{info['remote']}")
-            log(f"✔ نصب شد: {name} v{info['remote']} (بکاپ: {os.path.basename(bak)})")
+            log(f"نصب شد: {name} v{info['remote']} (بکاپ: {os.path.basename(bak)})")
         except Exception as e:
-            log(f"✖ نصب {name} ناموفق: {e}")
+            log(f"نصب {name} ناموفق: {e}")
     if installed:
-        log("🔁 برای فعال‌شدن کامل، برنامه را ببندید و دوباره باز کنید.")
+        log("برای فعال‌شدن کامل، برنامه را ببندید و دوباره باز کنید.")
     return installed
 
 
@@ -504,7 +519,7 @@ def system_info() -> str:
         lines.append("ONNX Runtime: نصب نیست")
     try:
         import torch  
-        lines.append("GPU (CUDA): ✅")
+        lines.append("GPU (CUDA): دارد")
     except Exception:
         lines.append("GPU (CUDA): —")
     if os.path.isdir(MODELS_DIR):
@@ -656,11 +671,11 @@ HELP_TEXT = f"""راهنما — {APP_NAME} v{APP_VER}
   manga.py      (فایل مترجم — همان فایل اصلی)
   manga_app.py  (برنامه)
   سپس:  !python manga_app.py
-  ⚠ manga_app.py را با نام manga.py ذخیره نکنید — خطای «فایل مترجم نیست» می‌گیرید.
+  توجه: manga_app.py را با نام manga.py ذخیره نکنید — خطای «فایل مترجم نیست» می‌گیرید.
 
 ▶ GitHub Codespaces / SSH
   لینک عمومی خودکار چاپ می‌شود (gradio.live) — نیازی به Port Forwarding نیست.
-  ⚠ سرور وب به نشست ترمینال چسبیده است: با بستن ترمینال kill می‌شود.
+  توجه: سرور وب به نشست ترمینال چسبیده است: با بستن ترمینال kill می‌شود.
   برای زنده‌ماندن: tmux new -s manga 'python3 manga_app.py --web'
   (detach: Ctrl+B بعد D | بازگشت: tmux attach -t manga)
 
@@ -691,7 +706,7 @@ def manga_py_ok() -> bool:
 
 
 MANGA_MIXED_MSG = (
-    "❌ فایل manga.py کنار برنامه، فایل «مترجم» نیست — کد خود برنامه داخلش ذخیره شده\\n"
+    "خطا: فایل manga.py کنار برنامه، فایل «مترجم» نیست — کد خود برنامه داخلش ذخیره شده\\n"
     "(احتمالاً manga_app.py را با نام manga.py ذخیره کرده‌اید).\\n"
     "فایل manga.py اصلی (مترجم) را کنار manga_app.py بگذارید و دوباره اجرا کنید."
 )
@@ -706,12 +721,12 @@ def run_cli_interactive():
         return
 
     cfg = load_config()
-    src = input("📄 مسیر فایل/پوشه یا URL ورودی: ").strip().strip('"')
+    src = input("مسیر فایل/پوشه یا URL ورودی: ").strip().strip('"')
     if not src:
-        print("❌ ورودی خالی است.")
+        print("خطا: ورودی خالی است.")
         return
     if not os.path.exists(src) and not src.lower().startswith(("http://", "https://")):
-        print(f"❌ مسیر پیدا نشد: {src}")
+        print(f"خطا: مسیر پیدا نشد: {src}")
         return
 
     print("\nقالب خروجی:  1) PDF   2) ZIP   3) HTML   4) پوشهٔ تصاویر   5) PSD")
@@ -756,32 +771,32 @@ def run_cli_interactive():
             if not raw and api_base_v:
                 break
             if not raw:
-                print("  ✗ provider «custom» بدون دامنهٔ API کار نمی‌کند — دوباره وارد کن.")
+                print("  [-] provider «custom» بدون دامنهٔ API کار نمی‌کند — دوباره وارد کن.")
                 continue
             _ab = normalize_api_base(raw)
             if not _ab:
-                print("  ✗ آدرس معتبر نیست — مثل https://api.example.com/v1 بنویس "
+                print("  [-] آدرس معتبر نیست — مثل https://api.example.com/v1 بنویس "
                       "(https:// خودکار اضافه می‌شود).")
                 continue
             api_base_v = _ab
             break
         if not api_base_v:
-            print("❌ انصراف — دامنهٔ API داده نشد. provider دیگری انتخاب کن یا دوباره اجرا کن.")
+            print("خطا: انصراف — دامنهٔ API داده نشد. provider دیگری انتخاب کن یا دوباره اجرا کن.")
             return
         if not model:
             for _try in range(3):
                 model = _cli_ask("نام مدل (مثال: gpt-4o-mini) [اجباری]: ")
                 if model:
                     break
-                print("  ✗ مدل نمی‌تواند خالی باشد — مثال: gpt-4o-mini")
+                print("  [-] مدل نمی‌تواند خالی باشد — مثال: gpt-4o-mini")
             if not model:
-                print("❌ انصراف — نام مدل داده نشد.")
+                print("خطا: انصراف — نام مدل داده نشد.")
                 return
-        print(f"  ✔ دامنه: {api_base_v} | مدل: {model}")
+        print(f"  [+] دامنه: {api_base_v} | مدل: {model}")
 
     font_v = cfg.get("font") or find_font()
     if not font_v or not os.path.isfile(font_v):
-        print("❌ فونت فارسی پیدا نشد — fonts/ را آماده کنید.")
+        print("خطا: فونت فارسی پیدا نشد — fonts/ را آماده کنید.")
         return
 
     base = smart_output_base(src)
@@ -819,9 +834,9 @@ def run_cli_interactive():
     proc.wait()
     dur_s = f"{int((time.time()-t0)//60)}:{int((time.time()-t0)%60):02d}"
     if proc.returncode != 0:
-        print(f"\n❌ خطا — کد خروج {proc.returncode}")
+        print(f"\nخطا — کد خروج {proc.returncode}")
     else:
-        print(f"\n✅ تمام شد ({dur_s}) — خروجی: {out_v}")
+        print(f"\nتمام شد ({dur_s}) — خروجی: {out_v}")
 
 
 def run_cli(argv):
@@ -946,25 +961,25 @@ def run_desktop():
                     return
                 if rep.get("update_available"):
                     root.after(0, lambda: upd_lbl.config(
-                        text="🔄 آپدیت جدید: " + ", ".join(
+                        text="آپدیت جدید: " + ", ".join(
                             f"{n} v{i['remote']}" for n, i in rep["files"].items()
                             if i.get("newer")),
                         fg=C_OK))
                     installed = apply_updates(rep, log=lambda m: None)
                     if installed:
                         root.after(0, lambda: upd_lbl.config(
-                            text="✔ نصب شد — برنامه را دوباره باز کنید", fg=C_OK))
+                            text="نصب شد — برنامه را دوباره باز کنید", fg=C_OK))
                 elif manual:
                     root.after(0, lambda: upd_lbl.config(
-                        text="✔ به‌روز است", fg=C_MUT))
+                        text="به‌روز است", fg=C_MUT))
             except Exception:
                 if manual:
                     root.after(0, lambda: upd_lbl.config(
-                        text="✖ چک آپدیت ناموفق", fg=C_ERR))
+                        text="چک آپدیت ناموفق", fg=C_ERR))
 
         threading.Thread(target=_work, daemon=True).start()
 
-    ttk.Button(head, text="🔄 آپدیت", width=9,
+    ttk.Button(head, text="چک آپدیت", width=9,
                command=lambda: (_run_update(True))).pack(side="left", padx=(2, 8))
     status_lbl = tk.Label(head, text="● آماده", font=(None, 10, "bold"),
                           bg=C_BG2, fg=C_OK)
@@ -976,7 +991,7 @@ def run_desktop():
 
     
     tab = ttk.Frame(nb)
-    nb.add(tab, text="🚀 ترجمه")
+    nb.add(tab, text="ترجمه")
 
     tab_canvas = tk.Canvas(tab, bg=C_BG, highlightthickness=0)
     tab_sb = ttk.Scrollbar(tab, orient="vertical", command=tab_canvas.yview)
@@ -1035,7 +1050,7 @@ def run_desktop():
                         f"گذاشته شدند:\n{d}")
                 except Exception:
                     pass
-    ttk.Button(row_in, text="📁 انتخاب", command=pick_input).pack(side="left", padx=(6, 0))
+    ttk.Button(row_in, text="انتخاب فایل", command=pick_input).pack(side="left", padx=(6, 0))
 
     row_out = ttk.Frame(card_io); row_out.pack(fill="x", pady=(8, 0))
     fmt_var = tk.StringVar(value=cfg.get("out_fmt", "PDF"))
@@ -1079,8 +1094,27 @@ def run_desktop():
     # ---- دکمهٔ تست کلیدها (پی‌سی) ----
     row_testk = ttk.Frame(card_ai); row_testk.pack(fill="x", pady=(6, 0))
     testk_out = tk.StringVar(value="")
+    testk_lbl = None
+    testk_after = [None]
+
+    def _testk_hide():
+        testk_out.set("")
+        if testk_lbl is not None:
+            try:
+                testk_lbl.pack_forget()
+            except Exception:
+                pass
+
+    def _testk_schedule_hide():
+        if testk_after[0] is not None:
+            try:
+                root.after_cancel(testk_after[0])
+            except Exception:
+                pass
+        testk_after[0] = root.after(30000, _testk_hide)
+
     def _run_test_keys_pc():
-        testk_out.set("⏳ در حال تست کلیدها…")
+        testk_out.set("در حال تست کلیدها…")
         def _worker():
             try:
                 res = _manga_shared().test_api_keys(
@@ -1088,22 +1122,33 @@ def run_desktop():
                     apibase_var.get() or "")
                 out = []
                 for i, r in enumerate(res, 1):
-                    mark = "✅" if r.get("ok") else ("⚠️" if r.get("error") and r.get("ok") else "❌")
+                    if r.get("ok") and r.get("error"):
+                        state = "سالم (با هشدار)"
+                    elif r.get("ok"):
+                        state = "سالم است"
+                    else:
+                        state = "کار نمی‌کند"
                     err = f" — {r['error']}" if r.get("error") else ""
-                    out.append(f"{mark} کلید {i} ({r.get('key', '')}): "
-                               + ("سالم است" if r.get("ok") else "کار نمی‌کند")
+                    out.append(f"کلید {i} ({r.get('key', '')}): "
+                               + state
                                + err + f"  [{r.get('ms', 0)}ms]")
                 msg = "\n".join(out) if out else "کلیدی وارد نشده"
             except Exception as e:
                 msg = f"خطا در تست: {e}"
-            root.after(0, lambda: testk_out.set(msg))
+            def _show():
+                nonlocal testk_lbl
+                testk_out.set(msg)
+                if testk_lbl is None:
+                    testk_lbl = ttk.Label(row_testk, textvariable=testk_out,
+                                          foreground=C_MUT, wraplength=520,
+                                          justify="right")
+                testk_lbl.pack(side="right", fill="x", expand=True)
+                _testk_schedule_hide()
+            root.after(0, _show)
         import threading
         threading.Thread(target=_worker, daemon=True).start()
-    ttk.Button(row_testk, text="🧪 تست کلیدها / لینک",
+    ttk.Button(row_testk, text="تست کلیدها / لینک",
                command=_run_test_keys_pc).pack(side="right", padx=(0, 6))
-    ttk.Label(row_testk, textvariable=testk_out, foreground=C_MUT,
-              wraplength=520, justify="right").pack(side="right", fill="x",
-                                                    expand=True)
 
     def _toggle_custom_fields(*_a):
         if str(prov_var.get()).strip() == "custom":
@@ -1162,7 +1207,7 @@ def run_desktop():
     ocr_lang_var.trace_add("write", _schedule_api_save)
 
     
-    card_font = ttk.LabelFrame(tab_body, text=" فونت‌های لحن ", padding=10)
+    card_font = ttk.LabelFrame(tab_body, text=" قلم‌های انواع حباب ", padding=10)
     card_font.pack(fill="x", padx=10, pady=6)
     font_vars = {"main": tk.StringVar(value=cfg.get("font") or find_font())}
     row_fm = ttk.Frame(card_font); row_fm.pack(fill="x")
@@ -1181,26 +1226,26 @@ def run_desktop():
 
     
     SLOT_LABELS = {
-        "normal": "کودک (عادی)", "shout": "افسانه (خشم)", "comedy_shout": "کروش (کمدی)",
+        "normal": "عادی", "shout": "داد/خشم", "comedy_shout": "داد کمدی",
         "whisper": "زمزمه", "thought": "تفکر", "system": "سیستم/تگ",
-        "letter": "نامه/طومار", "narrator": "راوی", "free_text": "متن آزاد",
+        "broadcast": "بی‌سیم/موبایل", "letter": "نامه/طومار", "narrator": "راوی",
+        "free_text": "متن آزاد", "black": "حباب تیره", "monster": "هیولا",
+        "cry": "گریه", "fear": "ترس", "sfx": "افکت صوتی",
     }
     font_slots = {}
-    tone_en_vars = {}
     for slot, fname, _desc, _urls in FONT_BUNDLES:
         dflt = os.path.join(FONT_DIR, fname) if os.path.isfile(os.path.join(FONT_DIR, fname)) else ""
         if dflt and not _font_persian_ok(dflt):
             dflt = ""
         font_slots[slot] = tk.StringVar(value=dflt)
-        tone_en_vars[slot] = tk.BooleanVar(value=bool(cfg.get("tone_en_" + slot, True)))
 
     def open_font_editor():
         win = tk.Toplevel(root)
-        win.title("ویرایش فونت‌های لحن")
+        win.title("ویرایش فونت انواع حباب")
         win.geometry("880x480")
         win.configure(bg=C_BG)
-        tk.Label(win, text="مسیر هر فونت را عوض کنید یا با … انتخاب کنید؛ "
-                           "لحن خاموش = آن tone از ترجمه حذف و حباب‌ها با فونت اصلی رندر می‌شوند",
+        tk.Label(win, text="نوع حباب را خود برنامه از شکلش تشخیص می‌دهد؛ "
+                           "اینجا فقط قلم هر نوع را عوض کنید (خالی = قلم پیش‌فرض همان نوع)",
                  bg=C_BG, fg=C_MUT).pack(anchor="e", padx=12, pady=(10, 4))
         body = tk.Frame(win, bg=C_BG)
         body.pack(fill="both", expand=True, padx=12)
@@ -1209,8 +1254,6 @@ def run_desktop():
             cell = tk.Frame(body, bg=C_BG)
             cell.grid(row=r, column=(1 - c), sticky="ew", padx=4, pady=3)
             body.columnconfigure(1 - c, weight=1)
-            ttk.Checkbutton(cell, text="",
-                            variable=tone_en_vars[slot]).pack(side="left")
             tk.Label(cell, text=f"{SLOT_LABELS.get(slot, slot)}:",
                      bg=C_BG, fg=C_TXT).pack(side="right", padx=(0, 4))
             ttk.Entry(cell, textvariable=font_slots[slot]).pack(
@@ -1231,9 +1274,9 @@ def run_desktop():
 
         threading.Thread(target=t, daemon=True).start()
 
-    dl_btn = ttk.Button(row_fd, text="⬇ دانلود فونت‌های گمشده", command=do_download_fonts)
+    dl_btn = ttk.Button(row_fd, text="دانلود فونت‌های گمشده", command=do_download_fonts)
     dl_btn.pack(side="left")
-    ttk.Button(row_fd, text="✏️ ویرایش فونت‌های لحن",
+    ttk.Button(row_fd, text="ویرایش فونت انواع حباب",
                command=open_font_editor).pack(side="left", padx=6)
 
     
@@ -1301,7 +1344,7 @@ def run_desktop():
     glos_txt.insert("1.0", str(cfg.get("glossary_text", "") or ""))
     ttk.Checkbutton(row5c, text="بریف داستان قبل از ترجمه (لحن شخصیت‌ها حفظ شود)",
                     variable=brief_var).pack(anchor="e")
-    ttk.Label(adv, text="متن دستور مترجم (فقط لحن/سبک — بخش JSON و tone قفل است؛ خالی = پیش‌فرض):"
+    ttk.Label(adv, text="متن دستور مترجم — سبک و لحن ترجمه (خالی = پیش‌فرض):"
               ).pack(anchor="e", pady=(8, 0))
     instr_txt = tk.Text(adv, height=6, font=("Consolas", 10), bg=C_CARD, fg=C_TXT)
     instr_txt.pack(fill="x", pady=(2, 4))
@@ -1309,18 +1352,18 @@ def run_desktop():
 
     
     row6 = ttk.Frame(tab_body); row6.pack(fill="x", padx=10, pady=(4, 2))
-    run_btn = ttk.Button(row6, text="🚀  شروع ترجمه", style="Accent.TButton")
+    run_btn = ttk.Button(row6, text="شروع ترجمه", style="Accent.TButton")
     run_btn.pack(side="right")
-    stop_btn = ttk.Button(row6, text="⏹ توقف", state="disabled")
+    stop_btn = ttk.Button(row6, text="توقف", state="disabled")
     stop_btn.pack(side="right", padx=6)
-    read_btn = ttk.Button(row6, text="📖 خواندن", state="disabled",
+    read_btn = ttk.Button(row6, text="خواندن", state="disabled",
                           command=lambda: open_reader())
     read_btn.pack(side="left")
-    open_btn = ttk.Button(row6, text="📂 خروجی", state="disabled")
+    open_btn = ttk.Button(row6, text="خروجی", state="disabled")
     open_btn.pack(side="left")
-    read_dbg_btn = ttk.Button(row6, text="🔍 خواندن دیباگ", state="disabled",
+    read_dbg_btn = ttk.Button(row6, text="خواندن دیباگ", state="disabled",
                               command=lambda: open_reader(debug=True))
-    open_dbg_btn = ttk.Button(row6, text="📂 دیباگ", state="disabled")
+    open_dbg_btn = ttk.Button(row6, text="دیباگ", state="disabled")
     
     out_path_holder = {"p": "", "d": "", "dbg_p": "", "dbg_d": ""}
 
@@ -1357,7 +1400,7 @@ def run_desktop():
     
     tab_log = ttk.Frame(nb)
     row_log = ttk.Frame(tab_log); row_log.pack(fill="x", padx=10, pady=(8, 4))
-    copy_btn = ttk.Button(row_log, text="📋 کپی لاگ")
+    copy_btn = ttk.Button(row_log, text="کپی لاگ")
     log_box = scrolledtext.ScrolledText(tab_log, height=26, font=("Consolas", 9),
                                         bg="#0a0f1c", fg="#cbd5e1",
                                         insertbackground="#e2e8f0", wrap="none",
@@ -1384,8 +1427,8 @@ def run_desktop():
 
     def toggle_log_dir():
         log_newest_top.set(not log_newest_top.get())
-        dir_btn.config(text="⬆ جدید در بالا" if log_newest_top.get() else "⬇ جدید در پایین")
-    dir_btn = ttk.Button(row_log, text="⬇ جدید در پایین", command=toggle_log_dir, width=14)
+        dir_btn.config(text="جدید در بالا" if log_newest_top.get() else "جدید در پایین")
+    dir_btn = ttk.Button(row_log, text="جدید در پایین", command=toggle_log_dir, width=14)
     dir_btn.pack(side="left", padx=6)
     ttk.Label(row_log, text="لاگ با Ctrl+C قابل کپی است", foreground=C_MUT
               ).pack(side="left", padx=8)
@@ -1423,7 +1466,7 @@ def run_desktop():
                     "برای حالت خواندن، خروجی را ZIP یا «پوشهٔ تصاویر» بگیرید (PDF صفحه‌تصویری ندارد).")
             return
         win = tk.Toplevel(root)
-        win.title("🔍 خواندن دیباگ" if debug else "📖 حالت خواندن")
+        win.title("خواندن دیباگ" if debug else "حالت خواندن")
         win.geometry("920x860")
         win.configure(bg="#0a0f1c")
 
@@ -1500,13 +1543,13 @@ def run_desktop():
                   bg="#10131c", fg="#ff4a3d", font=(None, 11, "bold"),
                   cursor="hand2", activebackground="#1c1c22",
                   activeforeground="#ff4a3d").pack(side="left")
-        tk.Button(bar, text="🔍−", command=zo, bd=0, padx=8,
+        tk.Button(bar, text="−", command=zo, bd=0, padx=8,
                   bg="#10131c", fg="#e8e6e1", font=(None, 10),
                   cursor="hand2", activebackground="#1c1c22").pack(side="left")
-        tk.Button(bar, text="🔍+", command=zi, bd=0, padx=8,
+        tk.Button(bar, text="+", command=zi, bd=0, padx=8,
                   bg="#10131c", fg="#e8e6e1", font=(None, 10),
                   cursor="hand2", activebackground="#1c1c22").pack(side="left")
-        tk.Button(bar, text="⛶ فول‌اسکرین", command=toggle_full, bd=0, padx=8,
+        tk.Button(bar, text="فول‌اسکرین", command=toggle_full, bd=0, padx=8,
                   bg="#10131c", fg="#e8e6e1", font=(None, 10),
                   cursor="hand2", activebackground="#1c1c22").pack(side="left")
         tk.Label(bar, text="Ctrl+چرخ = زوم · دابل‌کلیک = فول‌اسکرین",
@@ -1555,7 +1598,7 @@ def run_desktop():
 
     def toggle_log_dir():
         log_newest_top.set(not log_newest_top.get())
-        dir_btn.config(text="⬆ جدید در بالا" if log_newest_top.get() else "⬇ جدید در پایین")
+        dir_btn.config(text="جدید در بالا" if log_newest_top.get() else "جدید در پایین")
 
     def poll_queue():
         try:
@@ -1589,7 +1632,7 @@ def run_desktop():
                         pth = os.path.join(FONT_DIR, fname)
                         if os.path.isfile(pth):
                             font_slots[slot].set(pth)
-                    log_write(f"🔤 فونت‌ها: {payload} فایل جدید دانلود شد.")
+                    log_write(f"فونت‌ها: {payload} فایل جدید دانلود شد.")
                 elif kind == "finished":
                     run_btn.config(state="normal")
                     stop_btn.config(state="disabled")
@@ -1634,9 +1677,9 @@ def run_desktop():
         dur_s = f"{int(dur // 60)}:{int(dur % 60):02d}"
         if proc.returncode != 0:
             append_history({"time": datetime.now().strftime("%m-%d %H:%M"),
-                            "input": src, "status": f"❌ ({proc.returncode})",
+                            "input": src, "status": f"خطا ({proc.returncode})",
                             "duration": dur_s})
-            q.put(("log", f"❌ خطا — کد خروج {proc.returncode}"))
+            q.put(("log", f"خطا — کد خروج {proc.returncode}"))
             q.put(("status", ("ناموفق", C_ERR)))
         else:
             target = out_v
@@ -1645,9 +1688,9 @@ def run_desktop():
                 target = os.path.join(out_v, fs[0]) if fs else out_v
             size = os.path.getsize(target) if os.path.isfile(target) else 0
             append_history({"time": datetime.now().strftime("%m-%d %H:%M"),
-                            "input": src, "status": "✅", "duration": dur_s})
-            q.put(("log", f"✅ تمام شد ({dur_s}) — {human_size(size)}: {target}"))
-            q.put(("status", ("موفق ✅", C_OK)))
+                            "input": src, "status": "موفق", "duration": dur_s})
+            q.put(("log", f"تمام شد ({dur_s}) — {human_size(size)}: {target}"))
+            q.put(("status", ("موفق", C_OK)))
             q.put(("done", target))
             
             parent = os.path.dirname(out_v) or "."
@@ -1736,7 +1779,7 @@ def run_desktop():
                     except Exception:
                         pass
             if dbg_file or dbg_dir:
-                q.put(("log", f"🔍 دیباگ آماده: {dbg_file or dbg_dir}"))
+                q.put(("log", f"دیباگ آماده: {dbg_file or dbg_dir}"))
             if dbg_file:
                 q.put(("debug_done", dbg_file))
             if dbg_dir:
@@ -1793,9 +1836,6 @@ def run_desktop():
                      "instruction_text": instruction_for_config(
                          instr_txt.get("1.0", "end")),
                      "glossary_text": glos_txt.get("1.0", "end").rstrip()})
-        for _slot, _en in tone_en_vars.items():
-            save_config({**load_config(), "tone_en_" + _slot: _en.get()})
-
         cmd = [sys.executable, MANGA_PY, "-i", src, "-o", out_v, "--font", font_v,
                "--provider", prov_var.get(),
                "--workers", str(workers_var.get()),
@@ -1810,17 +1850,10 @@ def run_desktop():
                "--clean-method", str(clean_var.get() or "auto")]
         
         cli_font = {"free_text": "free"}
-        active_tones = ["normal"]
         for slot, var in font_slots.items():
-            if not tone_en_vars.get(slot, tk.BooleanVar(value=True)).get():
-                continue
             pv = var.get().strip()
             if pv and os.path.isfile(pv):
                 cmd += ["--font-" + cli_font.get(slot, slot.replace("_", "-")), pv]
-                if slot not in active_tones:
-                    active_tones.append(slot)
-        if active_tones:
-            cmd += ["--active-tones", ",".join(active_tones)]
         keys = [k.strip() for k in keys_var.get().replace(";", ",").split(",") if k.strip()]
         if keys:
             cmd += ["--api-key", ",".join(keys)]
@@ -1883,7 +1916,7 @@ def run_desktop():
 
     
     tab_sys = ttk.Frame(nb, padding=12)
-    nb.add(tab_sys, text="🖥️ سیستم")
+    nb.add(tab_sys, text="سیستم")
     sys_txt = tk.Text(tab_sys, font=("Consolas", 10), bg=C_CARD, fg=C_TXT,
                       relief="flat", height=18)
     sys_txt.pack(fill="both", expand=True)
@@ -1891,14 +1924,14 @@ def run_desktop():
     sys_txt.config(state="disabled")
 
     tab_help = ttk.Frame(nb, padding=12)
-    nb.add(tab_help, text="❓ راهنما")
+    nb.add(tab_help, text="راهنما")
     help_txt = tk.Text(tab_help, font=(None, 10), bg=C_CARD, fg=C_TXT,
                        relief="flat", wrap="word")
     help_txt.pack(fill="both", expand=True)
     help_txt.insert("1.0", HELP_TEXT)
     help_txt.config(state="disabled")
 
-    nb.add(tab_log, text="📜 لاگ")
+    nb.add(tab_log, text="لاگ")
 
     
     import webbrowser
@@ -2286,7 +2319,7 @@ def run_web():
         pass
 
     cfg = load_config()
-    print("[*] بررسی فونت‌های لحن…")
+    print("[*] بررسی قلم‌ها…")
     try:
         n = download_fonts()
         print(f"[+] {n} فونت دانلود شد.")
@@ -2583,12 +2616,12 @@ def run_web():
                                   scale=3)
             with gr.Row():
                 test_keys_btn = gr.Button(
-                    "🧪 تست کلیدها / لینک (هر کلید جداگانه بررسی می‌شود)",
+                    "تست کلیدها / لینک (هر کلید جداگانه بررسی می‌شود)",
                     scale=1, elem_id="manga_test_keys_btn")
                 test_keys_out = gr.Textbox(
                     label="نتیجهٔ تست", value="", interactive=False, scale=3,
-                    elem_id="manga_test_keys_out",
-                    placeholder="بعد از کلیک، وضعیت هر کلید اینجا نمایش داده می‌شود")
+                    elem_id="manga_test_keys_out", visible=False,
+                    placeholder="بعد از کلیک، وضعیت هر کلید اینجا نمایش داده می‌شود — بعد از ۳۰ ثانیه خودش بسته می‌شود")
             gr.Markdown("<div class='hint'>کلید از aistudio.google.com (Gemini) یا "
                         "platform.openai.com (ChatGPT) یا console.groq.com بگیرید. "
                         "تنظیمات وب فقط در مرورگر ذخیره می‌شود.</div>")
@@ -2615,23 +2648,21 @@ def run_web():
                                     step=1, label="کیفیت تصویر")
 
         
-        with gr.Accordion("✒️ فونت‌ها (اصلی + لحن‌ها — اختیاری، خالی = فونت سرور)", open=False):
+        with gr.Accordion("فونت‌ها (اصلی + فونت هر نوع حباب — اختیاری، خالی = فونت سرور)", open=False):
             font_upload = gr.File(label="فونت اصلی (.ttf)",
                                   file_count="single", type="filepath",
                                   file_types=[".ttf", ".otf"],
                                   elem_classes=["compact-upload"])
-            gr.Markdown("<div class='hint'>هر فونت لحن را جدا آپلود کنید؛ خالی = فونت سرور. "
-                        "با سوییچ کنار هر لحن، آن فونت/لحن را فعال یا غیرفعال کن — "
-                        "لحن غیرفعال حذف می‌شود و حباب‌ها با فونت اصلی رندر می‌شوند.</div>")
+            gr.Markdown("<div class='hint'>قلم هر نوع حباب را جدا آپلود کنید؛ خالی = قلم پیش‌فرض همان نوع روی سرور. نوع حباب را خود برنامه از شکلش تشخیص می‌دهد.</div>")
             SLOT_LABELS = {
-                "normal": "کودک (عادی)", "shout": "افسانه (خشم)",
-                "comedy_shout": "کروش (کمدی)", "whisper": "زمزمه",
-                "thought": "تفکر", "system": "سیستم/تگ",
-                "letter": "نامه/طومار", "narrator": "راوی", "free_text": "متن آزاد",
+                "normal": "عادی", "shout": "داد/خشم", "comedy_shout": "داد کمدی",
+                "whisper": "زمزمه", "thought": "تفکر", "system": "سیستم/تگ",
+                "broadcast": "بی‌سیم/موبایل", "letter": "نامه/طومار", "narrator": "راوی",
+                "free_text": "متن آزاد", "black": "حباب تیره", "monster": "هیولا",
+                "cry": "گریه", "fear": "ترس", "sfx": "افکت صوتی",
             }
             tone_uploads = []
             tone_slots = []
-            tone_enables = []
             with gr.Row():
                 col1 = gr.Column()
                 col2 = gr.Column()
@@ -2642,22 +2673,14 @@ def run_web():
                     for slot, fname, desc, _u in chunk:
                         have = os.path.isfile(os.path.join(FONT_DIR, fname))
                         up = gr.File(label=f"{SLOT_LABELS.get(slot, slot)} ({desc})"
-                                          f"{' ✓' if have else ''}",
+                                          f"{' (موجود)' if have else ''}",
                                      file_count="single", type="filepath",
                                      file_types=[".ttf", ".otf"],
                                      elem_classes=["compact-upload"])
-                        en = gr.Checkbox(label=f"فعال: {SLOT_LABELS.get(slot, slot)}",
-                                         value=True)
                         tone_uploads.append(up)
                         tone_slots.append(slot)
-                        tone_enables.append(en)
-                        try:
-                            en.change(lambda v, u=up: gr.update(visible=bool(v)),
-                                      inputs=[en], outputs=[up])
-                        except Exception:
-                            pass
 
-        with gr.Accordion("⚙️ تنظیمات پیشرفته", open=False):
+        with gr.Accordion("تنظیمات پیشرفته", open=False):
             with gr.Row():
                 workers = _safe(gr.Slider, 1, 8, value=int(cfg.get("workers", 2)),
                                 step=1, label="ورکر موازی OCR")
@@ -2704,9 +2727,8 @@ def run_web():
                 label="واژه‌نامهٔ اسامی و اصطلاحات (هر خط: English=فارسی)",
                 placeholder="Raphdonia=رافدونیا\nBarbarian=باربارین",
                 lines=3, value=str(cfg.get("glossary_text", "") or ""))
-            gr.Markdown("<div class='hint'><b>🧠 متن دستور مترجم:</b> فقط بخش لحن و سبک ترجمه "
-                        "قابل ویرایش است. قوانین JSON، tone و خروجی همیشه از داخل کد اعمال می‌شوند "
-                        "و قابل تغییر نیستند. خالی = پیش‌فرض.</div>")
+            gr.Markdown("<div class='hint'><b>متن دستور مترجم:</b> "
+                        "سبک و لحن ترجمه است. خالی = متن پیش‌فرض داخل کد.</div>")
             instruction_text = gr.Textbox(
                 label="System Instruction مترجم (فقط سبک)",
                 lines=8, max_lines=25,
@@ -2780,7 +2802,7 @@ def run_web():
                         pass
                 job["proc"] = None
                 job["ts"] = time.time()
-                job["log"] = (job.get("log") or "") + "\n⏹ ترجمه متوقف شد توسط کاربر."
+                job["log"] = (job.get("log") or "") + "\nترجمه متوقف شد توط کاربر."
             try:
                 _persist_job_meta(sid)
             except Exception:
@@ -2889,7 +2911,7 @@ def run_web():
             try:
                 append_history({
                     "time": datetime.now().strftime("%m-%d %H:%M"),
-                    "input": src, "status": "✅", "duration": dur_s
+                    "input": src, "status": "موفق", "duration": dur_s
                 })
             except Exception:
                 pass
@@ -3042,10 +3064,10 @@ def run_web():
 
             extra = ""
             if not imgs:
-                extra = "\n⚠ تصاویر برای نمایشگر پیدا نشد — فقط دانلود فعال است."
+                extra = "\nتوجه: تصاویر برای نمایشگر پیدا نشد — فقط دانلود فعال است."
             if debug_imgs or download_debug:
-                extra += f"\n🔍 دیباگ: {len(debug_imgs)} صفحه آماده نمایش/دانلود"
-            final_log = "\n".join(buf[-120:]) + f"\n\n✅ تمام شد ({dur_s}) — دکمه‌های نمایش و دانلود پایین فعال شدند" + extra
+                extra += f"\nدیباگ: {len(debug_imgs)} صفحه آماده نمایش/دانلود"
+            final_log = "\n".join(buf[-120:]) + f"\n\nتمام شد ({dur_s}) — دکمه‌های نمایش و دانلود پایین فعال شدند" + extra
             with job["lock"]:
                 job["log"] = final_log
                 job["download_path"] = target
@@ -3064,7 +3086,7 @@ def run_web():
             def _fmt(buf_lines):
                 el = int(time.time() - t0)
                 body = "\n".join(buf_lines[-120:]) if buf_lines else "… در حال دریافت خروجی …"
-                return f"⏱ {el // 60}:{el % 60:02d}\n\n{body}"
+                return f"{el // 60}:{el % 60:02d}\n\n{body}"
 
             def _reader():
                 buf = list(job.get("buf") or [])
@@ -3126,7 +3148,7 @@ def run_web():
                         pass
                 except Exception as e:
                     with job["lock"]:
-                        job["log"] = (job.get("log") or "") + f"\n⚠ reader: {e}"
+                        job["log"] = (job.get("log") or "") + f"\nreader: {e}"
                 finally:
                     rc = None
                     try:
@@ -3148,10 +3170,10 @@ def run_web():
                             _finalize_job_success(sid)
                         except Exception as e:
                             with job["lock"]:
-                                job["log"] = (job.get("log") or "") + f"\n⚠ finalize: {e}"
+                                job["log"] = (job.get("log") or "") + f"\nfinalize: {e}"
                     elif rc not in (None, 0) and rc not in (-15, -9, 15, 9):
                         with job["lock"]:
-                            job["log"] = (job.get("log") or "") + f"\n\n❌ خطا — کد خروج {rc}"
+                            job["log"] = (job.get("log") or "") + f"\n\nخطا — کد خروج {rc}"
                     _persist_job_meta(sid)
 
             threading.Thread(target=_reader, daemon=True, name=f"manga-job-{sid[:8]}").start()
@@ -3176,9 +3198,9 @@ def run_web():
         
         sid_holder = gr.Textbox(value="", visible=False, elem_id="manga_sid_holder", label="sid_holder")
 
-        run_btn = gr.Button("🚀  شروع ترجمه", variant="primary", elem_id="runbtn")
+        run_btn = gr.Button("شروع ترجمه", variant="primary", elem_id="runbtn")
 
-        with gr.Accordion("📡 لاگ زنده", open=True):
+        with gr.Accordion("لاگ زنده", open=True):
             log_box = _safe(gr.Textbox, lines=16, max_lines=50, autoscroll=True,
                             show_label=False, interactive=True,
                             elem_id="manga_live_log",
@@ -3189,12 +3211,12 @@ def run_web():
         with gr.Group(elem_classes=["stepcard"], visible=False) as result_group:
             gr.HTML('<div class="steptitle"><span class="stepnum">✓</span> نتیجه — نمایش یا دانلود</div>')
             with gr.Row():
-                btn_view = _safe(gr.Button, "👁 نمایش", visible=False)
-                dl_btn = _safe(gr.DownloadButton, label="⬇ دانلود", visible=False)
+                btn_view = _safe(gr.Button, "نمایش خروجی", visible=False)
+                dl_btn = _safe(gr.DownloadButton, label="دانلود", visible=False)
             debug_row = gr.Row(visible=False)
             with debug_row:
-                btn_view_debug = _safe(gr.Button, "🔍 نمایش دیباگ", visible=False)
-                dl_btn_debug = _safe(gr.DownloadButton, label="⬇ دانلود دیباگ", visible=False)
+                btn_view_debug = _safe(gr.Button, "نمایش دیباگ", visible=False)
+                dl_btn_debug = _safe(gr.DownloadButton, label="دانلود دیباگ", visible=False)
             viewer_html = gr.HTML(visible=False, elem_id="reader_wrap")
 
         LS_KEY = "manga_autotranslate_form_v2"
@@ -3279,7 +3301,6 @@ def run_web():
       return [];
     }}
     const done = (log || prevLog || "").indexOf("تمام شد") >= 0
-      || (log || prevLog || "").indexOf("✅") >= 0
       || (log || prevLog || "").indexOf("موفق") >= 0;
     if (prevRunning && !running && !done && prevLog && log && prevLog.length >= log.length) {{
       if (log.length > prevLog.length + 10 && (!realSid || realSid === prevSid)) {{
@@ -3306,13 +3327,13 @@ def run_web():
       ts: Date.now()
     }};
     const done2 = (keepLog || "").indexOf("تمام شد") >= 0
-      || (keepLog || "").indexOf("✅") >= 0;
+;
     if (done2) {{
       job.running = false;
-      job.btn = "🚀  شروع ترجمه";
+      job.btn = "شروع ترجمه";
     }} else if (!running && btn.indexOf("شروع") >= 0 && prevRunning && keepLog === prevLog) {{
       job.running = true;
-      job.btn = prev.btn || "⏹  متوقف ترجمه";
+      job.btn = prev.btn || "متوقف ترجمه";
       job.sid = prevSid || job.sid;
     }}
     localStorage.setItem(JOB, JSON.stringify(job));
@@ -3398,6 +3419,34 @@ def run_web():
     el.dispatchEvent(new Event("change", {{ bubbles: true }}));
   }};
 
+  const watchTestOut = () => {{
+    let tmo = null;
+    const hideIt = () => {{
+      const el = document.querySelector("#manga_test_keys_out");
+      if (!el) return;
+      el.style.display = "none";
+    }};
+    const check = () => {{
+      const el = document.querySelector("#manga_test_keys_out");
+      if (!el) return;
+      const vis = (el.offsetParent !== null);
+      const ta = el.querySelector("textarea");
+      const has = !!(ta && (ta.value || "").trim());
+      if (vis && has) {{
+        el.style.display = "";
+        if (tmo) clearTimeout(tmo);
+        tmo = setTimeout(hideIt, 30000);
+      }} else if (!vis) {{
+        el.style.display = "";
+      }}
+    }};
+    const mo = new MutationObserver(check);
+    mo.observe(document.body, {{ childList: true, subtree: true, attributes: true }});
+    check();
+  }};
+  if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", watchTestOut);
+  else watchTestOut();
+
   const findLogEl = () => {{
     return document.querySelector("#manga_live_log textarea")
       || document.querySelector('[id*="manga_live_log"] textarea')
@@ -3426,7 +3475,7 @@ def run_web():
         if (sidEl) setVal(sidEl, sidOnly);
       }}
 
-      const jobDone = (jobLog || "").indexOf("تمام شد") >= 0 || (jobLog || "").indexOf("✅") >= 0;
+      const jobDone = (jobLog || "").indexOf("تمام شد") >= 0;
       if (jobDone) {{
         const forceStart = () => {{
           const roots = [document.getElementById("runbtn"), ...Array.from(document.querySelectorAll("button"))];
@@ -3436,7 +3485,7 @@ def run_web():
             if (!el) continue;
             const t = (el.textContent || "");
             if (t.indexOf("متوقف") >= 0 || t.indexOf("⏹") >= 0) {{
-              el.textContent = "🚀  شروع ترجمه";
+              el.textContent = "شروع ترجمه";
             }}
           }}
         }};
@@ -3445,7 +3494,7 @@ def run_web():
         setTimeout(forceStart, 1500);
         try {{
           job.running = false;
-          job.btn = "🚀  شروع ترجمه";
+          job.btn = "شروع ترجمه";
           localStorage.setItem(JOB, JSON.stringify(job));
         }} catch (e) {{}}
       }}
@@ -3461,8 +3510,8 @@ def run_web():
             const el = b || (r.tagName === "BUTTON" ? r : null);
             if (!el) continue;
             const t = (el.textContent || "");
-            if (t.indexOf("شروع") >= 0 || t.indexOf("🚀") >= 0 || t.indexOf("متوقف") >= 0 || t.indexOf("⏹") >= 0) {{
-              el.textContent = "⏹  متوقف ترجمه";
+            if (t.indexOf("شروع") >= 0 || t.indexOf("متوقف") >= 0) {{
+              el.textContent = "متوقف ترجمه";
             }}
           }}
         }};
@@ -3591,7 +3640,6 @@ def run_web():
             job = _get_job(sid)
             n_slots = len(tone_slots)
             tone_files = list(tone_args[:n_slots])
-            tone_enables = list(tone_args[n_slots:n_slots * 2])
 
             def _pack(btn, log, dl=None, view=None, group=None, viewer=None, html="",
                       dl_dbg=None, view_dbg=None, dbg_row=None, html_dbg=""):
@@ -3615,31 +3663,31 @@ def run_web():
                 running_now = _job_running(job)
             if running_now:
                 _kill_job(sid)
-                msg = job.get("log") or "⏹ ترجمه متوقف شد.\n(پروسه manga.py بسته شد)"
-                return _pack("🚀  شروع ترجمه", msg)
+                msg = job.get("log") or "ترجمه متوقف شد.\n(پروسه manga.py بسته شد)"
+                return _pack("شروع ترجمه", msg)
 
             src = bundle_multi_files(upload) or (inp_path_v or "").strip()
 
             if not src:
-                return _pack("🚀  شروع ترجمه",
-                             "❌ ورودی خالی است — فایل آپلود کنید یا URL بدهید.")
+                return _pack("شروع ترجمه",
+                             "خطا: ورودی خالی است — فایل آپلود کنید یا URL بدهید.")
 
             font_v = font_up or find_font()
             if not font_v or not os.path.isfile(font_v):
-                return _pack("🚀  شروع ترجمه",
-                             "❌ فونت فارسی روی سرور نیست — یک .ttf آپلود کنید.")
+                return _pack("شروع ترجمه",
+                             "خطا: فونت فارسی روی سرور نیست — یک .ttf آپلود کنید.")
 
             prov_s = str(provider_v or "").strip()
             if prov_s == "custom":
                 _ab = normalize_api_base(str(api_base_v or ""))
                 if not _ab:
-                    return _pack("🚀  شروع ترجمه",
-                                 "❌ provider «custom» به دامنهٔ API معتبر نیاز دارد.\n"
+                    return _pack("شروع ترجمه",
+                                 "خطا: provider «custom» به دامنهٔ API معتبر نیاز دارد.\n"
                                  "   مثال: https://api.example.com/v1\n"
                                  "   (https:// اگر جا افتاده باشد خودکار اضافه می‌شود.)")
                 if not str(model_v or "").strip():
-                    return _pack("🚀  شروع ترجمه",
-                                 "❌ provider «custom» به نام مدل نیاز دارد (مثال: gpt-4o-mini).")
+                    return _pack("شروع ترجمه",
+                                 "خطا: provider «custom» به نان مدل نیاز دارد (مثال: gpt-4o-mini).")
                 api_base_v = _ab
 
             ext = {"PDF": ".pdf", "ZIP": ".zip", "HTML": ".html", "PSD": ".psd", "پوشهٔ تصاویر": ""}[out_fmt_v]
@@ -3680,12 +3728,8 @@ def run_web():
             if prov_s == "custom" and str(api_base_v or "").strip():
                 cmd += ["--api-base", str(api_base_v).strip()]
             cmd += font_args()
-            active_tones = ["normal"]
             for si, slot in enumerate(tone_slots):
                 fp = tone_files[si] if si < len(tone_files) else None
-                en = tone_enables[si] if si < len(tone_enables) else True
-                if not en:
-                    continue
                 if not fp:
                     bundle = next((b for b in FONT_BUNDLES if b[0] == slot), None)
                     if bundle:
@@ -3695,10 +3739,6 @@ def run_web():
                 if fp and os.path.isfile(fp):
                     _cli = {"free_text": "free"}
                     cmd += ["--font-" + _cli.get(slot, slot.replace("_", "-")), fp]
-                    if slot not in active_tones:
-                        active_tones.append(slot)
-            if active_tones:
-                cmd += ["--active-tones", ",".join(active_tones)]
             klist = [k.strip() for k in (api_keys_v or "").replace(";", ",").split(",") if k.strip()]
             if klist:
                 cmd += ["--api-key", ",".join(klist)]
@@ -3749,7 +3789,7 @@ def run_web():
                 job["out_v"] = out_v
                 job["src"] = src
                 job["running"] = True
-                job["log"] = "⏱ 0:00\n\n▶ در حال شروع…"
+                job["log"] = "0:00\n\nدر حال شروع…"
                 job["ts"] = time.time()
 
             _env = os.environ.copy()
@@ -3766,8 +3806,8 @@ def run_web():
             except Exception as e:
                 with job["lock"]:
                     job["running"] = False
-                    job["log"] = f"❌ اجرا نشد: {e}"
-                return _pack("🚀  شروع ترجمه", job["log"])
+                    job["log"] = f"خطا در اجرا: {e}"
+                return _pack("شروع ترجمه", job["log"])
 
             with job["lock"]:
                 job["proc"] = proc
@@ -3778,7 +3818,7 @@ def run_web():
             _start_job_reader(sid, proc, t0)
 
             return _pack(
-                "⏹  متوقف ترجمه", job["log"],
+                "متوقف ترجمه", job["log"],
                 dl=gr.update(visible=False),
                 view=gr.update(visible=False),
                 group=gr.update(visible=False),
@@ -3804,7 +3844,7 @@ def run_web():
                     batchw, maxre, reqdelay, temp, readord,
                     use_lama, force_cpu, two_pass, clean_method,
                     fake_test, clean_only, web_debug, instruction_text,
-                    glossary_text, story_brief, api_base] + tone_uploads + tone_enables,
+                    glossary_text, story_brief, api_base] + tone_uploads,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
                      dl_btn_debug, btn_view_debug, debug_row, html_debug_state],
             concurrency_limit=8,
@@ -3817,7 +3857,7 @@ def run_web():
             except TypeError:
                 run_btn.click(run_translation, **_click_kw)
 
-        # ---- تست کلیدها / لینک (دکمهٔ 🧪) ----
+        # ---- تست کلیدها / لینک ----
         def _test_keys_fn(provider_v, api_keys_v, api_base_v):
             try:
                 res = _manga_shared().test_api_keys(
@@ -3825,17 +3865,21 @@ def run_web():
                     api_base_v or "")
                 out_lines = []
                 for i, r in enumerate(res, 1):
-                    mark = "✅" if r.get("ok") else "❌"
                     if r.get("ok") and r.get("error"):
-                        mark = "⚠️"
+                        state = "سالم (با هشدار)"
+                    elif r.get("ok"):
+                        state = "سالم است"
+                    else:
+                        state = "کار نمی‌کند"
                     err = f" — {r['error']}" if r.get("error") else ""
                     out_lines.append(
-                        f"{mark} کلید {i} ({r.get('key', '')}): "
-                        + ("سالم است" if r.get("ok") else "کار نمی‌کند")
+                        f"کلید {i} ({r.get('key', '')}): "
+                        + state
                         + err + f"  [{r.get('ms', 0)}ms]")
-                return "\n".join(out_lines) if out_lines else "کلیدی وارد نشده"
+                txt = "\n".join(out_lines) if out_lines else "کلیدی وارد نشده"
+                return gr.update(visible=True, value=txt)
             except Exception as e:
-                return f"خطا در تست: {e}"
+                return gr.update(visible=True, value=f"خطا در تست: {e}")
 
         try:
             test_keys_btn.click(
@@ -3955,7 +3999,7 @@ def run_web():
                         cur = job.get("log") or ""
                         if "اتصال به جلسه قطع شد" not in cur:
                             job["log"] = (cur or client_log or meta_log or "") + (
-                                "\n\n⚠ اتصال به پروسه روی سرور قطع است. "
+                                "\n\nتوجه: اتصال به پروسه روی سرور قطع است. "
                                 "اگر ترجمه تمام شده از خروجی استفاده کنید؛ وگرنه دوباره Start بزنید."
                             )
                 log = job.get("log") or client_log or default_log
@@ -3964,9 +4008,9 @@ def run_web():
                 html = job.get("html_state") or ""
             
             if still_running or client_running:
-                btn = "⏹  متوقف ترجمه"
+                btn = "متوقف ترجمه"
             else:
-                btn = "🚀  شروع ترجمه"
+                btn = "شروع ترجمه"
 
             def u_str(key):
                 if key not in data:
@@ -4094,7 +4138,7 @@ def run_web():
                     html = job.get("html_state") or ""
                 if not log or log.startswith("—"):
                     return (sid, gr.update(value=sid)) + (gr.update(),) * 11
-                btn = "⏹  متوقف ترجمه" if still_running else "🚀  شروع ترجمه"
+                btn = "متوقف ترجمه" if still_running else "شروع ترجمه"
                 return (
                     sid,
                     gr.update(value=sid),
@@ -4152,7 +4196,7 @@ def run_web():
                 want_dbg = bool(job.get("want_debug") or meta.get("want_debug") or has_dbg)
                 
                 show_dbg = bool(want_dbg and (vis or running))
-            btn = "⏹  متوقف ترجمه" if running else "🚀  شروع ترجمه"
+            btn = "متوقف ترجمه" if running else "شروع ترجمه"
             html_dbg = ""
             with job["lock"]:
                 html_dbg = job.get("html_debug") or ""
@@ -4278,10 +4322,10 @@ def run_web():
     const sid = (localStorage.getItem("manga_sid") || job.sid || "").trim();
     const log = (job.log || "").toString();
     const running = !!job.running;
-    const btn = running ? "⏹  متوقف ترجمه" : "🚀  شروع ترجمه";
+    const btn = running ? "متوقف ترجمه" : "شروع ترجمه";
     return [sid, sid, sid, btn, log];
   }} catch (e) {{
-    return ["", "", "", "🚀  شروع ترجمه", ""];
+    return ["", "", "", "شروع ترجمه", ""];
   }}
 }}
 """
@@ -4289,7 +4333,7 @@ def run_web():
         def _apply_direct_restore(sid, sid2, btn, log):
             sid = (sid or sid2 or "").strip()
             log = (log or "").strip()
-            btn = (btn or "").strip() or "🚀  شروع ترجمه"
+            btn = (btn or "").strip() or "شروع ترجمه"
             if not sid and not log:
                 return gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
             server_log = ""
@@ -4307,17 +4351,17 @@ def run_web():
                     server_log = job.get("log") or ""
             client_wants_run = ("متوقف" in btn) or ("⏹" in btn)
             if still:
-                btn = "⏹  متوقف ترجمه"
+                btn = "متوقف ترجمه"
             elif client_wants_run and not still:
                 
                 if server_log or log:
-                    tail = "\n\n⚠ بعد از رفرش اتصال به پروسه قطع شد. اگر کار تمام نشده دوباره Start بزنید."
+                    tail = "\n\nتوجه: بعد از رفرش اتصال به پروسه قطع شد. اگر کار تمام نشده دوباره Start بزنید."
                     base = server_log if len(server_log) >= len(log) else log
                     if "اتصال به پروسه قطع شد" not in base:
                         log = base + tail
                     else:
                         log = base
-                btn = "🚀  شروع ترجمه"
+                btn = "شروع ترجمه"
             final_log = server_log if (server_log and len(server_log) >= len(log or "")) else (log or server_log)
             return (
                 sid if sid else gr.update(),

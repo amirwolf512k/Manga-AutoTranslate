@@ -87,7 +87,7 @@ def health():
     lines = []
     ok = True
 
-    lines.append("📋 وضعیت فایل‌های موتور (updates):")
+    lines.append("وضعیت فایل‌های موتور (updates):")
     for n in _ENGINE_FILES:
         p = os.path.join(upd, n)
         if not os.path.isfile(p):
@@ -96,49 +96,49 @@ def health():
         size = os.path.getsize(p)
         if size < 1000:
             ok = False
-            lines.append("  • %s — ❌ خراب (فقط %d بایت)" % (n, size))
+            lines.append("  • %s — خراب (فقط %d بایت)" % (n, size))
             continue
         err = _syntax_check(p)
         if err:
             ok = False
-            lines.append("  • %s — ❌ %s" % (n, err))
+            lines.append("  • %s — خطا: %s" % (n, err))
         else:
-            lines.append("  • %s — ✔ سالم (%.1f KB)" % (n, size / 1024.0))
+            lines.append("  • %s — سالم (%.1f KB)" % (n, size / 1024.0))
 
     culprit = None
     tb_full = ""
     try:
         import manga
-        lines.append("📥 import manga.py — ✔ موفق")
+        lines.append("بارگذاری manga.py — موفق")
     except Exception:
         ok = False
         tb_full = traceback.format_exc()
         culprit = _find_culprit(tb_full)
-        lines.append("📥 import manga.py — ❌ خطا:")
+        lines.append("بارگذاری manga.py — خطا:")
         lines.append("```")
         lines.append(tb_full.strip()[-2500:])
         lines.append("```")
-        lines.append("👉 فایل مقصر: %s" % (culprit or "نامشخص — traceback بالا را ببین"))
+        lines.append("فایل مقصر: %s" % (culprit or "نامشخص — traceback بالا را ببین"))
     try:
         import manga_app
-        lines.append("📥 import manga_app.py — ✔ موفق")
+        lines.append("بارگذاری manga_app.py — موفق")
     except Exception:
         ok = False
         tb_full = traceback.format_exc()
         culprit2 = _find_culprit(tb_full) or culprit
-        lines.append("📥 import manga_app.py — ❌ خطا:")
+        lines.append("بارگذاری manga_app.py — خطا:")
         lines.append("```")
         lines.append(tb_full.strip()[-2500:])
         lines.append("```")
-        lines.append("👉 فایل مقصر: %s" % (culprit2 or "نامشخص"))
+        lines.append("فایل مقصر: %s" % (culprit2 or "نامشخص"))
 
     if ok:
-        lines.insert(0, "✅ موتور سالم است.")
-        lines.append("💡 اگر باز هم خطا گرفتی، متن کامل خطای زمان اجرا در همین "
+        lines.insert(0, "موتور سالم است.")
+        lines.append("اگر باز هم خطا گرفتی، متن کامل خطای زمان اجرا در همین "
                      "کادر لاگ، موقع شروع ترجمه نمایش داده می‌شود.")
     else:
-        lines.insert(0, "❌ موتور خرابه — دقیقاً این‌جا:")
-        lines.append("🔧 راه‌حل سریع: تنظیمات اپ → پاک‌کردن داده اپ (Clear Data) "
+        lines.insert(0, "موتور خراب است — دقیقاً این‌جا:")
+        lines.append("راه‌حل سریع: تنظیمات اپ → پاک‌کردن داده اپ (Clear Data) "
                      "→ باز کردن دوباره؛ یا نسخه جدید اپ را نصب کن.")
     return json.dumps({"ok": ok, "report": "\n".join(lines)}, ensure_ascii=False)
 
@@ -207,7 +207,7 @@ def start_job(params_json, files_dir):
         err, info = _ollama_check(p)
         if err:
             return json.dumps(
-                {"ok": False, "error": "❌ " + err + "\n\n🔎 " + info},
+                {"ok": False, "error": "خطا: " + err + "\n\n" + info},
                 ensure_ascii=False)
         try:
             import manga

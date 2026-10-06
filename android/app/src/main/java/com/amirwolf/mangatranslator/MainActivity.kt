@@ -96,6 +96,13 @@ class MainActivity : AppCompatActivity() {
         return d
     }
 
+    private fun cancelBtn(): GradientDrawable {
+        val d = GradientDrawable(GradientDrawable.Orientation.TL_BR,
+            intArrayOf(0xffB3261E.toInt(), 0xff7F1D1B.toInt()))
+        d.cornerRadius = dp(14).toFloat()
+        return d
+    }
+
     private fun label(t: String): TextView = TextView(this).apply {
         text = t; setTextColor(MUT); textSize = 13f; setPadding(0, dp(8), 0, dp(4))
     }
@@ -146,7 +153,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(formBox)
 
         runBtn = Button(this).apply {
-            text = "🚀  شروع ترجمه"
+            text = "شروع ترجمه"
             setTextColor(Color.WHITE); textSize = 17f; typeface = Typeface.DEFAULT_BOLD
             background = gradBtn(); setPadding(0, dp(14), 0, dp(14))
             stateListAnimator = null
@@ -171,19 +178,16 @@ class MainActivity : AppCompatActivity() {
             setPadding(0, dp(2), 0, dp(8))
         }
         logTitle.addView(TextView(this).apply {
-            text = "🚩"; textSize = 15f
-        }, LinearLayout.LayoutParams(dp(27), dp(27)))
-        logTitle.addView(TextView(this).apply {
             text = "لاگ زنده"
             setTextColor(TXT); textSize = 15.5f; typeface = Typeface.DEFAULT_BOLD
-            setPadding(dp(9), 0, 0, 0)
+            setPadding(dp(2), 0, 0, 0)
         })
         val logSpacer = View(this)
         logTitle.addView(logSpacer, LinearLayout.LayoutParams(0, 1, 1f))
         logTitle.addView(TextView(this).apply {
-            text = "📋"
-            textSize = 14f
-            setPadding(dp(6), 0, dp(6), 0)
+            text = "کپی"
+            setTextColor(MUT); textSize = 12.5f
+            setPadding(dp(10), dp(4), dp(10), dp(4))
             setOnClickListener {
                 val cb = getSystemService(CLIPBOARD_SERVICE) as android.content.ClipboardManager
                 cb.setPrimaryClip(android.content.ClipData.newPlainText("log", logBox.text))
@@ -241,7 +245,7 @@ class MainActivity : AppCompatActivity() {
         root.addView(loadingRow, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
 
-        runBtn.setOnClickListener { onStartJob() }
+        runBtn.setOnClickListener { if (jobRunning) onCancelJob() else onStartJob() }
 
         Thread {
             try {
@@ -250,7 +254,7 @@ class MainActivity : AppCompatActivity() {
                     if (cl.exists()) {
                         val prevTxt = cl.readText().take(4000)
                         ui.post {
-                            logBox.text = "💥 گزارش کرش قبلی (این متن را برای سازنده بفرست):\n$prevTxt"
+                            logBox.text = "گزارش کرش قبلی (این متن را برای سازنده بفرست):\n$prevTxt"
                         }
                     }
                 } catch (_: Exception) {
@@ -276,7 +280,7 @@ class MainActivity : AppCompatActivity() {
             } catch (e: PyException) {
                 ui.post {
                     loadingRow.visibility = View.GONE
-                    logBox.text = "❌ خطای موتور:\n" + e.message
+                    logBox.text = "خطای موتور:\n" + e.message
                     Toast.makeText(this, "خطای موتور پایتون", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Throwable) {
@@ -284,7 +288,7 @@ class MainActivity : AppCompatActivity() {
                     loadingRow.visibility = View.GONE
                     val sw = java.io.StringWriter()
                     e.printStackTrace(java.io.PrintWriter(sw))
-                    logBox.text = "❌ خطای غیرمنتظره در آماده‌سازی:\n" + sw.toString().take(2500)
+                    logBox.text = "خطا در آماده‌سازی:\n" + sw.toString().take(2500)
                     Toast.makeText(this, "خطای غیرمنتظره", Toast.LENGTH_LONG).show()
                 }
             }
@@ -293,7 +297,7 @@ class MainActivity : AppCompatActivity() {
         ui.postDelayed({
             if (loadingRow.visibility == View.VISIBLE) {
                 val tv = loadingRow.findViewWithTag<TextView>("loading_text")
-                tv?.text = "  ⏳ بیشتر از حد انتظار طول کشیده (دانلود فونت‌ها/بررسی آپدیت). چند لحظه دیگر صبر کن؛ اگر اپ بسته شد دوباره بازش کن — این بار سریع لود می‌شود."
+                tv?.text = "  طول کشیده (دانلود فونت‌ها/بررسی آپدیت). چند لحظه دیگر صبر کن؛ اگر اپ بسته شد دوباره بازش کن — این بار سریع لود می‌شود."
             }
         }, 120_000)
     }
@@ -545,7 +549,7 @@ class MainActivity : AppCompatActivity() {
                     setPadding(0, dp(2), 0, dp(8))
                 }
                 titleRow.addView(TextView(this).apply {
-                    text = if (sec.optString("title").contains("تنظیمات")) "⚙" else step.toString()
+                    text = step.toString()
                     setTextColor(Color.WHITE); textSize = 14f; typeface = Typeface.DEFAULT_BOLD
                     gravity = Gravity.CENTER
                     background = gradBtn().apply { cornerRadius = dp(8).toFloat() }
@@ -576,7 +580,7 @@ class MainActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             loadingRow.visibility = View.GONE
-            logBox.text = "❌ ساخت فرم:\n" + (e.message ?: e.toString())
+            logBox.text = "خطا در ساخت فرم:\n" + (e.message ?: e.toString())
         }
     }
 
@@ -869,8 +873,8 @@ class MainActivity : AppCompatActivity() {
                 }
                 val multi = f.optBoolean("multiple", false)
                 val btn = Button(this).apply {
-                    text = if (multi) "⬆  آپلود فایل‌ها (چندتایی) — کلیک کن"
-                           else "⬆  آپلود فایل — کلیک کن"
+                    text = if (multi) "آپلود فایل‌ها (چندتایی) — کلیک کن"
+                           else "آپلود فایل — کلیک کن"
                     setTextColor(MUT); textSize = 13f
                     background = dashed()
                     gravity = Gravity.CENTER
@@ -890,8 +894,8 @@ class MainActivity : AppCompatActivity() {
                     pickedFiles.remove(id)
                     try { prefs.edit().remove(id + "_path").apply() } catch (_: Exception) {}
                     nameView.text = "فایلی انتخاب نشده"
-                    btn.text = if (multi) "⬆  آپلود فایل‌ها (چندتایی) — کلیک کن"
-                               else "⬆  آپلود فایل — کلیک کن"
+                    btn.text = if (multi) "آپلود فایل‌ها (چندتایی) — کلیک کن"
+                               else "آپلود فایل — کلیک کن"
                     clearBtn.visibility = View.GONE
                 }
                 clearBtn.setOnClickListener { resetPick() }
@@ -923,15 +927,15 @@ class MainActivity : AppCompatActivity() {
                 val prev = prefs.getString(id + "_path", null)
                 if (prev != null && File(prev).isFile()) {
                     pickedFiles[id] = prev
-                    nameView.text = "✔ ${File(prev).name}"
-                    (fieldViews[id + "_btn"] as? Button)?.text = "✓ ${File(prev).name}"
+                    nameView.text = "${File(prev).name}"
+                    (fieldViews[id + "_btn"] as? Button)?.text = "${File(prev).name}"
                     clearBtn.visibility = View.VISIBLE
                 } else if (prev != null && File(prev).isDirectory) {
                     val n = try { File(prev).listFiles()?.size ?: 0 } catch (_: Exception) { 0 }
                     if (n > 0) {
                         pickedFiles[id] = prev
-                        nameView.text = "✔ $n فایل"
-                        (fieldViews[id + "_btn"] as? Button)?.text = "✓ $n فایل"
+                        nameView.text = "$n فایل"
+                        (fieldViews[id + "_btn"] as? Button)?.text = "$n فایل"
                         clearBtn.visibility = View.VISIBLE
                     }
                 }
@@ -940,12 +944,21 @@ class MainActivity : AppCompatActivity() {
                 // دکمهٔ عمل (فعلاً فقط «تست کلیدها / لینک»)
                 val action = f.optString("action", "")
                 val b = Button(this).apply {
-                    text = "🧪  " + (if (lbl.isNotEmpty()) lbl else "تست کلیدها / لینک")
+                    text = if (lbl.isNotEmpty()) lbl else "تست کلیدها / لینک"
                     setTextColor(ACC); textSize = 13f
                     background = rounded(CARD2, 10, 1)
                     setPadding(dp(12), dp(12), dp(12), dp(12))
                     stateListAnimator = null
                 }
+                val testOut = TextView(this).apply {
+                    setTextColor(TXT); textSize = 11.5f
+                    typeface = Typeface.MONOSPACE
+                    background = rounded(CARD2, 8, 1)
+                    setPadding(dp(12), dp(10), dp(12), dp(10))
+                    visibility = View.GONE
+                    setTextIsSelectable(true)
+                }
+                val testHide = Runnable { testOut.visibility = View.GONE }
                 b.setOnClickListener {
                     if (action != "test_keys") return@setOnClickListener
                     val p = collect()
@@ -954,7 +967,7 @@ class MainActivity : AppCompatActivity() {
                     tp.put("provider", p.optString("provider", "gemini"))
                     tp.put("api_base", p.optString("api_base", ""))
                     b.isEnabled = false
-                    b.text = "⏳ در حال تست کلیدها…"
+                    b.text = "در حال تست…"
                     Thread {
                         var res: JSONObject? = null
                         var err: String? = null
@@ -965,24 +978,25 @@ class MainActivity : AppCompatActivity() {
                         }
                         ui.post {
                             b.isEnabled = true
-                            b.text = "🧪  " + (if (lbl.isNotEmpty()) lbl else "تست کلیدها / لینک")
+                            b.text = if (lbl.isNotEmpty()) lbl else "تست کلیدها / لینک"
                             val okTxt = res?.optString("text")?.takeIf { it.isNotBlank() }
                             val msg = okTxt
-                                ?: ("❌ " + (res?.optString("error")?.takeIf { it.isNotBlank() }
+                                ?: ("خطا: " + (res?.optString("error")?.takeIf { it.isNotBlank() }
                                     ?: (err ?: "خطا")))
-                            try {
-                                AlertDialog.Builder(this)
-                                    .setTitle("نتیجهٔ تست کلیدها")
-                                    .setMessage(msg)
-                                    .setPositiveButton("باشه", null)
-                                    .show()
-                            } catch (_: Exception) {
-                                logBox.text = msg
-                            }
+                            // نتیجه همین‌جا زیر دکمه نمایش داده می‌شود؛ بدون پاپ‌آپ
+                            testOut.text = msg
+                            testOut.setTextColor(if (okTxt != null) TXT else ACC)
+                            testOut.visibility = View.VISIBLE
+                            // بعد از ۳۰ ثانیه خودش بسته می‌شود
+                            ui.removeCallbacks(testHide)
+                            ui.postDelayed(testHide, 30_000)
                         }
                     }.start()
                 }
                 row.addView(b)
+                row.addView(testOut, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
             }
             "header" -> row.addView(TextView(this).apply {
                 text = lbl; setTextColor(ACC); textSize = 12.5f
@@ -1095,6 +1109,31 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private var jobRunning = false
+
+    private fun setRunIdle() {
+        jobRunning = false
+        runBtn.isEnabled = true
+        runBtn.text = "شروع ترجمه"
+        runBtn.background = gradBtn()
+        runBtn.setTextColor(Color.WHITE)
+    }
+
+    private fun setRunCancelling() {
+        runBtn.isEnabled = false
+        runBtn.text = "در حال لغو…"
+    }
+
+    private fun onCancelJob() {
+        setRunCancelling()
+        Thread {
+            try {
+                bridge.callAttr("cancel")
+            } catch (_: Exception) {
+            }
+        }.start()
+    }
+
     private fun onStartJob() {
         try {
             val p = collect()
@@ -1102,8 +1141,11 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this, "فایل یا لینک ورودی بده", Toast.LENGTH_SHORT).show()
                 return
             }
-            runBtn.isEnabled = false
-            runBtn.text = "⏳ در حال اجرا…"
+            jobRunning = true
+            runBtn.isEnabled = true
+            runBtn.text = "لغو"
+            runBtn.background = cancelBtn()
+            runBtn.setTextColor(Color.WHITE)
             resultsBox.removeAllViews()
             Thread {
                 var res: JSONObject? = null
@@ -1119,19 +1161,19 @@ class MainActivity : AppCompatActivity() {
                         val r = res
                         if (r != null && r.optBoolean("ok")) pollLoop()
                         else {
-                            logBox.text = "❌ " + (r?.optString("error", "")?.ifBlank { null }
+                            logBox.text = "خطا: " + (r?.optString("error", "")?.ifBlank { null }
                                 ?: err ?: "خطا")
-                            runBtn.isEnabled = true; runBtn.text = "🚀  شروع ترجمه"
+                            setRunIdle()
                         }
                     } catch (e: Exception) {
-                        logBox.text = "❌ " + (e.message ?: e.toString())
-                        runBtn.isEnabled = true
+                        logBox.text = "خطا: " + (e.message ?: e.toString())
+                        setRunIdle()
                     }
                 }
             }.start()
         } catch (e: Exception) {
-            logBox.text = "❌ " + (e.message ?: e.toString())
-            runBtn.isEnabled = true
+            logBox.text = "خطا: " + (e.message ?: e.toString())
+            setRunIdle()
         }
     }
 
@@ -1151,9 +1193,8 @@ class MainActivity : AppCompatActivity() {
                 try {
                     val s = st
                     if (s == null) {
-                        logBox.text = "❌ poll: $err"
-                        runBtn.isEnabled = true
-                        runBtn.text = "🚀  شروع ترجمه"
+                        logBox.text = "خطا در poll: $err"
+                        setRunIdle()
                         return@post
                     }
                     val lg = s.optString("log", "")
@@ -1162,13 +1203,14 @@ class MainActivity : AppCompatActivity() {
                         setLog(lg)
                     }
                     if (s.optBoolean("done")) {
-                        runBtn.isEnabled = true
-                        runBtn.text = "🚀  شروع ترجمه"
+                        setRunIdle()
+                        if (s.optBoolean("cancelled"))
+                            Toast.makeText(this, "کار لغو شد", Toast.LENGTH_LONG).show()
                         showResults(s)
                     } else ui.postDelayed({ pollLoop() }, 1500)
                 } catch (e: Exception) {
-                    logBox.text = "❌ poll: " + (e.message ?: e.toString())
-                    runBtn.isEnabled = true
+                    logBox.text = "خطا در poll: " + (e.message ?: e.toString())
+                    setRunIdle()
                 }
             }
         }
@@ -1196,16 +1238,16 @@ class MainActivity : AppCompatActivity() {
         val hasOutFile = outFile.isNotBlank() && File(outFile).isFile()
 
         if (images.isNotEmpty()) {
-            resultsBox.addView(resBtn("📖  نمایش (${images.size} صفحه)", true) {
+            resultsBox.addView(resBtn("نمایش (${images.size} صفحه)", true) {
                 viewer(images)
             })
         }
         if (hasOutFile) {
-            resultsBox.addView(resBtn("⬇  دانلود خروجی", false) { saveToDownloads(outFile) })
+            resultsBox.addView(resBtn("دانلود خروجی", false) { saveToDownloads(outFile) })
         }
         if (debug.isNotEmpty()) {
-            resultsBox.addView(resBtn("🔍  نمایش دیباگ (${debug.size})", false) { viewer(debug) })
-            resultsBox.addView(resBtn("⬇  دانلود دیباگ (${debug.size})", false) {
+            resultsBox.addView(resBtn("نمایش دیباگ (${debug.size})", false) { viewer(debug) })
+            resultsBox.addView(resBtn("دانلود دیباگ (${debug.size})", false) {
                 saveManyToDownloads(debug, "debug")
             })
         }
@@ -1397,7 +1439,7 @@ class MainActivity : AppCompatActivity() {
             val ok = saveAnyToDownloads(path, null, nice)
             ui.post {
                 Toast.makeText(this,
-                    if (ok) "✔ ذخیره شد: Download/manga" else "❌ ذخیره نشد: ${f.name}",
+                    if (ok) "ذخیره شد: Download/manga" else "خطا: ذخیره نشد: ${f.name}",
                     Toast.LENGTH_LONG).show()
             }
         }.start()
@@ -1417,7 +1459,7 @@ class MainActivity : AppCompatActivity() {
             for (p in paths) if (saveAnyToDownloads(p, sub, null)) n++
             ui.post {
                 Toast.makeText(this,
-                    if (n > 0) "✔ $n فایل ذخیره شد: Download/manga/$sub" else "❌ ذخیره نشد",
+                    if (n > 0) "$n فایل ذخیره شد: Download/manga/$sub" else "خطا: ذخیره نشد",
                     Toast.LENGTH_LONG).show()
             }
         }.start()
@@ -1447,7 +1489,7 @@ class MainActivity : AppCompatActivity() {
                 for (p in images) if (saveAnyToDownloads(p, sub, null)) n++
                 ui.post {
                     if (n > 0) Toast.makeText(this,
-                        "📥 $n فایل ذخیره شد در Download/manga", Toast.LENGTH_LONG).show()
+                        "$n فایل ذخیره شد در Download/manga", Toast.LENGTH_LONG).show()
                 }
             } catch (e: Exception) {
                 ui.post {
@@ -1517,8 +1559,8 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                             dir!!.absolutePath else saved[0].absolutePath
                         pickedFiles[fid] = target
                         saveVal(fid + "_path", target)
-                        val label = if (saved.size > 1) "✔ ${saved.size} فایل انتخاب شد"
-                            else "✔ ${saved[0].name}"
+                        val label = if (saved.size > 1) "${saved.size} فایل انتخاب شد"
+                            else "${saved[0].name}"
                         (fieldViews[fid] as? TextView)?.text = label
                         (fieldViews[fid + "_clear"] as? Button)?.visibility = View.VISIBLE
                         if (fid.startsWith("up_") || fid == "font_upload") {
