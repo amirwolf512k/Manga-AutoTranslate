@@ -2175,6 +2175,12 @@ WATERMARK_PATTERNS = (
     "exclusively on", "storm at", "join the storm",
     "redice studio", "redice", "leafsky", "wasakbasak", "wasak basak",
     "cho wooneh", "hermode", "dotori", "3b2s",
+    # ---- سایت‌های چینی/کره‌ای/ژاپنی (واترمارک مانهوا/مانهوا) ----
+    "知音漫客", "知音曼客", "漫客", "曼客", "zymk", "快看漫画", "快看",
+    "咔哒", "腾讯动漫", "哔哩哔哩", "bilibili漫画", "有妖气", "微博动漫",
+    "naver", "네이버", "카카오", "kakao", "카카오페이지", "kakaopage",
+    "피넛툰", "peanutoon", "탭플레이", "뉴토니", "newtoki", "마루마루",
+    "少年ジャンプ", "サンデー", "となりのヤングジャンプ",
 )
 
 DOMAIN_TLDS = (
@@ -2822,6 +2828,7 @@ class MangaTranslator:
                 ) from e
 
         print(f"[*] موتور OCR فعال: {self._ocr_backend_name} | workers={self.max_workers}")
+        self._ocr_main_lang = main_lang
 
         self.det = None
         try:
@@ -5957,6 +5964,11 @@ class MangaTranslator:
         
         
         t = (text or "").lower()
+        # زیررشتهٔ مستقیم برای الگوهای غیرلاتین (چینی/کره‌ای/ژاپنی):
+        # توکن‌ایزر فقط [a-z0-9] می‌گیرد و حروف CJK را می‌اندازد!
+        for w in WATERMARK_PATTERNS:
+            if not w.isascii() and w in t:
+                return True
         toks = re.findall(r"[a-z0-9]+", t)
         if not toks:
             return False
@@ -7539,7 +7551,8 @@ class MangaTranslator:
         except Exception:
             return 0.0
 
-    def _ocr_crop(self, image_bgr: np.ndarray, rect) -> Tuple[str, List[np.ndarray]]:
+    def _ocr_crop(self, image_bgr: np.ndarray, rect,
+                  engine=None) -> Tuple[str, List[np.ndarray]]:
         
         x1, y1, x2, y2 = [int(v) for v in rect]
         h, w = image_bgr.shape[:2]
@@ -7571,8 +7584,11 @@ class MangaTranslator:
                 crop_bgr = cv2.resize(
                     crop_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
                 )
+            _eng = engine if engine is not None else self.ocr
+            if _eng is None:
+                return "", [], 0.0, []
             try:
-                results = self.ocr.ocr(crop_bgr)
+                results = _eng.ocr(crop_bgr)
             except Exception:
                 return "", [], 0.0, []
             if not results or not results[0]:
@@ -7853,6 +7869,99 @@ class MangaTranslator:
 
         return best[0], best[1], (best[3] if len(best) > 3 else [])
 
+
+    def _alt_ocr_langs(self) -> List[str]:
+        """زبان‌های OCR جایگزین برای بازخوانی متن‌های خرابِ مدل اصلی
+        (مثلاً متن ژاپنی که با مدل کره‌ای خراب خوانده شده). فقط وقتی فعال
+        که کاربر چند زبانِ متفاوت داده باشد."""
+        main = str(getattr(self, "_ocr_main_lang", "") or "")
+        allow_en, allow_ko, allow_ja, allow_zh = self._ocr_lang_flags()
+        keys = []
+        if allow_ja and main != "japan":
+            keys.append("japan")
+        if allow_ko and main != "korean":
+            keys.append("korean")
+        if allow_zh and main != "ch":
+            keys.append("ch")
+        return keys
+
+    def _get_alt_ocr(self, lang_key: str):
+        """موتور OCR جایگزین (کش می‌شود) — فقط برای متن‌های خراب."""
+        cache = getattr(self, "_alt_ocr_cache", None)
+        if cache is None:
+            cache = {}
+            self._alt_ocr_cache = cache
+        if lang_key in cache:
+            return cache[lang_key]
+        eng = None
+        try:
+            if _on_android():
+                eng = MlKitBackend(lang=lang_key)
+            else:
+                eng = RapidOCRBackend(lang=lang_key)
+        except Exception as _e:
+            print(f"    [!] موتور OCR جایگزین ({lang_key}) لود نشد: {_e}")
+            eng = None
+        cache[lang_key] = eng
+        if eng is not None:
+            print(f"    [*] موتور OCR جایگزین آماده: {lang_key} (برای متن‌های خراب)")
+        return eng
+
+    @staticmethod
+    def _ocr_text_is_garbage(text: str) -> bool:
+        """متنِ خرابِ خوانده‌شده با مدل زبان غلط (مثل d112 / PJ2 / NK روی متن ژاپنی)."""
+        t = (text or "").strip()
+        if not t:
+            return True
+        if len(t) <= 3:
+            return True
+        latin = re.sub(r"[^A-Za-z]", "", t)
+        if 0 < len(latin) <= 4 and len(t) <= 8 \
+                and not any(v in latin for v in "aeiouAEIOU"):
+            return True
+        alnum = sum(1 for c in t if c.isalnum())
+        if alnum < max(2, len(t) * 0.5):
+            return True
+        return False
+
+    def _reocr_garbage_with_alt_langs(self, image: np.ndarray, cand: list,
+                                      ocr_results: list) -> list:
+        """دستهٔ چندزبانه: متن‌های خراب با موتورهای زبان دیگر بازخوانی می‌شوند
+        تا هم متن و هم چندضلعی‌های ماسک درست ساخته شوند (متنی جامانده نماند)."""
+        alt_langs = self._alt_ocr_langs()
+        if not alt_langs:
+            return ocr_results
+        fixed = 0
+        for idx, (row, (text, polys, angs)) in enumerate(zip(cand, ocr_results)):
+            if not self._ocr_text_is_garbage(text):
+                continue
+            best_txt, best_polys, best_angs = text, polys, angs
+            best_score = len(re.sub(r"\s+", "", text or ""))
+            for lang_key in alt_langs:
+                eng = self._get_alt_ocr(lang_key)
+                if eng is None:
+                    continue
+                try:
+                    t2, p2, a2 = self._ocr_crop(
+                        image, [row[2], row[3], row[4], row[5]], engine=eng)
+                except TypeError:
+                    try:
+                        t2, p2, a2 = self._ocr_crop(
+                            image, [row[2], row[3], row[4], row[5]])
+                    except Exception:
+                        continue
+                except Exception:
+                    continue
+                sc2 = len(re.sub(r"\s+", "", t2 or ""))
+                if sc2 > best_score + 1:
+                    best_txt, best_polys, best_angs = t2, p2, a2
+                    best_score = sc2
+            if best_txt != text:
+                ocr_results[idx] = (best_txt, best_polys, best_angs)
+                fixed += 1
+        if fixed:
+            print(f"    [*] بازخوانی چندزبانه: {fixed} متنِ خراب با مدل زبان درست دوباره خوانده شد")
+        return ocr_results
 
     @staticmethod
     def _drop_contained_boxes(boxes: List[dict], contain_thresh: float = 0.72) -> List[dict]:
@@ -8230,6 +8339,12 @@ class MangaTranslator:
                     self._ocr_crop(image, [t[2], t[3], t[4], t[5]]) for t in cand
                 ]
 
+        # ---- بازخوانی متن‌های خراب با مدل زبان دیگر (دستهٔ چندزبانه) ----
+        try:
+            ocr_results = self._reocr_garbage_with_alt_langs(image, cand, ocr_results)
+        except Exception as _e:
+            print(f"    [!] بازخوانی چندزبانه رد شد: {_e}")
+
         for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs) in zip(
                 cand, ocr_results):
             if not text:
@@ -8384,13 +8499,23 @@ class MangaTranslator:
                 continue
 
     def _ocr_gap_sweep(self, image: np.ndarray,
-                       regions: List["TextRegion"]) -> List["TextRegion"]:
+                       regions: List["TextRegion"],
+                       scale_override: Optional[float] = None) -> List["TextRegion"]:
         """جاروی OCR سبک روی کل صفحه: متن‌هایی که تشخیص‌دهندهٔ حباب نگرفته
         (واترمارک سایت اسکن، متن ریز روی هنر، متنِ نصفه‌شده) پیدا و به‌عنوان
         ناحیهٔ پاک‌شونده اضافه می‌شوند — هیچ متنی جامانده نماند.
-        فقط یک پاسِ OCR (بدون واریانت‌های سنگین) + گیت‌های سخت اطمینان."""
-        if self.ocr is None or not regions:
+        در دستهٔ چندزبانه، این جارو با همهٔ موتورهای زبان اجرا می‌شود
+        (مدل کره‌ای واترمارک چینی را نمی‌بیند!)."""
+        if self.ocr is None:
             return []
+        engines = [(None, self.ocr)]
+        try:
+            for lang_key in self._alt_ocr_langs():
+                eng = self._get_alt_ocr(lang_key)
+                if eng is not None:
+                    engines.append((lang_key, eng))
+        except Exception:
+            pass
         h, w = image.shape[:2]
         chunk_h = 3600
         found: List[TextRegion] = []
@@ -8403,6 +8528,8 @@ class MangaTranslator:
                 scale = 1.0
             if _IS_ANDROID:
                 scale = min(scale, 1.5)
+            if scale_override is not None:
+                scale = float(scale_override)
             try:
                 if scale > 1.01:
                     piece_up = cv2.resize(piece, None, fx=scale, fy=scale,
@@ -8410,54 +8537,65 @@ class MangaTranslator:
                 else:
                     piece_up = piece
                     scale = 1.0
-                res = self.ocr.ocr(piece_up)
             except Exception:
                 continue
-            if not res or not res[0]:
-                continue
-            for line in res[0]:
+            for _lkey, eng in engines:
                 try:
-                    poly = (np.asarray(line[0], dtype=np.float32) / scale).astype(np.int32)
-                    text = str(line[1][0]).strip()
-                    conf = float(line[1][1])
+                    res = eng.ocr(piece_up)
                 except Exception:
                     continue
-                if conf < 0.70 or len(text) < 3:
+                if not res or not res[0]:
                     continue
-                if not any(ch.isalnum() for ch in text):
-                    continue
-                px1 = int(poly[:, 0].min())
-                py1 = int(poly[:, 1].min()) + y0
-                px2 = int(poly[:, 0].max()) + 1
-                py2 = int(poly[:, 1].max()) + 1 + y0
-                if px2 - px1 < 10 or py2 - py1 < 8:
-                    continue
-                inside = False
-                for (rx, ry, rw, rh) in boxes:
-                    if px1 >= rx - 12 and py1 >= ry - 12 and \
-                            px2 <= rx + rw + 12 and py2 <= ry + rh + 12:
-                        inside = True
-                        break
-                if inside:
-                    continue
-                toks = [t for t in re.findall(r"[A-Za-z0-9]+", text) if len(t) >= 2]
-                if not toks:
-                    continue
-                kind = "promo"
-                if not self._is_watermark_text(text) and len(text) >= 14 and \
-                        len(toks) >= 3 and text[-1] in ".!?…\"'":
-                    kind = "dialogue"
-                poly_page = poly.copy()
-                poly_page[:, 1] += y0
-                found.append(TextRegion(
-                    id=0,
-                    boxes=[poly_page],
-                    source_text=text,
-                    rect=(px1, py1, px2 - px1, py2 - py1),
-                    kind=kind,
-                    det_class="text_free",
-                ))
-                boxes.append((px1, py1, px2 - px1, py2 - py1))
+                for line in res[0]:
+                    try:
+                        poly = (np.asarray(line[0], dtype=np.float32) / scale).astype(np.int32)
+                        text = str(line[1][0]).strip()
+                        conf = float(line[1][1])
+                    except Exception:
+                        continue
+                    _is_wm = self._is_watermark_text(text)
+                    # واترمارک حتی با اطمینانِ کمتر پذیرفته می‌شود (متنِ کم‌رنگ)
+                    _min_conf = 0.50 if _is_wm else 0.70
+                    if conf < _min_conf or len(text) < (2 if _is_wm else 3):
+                        continue
+                    if not any(ch.isalnum() for ch in text) and not _is_wm:
+                        continue
+                    px1 = int(poly[:, 0].min())
+                    py1 = int(poly[:, 1].min()) + y0
+                    px2 = int(poly[:, 0].max()) + 1
+                    py2 = int(poly[:, 1].max()) + 1 + y0
+                    if px2 - px1 < 10 or py2 - py1 < 8:
+                        continue
+                    inside = False
+                    for (rx, ry, rw, rh) in boxes:
+                        if px1 >= rx - 12 and py1 >= ry - 12 and \
+                                px2 <= rx + rw + 12 and py2 <= ry + rh + 12:
+                            inside = True
+                            break
+                    if inside:
+                        continue
+                    toks = [t for t in re.findall(r"[A-Za-z0-9]+", text) if len(t) >= 2]
+                    if not toks and not _is_wm:
+                        continue
+                    # متن غیر-واترمارکی باید واقعاً متن‌مانند باشد (≥۴ حرف، ≥۲ توکن)
+                    # — جلوی پاک‌کردن بافت هنری با خطاهای مثبت OCR را می‌گیرد
+                    if not _is_wm and (len(text) < 4 or len(toks) < 2):
+                        continue
+                    kind = "promo"
+                    if not self._is_watermark_text(text) and len(text) >= 14 and \
+                            len(toks) >= 3 and text[-1] in ".!?…\"'":
+                        kind = "dialogue"
+                    poly_page = poly.copy()
+                    poly_page[:, 1] += y0
+                    found.append(TextRegion(
+                        id=0,
+                        boxes=[poly_page],
+                        source_text=text,
+                        rect=(px1, py1, px2 - px1, py2 - py1),
+                        kind=kind,
+                        det_class="text_free",
+                    ))
+                    boxes.append((px1, py1, px2 - px1, py2 - py1))
         return found
 
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
@@ -8529,6 +8667,41 @@ class MangaTranslator:
             print("    [!] هیچ متن/حبابی یافت نشد.")
         return unique_regions, dbg
 
+    def _postclean_ocr_sweep(self, cleaned: np.ndarray,
+                             regions_done: List["TextRegion"]) -> np.ndarray:
+        """دور آخرِ راستی‌آزمایی روی تصویرِ پاک‌شده: متن‌های کم‌رنگ
+        (مثل واترمارک گوشهٔ سایت) فقط وقتی برای OCR پیدا می‌شوند که
+        متن‌های بلندِ اطراف‌شان پاک شده باشند — این دور همان‌جا می‌گردد.
+        هنر با گیت‌های سخت (≥۴ حرف + ≥۲ توکن یا الگوی واترمارک) محفوظ می‌ماند."""
+        try:
+            if self.ocr is None:
+                self._maybe_reinit_extraction_models()
+            if self.ocr is None:
+                return cleaned
+            _extra = self._ocr_gap_sweep(cleaned, [], scale_override=1.0)
+            if not _extra:
+                return cleaned
+            boxes = [r.rect for r in (regions_done or [])]
+            keep = []
+            for r in _extra:
+                x, y, w, h = r.rect
+                hit = False
+                for (rx, ry, rw, rh) in boxes:
+                    ix = max(0, min(x + w, rx + rw) - max(x, rx))
+                    iy = max(0, min(y + h, ry + rh) - max(y, ry))
+                    if ix * iy > 0.55 * max(1, w * h):
+                        hit = True
+                        break
+                if not hit:
+                    keep.append(r)
+            if not keep:
+                return cleaned
+            print(f"  [*] دور آخر: {len(keep)} متن جامانده (واترمارک/…) دوباره پاک شد")
+            return self.clean_image(cleaned, keep)
+        except Exception as e:
+            print(f"  [!] دور آخرِ راستی‌آزمایی رد شد: {e}")
+            return cleaned
+
     def finish_page_phase(self, image: np.ndarray, regions: List[TextRegion],
                           skip_translate: bool = False,
                           precleaned: Optional[np.ndarray] = None,
@@ -8563,6 +8736,7 @@ class MangaTranslator:
             else:
                 final_image = image.copy()
                 print("  - ناحیه‌ای برای پاکسازی نبود.")
+            final_image = self._postclean_ocr_sweep(final_image, clean_targets)
             return final_image, page_debug
 
         if skip_translate:
@@ -8612,6 +8786,9 @@ class MangaTranslator:
                 image, clean_targets)
         else:
             cleaned_image = precleaned.copy() if precleaned is not None else image.copy()
+        # دور آخر: واترمارک/متن کم‌رنگی که فقط بعد از پاک شدن متن‌های اصلی
+        # برای OCR قابل‌ دیدن می‌شود (قبل از رندر فارسی اجرا می‌شود)
+        cleaned_image = self._postclean_ocr_sweep(cleaned_image, clean_targets)
         if translated_regions:
             final_image = self.render_translations(cleaned_image, translated_regions, raw_image_copy)
             print("  - پاکسازی متن + رندر فارسی تمام شد.")
