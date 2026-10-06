@@ -1059,7 +1059,13 @@ class LamaLiteONNX:
             self.session, model_path, use_threads)
         self.max_side = int(max_side or self.MAX_RUN)
         if _lite_mode():
-            self.max_side = min(self.max_side, 384)
+            # کیفیتِ PC: ۵۱۲ (به‌جای ۳۸۴) — مناطقِ بزرگِ SFX/هنر با جزئیات
+            # بیشتری بازسازی می‌شوند؛ اندروید برای ایمنیِ رم روی ۳۸۴ می‌ماند
+            _env_ms = os.environ.get("MANGA_LAMA_MAXSIDE", "").strip()
+            _lite_cap = int(_env_ms) if _env_ms.isdigit() and int(_env_ms) >= 192 else 512
+            if _on_android():
+                _lite_cap = min(_lite_cap, 384)
+            self.max_side = min(self.max_side, _lite_cap)
         # dynamic dims?
         self._dynamic = True
         try:
@@ -5226,6 +5232,64 @@ class MangaTranslator:
                             pass
             except Exception:
                 pass
+            # ---- نجاتِ هالهٔ رنگی/گلو (متن نئونی/درخشان) ----
+            # متنِ گلودار (مثلاً هالهٔ بنفش ORV) بیرونِ چندضلعیِ OCR می‌زند؛
+            # ماسکِ جوهرِ روشنایی‌محور آن را نمی‌بیند → شبحِ بنفش می‌ماند.
+            # پیکسل‌های «رنگی» چسبیده به ماسکِ نهایی که اختلافِ کانالیِ
+            # محسوس با زمینهٔ محلی دارند، تا سقفِ بزرگ‌ترِ لنگر اضافه می‌شوند.
+            try:
+                _hpl = list(getattr(region, "ocr_polys", None) or [])
+                if not _hpl:
+                    for _b3 in (getattr(region, "boxes", None) or []):
+                        try:
+                            _bp3 = np.asarray(_b3, dtype=np.int32).reshape(-1, 2)
+                            if _bp3.size >= 6:
+                                _hpl.append(_bp3)
+                        except Exception:
+                            continue
+                if ink is not None and int(np.count_nonzero(ink)) > 0 \
+                        and _hpl and image is not None:
+                    _imgc = image[y0:y1, x0:x1]
+                    _cdiff = None
+                    if _imgc is not None and _imgc.ndim == 3 \
+                            and _imgc.shape[:2] == gray.shape[:2]:
+                        _cd3 = None
+                        for _cc3 in range(3):
+                            _bc3 = cv2.medianBlur(_imgc[:, :, _cc3], 31)
+                            _dc3 = _imgc[:, :, _cc3].astype(np.int16) - _bc3.astype(np.int16)
+                            _cd3 = _dc3 if _cd3 is None else np.maximum(_cd3, _dc3)
+                        _cdiff = np.abs(_cd3)
+                    if _cdiff is None:
+                        _bd = cv2.medianBlur(gray, 31)
+                        _cdiff = np.abs(gray.astype(np.int16) - _bd.astype(np.int16))
+                    _halo = ((_cdiff > 9) &
+                             (cv2.dilate(ink, np.ones((3, 3), np.uint8)) > 0)
+                             ).astype(np.uint8) * 255
+                    _halo = cv2.morphologyEx(_halo, cv2.MORPH_OPEN,
+                                             np.ones((2, 2), np.uint8))
+                    if int(cv2.countNonZero(_halo)) > 0:
+                        _lh3s = []
+                        _anch3 = np.zeros_like(ink)
+                        for _p3 in _hpl:
+                            try:
+                                _pt3 = np.asarray(_p3, dtype=np.int32).reshape(-1, 2).copy()
+                                _pt3[:, 0] -= x0
+                                _pt3[:, 1] -= y0
+                                cv2.fillPoly(_anch3, [_pt3], 255)
+                                _lh3s.append(max(6, int(_pt3[:, 1].max() - _pt3[:, 1].min())))
+                            except Exception:
+                                continue
+                        if int(cv2.countNonZero(_anch3)) > 0:
+                            _mh2 = int(np.clip(int(round(0.9 * float(np.median(_lh3s))))
+                                               if _lh3s else 12, 6, 34))
+                            _kern3 = cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE, (2 * _mh2 + 1, 2 * _mh2 + 1))
+                            _anch3 = cv2.dilate(_anch3, _kern3)
+                            _halo = cv2.bitwise_and(_halo, _anch3)
+                            if int(np.count_nonzero(_halo)) >= 40:
+                                ink = cv2.bitwise_or(ink, _halo)
+            except Exception:
+                pass
             if padding:
                 ink = cv2.dilate(ink, kernel)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
@@ -5656,6 +5720,7 @@ class MangaTranslator:
                         _mdl is not None
                         and _mdl["std"] <= 7.0
                         and _mdl.get("tex_local", 0.0) <= 6.0
+                        and _mdl.get("hf", 0.0) <= 4.5
                         and (_near is None or _near <= 12.0)
                         and _mdl.get("grad_slope", 0.0) <= 130.0
                     )
@@ -5679,11 +5744,15 @@ class MangaTranslator:
                 if _mdl is not None and (
                         _mdl["std"] >= 8.0
                         or _mdl.get("tex_local", 0.0) >= 6.0
-                        or _mdl["hf"] >= 5.0):
+                        or _mdl["hf"] >= 4.5):
                     _tt = self._tone_tile_fill_page(
                         image, mask, (cx0, cy0, cx1, cy1), _mdl)
                     if _tt is not None:
-                        _ok_tt, _ = self._fill_matches_bg(_tt, _mdl, crop_msk)
+                        _txt2 = bool(_mdl.get("tex_local", 0.0) >= 6.0
+                                     or _mdl.get("hf", 0.0) >= 4.5)
+                        _ok_tt, _ = self._fill_matches_bg(
+                            _tt, _mdl, crop_msk,
+                            tol_mean=(24.0 if _txt2 else 7.0))
                         if _ok_tt:
                             result = _tt
                             method = "tone"
@@ -5906,6 +5975,20 @@ class MangaTranslator:
                         crop_img, result, crop_msk, method,
                         page_img=image, page_mask=mask,
                         box=(cx0, cy0, cx1, cy1), domain=_dom)
+                except Exception:
+                    pass
+                # جاروی نهاییِ متن‌شبح روی زمینهٔ صاف: پرکردن/پرزِ لبه گاهی
+                # ته‌ماندهٔ محویِ خودِ متن را نگه می‌دارد (کاملاً داخل ماسک)
+                try:
+                    _mdl = self._region_bg_model(crop_img, crop_msk, domain=_dom)
+                    _texd = bool(_mdl is not None and
+                                 (_mdl.get("tex_local", 0.0) >= 6.0 or
+                                  _mdl.get("hf", 0.0) >= 6.0))
+                    if not _texd:
+                        _gg = self._bg_guide(crop_img, crop_msk, _dom)
+                        if _gg is not None:
+                            result = self._scrub_ghost_residuals(result, _gg, crop_msk)
+                            result = self._scrub_ghost_residuals(result, _gg, crop_msk)
                 except Exception:
                     pass
             mm = (crop_msk > 0)
@@ -6576,7 +6659,8 @@ class MangaTranslator:
 
     @staticmethod
     def _fill_matches_bg(fill_img: np.ndarray, model: Optional[dict],
-                         msk: np.ndarray, tol_mean: float = 7.0) -> Tuple[bool, str]:
+                         msk: np.ndarray, tol_mean: float = 7.0,
+                         skip_noise_cap: bool = False) -> Tuple[bool, str]:
         """آیا پرکردن با زمینهٔ واقعی ناحیه می‌خواند؟ (رنگ، ته‌رنگ، بافت)"""
         try:
             if model is None:
@@ -6592,13 +6676,18 @@ class MangaTranslator:
             fill_px = g[me].astype(np.float32)
             fill_mean = float(np.mean(fill_px))
             fill_std = float(np.std(fill_px))
+            _txt = bool(model.get("tex_local", 0.0) >= 6.0
+                        or model.get("hf", 0.0) >= 4.5)
             # ۱) جابه‌جایی روشنایی (لکهٔ خاکستری/تیره روی کاغذ روشن یا برعکس)
-            if abs(fill_mean - model["gray_mean"]) > tol_mean:
+            # روی زمینهٔ بافت‌دار/ناهمگن (هنر + کاغذ) مدلِ حلقه به سفید بایاس است؛
+            # تولرانسِ وسیع‌تر تا کاشیِ بافتِ واقعی بی‌دلیل رد نشود
+            _tol_m = tol_mean if not _txt else max(tol_mean, 18.0)
+            if abs(fill_mean - model["gray_mean"]) > _tol_m:
                 return False, f"mean {fill_mean:.0f}!={model['gray_mean']:.0f}"
             # ۲) جابه‌جایی رنگ (مانهوای رنگی)
             for c in range(3):
                 fc = float(np.mean(fill_img[:, :, c][me].astype(np.float32)))
-                if abs(fc - model["ch_means"][c]) > tol_mean + 2.0:
+                if abs(fc - model["ch_means"][c]) > _tol_m + 2.0:
                     return False, f"ch{c} {fc:.0f}!={model['ch_means'][c]:.0f}"
             # ۳) بافت کشته‌شده (اسکرین‌تون → لکهٔ صاف) — هم توزیع کلی، هم بافت
             # محلی پنجره‌ای (نقطه‌چین کم‌کنتراست)
@@ -6607,8 +6696,9 @@ class MangaTranslator:
                 return False, f"tex {fill_std:.0f}<{0.45 * _tex_src:.0f}"
             lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
             fhf = float(np.mean(lap[me]))
-            if model["hf"] >= 6.0 and fhf < 0.15 * model["hf"]:
-                return False, f"hf {fhf:.1f}<{0.15 * model['hf']:.1f}"
+            _hf_thr = 0.30 if model["hf"] >= 15.0 else 0.15
+            if model["hf"] >= 4.5 and fhf < _hf_thr * model["hf"]:
+                return False, f"hf {fhf:.1f}<{_hf_thr * model['hf']:.1f}"
             try:
                 _mb = cv2.boxFilter(g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
                 _sb = cv2.boxFilter(g * g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
@@ -6620,7 +6710,9 @@ class MangaTranslator:
             if _mtl >= 6.0 and _fl_loc < 0.5 * _mtl:
                 return False, f"texloc {_fl_loc:.1f}<{0.5 * _mtl:.1f}"
             # ۴) نویز/آثار اضافه (چرک LaMa روی برخی کاغذها)
-            if fill_std > model["std"] + 14.0:
+            # برای کاشیِ بافتِ واقعی (tone) اعمال نمی‌شود — بافتِ آن اصیل است
+            # و stdِ حلقه روی نقطه‌چینِ کم‌کنتراست به‌کلی پایین‌تر دیده می‌شود
+            if not skip_noise_cap and fill_std > model["std"] + 14.0:
                 return False, f"noisy {fill_std:.0f}>{model['std']:.0f}+14"
             return True, ""
         except Exception:
@@ -6835,6 +6927,82 @@ class MangaTranslator:
         if bad_frac >= 0.40 and dev > 10.0:
             return False
         return True
+
+    @staticmethod
+    def _fill_texture_ok(fill_img: np.ndarray, msk: np.ndarray,
+                         model: Optional[dict],
+                         min_ratio: float = 0.55,
+                         ring_tex: Optional[float] = None,
+                         ring_hf: Optional[float] = None) -> bool:
+        """چکِ «بافت‌تخت» — روی اسکرین‌تون/بافتِ دوره‌ای، پرکردنِ LaMa
+        معمولاً بافت را صاف می‌کند؛ انرژی بافتِ داخلِ پرکردن باید بخشِ
+        معناداری از بافتِ نوارِ زمینه باشد وگرنه پرکردنِ «لکه‌ای» است.
+        دو معیار: بافتِ پنجره‌ای (نقطه‌چین) و ساختارِ فرکانس‌بالا
+        (خطوطِ تیزِ پراکنده که در میانهٔ واریانسِ پنجره‌ای جا می‌زنند)."""
+        try:
+            if ring_tex is None:
+                ring_tex = float((model or {}).get("tex_local", 0.0) or 0.0)
+            if ring_hf is None:
+                ring_hf = float((model or {}).get("hf", 0.0) or 0.0)
+            if ring_tex < 6.0 and ring_hf < 8.0:
+                return True  # زمینهٔ صاف — چکِ بافت لازم نیست
+            g = cv2.cvtColor(fill_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+            m = (msk > 0)
+            me = cv2.erode(m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+            if int(np.count_nonzero(me)) < 30:
+                me = m
+            if ring_tex >= 6.0:
+                mb = cv2.boxFilter(g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                sb = cv2.boxFilter(g * g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                lstd = np.sqrt(np.maximum(sb - mb * mb, 0.0))
+                fill_tex = float(np.median(lstd[me]))
+                if fill_tex < min_ratio * ring_tex:
+                    return False
+            if ring_hf >= 8.0:
+                # ساختارِ خطوطِ تیزِ پراکنده: «چگالیِ لبه» داخلِ پرکردن باید
+                # بخشِ معناداری از چگالیِ لبهٔ حلقه باشد (پرکردنِ تختِ بلور ≈ صفر)
+                try:
+                    gu8 = cv2.cvtColor(np.clip(g, 0, 255).astype(np.uint8),
+                                       cv2.COLOR_GRAY2BGR)
+                    gu8 = cv2.cvtColor(gu8, cv2.COLOR_BGR2GRAY)
+                    edges = cv2.Canny(gu8, 80, 160)
+                    ring = (cv2.dilate(msk, np.ones((9, 9), np.uint8)) > 0) & ~m
+                    den_ring = float(np.mean(edges[ring])) if ring.any() else 0.0
+                    if den_ring >= 2.0:
+                        den_fill = float(np.mean(edges[me]))
+                        if den_fill < 0.30 * den_ring:
+                            return False
+                except Exception:
+                    lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
+                    fill_hf = float(np.mean(lap[me]))
+                    if fill_hf < 0.35 * ring_hf:
+                        return False
+            return True
+        except Exception:
+            return True
+
+    def _fsr_fill(self, crop_img: np.ndarray,
+                  crop_msk: np.ndarray) -> Optional[np.ndarray]:
+        """بازسازی فرکانسی گزینشی (cv2.xphoto FSR-FAST) — برای بافتِ
+        دوره‌ای/نقطه‌ای (اسکرین‌تون) که LaMa آن را صاف می‌کند و کاشیِ تمیز
+        پیدا نشده. فقط ناحیه‌های کوچک (≤۳۲۰px) تا سریع بماند."""
+        try:
+            if not hasattr(cv2, "xphoto") or not hasattr(cv2.xphoto, "INPAINT_FSR_FAST"):
+                return None
+            m = (crop_msk > 0).astype(np.uint8) * 255
+            if not m.any():
+                return None
+            h, w = m.shape[:2]
+            if max(h, w) > 420:
+                return None
+            valid = (255 - m)
+            dst = crop_img.copy()
+            cv2.xphoto.inpaint(crop_img, valid, dst, cv2.xphoto.INPAINT_FSR_FAST)
+            out = crop_img.copy()
+            out[m > 0] = dst[m > 0]
+            return out
+        except Exception:
+            return None
 
 
     @staticmethod
@@ -7079,7 +7247,34 @@ class MangaTranslator:
             model = self._region_bg_model(crop_img, msk, domain=domain)
             textured = bool(model is not None and
                             (model.get("tex_local", 0.0) >= 6.0
-                             or model.get("hf", 0.0) >= 6.0))
+                             or model.get("hf", 0.0) >= 4.5))
+            _ring_tex_fb = None
+            _ring_hf_fb = None
+            if model is None:
+                # مدلِ حلقه نامعتبر (هنر پیچیده) — بافت را مستقیم از حلقه بسنج
+                textured = self._bg_is_textured(crop_img, msk)
+                if textured:
+                    try:
+                        _g2 = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                        _mb = cv2.boxFilter(_g2, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                        _sb = cv2.boxFilter(_g2 * _g2, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
+                        _ls = np.sqrt(np.maximum(_sb - _mb * _mb, 0.0))
+                        _rg = (cv2.dilate(msk, np.ones((9, 9), np.uint8)) > 0) & ~(msk > 0)
+                        if int(np.count_nonzero(_rg)) >= 60:
+                            _ring_tex_fb = float(np.median(_ls[_rg]))
+                            _ring_hf_fb = float(np.mean(np.abs(
+                                cv2.Laplacian(_g2, cv2.CV_32F))[_rg]))
+                    except Exception:
+                        _ring_tex_fb = None
+                        _ring_hf_fb = None
+            if os.environ.get("MANGA_DBG_VERIFY"):
+                try:
+                    print(f"      [verify-dbg] model={'None' if model is None else 'ok'} "
+                          f"tex={(model or {}).get('tex_local', 0) if model is not None else (_ring_tex_fb or 0):.2f} "
+                          f"hf={(model or {}).get('hf', 0):.2f} "
+                          f"std={(model or {}).get('std', 0):.2f} textured={textured} method={method}")
+                except Exception:
+                    pass
             guide = self._bg_guide(crop_img, msk, domain)
             if model is not None:
                 ok, why = self._fill_matches_bg(fill_img, model, msk)
@@ -7096,12 +7291,21 @@ class MangaTranslator:
                 ok = self._fill_local_ok(fill_img, guide, msk,
                                          textured=textured)
                 why = "local-gradient(no-model)"
+            if ok and textured:
+                # اسکرین‌تون/بافتِ دوره‌ای: پرکردنِ صاف‌شده (لکهٔ LaMa) همین‌جا رد می‌شود
+                if not self._fill_texture_ok(fill_img, msk, model,
+                                             ring_tex=_ring_tex_fb,
+                                             ring_hf=_ring_hf_fb):
+                    ok = False
+                    why = "texture-flat"
             if ok:
                 return fill_img, method
             # --- لکه پیدا شد؛ ترمیم ---
             def _guide_mean_ok(cand: Optional[np.ndarray]) -> bool:
                 """برای کاندیدِ پیوندی: مقایسه با خودِ راهنما (نه مدلِ حلقه —
-                حلقه ممکن است با رگه‌ی براق/هایلایت بایاسِ سفید داشته باشد)."""
+                حلقه ممکن است با رگه‌ی براق/هایلایت بایاسِ سفید داشته باشد).
+                روی زمینهٔ بافت‌دار مقایسهٔ «میانگین» است نه پیکسل‌به‌پیکسل —
+                بافتِ واقعی از تکنهٔ صاف منحرف است ولی رنگش درست است."""
                 if cand is None or guide is None:
                     return cand is not None
                 m = (msk > 0)
@@ -7109,40 +7313,71 @@ class MangaTranslator:
                                np.ones((5, 5), np.uint8)) > 0
                 if int(np.count_nonzero(me)) < 24:
                     me = m
-                d = np.abs(cand.astype(np.float32)
-                           - guide.astype(np.float32)).max(axis=2)
+                cd = cand.astype(np.float32) - guide.astype(np.float32)
+                if textured:
+                    mc = np.abs(cd[me].mean(axis=0)).max()
+                    return bool(float(mc) <= 14.0)
+                d = np.abs(cd).max(axis=2)
                 return bool(float(np.mean(d[me])) <= 12.0)
 
             def _accept(cand: Optional[np.ndarray],
-                        from_guide: bool = False) -> bool:
+                        from_guide: bool = False,
+                        tag: str = "",
+                        skip_noise_cap: bool = False) -> bool:
                 if cand is None:
                     return False
                 if from_guide or model is None:
                     if not _guide_mean_ok(cand):
                         if os.environ.get("MANGA_DBG_VERIFY"):
-                            print("      [verify-dbg] guide-mean reject")
+                            print(f"      [verify-dbg] guide-mean reject[{tag}]")
                         return False
                 else:
-                    ok2, w2 = self._fill_matches_bg(cand, model, msk)
+                    ok2, w2 = self._fill_matches_bg(
+                        cand, model, msk,
+                        tol_mean=(24.0 if textured else 7.0),
+                        skip_noise_cap=skip_noise_cap)
                     if not ok2:
                         if os.environ.get("MANGA_DBG_VERIFY"):
-                            print(f"      [verify-dbg] global reject: {w2}")
+                            print(f"      [verify-dbg] global reject[{tag}]: {w2}")
                         return False
                 lok = self._fill_local_ok(cand, guide, msk, textured=textured)
+                if lok and textured:
+                    lok = self._fill_texture_ok(cand, msk, model,
+                                                ring_tex=_ring_tex_fb,
+                                                ring_hf=_ring_hf_fb)
                 if not lok and os.environ.get("MANGA_DBG_VERIFY"):
                     bf, dv = self._grid_mismatch(cand, guide, msk)
-                    print(f"      [verify-dbg] local reject: bad={bf:.2f} dev={dv:.1f}")
+                    print(f"      [verify-dbg] local reject[{tag}]: bad={bf:.2f} dev={dv:.1f}")
                 return lok
             # ۰) پیوندِ پس‌زمینهٔ کم‌بسامد: پرکردن را به گرادیانِ خودِ ناحیه
             # قفل می‌کند (لکهٔ مربعی + متن‌شبح را با هم می‌کُشد) — سریع و بی‌لبه
             if guide is None:
                 guide = self._bg_guide(crop_img, msk, domain)
+            # ۰-الف) زمینهٔ بافت‌دار (اسکرین‌تون): اول کاشیِ بافتِ واقعی و
+            # FSR — پیوندِ کم‌بسامد بافتِ لکه‌ایِ خودِ LaMa را زنده نگه می‌دارد
+            if textured:
+                tt0 = None
+                if page_img is not None and page_mask is not None and box is not None:
+                    try:
+                        tt0 = self._tone_tile_fill_page(page_img, page_mask, box, model)
+                    except Exception:
+                        tt0 = None
+                if tt0 is None:
+                    try:
+                        tt0 = self._tone_tile_fill(crop_img, msk, model)
+                    except Exception:
+                        tt0 = None
+                if tt0 is not None and _accept(tt0, from_guide=(model is None), tag="tone0", skip_noise_cap=True):
+                    return tt0, "tone"
+                fr0 = self._fsr_fill(crop_img, msk)
+                if fr0 is not None and _accept(fr0, from_guide=(model is None), tag="fsr0"):
+                    return fr0, method + "+fsr"
             tr = self._transplant_bg(fill_img, crop_img, msk, domain=domain,
                                      textured=textured)
             if tr is not None and guide is not None and not textured:
                 tr = self._scrub_ghost_residuals(tr, guide, msk)
                 tr = self._scrub_ghost_residuals(tr, guide, msk)
-            if _accept(tr, from_guide=True):
+            if _accept(tr, from_guide=True, tag="transplant"):
                 return tr, method + "+grad"
             # ۱) زمینۀ کاملاً یکدست → پرکردن ثابت همیشه بی‌لکه است
             near_std = model.get("near_std") if model is not None else None
@@ -7157,33 +7392,49 @@ class MangaTranslator:
             if flat_bg:
                 fc = self._flat_const_fill(crop_img, msk, model)
                 if fc is not None:
-                    if _accept(fc):
+                    if _accept(fc, tag="flat"):
                         return fc, "flat"
             # ۲) جابه‌جایی ملایم ته‌رنگ → ترمیم ساختارحافظ
             _base_for_regrain = fill_img
             if not flat_bg or (model is not None and _m_std > 7.0):
                 rl = self._relevel_fill(fill_img, model, msk)
                 if rl is not None:
-                    if _accept(rl):
+                    if _accept(rl, tag="relevel"):
                         return rl, method + "+fix"
                     _base_for_regrain = rl
             # ۲.۵) بافتِ صاف‌شده → بازگرداندن دانه تا واریانس زمینه
-            if model is not None and (_m_tex >= 5.0 or _m_std >= 8.0):
+            # (بافتِ ساخت‌یافته/نقطه‌ای → رد، تا کاشی‌کاری/FSR اولویت بگیرند)
+            _m_hf = model.get("hf", 0.0) if model is not None else 0.0
+            if model is not None and (_m_tex >= 5.0 or _m_std >= 8.0) and _m_hf < 5.0:
                 rg = self._regrain_fill(_base_for_regrain, model, msk)
                 if rg is not None:
-                    if _accept(rg):
+                    if _accept(rg, tag="regrain"):
                         return rg, method + "+grain"
             # ۳) بافت تکراری (اسکرین‌تون) → کاشی‌کاری (ترجیحاً در سطح صفحه)
-            _m_hf = model.get("hf", 0.0) if model is not None else 0.0
-            if model is not None and (_m_hf >= 5.0 or _m_std >= 8.0 or _m_tex >= 6.0):
+            if (model is not None and (_m_hf >= 5.0 or _m_std >= 8.0 or _m_tex >= 6.0)) \
+                    or (model is None and textured):
                 tt = None
                 if page_img is not None and page_mask is not None and box is not None:
                     tt = self._tone_tile_fill_page(page_img, page_mask, box, model)
                 if tt is None:
                     tt = self._tone_tile_fill(crop_img, msk, model)
                 if tt is not None:
-                    if _accept(tt):
+                    if _accept(tt, tag="tone", skip_noise_cap=True):
                         return tt, "tone"
+            # ۳.۵) بازسازی فرکانسی گزینشی (FSR) — وقتی کاشیِ تمیز پیدا نشد؛
+            # بافتِ دوره‌ای را از حلقه بازسازی می‌کند (کوچک‌تر از ۳۲۰px)
+            if (model is not None and (_m_hf >= 5.0 or _m_tex >= 6.0)) \
+                    or (model is None and textured):
+                fr = self._fsr_fill(crop_img, msk)
+                if fr is not None:
+                    if _accept(fr, tag="fsr"):
+                        return fr, method + "+fsr"
+                # آخرین شانس برای بافت‌دار: دانه‌زنیِ دوباره (۲.۵ برای hf رد شده بود)
+                if model is not None and _m_hf >= 5.0 and (_m_tex >= 5.0 or _m_std >= 8.0):
+                    rg = self._regrain_fill(_base_for_regrain, model, msk)
+                    if rg is not None:
+                        if _accept(rg, tag="regrain"):
+                            return rg, method + "+grain2"
             # هیچ ترمیمی قبول نشد → پرکردن اولیه بهتر از جا ماندن متن است
             try:
                 print(f"    [!] لکهٔ پرکردن ({why}) → ترمیم نشد؛ همان روش {method} نگه داشته شد")
@@ -7304,7 +7555,7 @@ class MangaTranslator:
                 return False
             g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
             rf = g[ring].astype(np.float32)
-            t_std, t_lap = (25.0, 8.0) if strong else (17.0, 5.0)
+            t_std, t_lap = (25.0, 8.0) if strong else (17.0, 4.0)
             if float(np.std(rf)) > t_std:
                 return True
             lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
@@ -7321,9 +7572,22 @@ class MangaTranslator:
                 return None
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
             bg = cv2.medianBlur(gray, 31)
+            # رنگ‌آگاه: متنِ گلودار/رنگی (مثلاً هالهٔ بنفش روی خاکستری) در
+            # «روشنایی» جابه‌جایی کمی دارد ولی در کانال‌های رنگی زیاد —
+            # بیشینهٔ اختلافِ کانال‌ها به‌جای فقط روشنایی
             diff = gray.astype(np.int16) - bg.astype(np.int16)
-            zone = cv2.dilate(m0, np.ones((7, 7), np.uint8), iterations=1)
-            ink = ((np.abs(diff) > 26) & (zone > 0)).astype(np.uint8) * 255
+            try:
+                diff3 = None
+                for _c in range(3):
+                    _bc = cv2.medianBlur(image[:, :, _c], 31)
+                    _dc = image[:, :, _c].astype(np.int16) - _bc.astype(np.int16)
+                    diff3 = _dc if diff3 is None else np.maximum(diff3, _dc)
+                diff = np.maximum(diff, diff3)
+            except Exception:
+                pass
+            diff = np.abs(diff)
+            zone = cv2.dilate(m0, np.ones((11, 11), np.uint8), iterations=1)
+            ink = ((diff > 26) & (zone > 0)).astype(np.uint8) * 255
             ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
             ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
             try:
@@ -7336,6 +7600,17 @@ class MangaTranslator:
                             _keep[_lab == _i] = 255
                     if int(np.count_nonzero(_keep)) >= 40:
                         ink = _keep
+            except Exception:
+                pass
+            # هالهٔ آنتی‌آلیاس/گلوِ متن: پیکسل‌های «کم‌عمق» که چسبیده به
+            # جوهرِ قوی‌اند به ماسک اضافه می‌شوند — وگرنه لبهٔ محویِ متن
+            # بیرونِ ماسک می‌ماند و «شبحِ متن» دیده می‌شد (csm p48 r4، orv p54)
+            try:
+                _loose = (((diff > 9) & (diff <= 26)) &
+                          (cv2.dilate(ink, np.ones((3, 3), np.uint8)) > 0) &
+                          (zone > 0)).astype(np.uint8) * 255
+                if int(np.count_nonzero(_loose)) > 0:
+                    ink = cv2.bitwise_or(ink, _loose)
             except Exception:
                 pass
             ink = cv2.dilate(
