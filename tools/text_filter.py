@@ -8,9 +8,20 @@ no onnxruntime — so it runs on PC, Web and Android (Chaquopy) alike.
 The classification «rules» live in the TRAINING DATA, not in engine code:
 the model learns SFX/ads/junk patterns from labeled examples.
 
+Corpus sources (v2 — massively expanded after user feedback):
+  * dialogue: Tatoeba real sentences (en/ja/ko/zh, tools/.data/tatoeba_*.txt,
+    CC-BY) + manga-domain seeds + shout/short variants
+  * sfx: ~260 EN onomatopoeia bases + JA/KO/ZH lists, with realistic
+    mutations (caps, stretch, repetition, hyphenation, punct)
+  * ads/promo: scanlation credits, reader-site templates, domains/URLs,
+    socials, chapter headers, reader-UI strings — templated with real
+    site/team/handle vocabularies
+  * junk: digit/symbol noise, random alpha mash, OCR artifacts
+
 Usage:
   python3 tools/text_filter.py train            # build corpus + train + eval
   python3 tools/text_filter.py eval "BOOOM!!!"  # quick test
+  python3 tools/text_filter.py probe            # run the realistic probe set
 """
 import os, sys, re, math, json, random, unicodedata
 import numpy as np
@@ -20,6 +31,7 @@ OUT = os.path.join(ROOT, "models", "text_filter.npz")
 B = 1 << 18          # hash buckets
 DIM_CLASSES = ["dialogue", "sfx", "ads", "junk"]
 SEED = 137
+DATA_DIR = os.path.join(ROOT, "tools", ".data")
 
 # ---------------------------------------------------------------- featurize
 def _fnv1a(s: str) -> int:
@@ -58,7 +70,8 @@ def featurize(text: str, buckets: int = B, dense: bool = False):
         k = _fnv1a(f) % buckets
         counts[k] = counts.get(k, 0.0) + 1.0
     idx = np.fromiter(counts.keys(), dtype=np.int64, count=len(counts))
-    val = np.fromiter(counts.values(), dtype=np.float32, count=len(counts))
+    val = np.fromiter(counts.values(), dtype=np.float32,
+                      count=len(counts))
     np.sqrt(val, out=val)
     n = float(np.linalg.norm(val))
     if n > 0:
@@ -69,39 +82,51 @@ def featurize(text: str, buckets: int = B, dense: bool = False):
         return v
     return idx, val
 
-# ---------------------------------------------------------------- corpus
-SFX_EN = """boom bam pow zap wham crash bang clang thud slam smash crack
-crunch snap pop fizz buzz hum ring chime ding dong beep boop honk vroom
-zoom whoosh swoosh swish whip slash slice stab pierce shing clank clink
-thump thwack biff sock punch kick jab rumble roar growl hiss
-bark howl whimper yelp shriek screech squeak creak groan moan sigh
-gasp pant wheeze cough sniff sob blub drip splash sploosh slosh gurgle
-gulp slurp chomp munch nibble chew burp hiccup yawn sniffle
-flutter flap swish rustle crackle sizzle fizzle
-kaboom kapow boosh fwoosh shwoosh krakk krrsh shaaah hwaaah
-""".split()
+# ---------------------------------------------------------------- vocab
+SITES = [
+    "MangaDex", "MangaPlus", "VIZ", "Webtoon", "Naver", "Kakao", "KakaoPage",
+    "Lezhin", "Tappytoon", "Tapas", "Bilibili", "Kuaikan", "Webcomics",
+    "ToonHub", "ToonVerse", "ScanZone", "ZeroScans", "AsuraScans",
+    "FlameComics", "FlameScans", "LuminousScans", "NightScans", "DrakeScans",
+    "RawKuna", "ManhuaPlus", "ManhuaPlus", "ComicK", "Bato", "BatoTo",
+    "Mangakakalot", "Manganato", "Mangabuddy", "Mangadex", "WebtoonHub",
+    "Toonily", "ManhwaClan", "ManhwaHentai", "SuryaScans", "ArenaScans",
+    "CyanScans", "AnigliScans", "SigmaScans", "VoidScans", "TritonScans",
+    "HachiScans", "IlluminatiScans", "MangaSushi", "MangaClash", "Mangaowl",
+    "MangaFire", "Manga4Life", "MangaSee", "ReadComicBooks", "Comikey",
+    "Azuki", "Inkr", "Pocket Comics", "Secret Nobles", "Lilydusk",
+]
+TEAMS = [
+    "Zero Scans", "Asura Scans", "Flame Comics", "Luminous Scans",
+    "Night Scans", "Void Scans", "Surya Scans", "Drake Scans",
+    "Triton Scans", "Hachi Scans", "Cyan Scans", "Sigma Scans",
+    "Arena Scans", "Anigli Scans", "Illuminati Scans", "Manga Squad",
+    "MangaInvasion", "Shiro Scans", "Kataki Scans", "Kuma Scans",
+    "Moe Scans", "HunGRR Scans", "Beru Scans", "Igor Scans",
+    "Omega Scans", "Shadow Scans", "Grand Line Scans", "One Piece Scans",
+    "Nocturne Scans", "Aurora Scans", "Silent Sky Scans", "Red Hawk Scans",
+    "Proxy Scans", "Perverse Alchemy", "Hachirumi Scans", "落雪汉化组",
+    "猫咪汉化组", "하나스캔", "블루스캔",
+]
+HANDLES = [
+    "zeroscans", "asurateam", "flamecomics", "void_scans", "suryascans",
+    "drakescans", "hachiscans", "nocturnescans", "aurorascans", "moe_scans",
+    "shiroTeam", "kumascans", "omegaScans", "redhawkgg", "proxyteam",
+    "luminousscans", "sigmaScans", "nightscans", "triton_team", "igorscans",
+]
+BRANDS = [
+    "Crunchyroll", "Honey", "NordVPN", "Raid Shadow Legends", "Skillshare",
+    "Audible", "HelloFresh", "Raycon", "Manscaped", "Displate",
+]
+TLDS = ["com", "org", "net", "io", "xyz", "tv", "gg", "me", "to", "cc"]
 
-SFX_JA = """ドン バン ゴゴゴ ザアア ドダダ ガタガタ ガシャン バキッ ボカッ
-ゴキッ メキッ ズシッ ドカン バアアン キラキラ ピカッ カチッ パチッ
-サッ シュッ ヒュウ ビュウ ザッ ワアワア ウワアア ギャアア ウォアア
-ドクドク バクバク ズキズキ キリキリ ジリジリ ムカムカ イライラ
-ペコペコ キョロキョロ ジロジロ ニヤニヤ ウフフ アハハ オホホ
-エヘヘ ウシシ ケケケ ガハハ ニャア ワン モー メー コケコッ
-チュンチュン カアカア ケロケロ ブンブン ザンザン カラン コロン
-""".split()
-
-SFX_KO = """쾅 빵야 두둥 쿵 촤악 슥 슉 휘익 끼요오오옥
-드르륵 덜컹 철컥 딸깍 따깍 째깍 쏴아아 화아아악 부아아아
-우오오오 구오오오 가아아악 크아아아 쿠구구구 웅웅웅
-쩝쩝 냠냠 바삭바삭 사각사각 모락모락 잘잘잘 졸졸졸
-두근두근 쿵쾅쿵쾅 지끈지끈 욱신욱신 뒤끈뒤끈
-훌쩍훌쩍 엉엉 반짝반짝 번쩍 훨훨
-""".split()
-
-SFX_ZH = """轰 砰 唰 哐当 咔嚓 嗖 呼哧 咚 咣当 噼里啪啦 嘭 哗啦
-嗡嗡 吱嘎 咯吱 嘎吱 吧唧 咕噜 咕嘟 咕咚 滴答 哗哗
-呼呼 嗷呜 呜哇 嘿呀 哼哼 嘻嘻 哈哈哈 呵呵
-""".split()
+ROLES_EN = [
+    ("scanlated by", "scanlation group"), ("scans by", "scan team"),
+    ("translated by", "translation team"), ("tl by", "tl team"),
+    ("typeset by", "ts team"), ("proofread by", "pr team"),
+    ("cleaned by", "clean team"), ("redraw by", "rd team"),
+    ("cl by", "quality check"), ("edit by", "qc team"),
+]
 
 ADS_BASE = [
     "read free on", "read more at", "continue reading at", "full chapter at",
@@ -117,8 +142,187 @@ ADS_BASE = [
     "like and subscribe", "don't forget to", "check out",
     "manga updates", "novel updates", "webtoon original", "original story",
     "based on the novel", "serialized in", "published by", "licensed by",
+    "read now", "start reading", "read first", "free to read",
+    "daily pass", "unlock episode", "unlock chapter", "buy coins",
+    "download the app", "get the app", "install now", "sign up",
+    "log in", "tap to read", "scroll down", "swipe up", "swipe left",
+    "best viewed on mobile", "click here", "click now", "apply now",
+    "limited offer", "limited time", "sale now on", "buy now",
+    "order now", "shop now", "learn more", "see more", "show more",
+    "load more", "watch now", "play now", "subscribe now",
+    "not sold in stores", "recommended for you", "you may also like",
+    "recommended series", "similar series", "trending now",
+    "hot series", "new release", "coming soon", "stay tuned",
+    "follow for more", "turn on notifications", "share with friends",
+    "rate this series", "leave a comment", "report issue",
+    "support the artist", "buy the volume", "buy the tankobon",
+    "official english release", "read legally", "support the author",
+    # credit-page roles (must stay promo, never erased)
+    "quality check", "typesetter", "proofreader", "translator", "cleaner",
+    "redrawer", "author", "artist", "story", "art by", "manga by",
+    "original work", "original story by", "lettering", "graphics",
 ]
 
+CHAPTER_HEADERS = [
+    "CHAPTER {n}", "Chapter {n}", "Ch. {n}", "CH {n}", "chapter {n}",
+    "Episode {n}", "EP {n}", "Ep. {n}", "ep {n}", "episode {n}",
+    "第{n}話", "第{n}话", "{n}화", "제{n}화", "第{n}章", "Act {n}",
+    "Part {n}", "Round {n}", "Stage {n}", "Level {n}", "Case {n}",
+    "File {n}", "Log {n}", "Entry {n}", "Vol. {n}", "Vol {n}", "Volume {n}",
+    "Track {n}", "Mission {n}", "Quest {n}", "Chapter {n}:",
+    "Side Story {n}", "Extra Chapter {n}", "Interlude {n}",
+]
+
+# ad imperatives — heavy weight (OCR hits them often and model is weak here)
+AD_CTA = [
+    "CLICK HERE", "READ NOW", "SHOP NOW", "LEARN MORE", "WATCH NOW",
+    "SIGN UP", "SUBSCRIBE", "DOWNLOAD NOW", "PLAY FREE", "GET STARTED",
+    "TRY NOW", "JOIN NOW", "SEE MORE", "APPLY NOW", "BUY NOW",
+    "read here", "watch free", "no ads", "ad-free", "premium",
+    "unlock all", "VIP", "free coins", "daily bonus", "event now",
+]
+
+END_MARKS = [
+    "To be continued", "TO BE CONTINUED", "To Be Continued...", "Continued...",
+    "to be continued in the next chapter", "Next chapter", "Next episode",
+    "Previous chapter", "Previous episode", "See you next chapter",
+    "See you next week", "See you in the next issue", "つづく", "つづく…",
+    "次回へ続く", "次号に続く", "다음 화에 계속", "계속", "다음 편에 계속",
+    "未完待续", "下集待續", "待续", "END", "Fin.", "FIN", "The End", "完",
+    "おわり", "おしまい", "완결", "完結", "完结", "Author's note",
+    "Afterword", "Director's note", "Special thanks", "Credits",
+    "Credit page", "Staff", "Cast",
+]
+
+# ---------------------------------------------------------------- SFX lists
+SFX_EN = """boom bam pow zap wham crash bang clang thud slam smash crack
+crunch snap pop fizz buzz hum ring chime ding dong beep boop honk vroom
+zoom whoosh swoosh swish whip slash slice stab pierce shing clank clink
+thump thwack biff sock punch kick jab rumble roar growl hiss
+bark howl whimper yelp shriek screech squeak creak groan moan sigh
+gasp pant wheeze cough sniff sob blub drip splash sploosh slosh gurgle
+gulp slurp chomp munch nibble chew burp hiccup yawn sniffle
+flutter flap rustle crackle sizzle fizzle
+kaboom kapow boosh fwoosh shwoosh krakk krrsh shaaah hwaaah
+thud dooom doom vwoom vroom kwaan kwan klang kling shlink shing
+tak tk tok tik klik clack click chik chk tsk tsk-tsk
+katsu pata pat tap plop plink plonk plunk kerplunk kersplash
+splish splosh splat splort squish squelch sproing boing twang
+thwip thwapp whump whomp woomph fwip fwap fwump thwap womp
+bonk bop konk chunk klunk thunk chink clonk clop clippity
+scrape screech scratch scratchy skid skrrt skrrreee nnn vree
+hiss ssss pssh psst shhh shh shush wheee yipe yip arf woof
+meow purr mew chirp tweet caw coo hoot quack oink moo baa
+gobble cluck crow cockadoodledoo buzzz bzzz bzzt zzt zzz
+grr growlf grrr ruff growl snap-hiss clatter rattle jangle
+jingle tinkle chime-ding clink-clink rat-tat-tat ratatat
+rat-a-tat-tat bang-bang pop-pop pew-pew pew pyoo beam zap-zap
+ka-boom ka-chunk ka-ching cha-ching ker-chunk kachunk
+bada-boom bada-bing baroom ba-doom dum-dum dun-dun-duuun ta-da
+tada fanfare flourish roll-roll tadaaa
+drip-drop dripdrop pitter-patter patter pata-pata
+hummm whirr whir whizz whiz zzzzip zip zzzip zzzap
+swoosh woosh whoosh whush fwush shwoop shlup slosh spurt squirt
+glug glub blub-blub gurgle gargle blorp burble bloop blip
+kriiish shraaa krrrsh grrrrsh hwoooosh fwaaah shaaaah
+kwoom kwom woomm woomphe Doom doom-doom doomm
+kwaan kwaann kwaaan gooon goooon byuuun byuuuun
+biiii bonn booon paan paann baan baann
+gogogo dododo bababa gagaga dadada zuzuzuzu
+zag zig zog zug crick crack crick-crack snap-crackle
+kafooey kerfuffle blammo blam kablooey kersplode kersploosh
+swish-clang clang-clang boom-boom boomchaka
+huff puff phew wheeze-huff snort snrk hmph hmpf
+yawn yaaawn sleepy snore zzz-mimi
+heave ho hoist yank tug rip tear shrrrip riiiip
+zzzip-snap pop-snap snap-pop crack-snap boom-slam
+swipe swoop dive glide zoom-zoom vroom-vroom skreeee
+chomp-chomp nom nom-nom munch-munch crunch-crunch gobble
+gulp-gulp slurrrp slurp-slurp sssllluuurrrp
+sniff-sniff sniffle snff hnnngh hngh nngh
+flick flip flop flim-flam swish-swish whip-whip
+pewm pewm-pewm pyuun byun byunn shun shuuun
+tok-tok-tok tokkon kop-kop knock-knock knock
+ting ting-a-ling ding-dong bell-ring
+siren weeoo wee-oo wail woooo
+mumble murmur mutter whisper hush-hush psst-psst
+boom-slam crash-bang smash-boom wallup wallopped
+ka-rack krr-ack grrrack krakka krakaan
+shink shnkt shhhink sringg schwing schiing
+fwip-fwip fwap-fwap flutter-flutter pata-flap
+""" .split()
+
+SFX_JA = """ドン バン ゴゴゴ ザアア ドダダ ガタガタ ガシャン バキッ ボカッ
+ゴキッ メキッ ズシッ ドカン バアアン キラキラ ピカッ カチッ パチッ
+サッ シュッ ヒュウ ビュウ ザッ ワアワア ウワアア ギャアア ウォアア
+ドクドク バクバク ズキズキ キリキリ ジリジリ ムカムカ イライラ
+ペコペコ キョロキョロ ジロジロ ニヤニヤ ウフフ アハハ オホホ
+エヘヘ ウシシ ケケケ ガハハ ニャア ワン モー メー コケコッ
+チュンチュン カアカア ケロケロ ブンブン ザンザン カラン コロン
+ドォン ゴォン バォン ドオオオ ゴオオオ バオオオ ズオオオ
+ゴボッ ボゴッ ズルズル ズズズ ゴクリ ペロッ パクッ ガブッ カプリ
+ボキッ グシャ ガシャ ガラガラ ゴロゴロ ドスッ ドサッ バタッ ドタッ
+バタバタ ドタバタ カツ カツカツ タッ タタッ ダダッ ダダダダ タタタタ
+ドドドド ザワザワ ガヤガヤ ワイワイ ザーッ ザッザッ シャーッ
+キラ ピカ チラ ニヤ ニタ ニコッ ウッ ウフッ ヒャッ ハァ フゥー
+ゼイゼイ ゼーゼー ハーハー スースー ゴクッ コクッ チュッ チュルル
+ペチャクチャ モゴモゴ ブツブツ ツツツ チチチ ジジッ ビビビ バチバチ
+ピキピキ メキメキ ズキッ ズキューング チクチク ズンズン ドキッ
+ゾクッ ゾワゾワ ヒヤッ ヒヤヒヤ サラサラ ザラザラ ヌルヌル
+グニャ グニグニ ベチッ ビシッ ビシバシ ペチペチ バシッ バシバシ
+ガンッ ゴンッ コンコン ノック ピンポン チャリン ジリリ ウィーン
+ブーッ パーッ ピーッ ポーッ ビーッ ファンファーレ
+ズバッ ザクッ グサッ ブスッ サクッ ジャキッ シャキーン
+メラメラ ボーッ グラグラ ガタガタ バラバラ ポロポロ ボロボロ
+ザーザー ポタポタ ポタポタッ シトシト ジメジメ
+モクモク ケムリ ボフッ プスーッ スーッ ブワーッ ドバーッ
+ガブーッ ズボッ バキューン ドッカーン ゴッカーン パァーン
+チチチ ピピピ ピロリン カチカチ パチパチ バチッ
+ユラユラ ゆらゆら ヒラヒラ サヤサヤ ショボン ガクッ
+コケッ ドテッ バターン ズサッ ゴロッ コロコロ コロンコロ
+フラフラ ヨチヨチ ノシノシ ドッスン ズシズシ ガシッ ギュッ
+ブチッ パキッ ピキッ ミシミシ ギシギシ キーキー ギャンギャン
+ウヘヘ ヒヒヒ フフフ ニチャニチャ ペタペタ ベタベタ
+モグモグ ゴクゴク ツルツル パクパク バリバリ ザクザク
+ジワジワ ボカッ ボカボカ ドカドカ ゴツン ゴツゴツ
+シュワワ ツーン カーッ ボーッ ポーッ クラクラ フラッ
+キヨシ ヨシヨシ ナデナデ スリスリ ギュウッ ぎゅっ
+ムクッ サッと タッタッ テクテク ノソノソ ウロウロ
+キョトン ポカーン ピンと コツン カランカラン チリンチリン
+パラパラ バラバラッ ドサドサ ザクザクッ ボトッ ボタッ
+シュルシュル ズルル チョキッ パチン ビシッ グサッ
+オノマトペ ドンパチ ガチャガチャ ゴチャゴチャ ガタゴト
+ゴトゴト ガタンゴトン シャカシャカ チャカチャカ ジャンジャン
+""".split()
+
+SFX_KO = """쾅 콰앙 빵야 두둥 쿵 촤악 슥 슉 휘익 끼요오오옥
+드르륵 덜컹 철컥 딸깍 따깍 째깍 쏴아아 화아아악 부아아아
+우오오오 구오오오 가아아악 크아아아 쿠구구구 웅웅웅
+쩝쩝 냠냠 바삭바삭 사각사각 모락모락 잘잘잘 졸졸졸
+두근두근 쿵쾅쿵쾅 지끈지끈 욱신욱신 뒤끈뒤끈
+훌쩍훌쩍 엉엉 반짝반짝 번쩍 훨훨
+콰과아앙 콰직 콰득 지잉잉 웅먕먕 띠링
+쨍그랑 따라랑 똑똑 똑딱 쏴앙 촤앙 부웅
+발싸 띠용 촥 화르륵 두구두구 쿠쿵쿵
+휘파람 삑 삐빅 딩동 짜잔 빙글빙글
+스르륵 미끄덩 데굴데굴 두루룩 꿀꺽
+슬금슬금 삐걱삐걱 찰칵 찰칵찰칵
+또각또각 드드득 쩌우우욱 주르륵
+와르르 철렁 부들부들 파닥파닥
+훨훌훨 훨훌쩍 싱긋 방긋 씩씩
+""".split()
+
+SFX_ZH = """轰 砰 唰 哐当 咔嚓 嗖 呼哧 咚 咣当 噼里啪啦 嘭 哗啦
+嗡嗡 吱嘎 咯吱 嘎吱 吧唧 咕噜 咕嘟 咕咚 滴答 哗哗
+呼呼 嗷呜 呜哇 嘿呀 哼哼 嘻嘻 哈哈哈 呵呵
+哐哐 咚咚 轰隆隆 咔咔 嘎嘣 吧嗒 吧嗒吧嗒
+哧溜 呲溜 咻 咻咻 嗡 嗡嗡嗡 叮当 叮铃铃
+滋滋 滋啦 噼啪 啪啪 啪叽 咕叽 吧唧吧唧
+呜呜 呜呜呜 嘤嘤 嘤 呼噜噜 咕嘟咕嘟
+咔嚓咔嚓 咔啦 咯噔 咯噔咯噔 轰隆 轰隆轰隆
+""".split()
+
+# ---------------------------------------------------------------- corpus
 JUNK_CHARS = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
 def _mutate_sfx(w: str, rng: random.Random) -> list:
@@ -135,19 +339,40 @@ def _mutate_sfx(w: str, rng: random.Random) -> list:
         lambda s: "".join(c * 2 for c in s.upper()),
         lambda s: s.upper() + "-" + s.upper(),
         lambda s: s.upper() + "H",
+        lambda s: "K" + s.upper(),
+        lambda s: s.upper() + "-BAM",
+        lambda s: s.upper() + " " + s.upper() + " " + s.upper(),
+        lambda s: "-".join([s.upper()] * 3),
+        lambda s: s.upper() + rng.choice(["OOO", "AAA", "HHH"]) * rng.randint(1, 2),
+        lambda s: s[0].upper() + "O" * rng.randint(2, 5) + s[1:].upper(),
     ]
     for f in styles:
-        out.append(f(w))
-    if len(w) >= 2:
-        out.append(w.upper()[0] + "O" * rng.randint(2, 5) + w.upper()[1:] + "!")
-        out.append(w.upper() + rng.choice(["OOO", "AAA", "HHH"]) * rng.randint(1, 2))
+        try:
+            out.append(f(w))
+        except Exception:
+            pass
     return out
 
-def build_corpus():
+def _load_tatoeba(per_lang: dict, rng: random.Random) -> list:
+    """real sentences per language from the local Tatoeba extract"""
+    out = []
+    for lang, n_max in per_lang.items():
+        p = os.path.join(DATA_DIR, f"tatoeba_{lang}.txt")
+        if not os.path.isfile(p):
+            continue
+        lines = [l.strip() for l in open(p, encoding="utf-8") if l.strip()]
+        rng.shuffle(lines)
+        out.extend(lines[:n_max])
+    return out
+
+def _tatoeba_available() -> bool:
+    return os.path.isfile(os.path.join(DATA_DIR, "tatoeba_en.txt"))
+
+def build_corpus(verbose: bool = True):
     rng = random.Random(SEED)
     data = []  # (label, text)
 
-    # --- dialogue: real OCR lines from the project's own test pages ---
+    # ---------------- dialogue ----------------
     real = [
         # EN (One Piece colored / Eleceed / Naver page OCR)
         "Wealth, fame, power. Once, there was a man who took everything in this world.",
@@ -280,69 +505,189 @@ def build_corpus():
     for s in real:
         data.append(("dialogue", s))
 
-    # dialogue variants: light punct/ellipsis/case changes
+    # caps shouts of REAL words — the model must learn that real English
+    # words + bangs = dialogue (shout), even in all caps
+    shout_words = [
+        "stop", "wait", "go", "no", "yes", "why", "how", "who", "what",
+        "when", "where", "look", "run", "help", "come", "move", "fire",
+        "hold", "listen", "quiet", "enough", "please", "sorry", "thanks",
+        "damn", "hell", "die", "stay", "leave", "hide", "duck", "jump",
+        "watch", "think", "calm", "hurry", "believe", "understand",
+        "remember", "forget", "forgive", "protect", "fight", "win",
+        "lose", "save", "kill", "trust", "follow", "escape", "return",
+    ]
+    for w in shout_words:
+        for suf in ["!", "!!", "!!!", "?!", "?", "", "."]:
+            data.append(("dialogue", w.upper() + suf))
+            data.append(("dialogue", w.capitalize() + suf))
+        if rng.random() < 0.3:
+            data.append(("dialogue", " ".join([w.upper()] * 2) + "!"))
+
+    # manga-style short cries / interjections (dialogue, NOT sfx)
+    short_cries = [
+        "No!", "Why?!", "Stop!!", "What?!", "Run!", "Help!!",
+        "Look out!", "Behind you!", "Get down!", "Over here!",
+        "Not again...", "You're kidding.", "This can't be happening.",
+        "I won't lose!", "Watch out!!", "Come on!", "Hurry up!",
+        "Shut up!", "As if I'd let you!", "Damn it...", "So it begins.",
+        "Now's my chance!", "I can't move!", "It's no use!",
+        "Impossible!", "Unbelievable...", "Is everyone alright?",
+        "Who's there?!", "Show yourself!", "I'm coming for you!",
+        "Please, stop this!", "You'll pay for this!", "Never again.",
+        "At last!", "This is it!", "Go for it!", "Do it now!",
+        "No way!", "That's insane!", "You liar!", "I knew it!",
+        "So strong!", "So fast!", "Too late!", "After them!",
+        "Don't move!", "Freeze!", "Drop it!", "Get him!",
+        "여긴 어디지?", "빨리 가자!", "말도 안 돼!", "그만해!",
+        "무리야...", "잘됐네!", "이제 시작이다!", "큰일났어!",
+        "뭐야 그게?", "진짜?", "안 돼!", "어떡해!",
+        "やめろ!", "来たか!", "うそだろ…", "行くぞ!",
+        "なんだって!?", "馬鹿な!", "逃げろ!", "危ない!",
+        "住手！", "快跑！", "不可能！", "交给我吧！",
+        "怎么会这样？", "看招！", "小心！", "太强了！",
+    ]
+    for s in short_cries:
+        data.append(("dialogue", s))
+
+    # variants of the handmade seeds
     _dlg_seed = [s for lab, s in list(data) if lab == "dialogue"]
     for s in _dlg_seed:
         v = s.replace("...", "…")
         if v != s:
             data.append(("dialogue", v))
-        if s.endswith("."):
-            data.append(("dialogue", s[:-1] + "!"))
-            data.append(("dialogue", s[:-1] + "?"))
-            data.append(("dialogue", s[:-1]))
+        base = s.rstrip(".!?…")
+        if s[-1:] in ".!?…":
+            data.append(("dialogue", base + "!"))
+            data.append(("dialogue", base + "?"))
+            data.append(("dialogue", base))
         if s and s[0].islower():
             data.append(("dialogue", s[0].upper() + s[1:]))
-        if rng.random() < 0.5:
+        # ALL-CAPS shouting still dialogue when words are real
+        if rng.random() < 0.35:
             data.append(("dialogue", "- " + s))
-        if rng.random() < 0.3:
+        if rng.random() < 0.2:
             data.append(("dialogue", "「" + s + "」"))
-    # short interjections common in manga
-    for s in ["No!", "Why?!", "Stop!!", "What?!", "Run!", "Help!!",
-              "Look out!", "Behind you!", "Get down!", "Over here!",
-              "Not again...", "You're kidding.", "This can't be happening.",
-              "I won't lose!", "Watch out!!", "Come on!", "Hurry up!",
-              "Shut up!", "As if I'd let you!", "Damn it...", "So it begins.",
-              "Now's my chance!", "I can't move!", "It's no use!",
-              "Impossible!", "Unbelievable...", "Is everyone alright?",
-              "Who's there?!", "Show yourself!", "I'm coming for you!",
-              "Please, stop this!", "You'll pay for this!", "Never again.",
-              "At last!", "This is it!", "Go for it!", "Do it now!",
-              "여긴 어디지?", "빨리 가자!", "말도 안 돼!", "그만해!",
-              "무리야...", "잘됐네!", "이제 시작이다!",
-              "やめろ!", "来たか!", "うそだろ…", "行くぞ!",
-              "住手！", "快跑！", "不可能！", "交给我吧！"]:
-        data.append(("dialogue", s))
+        if rng.random() < 0.2 and s[-1:] == "!":
+            data.append(("dialogue", s.upper()))
 
-    # --- SFX ---
+    # Tatoeba real sentences (the bulk)
+    if _tatoeba_available():
+        tb = _load_tatoeba({"en": 9000, "ja": 9000, "ko": 6000, "zh": 6000}, rng)
+        for s in tb:
+            data.append(("dialogue", s))
+        if verbose:
+            print(f"[*] tatoeba dialogue: {len(tb)}")
+    else:
+        if verbose:
+            print("[!] Tatoeba extracts not found — corpus will be small. "
+                  "Run the download step first for best quality.")
+
+    # ---------------- SFX ----------------
     for w in SFX_EN:
         for m in _mutate_sfx(w, rng):
             data.append(("sfx", m))
+        # isolated caps form matters most at runtime — add plain + paired
+        data.append(("sfx", w.upper()))
+        data.append(("sfx", (w.upper() + " " + w.upper())))
     for lst in (SFX_JA, SFX_KO, SFX_ZH):
         for w in lst:
             data.append(("sfx", w))
             data.append(("sfx", w * 2))
             data.append(("sfx", w + "!"))
+            data.append(("sfx", w + "ッ"))
             if len(w) >= 2:
                 data.append(("sfx", w[0] * 2 + w[1:]))
+                data.append(("sfx", w + w[-1] * rng.randint(2, 5)))
 
-    # --- ads / promo / watermark ---
-    slots = ["MangaPlus", "WebtoonHub", "MangaDex", "ScanZone", "ToonVerse",
-             "RawKuna", "ManhuaPlus", "ComicK", "Asura", "Bato",
-             "Naver Series", "KakaoPage", "Tappytoon", "Lezhin"]
+    # ---------------- ads / promo / watermark ----------------
+    dom = lambda: rng.choice(SITES).replace(" ", "").lower()
+    team = lambda: rng.choice(TEAMS)
+    handle = lambda: rng.choice(HANDLES)
+    tld = lambda: rng.choice(TLDS)
+    year = lambda: rng.randint(1994, 2026)
+    n = lambda: rng.randint(1, 199)
+
+    templates = []
     for b in ADS_BASE:
-        data.append(("ads", b))
-        data.append(("ads", b.capitalize()))
-        data.append(("ads", b + " " + rng.choice(slots)))
-        data.append(("ads", rng.choice(slots) + ".com"))
-        data.append(("ads", "© " + rng.choice(slots)))
-        data.append(("ads", b + "!"))
-    for extra in ["CHAPTER 12", "Chapter 24", "EP 5", "Episode 108",
-                  "第12話", "12화", "제1화", "第104章", "Vol.3", "END",
-                  "To be continued", "つづく", "다음 화에 계속", "下集待續",
-                  "Fin.", "おわり", "The End", "완결"]:
-        data.append(("ads", extra))
+        templates += [b, b.capitalize(), b.title(), b + "!", b + ":"]
+    # non-English reader-site / scanlation strings
+    templates += [
+        "汉化", "汉化组", "搬运", "转载请注明出处", "仅供学习交流",
+        "禁止用于商业用途", "更多漫画请访问", "汉化组出品", "翻译",
+        "校对", "嵌字", "修图", "片源", "快看漫画", "哔哩哔哩漫画",
+        "腾讯动漫", "连载中", "每周更新", "扫码阅读", "关注我们",
+        "스캔본", "번역", "역자", "PD체", "저작권자", "정식 연재",
+        "매주", "업데이트", "완결작", "원작", "작가", "역자님",
+        "オフィシャル", "公式", "無断転載禁止", "※この作品はフィクションです",
+        "作者", "連載中", "最新刊", "発売中", "好評発売中", "次号掲載",
+    ]
+    # scanlator credits with real team names
+    for role, _x in ROLES_EN:
+        templates += [
+            f"{role} {team()}", f"{role.upper()} {team()}",
+            f"{role} {team()} scans", f"{role}: {team()}",
+        ]
+    templates += [
+        f"{team()}", f"{team()} scans", f"{team()} Scans",
+        "team " + team().split()[0].lower(), "credit: " + team(),
+        "credits: " + team(), "a " + team() + " production",
+        "presented by " + team(), "brought to you by " + team(),
+    ]
+    # site/domain templates
+    for site in SITES:
+        s = site.replace(" ", "")
+        templates += [
+            s, f"{s}.{tld()}", f"www.{s}.{tld()}", f"https://{s}.{tld()}",
+            f"read on {s}", f"read on {s}.{tld()}", f"only on {s}",
+            f"exclusive on {s}", f"© {s}", f"© {s} {year()}",
+            f"©{year()} {s}", f"powered by {s}", f"visit {s}.{tld()}",
+        ]
+    # socials
+    for h in HANDLES:
+        templates += [
+            f"discord.gg/{h}", f"t.me/{h}", f"twitter.com/{h}",
+            f"x.com/{h}", f"instagram.com/{h}", f"facebook.com/{h}",
+            f"reddit.com/r/{h}", f"patreon.com/{h}", f"ko-fi.com/{h}",
+            f"@{h}", f"follow @{h}", f"join us at discord.gg/{h}",
+        ]
+    # brands / sponsor-speak
+    for b in BRANDS:
+        templates += [f"sponsored by {b}", f"brought to you by {b}",
+                      f"ad: {b}", f"{b} presents"]
+    # chapter headers
+    for t in CHAPTER_HEADERS:
+        templates += [t.format(n=n()), t.format(n=n()) + "!"]
+    templates += END_MARKS
+    templates += ["NEW EPISODE", "DAILY PASS", "FREE EPISODE",
+                  "UNLOCK NOW", "1 COIN", "10 IMAGES", "SEASON FINALE",
+                  "PREVIEW", "NEXT EPISODE PREVIEW"]
+    # heavy weight for CJK scanlation/site credit tokens and CTA strings
+    for s in ["汉化", "汉化组", "搬运", "翻译", "校对", "嵌字", "修图",
+              "汉化组出品", "转载请注明出处", "仅供学习交流",
+              "스캔본", "번역", "역자", "저작권자", "정식 연재",
+              "無断転載禁止", "公式", "連載中", "最新刊", "発売中"]:
+        data.append(("ads", s))
+        data.append(("ads", s))
+        data.append(("ads", s))
+    for s in AD_CTA:
+        data.append(("ads", s))
+        data.append(("ads", s))
+        data.append(("ads", s))
+    for t in templates:
+        if t and len(t) <= 60:
+            data.append(("ads", t))
+            if rng.random() < 0.15:
+                data.append(("ads", t.upper()))
+            if rng.random() < 0.1:
+                data.append(("ads", t.lower()))
+    # second pass with re-rolled slots — boosts ad recall
+    for t in templates:
+        if t and len(t) <= 60 and rng.random() < 0.55:
+            data.append(("ads", t))
+            if rng.random() < 0.2:
+                data.append(("ads", t.upper()))
 
-    # --- junk: random strings, mash, digits ---
+    # ---------------- junk ----------------
     alpha_sets = [
         "abcdefghijklmnopqrstuvwxyz",
         "abcdefghijklmnopqrstuvwxyz0123456789",
@@ -351,19 +696,32 @@ def build_corpus():
         "的一是了我不人在他有这上们来到时大地为子中你说",
     ]
     for _ in range(1400):
-        n = rng.randint(1, 14)
+        nl = rng.randint(1, 14)
         alpha = rng.choice(alpha_sets)
-        s = "".join(rng.choice(alpha) for _ in range(n))
+        s = "".join(rng.choice(alpha) for _ in range(nl))
         if rng.random() < 0.3:
             s += rng.choice(["!", "??", "...", "!!!", "01", "42"])
         data.append(("junk", s))
     for _ in range(300):
-        n = rng.randint(2, 9)
-        s = "".join(rng.choice(JUNK_CHARS) for _ in range(n))
+        nl = rng.randint(2, 9)
+        s = "".join(rng.choice(JUNK_CHARS) for _ in range(nl))
+        data.append(("junk", s))
+    # symbol-only junk (dots, dashes, stars, boxes…) — OCR noise
+    sym_pool = ["!", "?", ".", "…", "—", "–", "-", "_", "~", "*", "#",
+                "@", "&", "%", "$", "+", "=", "|", "||", "/", "\\",
+                "•", "★", "☆", "※", "°", "♦", "◊", "♪", "∴"]
+    for _ in range(500):
+        k = rng.randint(1, 8)
+        s = "".join(rng.choice(sym_pool) for _ in range(k))
+        if rng.random() < 0.25:
+            s += rng.choice(["", "!", "?", "..."])
         data.append(("junk", s))
     for s in ["1", "12", "123", "007", "2024", "999+", "3.14", "50%",
               "#@!", "$%^&", "???", "...", "-", "__", "===", "0_O",
-              "T_T", "@_@", "^_^", "...?", "!!??"]:
+              "T_T", "@_@", "^_^", "...?", "!!??", "|", "||", "—",
+              "«»", "1O0", "II0I", "0x1F", "____", "......", "•••",
+              "!!!!!!", "??????", "......…", "———", "~~~~", "★★★",
+              "※※※", "☆☆☆", "::::::", "++++++", "...!", "!!..."]:
         data.append(("junk", s))
 
     rng.shuffle(data)
@@ -393,7 +751,7 @@ def train():
     bias = np.zeros(C, dtype=np.float32)
     G = np.ones((C, B), dtype=np.float32)
     Gb = np.ones(C, dtype=np.float32)
-    lr, epochs, l2 = 0.3, 28, 1e-6
+    lr, epochs, l2 = 0.3, 16, 1e-6
     bs = 64
     # class weights — balance dialogue against the big junk/sfx pools
     from collections import Counter as _C2
@@ -472,8 +830,8 @@ def train():
     sz = os.path.getsize(OUT) / 1024.0
     print(f"[+] saved {OUT} ({sz:.0f} KB)")
 
-def load_and_predict(text):
-    z = np.load(OUT, allow_pickle=False)
+def load_and_predict(text, path=OUT):
+    z = np.load(path, allow_pickle=False)
     W = z["W"].astype(np.float32)
     bias = z["bias"]
     labels = [str(x) for x in z["labels"]]
@@ -485,11 +843,83 @@ def load_and_predict(text):
     i = int(p.argmax())
     return labels[i], float(p[i])
 
+PROBE = [
+    # --- sfx (must be sfx) ---
+    "ZWOOSH", "KRA-KOOM!!", "FWOOSH", "THUD", "BAM!!", "SLASH!", "DOOM",
+    "VWOOM", "SHAAAH", "KRRRK", "TAK TAK TAK", "BOOM!!!", "CRACK", "KWAAN",
+    "ドォン", "ゴゴゴゴ", "バンッ", "ズシャアア", "キラッ", "ドドドド",
+    "THUDD", "DAAAN", "GOOON", "BWOOOM", "SKREEE", "KRRK", "THOK",
+    "パアアン", "쾅쾅", "咔嚓", "ZZZIP", "SLAM", "POW!!", "CLANG",
+    "ドンッ", "ガシャーン", "ズドドド", "KRAKKA", "WOOMPH", "THWIP",
+    # --- ads/promo (must be promo) ---
+    "Read more at mangadex.org", "SCANLATED BY ZERO SCANS", "Typeset: John",
+    "Join our discord server!", "www.webtoons.com", "NAVER WEBTOON",
+    "Follow us on twitter @xyz", "Chapter 45: The Beginning",
+    "Advertisement", "CLICK HERE", "Powered by Kakao",
+    "To be continued...", "SCAN BY FLAME COMICS", "discord.gg/xxxx",
+    "MANGADEX.ORG", "Support us on Patreon!", "Chapter 12", "つづく",
+    "READ ONLY ON ASURASCANS.COM", "第12話", "Vol.3", "© SHUEISHA",
+    "Follow @flamecomics", "Next episode preview", "12화",
+    # --- dialogue (must be dialogue) ---
+    "I can't believe you did that!", "Are you serious right now?",
+    "What happened here?", "Let's get out of this place.",
+    "You're lying, aren't you?", "He is the strongest hunter.",
+    "STOP!!", "NO!!!", "WHY?!", "GO!", "WAIT!", "HELP US!",
+    "그래, 여기가 바로 그 곳이야.", "お前は誰だ。", "你到底是谁？",
+    "Don't underestimate me!", "Who's there?!", "This is the end.",
+    # --- junk (must be junk) ---
+    "12345", "42", "!!!", "......", "0x1F", "#@!", "—", "||",
+]
+
+def probe():
+    """realistic probe set — prints label+confidence, flags mismatches"""
+    bad = 0
+    for s in PROBE:
+        lab, cf = load_and_predict(s)
+        exp = None
+        if s in PROBE_SFX: exp = "sfx"
+        elif s in PROBE_ADS: exp = "ads"
+        elif s in PROBE_DLG: exp = "dialogue"
+        elif s in PROBE_JUNK: exp = "junk"
+        mark = ""
+        if exp is not None and exp != lab:
+            mark = "   <<< MISS"
+            bad += 1
+        print(f"  {cf:.3f} {lab:9s} <- {s!r}{mark}")
+    print(f"[*] misses: {bad}/{len(PROBE)}")
+
+PROBE_SFX = {"ZWOOSH", "KRA-KOOM!!", "FWOOSH", "THUD", "BAM!!", "SLASH!",
+             "DOOM", "VWOOM", "SHAAAH", "KRRRK", "TAK TAK TAK", "BOOM!!!",
+             "CRACK", "KWAAN", "ドォン", "ゴゴゴゴ", "バンッ", "ズシャアア",
+             "キラッ", "ドドドド", "THUDD", "DAAAN", "GOOON", "BWOOOM",
+             "SKREEE", "KRRK", "THOK", "パアアン", "쾅쾅", "咔嚓", "ZZZIP",
+             "SLAM", "POW!!", "CLANG", "ドンッ", "ガシャーン", "ズドドド",
+             "KRAKKA", "WOOMPH", "THWIP"}
+PROBE_ADS = {"Read more at mangadex.org", "SCANLATED BY ZERO SCANS",
+             "Typeset: John", "Join our discord server!", "www.webtoons.com",
+             "NAVER WEBTOON", "Follow us on twitter @xyz",
+             "Chapter 45: The Beginning", "Advertisement", "CLICK HERE",
+             "Powered by Kakao", "To be continued...",
+             "SCAN BY FLAME COMICS", "discord.gg/xxxx", "MANGADEX.ORG",
+             "Support us on Patreon!", "Chapter 12", "つづく",
+             "READ ONLY ON ASURASCANS.COM", "第12話", "Vol.3", "© SHUEISHA",
+             "Follow @flamecomics", "Next episode preview", "12화"}
+PROBE_DLG = {"I can't believe you did that!", "Are you serious right now?",
+             "What happened here?", "Let's get out of this place.",
+             "You're lying, aren't you?", "He is the strongest hunter.",
+             "STOP!!", "NO!!!", "WHY?!", "GO!", "WAIT!", "HELP US!",
+             "그래, 여기가 바로 그 곳이야.", "お前は誰だ。", "你到底是谁？",
+             "Don't underestimate me!", "Who's there?!", "This is the end."}
+PROBE_JUNK = {"12345", "42", "!!!", "......", "0x1F", "#@!", "—", "||"}
+
 if __name__ == "__main__":
     cmd = sys.argv[1] if len(sys.argv) > 1 else "train"
     if cmd == "train":
         train()
+        probe()
     elif cmd == "eval":
         for t in sys.argv[2:]:
             lab, cf = load_and_predict(t)
             print(f"  {cf:.3f} {lab:9s} <- {t!r}")
+    elif cmd == "probe":
+        probe()

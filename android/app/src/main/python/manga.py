@@ -3774,6 +3774,92 @@ class MangaTranslator:
         return detections
 
 
+    def _protect_display_text(self, image: np.ndarray,
+                              regions: List["TextRegion"]) -> None:
+        """حفاظت از متنِ نمایشیِ روی هنر (لوگو/تیترِ بزرگ/دست‌نویسِ چرخیده):
+        این‌ها جزو هنرند و inpaintشان همیشه لکه می‌شود → SFX حساب می‌شوند
+        و دست‌نخورده می‌مانند. متنِ عمودیِ واقعی (tategaki) و متنِ داخلِ
+        حباب شاملِ این حفاظت نیست."""
+        try:
+            h = image.shape[0]
+            n_logo = n_rot = 0
+            for r in regions:
+                if (r.det_class or "") in ("bubble", "text_bubble"):
+                    continue
+                # ۱) لوگو/تیتر: تک‌خطی با ارتفاعِ حرف ≥ ۵.۵٪ ارتفاعِ صفحه
+                polys = list(r.ocr_polys or []) or list(r.boxes or [])
+                if polys and r.kind in ("dialogue", "junk"):
+                    _hs = []
+                    for p in polys:
+                        try:
+                            ys = [float(pt[1]) for pt in np.asarray(p)]
+                            _hs.append(max(ys) - min(ys))
+                        except Exception:
+                            continue
+                    if (len(_hs) == 1 and _hs
+                            and max(_hs) >= 0.055 * h):
+                        r.kind = "sfx"
+                        n_logo += 1
+                        continue
+                # ۲) متنِ چرخیدهٔ تزئینی (نه عمودیِ واقعی ۴۵..۱۳۵ درجه)
+                _ang = abs(float(getattr(r, "angle", 0.0) or 0.0))
+                if _ang >= 8.0 and not (45.0 <= _ang <= 135.0) \
+                        and r.kind == "dialogue":
+                    r.kind = "sfx"
+                    n_rot += 1
+            if n_logo or n_rot:
+                print(f"    [*] حفاظتِ متنِ نمایشی: {n_logo} لوگو/تیترِ بزرگ، "
+                      f"{n_rot} متنِ چرخیده → SFX (دست‌نخورده)")
+        except Exception as e:
+            print(f"    [!] حفاظتِ متنِ نمایشی ناموفق: {e}")
+
+    def _reclassify_sfx_context(self, image: np.ndarray,
+                                regions: List["TextRegion"]) -> None:
+        """حلِ ابهامِ دیالوگ/SFX با هندسهٔ حباب (بازبینیِ بعد از ساختِ نواحی):
+        متنِ کوتاهِ مدل‌مبهمِ بیرونِ حباب → SFX (هنر دست‌نخورده می‌ماند)؛
+        SFXِ داخلِ حباب که مدل کمی هم دیالوگ می‌بیند → دیالوگ (ترجمه می‌شود)."""
+        try:
+            if MangaTranslator._text_filter_model() is None:
+                return
+            interior = None
+            _bub = [r for r in regions
+                    if (r.det_class or "") in ("bubble", "text_bubble")]
+            if _bub:
+                interior = self._build_interior_map(image, _bub)
+            fx = fd = 0
+            for r in regions:
+                t = (r.source_text or "").strip()
+                if not t or len(t) > 24:
+                    continue
+                probs = MangaTranslator._ml_distribution(t)
+                if not probs:
+                    continue
+                p_dlg = probs.get("dialogue", 0.0)
+                p_sfx = probs.get("sfx", 0.0)
+                in_bubble = (r.det_class or "") in ("bubble", "text_bubble")
+                if interior is not None and not in_bubble:
+                    try:
+                        x, y, w, h = r.rect
+                        cx, cy = int(x + w / 2), int(y + h / 2)
+                        if (0 <= cy < interior.shape[0]
+                                and 0 <= cx < interior.shape[1]
+                                and interior[cy, cx] > 0):
+                            in_bubble = True
+                    except Exception:
+                        pass
+                if in_bubble and r.kind == "sfx" and p_dlg >= 0.28:
+                    r.kind = "dialogue"
+                    fd += 1
+                elif (not in_bubble and r.kind == "dialogue"
+                      and p_sfx >= 0.30 and p_sfx >= 0.75 * p_dlg):
+                    r.kind = "sfx"
+                    fx += 1
+            if fx or fd:
+                print(f"    [*] بازشناسیِ SFX/دیالوگ با هندسهٔ حباب: "
+                      f"{fx} → SFX، {fd} → دیالوگ")
+        except Exception as e:
+            print(f"    [!] بازشناسیِ SFX ناموفق: {e}")
+
     def _ocr_lang_flags(self):
         
         langs = [str(x).lower().strip() for x in (getattr(self, "ocr_langs", None) or ["en"])]
@@ -3946,8 +4032,8 @@ class MangaTranslator:
         return v
 
     @classmethod
-    def _ml_classify(cls, text: str) -> "Optional[Tuple[str, float]]":
-        """برچسب + اطمینانِ مدل؛ None = مدل غایب/بی‌اعتماد"""
+    def _ml_distribution(cls, text: str) -> "Optional[Dict[str, float]]":
+        """توزیعِ کاملِ احتمالِ کلاس‌ها؛ None = مدل غایب"""
         try:
             mdl = cls._text_filter_model()
             if mdl is None:
@@ -3957,31 +4043,84 @@ class MangaTranslator:
             lg -= float(lg.max())
             p = np.exp(lg)
             p /= float(p.sum())
-            i = int(p.argmax())
-            return mdl["labels"][i], float(p[i])
+            return {lab: float(p[i]) for i, lab in enumerate(mdl["labels"])}
         except Exception:
             return None
 
     @classmethod
-    def _classify_text(cls, text: str) -> str:
+    def _ml_classify(cls, text: str) -> "Optional[Tuple[str, float]]":
+        """برچسب + اطمینانِ مدل؛ None = مدل غایب/بی‌اعتماد"""
+        d = cls._ml_distribution(text)
+        if not d:
+            return None
+        lab = max(d, key=d.get)
+        return lab, d[lab]
+
+    @staticmethod
+    def _structural_junk(s: str) -> bool:
+        """نشانه‌های ساختاریِ قویِ نویز (نماد/رقم محض) — نه قاعدهٔ محتوایی"""
+        core = re.sub(r"[!?.…~\s\-_—–|•★☆※°♦◊♪#$%&*=+<>^'\"()\[\]{}]+",
+                      "", s)
+        if not core:
+            return True
+        if re.fullmatch(r"[\d\s.%+]+", s):
+            return True
+        return False
+
+    @staticmethod
+    def _structural_promo(s: str) -> bool:
+        """نشانه‌های ساختاریِ تبلیغ: دامنه/URL/© — نه قاعدهٔ محتوایی"""
+        if re.search(r"(?i)(?:https?://|www\.)\S+", s):
+            return True
+        if re.search(r"(?i)\b[\w-]+\.(?:com|org|net|gg|io|me|tv|to|cc|xyz"
+                     r"|ru|info)(?:/\S*)?", s):
+            return True
+        if re.search(r"(?i)\b(?:discord\.gg|t\.me|patreon\.com|ko-fi\.com"
+                     r"|instagram\.com|twitter\.com|x\.com|facebook\.com"
+                     r"|reddit\.com)/?\S*", s):
+            return True
+        if re.search(r"[©ⓒ]|(?i:copyright)", s):
+            return True
+        return False
+
+    @classmethod
+    def _classify_text(cls, text: str, in_bubble: bool = False) -> str:
 
         stripped = (text or "").strip()
         if not stripped:
             return "junk"
 
-        # ---------- ۱) مدلِ ML (اولویت) — آستانهٔ محافظه‌کارانه؛
-        # مواردِ کم‌اطمینان به قواعدِ پشتیبان می‌روند ----------
-        _mlr = cls._ml_classify(stripped)
-        if _mlr is not None:
-            _lab, _cf = _mlr
-            if _lab == "dialogue" and _cf >= 0.62:
-                return "dialogue"
-            if _lab == "sfx" and _cf >= 0.74:
-                return "sfx"
-            if _lab == "junk" and _cf >= 0.82:
-                return "junk"
-            if _lab == "ads" and _cf >= 0.78:
+        # ---------- ۱) مدلِ ML (اولویت) — تصمیمِ نهایی با مدلِ آموخته است.
+        # آستانه‌ها از اعتبارسنجیِ مجموعهٔ واقعی تنظیم شده‌اند ----------
+        _probs = cls._ml_distribution(stripped)
+        if _probs is not None:
+            _lab = max(_probs, key=_probs.get)
+            _cf = _probs[_lab]
+            # دامنه/URL/© همیشه تبلیغ است — حتی اگر مدل چیزِ دیگری بگوید
+            # (پاک‌کردنِ نیمه‌کارهٔ واترمارک روی هنر لکه می‌گذارد)
+            if cls._structural_promo(stripped):
                 return "promo"
+            if _lab == "dialogue" and _cf >= 0.55:
+                return "dialogue"
+            if _lab == "sfx" and _cf >= 0.60:
+                return "sfx"
+            if _lab == "ads" and _cf >= 0.50:
+                return "promo"
+            if _lab == "junk" and _cf >= 0.75:
+                return "junk"
+            # ---------- ناحیهٔ نامطمئنِ مدل ----------
+            if cls._structural_promo(stripped):
+                return "promo"
+            if cls._structural_junk(stripped):
+                return "junk"
+            _p_dlg = _probs.get("dialogue", 0.0)
+            _p_sfx = _probs.get("sfx", 0.0)
+            # متنِ کوتاهِ مبهمِ بیرونِ حباب → SFX (هنر دست‌نخورده)؛
+            # داخلِ حباب → دیالوگ (امن: ترجمه می‌شود)
+            if (not in_bubble and len(stripped) <= 12
+                    and _p_sfx >= 0.30 and _p_sfx >= 0.75 * _p_dlg):
+                return "sfx"
+            return "dialogue"   # پیش‌فرضِ امن: ترجمه شود
 
         latin_core = re.sub(r"[^A-Za-z]", "", stripped)
         if len(latin_core) >= 3 and re.fullmatch(r"[A-Za-z][A-Za-z\s.'\-]*[.!?…~]*", stripped.replace("...", ".").replace("…", ".")):
@@ -11374,6 +11513,28 @@ class MangaTranslator:
             except Exception as e:
                 print(f"    [!] جاروی OCR ناموفق: {e}")
 
+            # ---- بازشناسیِ نوعِ هر ناحیه از متنِ «نهاییِ» ادغام‌شده ----
+            # (نوع در لحظهٔ ساخت روی زیرمتنِ قبل از ادغام چسبیده و بعد از
+            # ادغام به‌روز نمی‌شد — باعثِ ترجمه/پاک‌شدنِ بلوکِ اعتبارِ
+            # تبلیغی می‌شد)
+            _rk = 0
+            for r in unique_regions:
+                _t2 = (r.source_text or "").strip()
+                if not _t2:
+                    continue
+                _k2 = MangaTranslator._classify_text(
+                    _t2,
+                    in_bubble=(r.det_class or "") in ("bubble", "text_bubble"))
+                if _k2 != r.kind:
+                    r.kind = _k2
+                    _rk += 1
+            if _rk:
+                print(f"    [*] بازشناسیِ نوع از متنِ نهایی: {_rk} ناحیه")
+
+            # ---- حفاظت از متنِ نمایشی (لوگو/تیتر/چرخیده) ----
+            self._protect_display_text(image, unique_regions)
+            # ---- بازشناسیِ ابهامِ SFX/دیالوگ با هندسهٔ حباب ----
+            self._reclassify_sfx_context(image, unique_regions)
         # ---- دروازهٔ برق‌های تزئینی: خوانشِ بی‌معنای کوتاه روی هنر
         # (جواهرها/خطوط تزئینی که OCR حرف‌شان می‌خواند) وقتی چندضلعی‌های
         # OCR فقط چند درصدِ کادر را می‌گیرند، متن نیست — نگه داشته می‌شود
@@ -11636,8 +11797,17 @@ class MangaTranslator:
         # تبلیغ/واترمارک و SFX دست‌نخورده می‌مانند (سیاست کاربر)؛
         # حباب‌های بدون ترجمه و junk پاک می‌شوند تا متنی جا نماند.
         # SFX داخل حبابِ گفت‌وگو استثناست — حباب نباید متن جامانده داشته باشد.
+        # ← اصلاحِ «متنِ جدید می‌پرد»: دیالوگی که AI برایش ترجمه نداد
+        #   پاک نمی‌شود؛ متنِ اصلی می‌ماند تا حباب خالی نشود.
+        _untrans = [r for r in dialogue_regions
+                    if not (r.translated_text or "").strip()]
+        if _untrans:
+            print(f"  [!] {len(_untrans)} حباب بدون ترجمه → متنِ اصلی "
+                  f"دست‌نخورده می‌ماند (حباب خالی نمی‌شود)")
         clean_targets = [r for r in regions
-                         if r.kind in ("dialogue", "junk")
+                         if (r.kind == "dialogue"
+                             and (r.translated_text or "").strip())
+                         or r.kind == "junk"
                          or (r.kind == "sfx"
                              and r.det_class in ("bubble", "text_bubble"))]
         if clean_targets:

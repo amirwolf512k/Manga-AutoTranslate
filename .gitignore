@@ -6,3 +6,5 @@ rapidocr_models/
 lama_models/
 workspace/
 *.cache/
+tools/.data/sentences*
+tools/.data/*.tar.bz2
