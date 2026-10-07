@@ -3848,10 +3848,44 @@ class MangaTranslator:
                 os.path.join(os.path.dirname(os.path.abspath(__file__)),
                              "models", "text_filter.npz"),
                 os.path.join(os.getcwd(), "models", "text_filter.npz"),
-                "/android_asset/models/text_filter.npz",
+                _model_cache_dir("models_cache"),
                 "/data/local/tmp/models/text_filter.npz",
             ]
-            pth = next((p for p in cands if p and os.path.isfile(p)), None)
+            pth = None
+            for p in cands:
+                if not p:
+                    continue
+                if os.path.isdir(p):
+                    p = os.path.join(p, "text_filter.npz")
+                if os.path.isfile(p) and os.path.getsize(p) > 10000:
+                    pth = p
+                    break
+            if pth is None:
+                # دانلود خودکار از آینهٔ releases (مثل lama-lite)
+                try:
+                    dst = os.path.join(_model_cache_dir("models_cache"),
+                                       "text_filter.npz")
+                    urls = (
+                        "https://github.com/amirwolf512k/Manga-AutoTranslate/"
+                        "releases/download/models-v2/text_filter.npz",
+                    )
+                    for u in urls:
+                        try:
+                            print("[*] دانلود مدلِ فیلترِ متنی ...")
+                            _d = _download_with_progress(u, dst, 60) \
+                                if "_download_with_progress" in globals() \
+                                else None
+                            if _d is None:
+                                import urllib.request as _ur
+                                _ur.urlretrieve(u, dst)
+                            if os.path.isfile(dst) \
+                                    and os.path.getsize(dst) > 10000:
+                                pth = dst
+                                break
+                        except Exception:
+                            continue
+                except Exception:
+                    pass
             if pth:
                 z = _np.load(pth, allow_pickle=False)
                 model = {
