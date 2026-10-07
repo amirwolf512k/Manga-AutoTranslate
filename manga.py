@@ -1060,12 +1060,17 @@ class LamaLiteONNX:
         self.max_side = int(max_side or self.MAX_RUN)
         if _lite_mode():
             # کیفیتِ PC: ۵۱۲ (به‌جای ۳۸۴) — مناطقِ بزرگِ SFX/هنر با جزئیات
-            # بیشتری بازسازی می‌شوند؛ اندروید برای ایمنیِ رم روی ۳۸۴ می‌ماند
+            # بیشتری بازسازی می‌شوند؛ اندروید برای ایمنیِ رم روی ۳۸۴ می‌ماند.
+            # با MANGA_LAMA_MAXSIDE می‌توان کیفیت را روی PC بالا هم برد
+            # (مثلاً ۷۶۸ برای صفحاتِ رنگی با جعبه‌های تیره — دودِ LaMa کمتر)
             _env_ms = os.environ.get("MANGA_LAMA_MAXSIDE", "").strip()
-            _lite_cap = int(_env_ms) if _env_ms.isdigit() and int(_env_ms) >= 192 else 512
-            if _on_android():
-                _lite_cap = min(_lite_cap, 384)
-            self.max_side = min(self.max_side, _lite_cap)
+            if _env_ms.isdigit() and int(_env_ms) >= 192:
+                _cap = int(_env_ms)
+                if _on_android():
+                    _cap = min(_cap, 384)
+                self.max_side = _cap
+            else:
+                self.max_side = min(self.max_side, 512)
         # dynamic dims?
         self._dynamic = True
         try:
@@ -3826,14 +3831,124 @@ class MangaTranslator:
             return True
         return False
 
+    # ---------- فیلترِ متنیِ یادشده (مدلِ کوچکِ n-gram، فقط numpy) ----------
+    # جایگزینِ قواعدِ دستی: الگوهای SFX/تبلیغ/چرت در «دادهٔ آموزش» اند،
+    # نه در کد. اگر مدل نبود یا مطمئن نبود → قواعدِ قدیمی به‌عنوان پشتیبان
+    _TF_CACHE: dict = {}
+
+    @classmethod
+    def _text_filter_model(cls):
+        if "model" in cls._TF_CACHE:
+            return cls._TF_CACHE["model"]
+        model = None
+        try:
+            import numpy as _np
+            cands = [
+                os.environ.get("MANGA_TEXT_FILTER", "").strip(),
+                os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "models", "text_filter.npz"),
+                os.path.join(os.getcwd(), "models", "text_filter.npz"),
+                "/android_asset/models/text_filter.npz",
+                "/data/local/tmp/models/text_filter.npz",
+            ]
+            pth = next((p for p in cands if p and os.path.isfile(p)), None)
+            if pth:
+                z = _np.load(pth, allow_pickle=False)
+                model = {
+                    "W": z["W"].astype(_np.float32),
+                    "bias": z["bias"].astype(_np.float32),
+                    "labels": [str(x) for x in z["labels"]],
+                    "buckets": int(z["buckets"][0]),
+                }
+                print(f"[+] فیلترِ متنیِ ML آماده: {os.path.basename(pth)} "
+                      f"({os.path.getsize(pth)//1024}KB، کلاس‌ها: "
+                      f"{'/'.join(model['labels'])})")
+        except Exception as e:
+            print(f"[!] فیلترِ متنیِ ML بارگذاری نشد ({e}) → قواعدِ پشتیبان")
+            model = None
+        cls._TF_CACHE["model"] = model
+        return model
+
     @staticmethod
-    def _classify_text(text: str) -> str:
+    def _tf_fnv1a(s: str) -> int:
+        h = 2166136261
+        for ch in s.encode("utf-8", "ignore"):
+            h ^= ch
+            h = (h * 16777619) & 0xFFFFFFFF
+        return h
+
+    @classmethod
+    def _tf_featurize(cls, text: str, buckets: int) -> "np.ndarray":
+        import unicodedata as _ud
+        t = _ud.normalize("NFKC", text or "").lower()
+        t = re.sub(r"\s+", " ", t).strip()
+        words = t.split(" ")
+        feats = []
+        for w in words:
+            if not w:
+                continue
+            ww = "<" + w + ">"
+            feats.append("w:" + w)
+            for n in range(1, 5):
+                for i in range(0, max(1, len(ww) - n + 1)):
+                    feats.append("c%d:%s" % (n, ww[i:i + n]))
+        for i in range(len(words) - 1):
+            feats.append("b:" + words[i] + "_" + words[i + 1])
+        if not feats:
+            feats = ["c1:<empty>"]
+        counts = {}
+        for f in feats:
+            k = cls._tf_fnv1a(f) % buckets
+            counts[k] = counts.get(k, 0.0) + 1.0
+        idx = np.fromiter(counts.keys(), dtype=np.int64, count=len(counts))
+        val = np.fromiter(counts.values(), dtype=np.float32,
+                          count=len(counts))
+        np.sqrt(val, out=val)
+        nrm = float(np.linalg.norm(val))
+        if nrm > 0:
+            val /= nrm
+        v = np.zeros(buckets, dtype=np.float32)
+        v[idx] = val
+        return v
+
+    @classmethod
+    def _ml_classify(cls, text: str) -> "Optional[Tuple[str, float]]":
+        """برچسب + اطمینانِ مدل؛ None = مدل غایب/بی‌اعتماد"""
+        try:
+            mdl = cls._text_filter_model()
+            if mdl is None:
+                return None
+            v = cls._tf_featurize(text, mdl["buckets"])
+            lg = v @ mdl["W"].T + mdl["bias"]
+            lg -= float(lg.max())
+            p = np.exp(lg)
+            p /= float(p.sum())
+            i = int(p.argmax())
+            return mdl["labels"][i], float(p[i])
+        except Exception:
+            return None
+
+    @classmethod
+    def _classify_text(cls, text: str) -> str:
 
         stripped = (text or "").strip()
         if not stripped:
             return "junk"
 
-        
+        # ---------- ۱) مدلِ ML (اولویت) — آستانهٔ محافظه‌کارانه؛
+        # مواردِ کم‌اطمینان به قواعدِ پشتیبان می‌روند ----------
+        _mlr = cls._ml_classify(stripped)
+        if _mlr is not None:
+            _lab, _cf = _mlr
+            if _lab == "dialogue" and _cf >= 0.62:
+                return "dialogue"
+            if _lab == "sfx" and _cf >= 0.74:
+                return "sfx"
+            if _lab == "junk" and _cf >= 0.82:
+                return "junk"
+            if _lab == "ads" and _cf >= 0.78:
+                return "promo"
+
         latin_core = re.sub(r"[^A-Za-z]", "", stripped)
         if len(latin_core) >= 3 and re.fullmatch(r"[A-Za-z][A-Za-z\s.'\-]*[.!?…~]*", stripped.replace("...", ".").replace("…", ".")):
             
@@ -4735,7 +4850,31 @@ class MangaTranslator:
             keep[lab == i] = 255
         return keep
 
-    def _bubble_interior_mask(self, gray_crop: np.ndarray, zone: np.ndarray) -> Optional[np.ndarray]:
+    @staticmethod
+    def _interior_polarity_hint(gray_crop: np.ndarray,
+                                zone: np.ndarray) -> Optional[str]:
+        """قطبیتِ داخلِ ناحیه از حلقهٔ اطرافِ خودِ متن (نه کلِ کراپ):
+        جعبهٔ سیاهِ روی صفحهٔ سفید حلقهٔ تیره دارد → «dark»؛ حبابِ کاغذی
+        حلقهٔ روشن → «bright». میانهٔ کلِ کراپ گمراه‌کننده است."""
+        try:
+            z = (zone > 0)
+            if int(z.sum()) < 150:
+                return None
+            ring = (cv2.dilate(zone, np.ones((15, 15), np.uint8)) > 0) & ~z
+            if int(ring.sum()) < 80:
+                return None
+            med = float(np.median(gray_crop[ring]))
+            if med < 110.0:
+                return "dark"
+            if med >= 150.0:
+                return "bright"
+            return None
+        except Exception:
+            return None
+
+    def _bubble_interior_mask(self, gray_crop: np.ndarray, zone: np.ndarray,
+                              polarity_hint: Optional[str] = None,
+                              allow_full_crop: bool = False) -> Optional[np.ndarray]:
         
         
         
@@ -4743,11 +4882,18 @@ class MangaTranslator:
         ch, cw = gray_crop.shape[:2]
         if zone is None or cv2.countNonZero(zone) == 0:
             return None
-        med = float(np.median(gray_crop))
-        if med >= 128:
-            base = (gray_crop >= max(120, med - 60)).astype(np.uint8)
+        if polarity_hint == "dark":
+            # جعبه/حبابِ تیره روی صفحهٔ روشن: میانهٔ کلِ کراپ سفیدِ صفحه است
+            # و قطبیت را خراب می‌کند — از راهنما استفاده می‌کنیم
+            base = (gray_crop <= 150).astype(np.uint8)
+        elif polarity_hint == "bright":
+            base = (gray_crop >= max(120, 0)).astype(np.uint8)
         else:
-            base = (gray_crop <= min(150, med + 60)).astype(np.uint8)
+            med = float(np.median(gray_crop))
+            if med >= 128:
+                base = (gray_crop >= max(120, med - 60)).astype(np.uint8)
+            else:
+                base = (gray_crop <= min(150, med + 60)).astype(np.uint8)
         base = cv2.morphologyEx(base, cv2.MORPH_CLOSE, np.ones((7, 7), np.uint8))
         n, lab, cst, _cents = cv2.connectedComponentsWithStats(base, connectivity=4)
         seed = cv2.dilate(zone, np.ones((3, 3), np.uint8), iterations=3)
@@ -4755,7 +4901,15 @@ class MangaTranslator:
         vals, cnts = np.unique(labs[labs > 0], return_counts=True)
         if len(vals) == 0:
             return None
-        comp = (lab == vals[int(np.argmax(cnts))]).astype(np.uint8) * 255
+        # «همهٔ» مؤلفه‌هایی که بذر به آن‌ها می‌رسد (نه فقط بزرگ‌ترین):
+        # متنِ روشن روی جعبهٔ تیره زمینِ تیره را به نوارهای جدا می‌بُرد و
+        # بزرگ‌ترینِ آن‌ها فقط یک نوارِ بینِ دو خط است — اتحادِ همه + پر
+        # کردنِ حفره‌ها = کلِ داخلِ جعبه/حباب
+        comp = np.zeros_like(base)
+        for v, c in zip(vals, cnts):
+            if int(v) == 0 or int(c) < 60:
+                continue
+            comp[lab == v] = 255
         if int(np.count_nonzero(comp)) < 0.10 * ch * cw:
             return None
         # جزیره‌های روشنِ محصور: خطوط متنِ جامانده + دیوارهٔ حباب نواحیِ
@@ -4793,9 +4947,14 @@ class MangaTranslator:
         cv2.floodFill(ff, ffm, (0, 0), 255)
         filled = cv2.bitwise_or(padc, cv2.bitwise_not(ff))[1:-1, 1:-1]
         if float(np.count_nonzero(filled)) > 0.95 * ch * cw:
-            
+            if allow_full_crop:
+                # کراپِ تنگِ دورِ باکس/حبابِ توپُر (جعبهٔ سیاهِ نریتور و…):
+                # «همهٔ کراپ» همان داخلِ حباب است — ولی لبهٔ کراپ ممکن است
+                # قاب/کاغذِ بیرون را هم داشته باشد؛ ۶px از دور برمی‌داریم
+                return cv2.erode(filled, np.ones((13, 13), np.uint8),
+                                 iterations=1)
             return None
-        
+
         filled = cv2.erode(filled, np.ones((3, 3), np.uint8), iterations=2)
         return filled
 
@@ -5449,9 +5608,17 @@ class MangaTranslator:
         پرکردن‌ها و جاروها نمونهٔ رنگ زمینه را فقط از داخلِ همین ناحیه
         برمی‌دارند تا رنگِ آن‌سوی دیواره (کاغذ بیرون/هنر) به داخل نچکد."""
         try:
-            bubble_regions = [r for r in regions
-                              if (getattr(r, "det_class", "") or "")
-                              in ("bubble", "text_bubble")]
+            # همهٔ ناحیه‌های متنی (نه فقط کلاس bubble) — حباب‌هایی که
+            # دسته‌بند کلاسشان خالی می‌آید هم داخلِ محاسبه‌شده دارند تا
+            # گشادگی ماسک هرگز از دیوارهٔ آن‌ها بیرون نزند
+            bubble_regions = []
+            for r in regions:
+                dc = (getattr(r, "det_class", "") or "")
+                if dc in ("bubble", "text_bubble"):
+                    bubble_regions.append(r)
+                elif (list(getattr(r, "ocr_polys", None) or [])
+                      or list(getattr(r, "boxes", None) or [])):
+                    bubble_regions.append(r)
             if not bubble_regions:
                 return None
             h, w = image.shape[:2]
@@ -5460,6 +5627,9 @@ class MangaTranslator:
             any_hit = False
             for r in bubble_regions:
                 try:
+                    dc = (getattr(r, "det_class", "") or "")
+                    if dc == "text_free":
+                        continue  # متن آزاد روی هنر — «داخلِ حباب» ندارد
                     x, y, rw, rh = [int(v) for v in r.rect]
                     pad = 16
                     x0, y0 = max(0, x - pad), max(0, y - pad)
@@ -5471,8 +5641,47 @@ class MangaTranslator:
                         z = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
                         z[max(0, y - y0):y + rh - y0,
                           max(0, x - x0):x + rw - x0] = 255
-                    interior = self._bubble_interior_mask(
+                    _hint = self._interior_polarity_hint(
                         gray[y0:y1, x0:x1], z)
+                    _ch2, _cw2 = y1 - y0, x1 - x0
+                    _allow_full = (float(rw * rh)
+                                   >= 0.45 * float(_ch2 * _cw2))
+                    interior = self._bubble_interior_mask(
+                        gray[y0:y1, x0:x1], z, polarity_hint=_hint,
+                        allow_full_crop=_allow_full)
+
+                    def _interior_too_small(iv):
+                        try:
+                            return iv is None or int(np.count_nonzero(iv)) \
+                                < 0.50 * float(max(1, rw * rh))
+                        except Exception:
+                            return True
+
+                    if _interior_too_small(interior):
+                        # داخلِ پیدا شده خیلی کوچک‌تر از باکس است — خطوطِ متن
+                        # مؤلفهٔ تیره/روشن را بریده‌اند. با بذرِ مستطیلِ
+                        # کوچک‌شدهٔ خودِ باکس دوباره امتحان می‌کنیم
+                        try:
+                            _cgh = y1 - y0
+                            _cgw = x1 - x0
+                            _sx = max(0, x - x0 + 8)
+                            _sy = max(0, y - y0 + 8)
+                            _ex = min(_cgw, x + rw - x0 - 8)
+                            _ey = min(_cgh, y + rh - y0 - 8)
+                            if _ex - _sx >= 16 and _ey - _sy >= 16:
+                                _seed2 = np.zeros((_cgh, _cgw), dtype=np.uint8)
+                                _seed2[_sy:_ey, _sx:_ex] = 255
+                                interior2 = self._bubble_interior_mask(
+                                    gray[y0:y1, x0:x1], _seed2,
+                                    polarity_hint=_hint,
+                                    allow_full_crop=_allow_full)
+                                if interior2 is not None:
+                                    _old = int(np.count_nonzero(interior)) \
+                                        if interior is not None else 0
+                                    if int(np.count_nonzero(interior2)) > _old:
+                                        interior = interior2
+                        except Exception:
+                            pass
                     if interior is not None and interior.max() > 0:
                         fmap[y0:y1, x0:x1] = cv2.bitwise_or(
                             fmap[y0:y1, x0:x1], interior)
@@ -5641,9 +5850,73 @@ class MangaTranslator:
         except Exception:
             return None
 
+    def _build_wall_protect(self, image: np.ndarray,
+                            regions: List["TextRegion"],
+                            interior_map: Optional[np.ndarray] = None,
+                            ) -> Optional[np.ndarray]:
+        """نقشهٔ «هرگز لمس نکن» برای پاکسازی:
+        ۱. حلقهٔ مرزِ داخلِ هر حباب (از نقشهٔ داخل) = خودِ دیواره + ۲px
+        ۲. خطوطِ بلندِ صفحه (قاب پنل‌ها) از _wall_lines
+        ۳. نوارِ لبهٔ باکس‌های حباب از _bubble_border_band
+        ماسک و گشادگیِ ماسک هرگز نباید روی این پیکسل‌ها برود — وگرنه
+        «حباب پاک می‌شود» (مشکلِ اصلیِ کاربر)."""
+        try:
+            h, w = image.shape[:2]
+            prot = np.zeros((h, w), dtype=np.uint8)
+            any_hit = False
+            # ۱) حلقهٔ مرزِ داخل
+            if interior_map is not None and interior_map.any():
+                try:
+                    ring = cv2.dilate(interior_map, np.ones((5, 5), np.uint8)) \
+                        & ~cv2.erode(interior_map, np.ones((3, 3), np.uint8))
+                    prot |= ring
+                    any_hit = True
+                except Exception:
+                    pass
+            # ۲) خطوطِ بلندِ صفحه
+            wl = self._wall_lines(image)
+            if wl is not None and wl.any():
+                prot |= wl
+                any_hit = True
+            # ۳) نوارِ لبهٔ باکس‌ها — ولی فقط بیرونِ داخلِ حباب‌ها؛ لبه‌های
+            # عمیقِ داخلِ داخل (خودِ خطوطِ متن!) نباید «دیواره» حساب شوند
+            bb = self._bubble_border_band(image, regions)
+            if bb is not None and bb.any():
+                try:
+                    if interior_map is not None and interior_map.any():
+                        _core = cv2.erode(interior_map, np.ones((3, 3), np.uint8))
+                        bb = cv2.bitwise_and(bb, cv2.bitwise_not(_core))
+                except Exception:
+                    pass
+                if bb.any():
+                    prot |= bb
+                    any_hit = True
+            return prot if any_hit else None
+        except Exception:
+            return None
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         self._check_cancel()
         mask = self._build_text_mask(image, regions)
+        # ---- نقشهٔ داخل + دیوارهٔ محفوظ (پیش از هر پرکردنی) ----
+        # داخلِ حباب‌ها یک‌بار حساب می‌شود؛ «دیوارهٔ محفوظ» یعنی حلقهٔ
+        # مرزِ داخل + خطوطِ بلند + نوارِ لبهٔ باکس‌ها — هیچ ماسکی حق
+        # ندارد روی این پیکسل‌ها برود (حباب باید زنده بماند).
+        page_interior = self._build_interior_map(image, regions)
+        wall_prot = self._build_wall_protect(image, regions, page_interior)
+        if wall_prot is not None:
+            try:
+                _mk = (mask > 0) & (wall_prot == 0)
+                _dropped = int((mask > 0).sum()) - int(_mk.sum())
+                if int(_mk.sum()) >= 0.35 * int((mask > 0).sum()):
+                    mask = _mk.astype(np.uint8) * 255
+                    if _dropped > 0:
+                        print(f"  [*] دیوارهٔ محفوظ: {_dropped}px از ماسک حذف شد")
+                else:
+                    # کلیپِ سخت ماسک را نابود می‌کند → فقط گشادگی‌ها بعداً کلیپ می‌شوند
+                    wall_prot = None
+            except Exception:
+                wall_prot = None
         if not np.any(mask):
             return image.copy()
 
@@ -5686,7 +5959,7 @@ class MangaTranslator:
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         page_wall = self._wall_lines(image)
         page_band = self._bubble_border_band(image, regions)
-        page_interior = self._build_interior_map(image, regions)
+        # page_interior بالاتر (قبل از کلیپِ ماسک) حساب شده است
         crops = []
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             self._check_cancel()
@@ -5791,6 +6064,20 @@ class MangaTranslator:
                                 if _pb.shape == _dsub.shape:
                                     _dsub = (((_dsub > 0) & (crop_msk > 0)) |
                                              ((_dsub > 0) & ~_pb)).astype(np.uint8) * 255
+                            try:
+                                _dm = (_dsub > 0)
+                                _mk = (crop_msk > 0)
+                                if page_interior is not None:
+                                    _di = page_interior[cy0:cy1, cx0:cx1]
+                                    if _di.shape == _dm.shape and _di.any():
+                                        _dm = _dm & (_mk | (_di > 0))
+                                if wall_prot is not None:
+                                    _wp = wall_prot[cy0:cy1, cx0:cx1]
+                                    if _wp.shape == _dm.shape and _wp.any():
+                                        _dm = _dm & (_mk | (_wp == 0))
+                                _dsub = _dm.astype(np.uint8) * 255
+                            except Exception:
+                                pass
                             sub_msk = np.zeros(sub_img.shape[:2], dtype=np.uint8)
                             sub_msk[cy0 - ey0:cy1 - ey0,
                                     cx0 - ex0:cx1 - ex0] = _dsub
@@ -5839,10 +6126,19 @@ class MangaTranslator:
                         if page_band is not None:
                             _pb = page_band > 0
                             _prot = _pb if _prot is None else (_prot | _pb)
+                        if wall_prot is not None:
+                            _wp = wall_prot > 0
+                            _prot = _wp if _prot is None else (_prot | _wp)
+                        # گشادگی فقط داخلِ حباب مجاز است؛ متنِ آزاد روی هنر
+                        # با خودِ ماسکِ اصلی زنده می‌ماند
+                        _pm = page_mask > 0
+                        _mk = mask > 0
+                        if page_interior is not None:
+                            _pm = _pm & ((_mk) | (page_interior > 0))
                         if _prot is not None:
-                            pm = page_mask > 0
-                            mk = mask > 0
-                            page_mask = ((pm & mk) | (pm & ~_prot)).astype(np.uint8) * 255
+                            page_mask = ((_pm & _mk) | (_pm & ~_prot)).astype(np.uint8) * 255
+                        else:
+                            page_mask = _pm.astype(np.uint8) * 255
                         t0 = time.time()
                         page_out = lama(image, page_mask)
                         dt = time.time() - t0
@@ -5878,6 +6174,29 @@ class MangaTranslator:
                                             result = None
                             except Exception:
                                 pass
+                            if result is not None:
+                                try:
+                                    # لکهٔ روشن/دود روی هنر: پیکسل‌های «فقط
+                                    # گشادگی» (نه ماسکِ متن) که بیرونِ داخلِ
+                                    # حباب‌اند باید دست‌نخورده بمانند؛ LaMa اگر
+                                    # آن‌جا دودِ سفید/خاکستری بگذارد → رد
+                                    _exp = _fm & (crop_msk == 0)
+                                    if page_interior is not None:
+                                        _di = page_interior[cy0:cy1, cx0:cx1]
+                                        if _di.shape == _exp.shape:
+                                            _exp = _exp & (_di == 0)
+                                    if _exp.any() and _exp.sum() >= 40:
+                                        _dif = np.abs(
+                                            result.astype(np.int16)
+                                            - crop_img.astype(np.int16)).max(axis=2)
+                                        _hurt = float((_dif[_exp] > 14).mean())
+                                        if _hurt > 0.04:
+                                            print(f"  [!] LaMa روی هنرِ بیرونِ حباب "
+                                                  f"دست گذاشت ({_hurt*100:.0f}%) "
+                                                  f"→ روش بعدی برای این خوشه")
+                                            result = None
+                                except Exception:
+                                    pass
                             if result is not None:
                                 c[4] = cv2.dilate(crop_msk, page_kernel)
                                 c[5] = result
@@ -5921,6 +6240,21 @@ class MangaTranslator:
                     _dm = (_dil > 0)
                     _dil = ((_dm & (crop_msk > 0)) |
                             (_dm & ~_cband)).astype(np.uint8) * 255
+                # دیوارهٔ محفوظ + داخلِ حباب: گشادگی هرگز از دیواره بیرون نمی‌زند
+                try:
+                    _dm = (_dil > 0)
+                    _mk = (crop_msk > 0)
+                    if page_interior is not None:
+                        _di = page_interior[cy0:cy1, cx0:cx1]
+                        if _di.shape == _dm.shape and _di.any():
+                            _dm = _dm & (_mk | (_di > 0))
+                    if wall_prot is not None:
+                        _wp = wall_prot[cy0:cy1, cx0:cx1]
+                        if _wp.shape == _dm.shape and _wp.any():
+                            _dm = _dm & (_mk | (_wp == 0))
+                    _dil = _dm.astype(np.uint8) * 255
+                except Exception:
+                    pass
                 try:
                     _thick = float(cv2.distanceTransform(
                         (_dil > 0).astype(np.uint8), cv2.DIST_L2, 3).max())
@@ -5997,7 +6331,17 @@ class MangaTranslator:
                 # نمی‌ماند — لبهٔ پرکردن با خودِ زمینه ترکیب می‌شود
                 try:
                     _al = cv2.GaussianBlur(mm.astype(np.float32), (0, 0), 2.0)
-                    _al = np.clip(_al * 1.8, 0.0, 1.0)[..., None]
+                    _al = np.clip(_al * 1.8, 0.0, 1.0)
+                    # دیوارهٔ حباب همیشه از تصویرِ اصلی می‌ماند — پرکردن هرگز
+                    # روی خطِ دیواره نوشته نمی‌شود («حباب پاک نشه»)
+                    if wall_prot is not None:
+                        try:
+                            _wp = (wall_prot[cy0:cy1, cx0:cx1] > 0)
+                            if _wp.shape == _al.shape:
+                                _al[_wp] = 0.0
+                        except Exception:
+                            pass
+                    _al = _al[..., None]
                     _base = cleaned[cy0:cy1, cx0:cx1].astype(np.float32)
                     _resf = result.astype(np.float32)
                     _blended = _base * (1.0 - _al) + _resf * _al
@@ -6096,6 +6440,24 @@ class MangaTranslator:
 
                 # ---------- دامنهٔ جارو ----------
                 zone = None
+                _im = None
+                if interior_map is not None:
+                    try:
+                        _c = interior_map[y0:y1, x0:x1]
+                        if _c.shape == g.shape and cv2.countNonZero(_c) > 0:
+                            _im = _c
+                    except Exception:
+                        _im = None
+                if not is_bubble and _im is not None \
+                        and int(cv2.countNonZero(anchor)) > 0:
+                    try:
+                        _ov = float(cv2.countNonZero(
+                            cv2.bitwise_and(anchor, _im))) / float(
+                            max(1, cv2.countNonZero(anchor)))
+                        if _ov >= 0.5:
+                            is_bubble = True  # حبابِ بی‌کلاس ولی نقشهٔ داخل دارد
+                    except Exception:
+                        pass
                 if is_bubble:
                     if interior_map is not None:
                         try:
@@ -6128,6 +6490,18 @@ class MangaTranslator:
                     _zk2 = int(np.clip(1.5 * line_h, 14, 64))
                     zone = cv2.dilate(anchor, cv2.getStructuringElement(
                         cv2.MORPH_ELLIPSE, (2 * _zk2 + 1, 2 * _zk2 + 1)))
+                    if _im is not None and int(cv2.countNonZero(anchor)) > 0:
+                        # اگر لنگرِ متن عمدتاً داخلِ نقشهٔ داخل است، گشادگیِ
+                        # جارو حق ندارد از دیواره بیرون بزند
+                        try:
+                            _ov = float(cv2.countNonZero(
+                                cv2.bitwise_and(anchor, _im))) / float(
+                                max(1, cv2.countNonZero(anchor)))
+                            if _ov >= 0.4:
+                                zone = cv2.bitwise_and(
+                                    zone, cv2.bitwise_or(_im, anchor))
+                        except Exception:
+                            pass
                     if int(cv2.countNonZero(zone)) < 80:
                         continue
                 if int((zone > 0).sum()) < 80:
@@ -6676,8 +7050,12 @@ class MangaTranslator:
             fill_px = g[me].astype(np.float32)
             fill_mean = float(np.mean(fill_px))
             fill_std = float(np.std(fill_px))
+            # زمینِ واقعاً صاف (tex≈0 و std کم): hfِ بالای حلقه از لبهٔ
+            # دیواره/قاب آلوده شده — نباید پرکردنِ هم‌رنگِ زمین را رد کند
+            _flat_ground = (float(model.get("tex_local", 0.0)) < 3.0
+                            and float(model.get("std", 99.0)) <= 7.0)
             _txt = bool(model.get("tex_local", 0.0) >= 6.0
-                        or model.get("hf", 0.0) >= 4.5)
+                        or (model.get("hf", 0.0) >= 4.5 and not _flat_ground))
             # ۱) جابه‌جایی روشنایی (لکهٔ خاکستری/تیره روی کاغذ روشن یا برعکس)
             # روی زمینهٔ بافت‌دار/ناهمگن (هنر + کاغذ) مدلِ حلقه به سفید بایاس است؛
             # تولرانسِ وسیع‌تر تا کاشیِ بافتِ واقعی بی‌دلیل رد نشود
@@ -6697,7 +7075,8 @@ class MangaTranslator:
             lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
             fhf = float(np.mean(lap[me]))
             _hf_thr = 0.30 if model["hf"] >= 15.0 else 0.15
-            if model["hf"] >= 4.5 and fhf < _hf_thr * model["hf"]:
+            if model["hf"] >= 4.5 and not _flat_ground \
+                    and fhf < _hf_thr * model["hf"]:
                 return False, f"hf {fhf:.1f}<{_hf_thr * model['hf']:.1f}"
             try:
                 _mb = cv2.boxFilter(g, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
@@ -7248,11 +7627,24 @@ class MangaTranslator:
             textured = bool(model is not None and
                             (model.get("tex_local", 0.0) >= 6.0
                              or model.get("hf", 0.0) >= 4.5))
+            if model is not None:
+                # hfِ تنها دروغ می‌گوید: لبهٔ دیوارهٔ جعبه/پنل hf را بالا می‌برد
+                # در حالی که زمینِ داخل کاملاً صاف است (tex≈0، std کم) —
+                # در این حالت «بافت‌دار» حساب نکن تا پرکردنِ ثابتِ هم‌رنگ
+                # زمین رد نشود (دودِ خاکستریِ LaMa روی جعبهٔ سیاه)
+                try:
+                    if float(model.get("tex_local", 0.0)) < 3.0 \
+                            and float(model.get("std", 99.0)) <= 7.0 \
+                            and (model.get("near_std") is None
+                                 or float(model.get("near_std")) <= 12.0):
+                        textured = False
+                except Exception:
+                    pass
             _ring_tex_fb = None
             _ring_hf_fb = None
             if model is None:
                 # مدلِ حلقه نامعتبر (هنر پیچیده) — بافت را مستقیم از حلقه بسنج
-                textured = self._bg_is_textured(crop_img, msk)
+                textured = self._bg_is_textured(crop_img, msk, domain=domain)
                 if textured:
                     try:
                         _g2 = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
@@ -7435,6 +7827,34 @@ class MangaTranslator:
                     if rg is not None:
                         if _accept(rg, tag="regrain"):
                             return rg, method + "+grain2"
+            # نجاتِ آخر (مدلِ حلقه None ولی راهنما یکدست): رنگِ ثابتِ
+            # هم‌رنگِ راهنما — جعبهٔ تیره/حبابِ صاف بدون مدل هم باید
+            # با رنگِ خودِ زمین پر شود، نه دودِ خاکستریِ LaMa.
+            # آمار فقط از «داخلِ دامنه ∩ ماسک» — پیکسل‌های چسبیده به
+            # دیواره در راهنما آلوده‌اند و نباید در آمار باشند
+            try:
+                if guide is not None:
+                    _m2 = (msk > 0)
+                    _m2i = _m2
+                    if domain is not None and domain.shape == _m2.shape \
+                            and (domain > 0).any():
+                        _m2i = _m2 & (domain > 0)
+                    _me2 = cv2.erode(_m2i.astype(np.uint8),
+                                     np.ones((5, 5), np.uint8)) > 0
+                    if int(np.count_nonzero(_me2)) < 24:
+                        _me2 = _m2i
+                    _gp = guide[_me2]
+                    if _gp.size >= 72 and float(np.std(_gp)) <= 8.0 \
+                            and int(np.count_nonzero(_m2i)) >= int(
+                                0.30 * max(1, np.count_nonzero(_m2))):
+                        _const = np.median(_gp, axis=0)
+                        _cand = fill_img.copy()
+                        _cand[_m2] = np.clip(np.rint(_const), 0, 255)\
+                            .astype(np.uint8)
+                        if _accept(_cand, from_guide=True, tag="const-guide"):
+                            return _cand, method + "+const"
+            except Exception:
+                pass
             # هیچ ترمیمی قبول نشد → پرکردن اولیه بهتر از جا ماندن متن است
             try:
                 print(f"    [!] لکهٔ پرکردن ({why}) → ترمیم نشد؛ همان روش {method} نگه داشته شد")
@@ -7547,10 +7967,18 @@ class MangaTranslator:
 
     @staticmethod
     def _bg_is_textured(crop_img: np.ndarray, crop_msk: np.ndarray,
-                        strong: bool = False) -> bool:
+                        strong: bool = False,
+                        domain: Optional[np.ndarray] = None) -> bool:
         try:
             m = crop_msk > 0
             ring = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0) & (~m)
+            if domain is not None:
+                try:
+                    _rd = ring & (domain > 0)
+                    if int(np.count_nonzero(_rd)) >= 60:
+                        ring = _rd  # نمونه‌گیری فقط از داخلِ حباب — دیواره/کاغذ نمونه نمی‌گیریم
+                except Exception:
+                    pass
             if int(np.count_nonzero(ring)) < 60:
                 return False
             g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)

@@ -1,1 +1,8 @@
 __pycache__/
+
+# runtime model caches (auto-downloaded)
+det_models/
+rapidocr_models/
+lama_models/
+workspace/
+*.cache/
