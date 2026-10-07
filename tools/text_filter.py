@@ -696,6 +696,31 @@ def build_corpus(verbose: bool = True):
         if rng.random() < 0.4:
             data.append(("dialogue", s.capitalize()))
 
+    # name-shouts — «OCHAKO!» / «KAACHAN!» دیالوگ‌اند نه SFX
+    _honors = ["KAACHAN", "KAA-CHAN", "OKAASAN", "TOUSAN", "TOU-SAN",
+               "NII-CHAN", "NII-SAN", "ONEE-CHAN", "NEE-SAN", "JII-CHAN",
+               "OBAA-SAN", "SENSEI", "SENPAI", "KUN", "CHAN", "SAMA",
+               "BAKA", "YAROU", "TEME"]
+    _name_pool = [n.upper() for n in first_names] + _honors \
+        + ["DEKU", "KACCHAN", "OCHAKO", "TODOROKI", "IIDA", "URARAKA",
+           "TSUYU", "SHINSO", "ERI", "MIDORIYA", "BAKUGOU", "IZUKU",
+           "NARUTO", "SASUKE", "SAKURA", "KAKASHI", "LUFFY", "ZORO",
+           "NAMI", "SANJI", "ICHIGO", "REM", "RAM", "EMILIA", "SUBARU",
+           "SAITAMA", "GENOS", "TATSUMAKI", "KENMA", "HINATA", "TOBIO"]
+    for _ in range(900):
+        nm = _name_pool[rng.randrange(len(_name_pool))]
+        suf = rng.choice(["!", "!!", "!!!", "?!", "?", "—", "…", ""])
+        s = nm + suf
+        data.append(("dialogue", s))
+        if rng.random() < 0.35:
+            data.append(("dialogue", nm + "-" + suf.lstrip("-")
+                         if suf and suf != "—" else nm + "!"))
+        if rng.random() < 0.25:
+            data.append(("dialogue", rng.choice(_honors) + "!"))
+        if rng.random() < 0.2:
+            data.append(("dialogue", nm.capitalize() + rng.choice(
+                ["!", "!!", "?"])))
+
     # localized profile captions (KO/JA/ZH)
     _ko_names = ["김하늘", "이서준", "박지민", "최유리", "정태양", "한별",
                  "오세림", "남주하", "차도연", "윤그림"]
@@ -973,9 +998,12 @@ def train():
             bias -= lr * db / np.sqrt(Gb)
         print(f"  epoch {ep+1:2d}/{epochs}  loss={tot_loss/len(ytr):.4f}", flush=True)
 
-    def predict_sparse(ix_list):
-        logits, _, _ = batch_forward(ix_list)
-        return logits.argmax(axis=1)
+    def predict_sparse(ix_list, chunk=512):
+        out = []
+        for _s in range(0, len(ix_list), chunk):
+            logits, _, _ = batch_forward(ix_list[_s:_s + chunk])
+            out.append(logits.argmax(axis=1))
+        return np.concatenate(out) if out else np.array([], dtype=np.int64)
     pr = predict_sparse(Xte)
     acc = float((pr == yte).mean())
     print(f"[*] test acc: {acc*100:.2f}%  ({len(yte)} examples)")

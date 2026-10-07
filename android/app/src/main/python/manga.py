@@ -4102,7 +4102,9 @@ class MangaTranslator:
                 return "promo"
             if _lab == "dialogue" and _cf >= 0.55:
                 return "dialogue"
-            if _lab == "sfx" and _cf >= 0.60:
+            # داخلِ حبابِ تشخیص‌داده‌شده، SFX هم باید مطمئن‌تر باشد —
+            # «فریادِ اسم» (OCHAKO!/KAACHAN!) نباید SFX شود
+            if _lab == "sfx" and _cf >= (0.75 if in_bubble else 0.60):
                 return "sfx"
             # داخلِ حباب/کادرِ تشخیص‌داده‌شده اشتباهِ «تبلیغ» خیلی گران است
             # (باکسِ معرفیِ شخصیت → بدونِ ترجمه می‌ماند) → آستانهٔ سخت‌گیرانه
