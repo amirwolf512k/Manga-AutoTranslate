@@ -549,6 +549,172 @@ def build_corpus(verbose: bool = True):
     for s in short_cries:
         data.append(("dialogue", s))
 
+    # ---------------- character-profile / stat captions ----------------
+    # باکس‌های «نام / سن / نژاد / توانایی» محتوای قابلِ ترجمه‌اند —
+    # نه تبلیغ (اشتباهِ رایجِ نسخهٔ قبلی: GLENDA HOLLY AGE: 40 RACE: ...)
+    first_names = [
+        "Glenda", "Kayla", "Devon", "Aaron", "Abel", "Adrian", "Aiko",
+        "Alistair", "Amara", "Amber", "Anya", "Axel", "Beatrice", "Bianca",
+        "Blake", "Cain", "Camilla", "Cedric", "Clara", "Damian", "Dante",
+        "Daria", "Dominic", "Edgar", "Elena", "Elias", "Emil", "Esther",
+        "Ezra", "Felix", "Fiona", "Gareth", "Giselle", "Greta", "Hana",
+        "Harold", "Hazel", "Hugo", "Ingrid", "Iris", "Ivan", "Jasmine",
+        "Jasper", "Jin", "Kai", "Kira", "Leon", "Lilith", "Luna", "Marcus",
+        "Mika", "Nadia", "Nero", "Nina", "Oliver", "Ophelia", "Oscar",
+        "Petra", "Quinn", "Raven", "Ren", "Rin", "Rowan", "Ruby", "Sable",
+        "Sebastian", "Selene", "Sora", "Stella", "Talia", "Theo", "Trisha",
+        "Ursula", "Vera", "Victor", "Violet", "Wendy", "William", "Xander",
+        "Yuki", "Yuna", "Zane", "Zoe",
+    ]
+    surnames = [
+        "Holly", "Sommers", "Winters", "Ashford", "Blackwood", "Cruz",
+        "Dain", "Elric", "Fairfax", "Grey", "Hale", "Ito", "Johnson",
+        "Kang", "Kimura", "Lee", "Lockhart", "Marsh", "Novak", "Okafor",
+        "Park", "Quill", "Rivera", "Roth", "Sato", "Sinclair", "Tanaka",
+        "Thorne", "Underwood", "Vance", "Voss", "Whitlock", "Yamada",
+        "Zhao", "Abernathy", "Bass", "Cole", "Diaz", "Evans", "Frost",
+        "Grimaldi", "Hayes", "Irving", "Jang", "Kessler", "Lombardi",
+        "Moreau", "Nakamura", "Ortega", "Pemberton", "Rossi", "Sterling",
+        "Takahashi", "Vaughn", "Wolfhard", "Young", "Zhang",
+    ]
+    races = [
+        "Human", "Vampire", "Incubus", "Succubus", "Demon", "Elf", "Half-Elf",
+        "Beast", "Beastman", "Angel", "Fallen Angel", "Dragon", "Dragonewt",
+        "Witch", "Wizard", "Mage", "Ghost", "Reaper", "Alien", "Android",
+        "Cyborg", "Mutant", "Slime", "Cat", "Wolf", "Fox Spirit",
+        "Kitsune", "Oni", "Dwarf", "Fairy", "Mermaid", "Nekomata",
+    ]
+    hometowns = [
+        "Seoul", "Tokyo", "Osaka", "Busan", "Beijing", "Shanghai", "Norvendia",
+        "Alderon", "King's Cross", "The Capital", "North Village",
+        "Grand Duchy", "Elmfalls", "Ravenhold", "Sunspire", "Ironvale",
+        "Misthollow", "Duskwall", "Frostpeak", "Stormbay",
+    ]
+    occupations = [
+        "Student", "Knight", "Swordmaster", "Mage", "Hunter", "Assassin",
+        "Healer", "Merchant", "Detective", "Butler", "Maid", "Teacher",
+        "Swordsman", "Archer", "Necromancer", "Alchemist", "Rogue",
+        "Noble", "Duke", "Princess", "Bodyguard", "Exorcist",
+    ]
+    abilities = [
+        "Fire Magic", "Ice Magic", "Time Stop", "Telekinesis", "Mind Reading",
+        "Shadow Step", "Regeneration", "Blood Control", "Lightning Bolt",
+        "Invisibility", "Super Strength", "Flight", "Healing Touch",
+        "Beast Taming", "Sword Aura", "Space Manipulation", "Precognition",
+    ]
+
+    def _ocr_noise(s: str) -> str:
+        if rng.random() < 0.35:
+            s = s.replace("O", "0", 1) if "O" in s else s
+        if rng.random() < 0.25:
+            s = s.replace("l", "1", 1) if "l" in s else s
+        if rng.random() < 0.2:
+            i = rng.randrange(len(s))
+            if s[i].isalpha() and rng.random() < 0.5:
+                s = s[:i] + s[i].lower() + s[i + 1:]
+        return s
+
+    _profile_templates = [
+        "{f} {s} AGE: {a} RACE: {r}",
+        "{f} {s} / AGE: {a} / RACE: {r}",
+        "NAME: {f} {s} AGE: {a} RACE: {r}",
+        "{f} {s} | AGE: {a} | RACE: {r}",
+        "{f} {s} — AGE: {a} — RACE: {r}",
+        "{f} {s} AGE: {a} RACE: {r} JOB: {o}",
+        "{f} {s}, {a}. {r}.",
+        "{f} {s} HOMETOWN: {h} RACE: {r}",
+        "{f} {s} AGE: {a} OCCUPATION: {o}",
+        "{f} {s} • AGE: {a} • RACE: {r}",
+        "AGE: {a} / RACE: {r} / JOB: {o}",
+        "NAME: {f} {s} / AGE: {a}",
+        "{r} — AGE {a} — {o}",
+        "{f} {s}  Age: {a}  Race: {r}",
+        "{f} {s}  Age: {a}",
+        "{f} {s} (Age: {a}, Race: {r})",
+    ]
+    for _ in range(2600):
+        t = _profile_templates[rng.randrange(len(_profile_templates))]
+        s = t.format(
+            f=rng.choice(first_names), s=rng.choice(surnames),
+            a=rng.randint(6, 428), r=rng.choice(races),
+            h=rng.choice(hometowns), o=rng.choice(occupations),
+        )
+        data.append(("dialogue", s))
+        if rng.random() < 0.4:
+            data.append(("dialogue", _ocr_noise(s)))
+        if rng.random() < 0.3:
+            data.append(("dialogue", s.upper()))
+
+    # single stat lines — also content
+    for _ in range(700):
+        pick = rng.randrange(4)
+        if pick == 0:
+            s = f"AGE: {rng.randint(6, 428)}"
+        elif pick == 1:
+            s = f"RACE: {rng.choice(races)}"
+        elif pick == 2:
+            s = f"HOMETOWN: {rng.choice(hometowns)}"
+        else:
+            s = f"HEIGHT: {rng.randint(140, 210)}CM"
+        data.append(("dialogue", s))
+        if rng.random() < 0.3:
+            data.append(("dialogue", _ocr_noise(s)))
+
+    # ability/skill descriptions — translatable
+    _abil_tpl = [
+        "SPECIAL ABILITY: {x}", "ABILITY: {x}", "HIS POWER: {x}",
+        "HER POWER: {x}", "SKILL: {x}", "HER ABILITY IS {x}.",
+        "HIS ABILITY IS {x}.", "THE POWER OF {x}.", "EFFECT: {x}",
+    ]
+    for _ in range(600):
+        t = _abil_tpl[rng.randrange(len(_abil_tpl))]
+        s = t.format(x=rng.choice(abilities))
+        data.append(("dialogue", s))
+        if rng.random() < 0.3:
+            data.append(("dialogue", s.upper()))
+
+    # narrator / place / time captions — translatable content
+    narrator_caps = [
+        "THAT DAY, THE WORLD CHANGED FOREVER.",
+        "3 YEARS LATER.", "TWO WEEKS LATER.", "THE NEXT MORNING.",
+        "MEANWHILE, AT THE ACADEMY...", "AFTER THE INCIDENT...",
+        "BACK THEN...", "AT THE SAME TIME...", "10 YEARS AGO.",
+        "ONE HOUR EARLIER.", "THAT NIGHT.", "THE FINAL DAY.",
+        "SEOUL, 1998.", "TOKYO, PRESENT DAY.", "THE ROYAL CAPITAL.",
+        "SOMEWHERE IN THE NORTH.", "MEANWHILE...", "TO BE CONTINUED...",
+        "AT THAT MOMENT.", "IN THE END, EVERYTHING CHANGED.",
+        "NO ONE KNEW WHAT WAS COMING.", "IT WAS A QUIET AFTERNOON.",
+        "THE STORY BEGINS HERE.", "AND SO, THE JOURNEY STARTED.",
+        "그날, 세상이 바뀌었다.", "3년 후.", "그리고 이제.",
+        "한편, 그곳에서는.", "그날 밤.", "이야기의 시작.",
+        "あの日、世界は変わった。", "3年後。", "翌朝。", "そして今。",
+        "那天，世界改变了。", "三年后。", "第二天早上。",
+    ]
+    for s in narrator_caps:
+        data.append(("dialogue", s))
+        data.append(("dialogue", s.lower()))
+        if rng.random() < 0.4:
+            data.append(("dialogue", s.capitalize()))
+
+    # localized profile captions (KO/JA/ZH)
+    _ko_names = ["김하늘", "이서준", "박지민", "최유리", "정태양", "한별",
+                 "오세림", "남주하", "차도연", "윤그림"]
+    _ja_names = ["山田太郎", "佐藤花子", "鈴木一郎", "高橋美咲", "田中健太",
+                 "伊藤さくら", "渡辺凛", "中村翔太"]
+    _zh_names = ["林小美", "王大明", "张伟", "李小红", "陈建国", "刘芳"]
+    for _ in range(400):
+        which = rng.randrange(3)
+        if which == 0:
+            s = (f"이름: {rng.choice(_ko_names)} / 나이: {rng.randint(7, 300)}"
+                 f" / 종족: {rng.choice(['인간', '뱀파이어', '마인', '엘프', '수인'])}")
+        elif which == 1:
+            s = (f"名前：{rng.choice(_ja_names)} / 年齢：{rng.randint(7, 300)}"
+                 f" / 種族：{rng.choice(['人間', '吸血鬼', '悪魔', 'エルフ', '獣人'])}")
+        else:
+            s = (f"姓名：{rng.choice(_zh_names)} / 年龄：{rng.randint(7, 300)}"
+                 f" / 种族：{rng.choice(['人类', '吸血鬼', '恶魔', '精灵', '兽人'])}")
+        data.append(("dialogue", s))
+
     # variants of the handmade seeds
     _dlg_seed = [s for lab, s in list(data) if lab == "dialogue"]
     for s in _dlg_seed:
