@@ -2,8 +2,6 @@ name: Build Android APK
 
 on:
   workflow_dispatch:
-  release:
-    types: [ published ]
 
 jobs:
   build:
@@ -71,19 +69,19 @@ jobs:
           path: MangaTranslator-*.apk
           if-no-files-found: error
 
-      - name: Put APKs in Releases (بیلد دستی)
+      - name: Put APKs in Release «apks» (فقط اپ — بدون فایل مدل)
         if: github.event_name == 'workflow_dispatch'
         run: |
           cp MangaTranslator-*-arm64.apk      MangaTranslator-arm64.apk
           cp MangaTranslator-*-armv7a.apk     MangaTranslator-armv7a.apk
           cp MangaTranslator-*-universal.apk  MangaTranslator-universal.apk
-          gh release view apk -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
-            gh release create apk -R "$GITHUB_REPOSITORY" --latest \
-              --title "APK — آخرین بیلد خودکار" \
-              --notes "خروجی آخرین اجرای موفق «Build Android APK». برای نسخه‌های رسمی به Releaseهای versionدار سر بزنید."
-          gh release edit apk -R "$GITHUB_REPOSITORY" \
+          gh release view apks -R "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create apks -R "$GITHUB_REPOSITORY" --latest \
+              --title "apks" \
+              --notes "APK — آخرین بیلد موفق «Build Android APK». فقط فایل‌های اپلیکیشن."
+          gh release edit apks -R "$GITHUB_REPOSITORY" --latest \
             --notes "خروجی بیلد شماره ${{ github.run_number }} — ${{ github.event.head_commit.message || 'اجرای دستی' }}"
-          gh release upload apk MangaTranslator-arm64.apk MangaTranslator-armv7a.apk MangaTranslator-universal.apk \
+          gh release upload apks MangaTranslator-arm64.apk MangaTranslator-armv7a.apk MangaTranslator-universal.apk \
             -R "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
@@ -99,9 +97,3 @@ jobs:
             -R "$GITHUB_REPOSITORY" --clobber
         env:
           GH_TOKEN: ${{ github.token }}
-
-      - name: Attach to Release (فقط وقتی بیلد از روی Release اجرا شده)
-        if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
-        with:
-          files: MangaTranslator-*.apk
