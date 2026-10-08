@@ -40,6 +40,8 @@ import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
+import android.os.PowerManager
+import android.provider.Settings
 import android.provider.MediaStore
 
 import java.io.File
@@ -122,6 +124,38 @@ class MainActivity : AppCompatActivity() {
     private fun savedOr(id: String, dflt: Any?): Any? =
         prefs.getString(id, null) ?: dflt
 
+
+    private fun askBatteryUnrestricted() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return
+        val pm = getSystemService(POWER_SERVICE) as? PowerManager ?: return
+        val pkg = packageName
+        if (pm.isIgnoringBatteryOptimizations(pkg)) return
+        val prefs = getSharedPreferences("manga_prefs", MODE_PRIVATE)
+        if (prefs.getBoolean("battery_asked_v2", false)) return
+        prefs.edit().putBoolean("battery_asked_v2", true).apply()
+        android.app.AlertDialog.Builder(this)
+            .setTitle("دسترسی باتری")
+            .setMessage(
+                "برای اینکه موقع ترجمه اندروید برنامه را نخواباند و CPU/رم بیشتری در دسترس باشد،\n" +
+                "«بدون محدودیت» را برای مانگا مترجم فعال کن.\n\n" +
+                "اگر رد کنی ممکن است ترجمه طولانی قطع یا خیلی کند شود."
+            )
+            .setPositiveButton("تنظیمات باتری") { _, _ ->
+                try {
+                    val i = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$pkg")
+                    }
+                    startActivity(i)
+                } catch (_: Exception) {
+                    try {
+                        startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+                    } catch (_: Exception) {}
+                }
+            }
+            .setNegativeButton("بعداً", null)
+            .show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installCrashLogger()
@@ -137,6 +171,11 @@ class MainActivity : AppCompatActivity() {
             requestPermissions(arrayOf(android.Manifest.permission.WRITE_EXTERNAL_STORAGE),
                 REQ_STORAGE)
         }
+
+        // درخواست معافیت بهینه‌سازی باتری تا اندروید CPU/رم را هنگام ترجمه نکشد
+        try {
+            askBatteryUnrestricted()
+        } catch (_: Exception) {}
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL

@@ -2720,7 +2720,7 @@ class MangaTranslator:
     # روش‌های مجاز — «flat» (پرکردن ساده/بلوکی) کامل حذف شد (سیاستِ
     # صریحِ کاربر): هر پاکسازی با بازسازیِ طبیعیِ بافت انجام می‌شود
     # (LaMa / AOT-GAN / OpenCV) و هیچ مسیری مستطیل رسم نمی‌کند.
-    _CLEAN_METHODS = ("auto", "lama", "aot", "opencv")
+    _CLEAN_METHODS = ("auto", "lama", "aot", "aot+lama", "opencv")
 
     @classmethod
     def _normalize_clean_method(cls, value) -> str:
@@ -2739,6 +2739,8 @@ class MangaTranslator:
             "opencv+flat": "opencv", "flatopencv": "opencv",
             "flat+aot": "aot", "flat+aotgan": "aot", "aot+flat": "aot",
             "flataot": "aot",
+            "aot+lama": "aot+lama", "aotlama": "aot+lama",
+            "aot+lamalite": "aot+lama", "lama+aot": "aot+lama",
             # بقیه
             "smart": "auto", "پیش‌فرض": "auto",
             "aotgan": "aot", "aot-gan": "aot", "gan": "aot",
@@ -6851,6 +6853,74 @@ class MangaTranslator:
         except Exception:
             return None
 
+    def _hard_residual_scrub(self, img: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """جاروی اجباری جوهر باقی‌مانده بعد از AOT/LaMa — hard fill بدون soft-paste.
+        مخصوص گوشی که tile کوچک ghost می‌سازد."""
+        if img is None or mask is None or not np.any(mask):
+            return img
+        out = img.copy()
+        m0 = (mask > 0).astype(np.uint8)
+        # گشادتر از حروف تا هالهٔ جوهر هم برود
+        m_dil = cv2.dilate(m0, np.ones((5, 5), np.uint8), iterations=2)
+        gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+        zone = cv2.dilate(m_dil, np.ones((13, 13), np.uint8)) > 0
+        # جوهر تیره روی زمینه روشن
+        dark = ((gray < 145) & zone).astype(np.uint8) * 255
+        # جوهر روشن روی زمینه تیره
+        bright = ((gray > 200) & zone & (gray < 255)).astype(np.uint8) * 255
+        ink = cv2.bitwise_or(dark, bright)
+        ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+        # فقط اجزای اندازهٔ حرف
+        n, lab, st, _ = cv2.connectedComponentsWithStats(ink, 8)
+        keep = np.zeros_like(ink)
+        h, w = ink.shape
+        for i in range(1, n):
+            a = int(st[i, cv2.CC_STAT_AREA])
+            if 4 <= a <= 25000:
+                keep[lab == i] = 255
+        if not keep.any():
+            return out
+        keep = cv2.dilate(keep, np.ones((3, 3), np.uint8), iterations=1)
+        keep = cv2.bitwise_and(keep, (zone.astype(np.uint8) * 255))
+        # per-component local median fill (hard)
+        n2, lab2, st2, _ = cv2.connectedComponentsWithStats(keep, 8)
+        for i in range(1, n2):
+            if int(st2[i, cv2.CC_STAT_AREA]) < 3:
+                continue
+            x, y, bw, bh = (int(st2[i, k]) for k in range(4))
+            pad = max(10, int(0.2 * max(bw, bh)))
+            x0, y0 = max(0, x - pad), max(0, y - pad)
+            x1, y1 = min(w, x + bw + pad), min(h, y + bh + pad)
+            comp = lab2[y0:y1, x0:x1] == i
+            dil = cv2.dilate(comp.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
+            ring = dil & (~comp)
+            crop = out[y0:y1, x0:x1]
+            if ring.any():
+                color = np.median(crop[ring].astype(np.float32), axis=0)
+            else:
+                color = np.array([255.0, 255.0, 255.0])
+            # hard replace interior (no soft blend of original ink)
+            crop2 = crop.copy()
+            crop2[comp] = np.clip(np.rint(color), 0, 255).astype(np.uint8)
+            # slight feather only on edge of component
+            edge = dil & (~cv2.erode(comp.astype(np.uint8), np.ones((3, 3), np.uint8)).astype(bool))
+            if edge.any():
+                soft = np.clip(cv2.GaussianBlur(comp.astype(np.float32), (0, 0), 0.9), 0, 1)[..., None]
+                c = crop.astype(np.float32)
+                c = c * (1.0 - soft) + color[None, None, :] * soft
+                crop2 = np.clip(c, 0, 255).astype(np.uint8)
+                crop2[comp & ~edge] = np.clip(np.rint(color), 0, 255).astype(np.uint8)
+            out[y0:y1, x0:x1] = crop2
+        # final TELEA on remaining ink bits
+        leftover = ((cv2.cvtColor(out, cv2.COLOR_BGR2GRAY) < 140) & zone).astype(np.uint8) * 255
+        leftover = cv2.morphologyEx(leftover, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+        leftover = cv2.dilate(leftover, np.ones((3, 3), np.uint8))
+        leftover = cv2.bitwise_and(leftover, (zone.astype(np.uint8) * 255))
+        if leftover.any():
+            out = cv2.inpaint(out, leftover, 4, cv2.INPAINT_TELEA)
+            out[~zone] = img[~zone]
+        return out
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         self._check_cancel()
         mask = self._build_text_mask(image, regions)
@@ -6977,8 +7047,10 @@ class MangaTranslator:
         elif mode == "aot" and not aot_ready:
             print("  [!] AOT-GAN در دسترس نیست → LaMa/OpenCV")
             mode = "lama" if lama_ready else "opencv"
-        use_lama_now = (mode == "lama")
-        use_aot_now = (mode == "aot")
+        use_lama_now = (mode in ("lama", "aot+lama"))
+        use_aot_now = (mode in ("aot", "aot+lama"))
+        # aot+lama: اول AOT، بعد residual با LaMa-lite روی همان ماسک
+        _force_aot_then_lama = (mode == "aot+lama")
         print(f"  [*] روش پاکسازی: {mode}"
               + (" (خودکار)" if mode_is_auto else ""))
 
@@ -7760,13 +7832,21 @@ class MangaTranslator:
                     _dbg(f"cluster_{_ci:02d}_{method or 'x'}_res.png", result)
                     _dbg(f"cluster_{_ci:02d}_{method or 'x'}_msk.png", crop_msk)
                     _dbg(f"cluster_{_ci:02d}_{method or 'x'}_img.png", crop_img)
-                # چسباندنِ محوشونده (feather): هیچ لبهٔ مستطیلی سختی روی تصویر
-                # نمی‌ماند — لبهٔ پرکردن با خودِ زمینه ترکیب می‌شود
+                # چسباندن: داخل حروف hard-replace (ضد ghost text روی گوشی)
+                # فقط لبهٔ نازک feather می‌شود تا مربع دیده نشود
                 try:
-                    _al = cv2.GaussianBlur(mm.astype(np.float32), (0, 0), 2.0)
-                    _al = np.clip(_al * 1.8, 0.0, 1.0)
-                    # دیوارهٔ حباب همیشه از تصویرِ اصلی می‌ماند — پرکردن هرگز
-                    # روی خطِ دیواره نوشته نمی‌شود («حباب پاک نشه»)
+                    _core = cv2.erode(mm.astype(np.uint8),
+                                      np.ones((3, 3), np.uint8), iterations=1) > 0
+                    if not _core.any():
+                        _core = mm
+                    _al = np.zeros(mm.shape, np.float32)
+                    _al[mm] = 1.0
+                    _al[_core] = 1.0
+                    # feather فقط روی حاشیهٔ ماسک (نه داخل حروف)
+                    _edge = mm & (~_core)
+                    if _edge.any():
+                        _fe = cv2.GaussianBlur(mm.astype(np.float32), (0, 0), 1.0)
+                        _al[_edge] = np.clip(_fe[_edge] * 1.2, 0.55, 1.0)
                     if wall_prot is not None:
                         try:
                             _wp = (wall_prot[cy0:cy1, cx0:cx1] > 0)
@@ -7774,10 +7854,10 @@ class MangaTranslator:
                                 _al[_wp] = 0.0
                         except Exception:
                             pass
-                    _al = _al[..., None]
+                    _al3 = _al[..., None]
                     _base = cleaned[cy0:cy1, cx0:cx1].astype(np.float32)
                     _resf = result.astype(np.float32)
-                    _blended = _base * (1.0 - _al) + _resf * _al
+                    _blended = _base * (1.0 - _al3) + _resf * _al3
                     cleaned[cy0:cy1, cx0:cx1] = np.clip(
                         np.rint(_blended), 0, 255).astype(np.uint8)
                 except Exception:
@@ -7799,6 +7879,23 @@ class MangaTranslator:
                 wall_prot=wall_prot)
         except Exception as e:
             print(f"  [!] دور دوم جارو رد شد: {e}")
+
+        # جاروی سخت residual بعد از AOT/LaMa (ضد ghost روی موبایل)
+        try:
+            _um = np.zeros(cleaned.shape[:2], np.uint8)
+            for _c in crops:
+                if _c[5] is None:
+                    continue
+                _x0, _y0, _x1, _y1, _cm = _c[0], _c[1], _c[2], _c[3], _c[4]
+                if _cm is None or not np.any(_cm):
+                    continue
+                _um[_y0:_y1, _x0:_x1] = np.maximum(
+                    _um[_y0:_y1, _x0:_x1],
+                    (_cm > 0).astype(np.uint8) * 255)
+            if _um.any():
+                cleaned = self._hard_residual_scrub(cleaned, _um)
+        except Exception as _hre:
+            print(f"  [!] hard residual scrub: {_hre}")
 
         print(f"  - Cleanup: {counts}")
         # ---------- دیباگ: نقشهٔ روشِ هر خوشه + خروجی نهایی ----------
