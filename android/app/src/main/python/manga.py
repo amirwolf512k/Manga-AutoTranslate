@@ -1192,6 +1192,150 @@ class LamaLiteONNX:
         return Image.fromarray(result)
 
 
+class AotOnnx:
+    """AOT-GAN مخصوص مانگا — پاکسازیِ موتور «yakuyomi» به‌صورت ONNX.
+
+    همان وزن‌هایی که yakuyomi-engine با NCNN اجرا می‌کند (مشتق از
+    inpainting.ckpt پروژهٔ manga-image-translator)؛ اینجا ONNX تا هم PC/وب
+    (onnxruntime) هم اندروید (onnxruntime همان‌جا) یک موتور باشند.
+
+    قرارداد ورودی/خروجی (هم‌قرارداد yakuyomi Inpainter.kt):
+      image [1,3,h,w] float32 ∈ [-1,1] و داخلِ سوراخ‌ها صفر
+      mask  [1,1,h,w] float32 {0,1}  (۱ = پاک‌کن)
+      out   [1,3,h,w] float32 ∈ [-1,1]
+    تمام‌کانولوشن ⇒ هر اندازه‌ای؛ کل صفحه یک‌جا در «tile» (۷۶۸ PC / ۵۱۲ کم‌رم)
+    کوچک می‌شود، بازسازی می‌شود و فقط پیکسل‌های ماسک جایگزین‌اند ⇒ ترمیمِ
+    طبیعی خودِ زمینه (نه مربع، نه لکه).
+    """
+
+    FILE = "aot-manga.onnx"
+    URLS = (
+        "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/"
+        "download/models-v3/aot-manga.onnx",
+    )
+    PC_TILE = 768
+    LOWRAM_TILE = 512
+
+    def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
+                 threads: int = 4, cache_dir: Optional[str] = None,
+                 tile: Optional[int] = None):
+        if not model_path or not os.path.isfile(model_path):
+            model_path = self._download_model(cache_dir=cache_dir)
+        self.model_path = model_path
+        if not prefer_gpu:
+            use_threads = max(1, min(4, os.cpu_count() or 2))
+        else:
+            use_threads = max(1, int(threads))
+        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu,
+                                         threads=use_threads)
+        self.session, use_threads = _cpu_thread_fallback(
+            self.session, model_path, use_threads)
+        env_tile = os.environ.get("MANGA_AOT_TILE", "").strip()
+        if env_tile.isdigit() and int(env_tile) >= 256:
+            self.tile = int(env_tile)
+        elif tile:
+            self.tile = int(tile)
+        elif _on_android() or _lite_mode():
+            self.tile = self.LOWRAM_TILE
+        else:
+            self.tile = self.PC_TILE
+        names = [i.name for i in self.session.get_inputs()]
+        self._in_image = names[0] if names else "image"
+        self._in_mask = names[1] if len(names) > 1 else "mask"
+        for n in names:
+            low = n.lower()
+            if "mask" in low:
+                self._in_mask = n
+            elif "image" in low or "img" in low:
+                self._in_image = n
+        print(
+            f"[+] AOT-GAN (yakuyomi پاکسازی) آماده ONNX | "
+            f"providers={self.session.get_providers()} | threads={use_threads} | "
+            f"tile={self.tile}"
+        )
+
+    @classmethod
+    def _download_model(cls, cache_dir: Optional[str] = None) -> str:
+        env_p = os.environ.get("AOT_MODEL", "").strip()
+        if env_p and os.path.isfile(env_p):
+            return env_p
+        _m = _mirror_model(cls.FILE)
+        if _m:
+            return _m
+        dst = os.path.join(_model_cache_dir("det_models"), cls.FILE)
+        if os.path.isfile(dst) and os.path.getsize(dst) > 10_000_000:
+            print(f"[*] مدل {cls.FILE} از کش: {dst}")
+            return dst
+        last = None
+        for url in cls.URLS:
+            try:
+                print(f"[*] دانلود {cls.FILE} (~۲۲MB، فقط بار اول) از "
+                      f"{url.split('/')[2]} ...")
+                _dl_to(url, dst, name=cls.FILE)
+                if os.path.getsize(dst) < 10_000_000:
+                    raise RuntimeError("حجم مدل مشکوک است")
+                return dst
+            except Exception as e:
+                last = e
+                print(f"    [!] دانلود از {url.split('/')[2]} نشد: {e}")
+                try:
+                    if os.path.isfile(dst + ".part"):
+                        os.remove(dst + ".part")
+                except Exception:
+                    pass
+        raise RuntimeError(f"دانلود {cls.FILE} ناموفق: {last}")
+
+    def __call__(self, image, mask):
+        if isinstance(image, np.ndarray):
+            if image.ndim == 3 and image.shape[2] in (3, 4):
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            else:
+                img_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        else:
+            img_rgb = np.array(image.convert("RGB"))
+        if isinstance(mask, np.ndarray):
+            if mask.ndim == 3:
+                mask_u8 = mask[..., 0] if mask.shape[2] == 1 else cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+            else:
+                mask_u8 = mask
+        else:
+            mask_u8 = np.array(mask.convert("L"))
+        if mask_u8.shape != img_rgb.shape[:2]:
+            raise ValueError("Image and mask dimensions must match")
+        original_mask = mask_u8 > 0
+        if not np.any(original_mask):
+            return img_rgb.copy()
+        oh, ow = img_rgb.shape[:2]
+        tile = int(self.tile)
+        scale = tile / float(max(ow, oh))
+        scale = min(scale, 1.0) if max(ow, oh) <= tile * 1.25 else scale
+        rw, rh = max(8, int(round(ow * scale))), max(8, int(round(oh * scale)))
+        interp = cv2.INTER_AREA if max(ow, oh) > tile else cv2.INTER_CUBIC
+        img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
+        msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
+                          interpolation=cv2.INTER_NEAREST_EXACT
+                          if scale < 1 else cv2.INTER_NEAREST) > 0).astype(np.uint8)
+        # پد به ضریب ۸ (دو بار stride=2 داخل مدل) — بازتابی تا لبه طبیعی بماند
+        ph = (8 - rh % 8) % 8
+        pw = (8 - rw % 8) % 8
+        if ph or pw:
+            img_np = cv2.copyMakeBorder(img_np, 0, ph, 0, pw, cv2.BORDER_REFLECT)
+            msk = cv2.copyMakeBorder(msk, 0, ph, 0, pw, cv2.BORDER_REFLECT)
+        img_f = img_np.astype(np.float32) / 127.5 - 1.0
+        img_f[msk > 0] = 0.0                       # سوراخ‌ها = صفر (قرارداد AOT)
+        out = self.session.run(None, {
+            self._in_image: img_f.transpose(2, 0, 1)[None],
+            self._in_mask: msk.astype(np.float32)[None, None],
+        })[0]
+        o = out[0].transpose(1, 2, 0).astype(np.float32)
+        o = np.clip((o + 1.0) * 127.5, 0, 255).astype(np.uint8)
+        o = o[:rh, :rw]
+        predicted = cv2.resize(o, (ow, oh), interpolation=cv2.INTER_LANCZOS4)
+        result = img_rgb.copy()
+        result[original_mask] = predicted[original_mask]
+        return result
+
+
 class LamaTorch:
     FILE = "big-lama.pt"
     FALLBACK_URL = ("https://github.com/enesmsahin/simple-lama-inpainting/"
@@ -2573,13 +2717,13 @@ class MangaTranslator:
             pass
         return 8.0
 
-    _CLEAN_METHODS = ("auto", "flat", "lama", "opencv",
-                      "flat+lama", "flat+opencv")
+    _CLEAN_METHODS = ("auto", "flat", "lama", "aot", "opencv",
+                      "flat+lama", "flat+opencv", "flat+aot")
 
     @classmethod
     def _normalize_clean_method(cls, value) -> str:
-        """نرمال‌سازی روش پاکسازی: auto / flat / lama / opencv /
-        flat+lama / flat+opencv (غلط‌های رایج هم پذیرفته می‌شود)."""
+        """نرمال‌سازی روش پاکسازی: auto / flat / lama / aot / opencv /
+        flat+lama / flat+opencv / flat+aot (غلط‌های رایج هم پذیرفته می‌شود)."""
         v = str(value or "auto").strip().lower().replace(" ", "")
         v = v.replace("−", "-").replace("＋", "+").replace("_", "+")
         aliases = {
@@ -2588,6 +2732,10 @@ class MangaTranslator:
             "lama+flat": "flat+lama", "flatlama": "flat+lama",
             "flatopencv": "flat+opencv", "flatonly": "flat",
             "hybrid": "flat+lama", "smart": "auto", "پیش‌فرض": "auto",
+            "aotgan": "aot", "aot-gan": "aot", "gan": "aot",
+            "yakuyomi": "aot", "yakuyomi-engine": "aot",
+            "flat+aotgan": "flat+aot", "aot+flat": "flat+aot",
+            "flataot": "flat+aot",
         }
         v = aliases.get(v, v)
         if v not in cls._CLEAN_METHODS:
@@ -2721,6 +2869,8 @@ class MangaTranslator:
         instruction_text: Optional[str] = None,
         repair_page_seams: bool = True,
         clean_method: str = "auto",
+        force_aot: bool = False,
+        no_aot: bool = False,
     ):
         # روش پاکسازی: اگر لحن LaMa بخواهد، مثل --lama رفتار می‌کنیم
         self.clean_method = self._normalize_clean_method(clean_method)
@@ -2842,6 +2992,8 @@ class MangaTranslator:
         if glossary_path and os.path.isfile(glossary_path):
             self._load_glossary_file(glossary_path)
         self._lama = None
+        self._aot = None
+        self._aot_failed = False
         self._title_skip_patterns: List[str] = []
         MangaTranslator._title_skip_patterns = []
         self.client = None
@@ -2871,6 +3023,13 @@ class MangaTranslator:
 
         self.use_lama = self._decide_lama(force_gpu=gpu, force_lama=force_lama)
         self._inpainter_name = "OpenCV"
+        # پاکسازی yakuyomi (AOT-GAN ONNX): پیش‌فرض روشن — سبک (~۲۳MB،
+        # جلسهٔ ~۲۰۰MB) و روی همهٔ پلتفرم‌ها اجرا می‌شود. با --no-aot خاموش.
+        self.use_aot = not no_aot
+        if no_aot:
+            print("[*] --no-aot → پاکسازی AOT-GAN خاموش شد.")
+        elif force_aot:
+            print("[*] --aot → پاکسازی AOT-GAN (yakuyomi) فعال ماند (پیش‌فرض).")
 
         if _lite_mode() and not _on_android():
             # نوارهای چسباندهٔ خیلی بلند روی سیستم کم‌رم بافرهای عظیم می‌سازند؛
@@ -3074,6 +3233,22 @@ class MangaTranslator:
         except Exception:
             pass
         return 0.0
+
+    def _get_aot(self):
+        """بارگذاری تنبلِ AOT-GAN (پاکسازی yakuyomi) — None = در دسترس نیست."""
+        if self._aot is None and getattr(self, "use_aot", True) \
+                and not getattr(self, "_aot_failed", False):
+            try:
+                self._aot = AotOnnx(
+                    prefer_gpu=self.use_gpu,
+                    threads=max(1, int(getattr(self, "max_workers", 2) or 2)),
+                )
+                self._inpainter_name = "AOT-GAN"
+            except Exception as e:
+                self._aot_failed = True
+                print(f"[!] AOT-GAN بارگذاری نشد ({e}) → LaMa/OpenCV")
+                return None
+        return self._aot
 
     def _get_lama(self):
         if self._lama is None and self.use_lama:
@@ -4198,6 +4373,33 @@ class MangaTranslator:
             h = (h * 16777619) & 0xFFFFFFFF
         return h
 
+    # v3 توکن‌های ساختاری — باید دقیقاً با tools/text_filter.py یکی باشد
+    _TF_URL_RE = re.compile(r"(?i)(?:https?://|www\.)\S+")
+    _TF_TLD_RE = re.compile(r"(?i)\b[\w-]+\.(?:com|org|net|gg|io|me|tv|to|cc|xyz|ru|info)\b")
+    _TF_STRETCH_RE = re.compile(r"([A-Za-z\uac00-\ud7a3\u3040-\u30ff\u4e00-\u9fff])\1{2,}")
+    _TF_KOR_RE = re.compile(r"[\uac00-\ud7a3\u1100-\u11ff]")
+    _TF_CJK_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+
+    @classmethod
+    def _tf_struct_tokens(cls, t: str, raw: str) -> list:
+        out = []
+        if cls._TF_URL_RE.search(t):
+            out.append("f:url")
+        if cls._TF_TLD_RE.search(t):
+            out.append("f:tld")
+        if cls._TF_STRETCH_RE.search(t):
+            out.append("f:stretch")
+        src = raw if raw else t
+        letters = [c for c in src if c.isalpha()]
+        if len(letters) >= 3 and \
+                (sum(1 for c in letters if c.isupper()) / len(letters)) > 0.85:
+            out.append("f:allcaps")
+        if re.search(r"\d", t) and cls._TF_KOR_RE.search(t):
+            out.append("f:kor_num")
+        if re.search(r"\d", t) and cls._TF_CJK_RE.search(t):
+            out.append("f:cjk_num")
+        return out
+
     @classmethod
     def _tf_featurize(cls, text: str, buckets: int) -> "np.ndarray":
         import unicodedata as _ud
@@ -4215,6 +4417,7 @@ class MangaTranslator:
                     feats.append("c%d:%s" % (n, ww[i:i + n]))
         for i in range(len(words) - 1):
             feats.append("b:" + words[i] + "_" + words[i + 1])
+        feats.extend(cls._tf_struct_tokens(t, text or ""))
         if not feats:
             feats = ["c1:<empty>"]
         counts = {}
@@ -4284,12 +4487,36 @@ class MangaTranslator:
             return True
         return False
 
+    # v3: عبارت‌های CTA/رابطِ خواننده که همیشه تبلیغ‌اند (حتی اگر مدل
+    # SFX/دیالوگ بگوید) — متن نرمال‌شده (حرف کوچک، بدون نقطه‌گذاری)
+    _CTA_PROMO = frozenset({
+        "click here", "read now", "shop now", "learn more", "watch now",
+        "sign up", "subscribe", "subscribe now", "download now", "play free",
+        "get started", "try now", "join now", "see more", "apply now",
+        "buy now", "read here", "watch free", "no ads", "ad free",
+        "unlock all", "unlock now", "free coins", "daily bonus", "event now",
+        "tap to read", "swipe up", "swipe left", "scroll down", "install now",
+        "get the app", "download the app", "limited offer", "limited time",
+        "advertisement", "sponsor", "sponsored", "ad", "ads",
+        "to be continued", "next episode", "new episode", "daily pass",
+        "free episode", "unlock chapter", "unlock episode", "read free",
+        "start reading", "read more", "continue reading", "follow us",
+        "join our discord", "visit our website", "support us",
+    })
+
     @classmethod
     def _classify_text(cls, text: str, in_bubble: bool = False) -> str:
 
         stripped = (text or "").strip()
         if not stripped:
             return "junk"
+
+        # v3: CTA/بنرهای تبلیغاتی همیشه تبلیغ‌اند — مدلِ ML گاهی
+        # «CLICK HERE» را SFX می‌خواند؛ این فهرستِ سخت آن را می‌بندد.
+        _cta_probe = re.sub(r"[!?.:;,~\-_—–\s]+", " ",
+                            stripped).strip().lower()
+        if _cta_probe in MangaTranslator._CTA_PROMO:
+            return "promo"
 
         # ---------- ۱) مدلِ ML (اولویت) — تصمیمِ نهایی با مدلِ آموخته است.
         # آستانه‌ها از اعتبارسنجیِ مجموعهٔ واقعی تنظیم شده‌اند ----------
@@ -6515,28 +6742,46 @@ class MangaTranslator:
                 lama_ready = self._get_lama() is not None
             except Exception:
                 lama_ready = False
+        aot_ready = False
+        if getattr(self, "use_aot", True):
+            try:
+                aot_ready = self._get_aot() is not None
+            except Exception:
+                aot_ready = False
 
-        # ---- سیاست پاکسازی (روش انتخابی کاربر + در دسترس بودن LaMa) ----
-        # auto      → flat+lama اگر LaMa آماده باشد، وگرنه flat+opencv
-        # flat      → پرکردن صاف همه‌جا (fallback: OpenCV فقط وقتی صاف نشد)
-        # lama      → همه‌جا LaMa (بدون flat)
-        # opencv    → همه‌جا OpenCV (بدون flat)
-        # flat+lama → زمینه صاف = پرکردن صاف، بقیه = LaMa
+        # ---- سیاست پاکسازی (روش انتخابی کاربر + در دسترس بودن مدل‌ها) ----
+        # auto        → flat + (AOT-GAN یا LaMa) وگرنه flat+opencv
+        # flat        → پرکردن صاف همه‌جا (fallback: OpenCV فقط وقتی صاف نشد)
+        # lama        → همه‌جا LaMa (بدون flat)
+        # aot         → همه‌جا AOT-GAN/yakuyomi (بدون flat)
+        # opencv      → همه‌جا OpenCV (بدون flat)
+        # flat+lama   → زمینه صاف = پرکردن صاف، بقیه = LaMa
+        # flat+aot    → زمینه صاف = پرکردن صاف، بقیه = AOT-GAN
         # flat+opencv → زمینه صاف = پرکردن صاف، بقیه = OpenCV
         mode = self._normalize_clean_method(getattr(self, "clean_method", "auto"))
         mode_is_auto = (getattr(self, "clean_method", "auto") == "auto")
         if mode == "auto":
             mode = "flat+lama" if lama_ready else "flat+opencv"
         elif mode in ("flat+lama", "lama") and not lama_ready:
-            print("  [!] LaMa در دسترس نیست → بازسازی این خوشه‌ها با OpenCV")
-            mode = "flat+opencv" if mode == "flat+lama" else "opencv"
-        use_flat = mode in ("flat", "flat+lama", "flat+opencv")
+            if aot_ready:
+                print("  [!] LaMa در دسترس نیست → بازسازی با AOT-GAN (yakuyomi)")
+                mode = "flat+aot" if mode == "flat+lama" else "aot"
+            else:
+                print("  [!] LaMa در دسترس نیست → بازسازی این خوشه‌ها با OpenCV")
+                mode = "flat+opencv" if mode == "flat+lama" else "opencv"
+        elif mode in ("flat+aot", "aot") and not aot_ready:
+            print("  [!] AOT-GAN در دسترس نیست → LaMa/OpenCV")
+            mode = "flat+lama" if mode == "flat+aot" else "lama"
+            if not lama_ready:
+                mode = "flat+opencv" if mode == "flat+lama" else "opencv"
+        use_flat = mode in ("flat", "flat+lama", "flat+opencv", "flat+aot")
         use_lama_now = mode in ("flat+lama", "lama")
+        use_aot_now = mode in ("flat+aot", "aot")
         print(f"  [*] روش پاکسازی: {mode}"
               + (" (خودکار)" if mode_is_auto else ""))
 
         cleaned = image.copy()
-        counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
+        counts = {"flat": 0, "LaMa": 0, "OpenCV": 0, "AOT": 0}
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         page_wall = self._wall_lines(image)
         page_band = self._bubble_border_band(image, regions)
@@ -6615,6 +6860,132 @@ class MangaTranslator:
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method, _mdl])
 
         pending = [c for c in crops if c[5] is None]
+
+        # ---- پاکسازی yakuyomi (AOT-GAN کل صفحه، ONNX) ----
+        # ترمیم طبیعی خودِ زمینه — متن جا نمی‌ماند و هیچ مربع/بلوکی
+        # رسم نمی‌شود. وقتی big-LaMa (torch) در دسترس نیست، AOT
+        # انتخابِ اولِ بازسازی است؛ با big-LaMa فقط نقشِ «شانسِ دوم»
+        # برای خوشه‌هایی دارد که LaMa رویشان لکه گذاشته است.
+        aot_bgr: Optional[np.ndarray] = None
+        aot_page_mask: Optional[np.ndarray] = None
+
+        def _aot_protected_mask() -> Optional[np.ndarray]:
+            """ماسک گشادشدهٔ کل صفحه با همهٔ محافظت‌ها (همان قواعد LaMa)."""
+            try:
+                pm = cv2.dilate(mask, page_kernel)
+                _prot = None
+                if page_wall is not None:
+                    _prot = page_wall > 0
+                if page_band is not None:
+                    _pb = page_band > 0
+                    _prot = _pb if _prot is None else (_prot | _pb)
+                if wall_prot is not None:
+                    _wp = wall_prot > 0
+                    _prot = _wp if _prot is None else (_prot | _wp)
+                _pm = pm > 0
+                _mk2 = mask > 0
+                if page_interior is not None:
+                    _pm = _pm & (_mk2 | (page_interior > 0))
+                if _prot is not None:
+                    pm = ((_pm & _mk2) | (_pm & ~_prot)).astype(np.uint8) * 255
+                else:
+                    pm = _pm.astype(np.uint8) * 255
+                return pm if np.any(pm) else None
+            except Exception:
+                return None
+
+        def _aot_try_fill(pl: List[list]) -> int:
+            """خوشه‌های فهرست pl را با خروجی AOT پر می‌کند؛ تعداد موفق برمی‌گرداند."""
+            if aot_bgr is None or aot_page_mask is None or not pl:
+                return 0
+            done = 0
+            for c in pl:
+                cx0, cy0, cx1, cy1, crop_msk = c[:5]
+                result = aot_bgr[cy0:cy1, cx0:cx1]
+                try:
+                    _fm = (cv2.dilate(crop_msk, page_kernel) > 0)
+                    _ring_m = (cv2.dilate(crop_msk, _qc_kernel) > 0) & (~_fm)
+                    if _fm.any() and _ring_m.any():
+                        _g = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+                        _bg_px = _g[_ring_m]
+                        _bright = _bg_px[_bg_px >= 160.0]
+                        if _bright.size >= max(50, int(0.02 * _bg_px.size)) and _bright.size >= 0.55 * _bg_px.size:
+                            _bg_med = float(np.median(_bright))
+                            _fill_med = float(np.median(_g[_fm]))
+                            if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
+                                result = None
+                except Exception:
+                    pass
+                if result is not None:
+                    try:
+                        _exp = (cv2.dilate(crop_msk, page_kernel) > 0) & (crop_msk == 0)
+                        if page_interior is not None:
+                            _di = page_interior[cy0:cy1, cx0:cx1]
+                            if _di.shape == _exp.shape:
+                                _exp = _exp & (_di == 0)
+                        if _exp.any() and _exp.sum() >= 40:
+                            _dif = np.abs(result.astype(np.int16)
+                                          - crop_img_global[cy0:cy1, cx0:cx1].astype(np.int16)).max(axis=2)
+                            _hurt = float((_dif[_exp] > 14).mean())
+                            if _hurt > 0.04:
+                                result = None
+                    except Exception:
+                        pass
+                if result is not None:
+                    try:
+                        result = self._smooth_lama_grain(
+                            result, crop_msk,
+                            crop_img_global[cy0:cy1, cx0:cx1])
+                    except Exception:
+                        pass
+                    c[4] = cv2.dilate(crop_msk, page_kernel)
+                    c[5] = result
+                    c[6] = "AOT"
+                    done += 1
+            return done
+
+        _qc_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+        crop_img_global = image
+        # AOT اول وقتی: روشِ صریح aot است، یا LaMa موجود «کلاسِ سبک» است
+        # (lama-lite int8 / اندروید / حالت Lite / --cpu) یا torch اصلاً نیست.
+        # big-LaMaٔ کامل (torch CUDA/CPU) همچنان اولویت دارد و AOT شانسِ دوم.
+        _lama_is_lite = (getattr(self, "_lama_prefer_lite", False)
+                         or _lite_mode() or _on_android())
+        _aot_runs_first = use_aot_now or (
+            aot_ready and (not use_lama_now or _lama_is_lite
+                           or not _torch_available()))
+        if pending and aot_ready and _aot_runs_first:
+            aot_page_mask = _aot_protected_mask()
+            if aot_page_mask is not None:
+                try:
+                    t0 = time.time()
+                    _aout = self._get_aot()(image, aot_page_mask)
+                    aot_bgr = _aout if isinstance(_aout, np.ndarray) else np.array(_aout)
+                    if aot_bgr.ndim == 2:
+                        aot_bgr = cv2.cvtColor(aot_bgr, cv2.COLOR_GRAY2BGR)
+                    else:
+                        aot_bgr = cv2.cvtColor(aot_bgr, cv2.COLOR_RGB2BGR)
+                    if aot_bgr.shape[:2] == image.shape[:2]:
+                        _n = _aot_try_fill(pending)
+                        if _n:
+                            print(f"  [*] AOT-GAN (yakuyomi) کل صفحه: "
+                                  f"{time.time() - t0:.1f}s ({_n}/{len(pending)} خوشه)")
+                            if os.environ.get("MANGA_DBG_AOT"):
+                                for _ci, _cc in enumerate(pending):
+                                    print(f"    [aot-dbg] cluster{_ci} "
+                                          f"box=({_cc[0]},{_cc[1]},{_cc[2]},{_cc[3]}) "
+                                          f"method={_cc[6]} filled={_cc[5] is not None}")
+                    else:
+                        aot_bgr = None
+                        aot_page_mask = None
+                except Exception as e:
+                    print(f"  [!] AOT-GAN ناموفق ({e}) → LaMa/OpenCV")
+                    aot_bgr = None
+
+        # خوشه‌هایی که AOT پر کرد از فهرستِ LaMa خارج شوند —
+        # وگرنه مسیرِ کل‌صفحهٔ LaMa نتایج AOT را بازنویسی می‌کرد
+        pending = [c for c in crops if c[5] is None]
+
         if pending and use_lama_now and lama_ready:
             lama = self._get_lama()
             if lama is not None:
@@ -6632,6 +7003,8 @@ class MangaTranslator:
                     t0 = time.time()
                     _pad = 32
                     for c in pending:
+                        if c[5] is not None:
+                            continue
                         cx0, cy0, cx1, cy1, crop_msk = c[:5]
                         try:
                             ex0, ey0 = max(0, cx0 - _pad), max(0, cy0 - _pad)
@@ -6741,6 +7114,8 @@ class MangaTranslator:
                         print(f"  [*] LaMa کل صفحه یک‌جا: {dt:.1f}s "
                               f"({len(pending)} خوشه)")
                         for c in pending:
+                            if c[5] is not None:
+                                continue
                             cx0, cy0, cx1, cy1, crop_msk = c[:5]
                             result = page_bgr[cy0:cy1, cx0:cx1]
                             try:
@@ -6795,7 +7170,33 @@ class MangaTranslator:
             else:
                 print("  [!] LaMa در دسترس نیست → OpenCV برای خوشه‌های باقی‌مانده")
 
+        # ---- شانسِ دوم AOT-GAN: خوشه‌هایی که LaMa رویشان لکه گذاشت ----
+        pending = [c for c in crops if c[5] is None]
+        if pending and aot_ready and aot_bgr is None and not use_aot_now:
+            aot_page_mask = _aot_protected_mask()
+            if aot_page_mask is not None:
+                try:
+                    t0 = time.time()
+                    _aout = self._get_aot()(image, aot_page_mask)
+                    aot_bgr = _aout if isinstance(_aout, np.ndarray) else np.array(_aout)
+                    if aot_bgr.ndim == 2:
+                        aot_bgr = cv2.cvtColor(aot_bgr, cv2.COLOR_GRAY2BGR)
+                    else:
+                        aot_bgr = cv2.cvtColor(aot_bgr, cv2.COLOR_RGB2BGR)
+                    if aot_bgr.shape[:2] != image.shape[:2]:
+                        aot_bgr = None
+                except Exception:
+                    aot_bgr = None
+            if aot_bgr is not None:
+                _n = _aot_try_fill(pending)
+                if _n:
+                    print(f"  [*] شانسِ دوم AOT-GAN: {_n} خوشه ترمیم شد "
+                          f"({time.time() - t0:.1f}s)")
+
         for cx0, cy0, cx1, cy1, crop_msk, result, method, *_cx in crops:
+            if os.environ.get("MANGA_DBG_AOT"):
+                print(f"    [loop-dbg] box=({cx0},{cy0},{cx1},{cy1}) "
+                      f"in_method={method} has_result={result is not None}")
             _cmdl = _cx[0] if _cx else None
             crop_img = image[cy0:cy1, cx0:cx1]
             if result is None:
@@ -7701,8 +8102,11 @@ class MangaTranslator:
     @staticmethod
     def _fill_matches_bg(fill_img: np.ndarray, model: Optional[dict],
                          msk: np.ndarray, tol_mean: float = 7.0,
-                         skip_noise_cap: bool = False) -> Tuple[bool, str]:
-        """آیا پرکردن با زمینهٔ واقعی ناحیه می‌خواند؟ (رنگ، ته‌رنگ، بافت)"""
+                         skip_noise_cap: bool = False,
+                         generative: bool = False) -> Tuple[bool, str]:
+        """آیا پرکردن با زمینهٔ واقعی ناحیه می‌خواند؟ (رنگ، ته‌رنگ، بافت)
+        generative=True برای خروجی مدل‌های مولد (AOT-GAN): بازسازیِ بافت
+        انحرافِ رنگی/واریانسیِ طبیعی دارد؛ نویزِ LaMa بدتر از آن است."""
         try:
             if model is None:
                 return True, ""
@@ -7727,6 +8131,16 @@ class MangaTranslator:
             # روی زمینهٔ بافت‌دار/ناهمگن (هنر + کاغذ) مدلِ حلقه به سفید بایاس است؛
             # تولرانسِ وسیع‌تر تا کاشیِ بافتِ واقعی بی‌دلیل رد نشود
             _tol_m = tol_mean if not _txt else max(tol_mean, 18.0)
+            _tol_c = _tol_m + 2.0
+            if generative:
+                # AOT-GAN: نویزکپ لازم نیست؛ تولرانس رنگ بازتر؛ کف‌های
+                # بافت ملایم‌تر (بازسازی ۵۱۲/۷۶۸ کمی نرم‌تر از حلقه است)
+                skip_noise_cap = True
+                _tol_m = max(_tol_m, 18.0)
+                _tol_c = _tol_m + 10.0
+                _gen_floor = 0.6
+            else:
+                _gen_floor = 1.0
             if skip_noise_cap:
                 # کاشیِ بافتِ اصیل: میانگینِ حلقه به کاغذِ بینِ حروف بایاس است
                 # (هافتونِ تیره mean≈۱۹۰ در برابر حلقهٔ ۲۵۳!) — چکِ میانگینِ
@@ -7751,16 +8165,17 @@ class MangaTranslator:
             # ۲) جابه‌جایی رنگ (مانهوای رنگی)
             for c in range(3):
                 fc = float(np.mean(fill_img[:, :, c][me].astype(np.float32)))
-                if abs(fc - model["ch_means"][c]) > _tol_m + 2.0:
+                if abs(fc - model["ch_means"][c]) > _tol_c:
                     return False, f"ch{c} {fc:.0f}!={model['ch_means'][c]:.0f}"
             # ۳) بافت کشته‌شده (اسکرین‌تون → لکهٔ صاف) — هم توزیع کلی، هم بافت
             # محلی پنجره‌ای (نقطه‌چین کم‌کنتراست)
             _tex_src = max(model["std"], model.get("tex_local", 0.0))
-            if _tex_src >= 6.5 and fill_std < 0.45 * _tex_src:
-                return False, f"tex {fill_std:.0f}<{0.45 * _tex_src:.0f}"
+            if _tex_src >= 6.5 and fill_std < 0.45 * _gen_floor * _tex_src:
+                return False, f"tex {fill_std:.0f}<{0.45 * _gen_floor * _tex_src:.0f}"
             lap = np.abs(cv2.Laplacian(g, cv2.CV_32F))
             fhf = float(np.mean(lap[me]))
             _hf_thr = 0.30 if model["hf"] >= 15.0 else 0.15
+            _hf_thr *= _gen_floor
             if skip_noise_cap:
                 _hf_thr *= 0.5   # کاشیِ اصیل: بافت واقعی است؛ آستانهٔ ملایم‌تر
             if model["hf"] >= 4.5 and not _flat_ground \
@@ -8374,7 +8789,9 @@ class MangaTranslator:
                     pass
             guide = self._bg_guide(crop_img, msk, domain)
             if model is not None:
-                ok, why = self._fill_matches_bg(fill_img, model, msk)
+                ok, why = self._fill_matches_bg(
+                    fill_img, model, msk,
+                    generative=(str(method) == "AOT"))
                 if ok:
                     # چکِ محلیِ گرادیان: میانگینِ کلیِ چکِ قبلی، لکهٔ مربعیِ
                     # پرکردنِ تخت روی زمینهٔ گرادیانی/تینت‌دار را نمی‌بیند
@@ -14614,11 +15031,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="اجبار به CPU (OpenCV inpaint)")
     p.add_argument("--lama", action="store_true", default=False,
                    help="حتی روی CPU هم پاک‌سازی big-lama.pt را فعال کن (کندتر، تمیزتر)")
+    p.add_argument("--aot", dest="force_aot", action="store_true", default=False,
+                   help="پاکسازی AOT-GAN (yakuyomi) — پیش‌فرض روشن است؛ این فلگ فقط "
+                        "نمادین است (برای خاموشی: --no-aot)")
+    p.add_argument("--no-aot", dest="no_aot", action="store_true", default=False,
+                   help="پاکسازی AOT-GAN (yakuyomi) را خاموش کن — فقط LaMa/OpenCV")
     p.add_argument("--clean-method", dest="clean_method", default="auto",
-                   choices=["auto", "flat", "lama", "opencv", "flat+lama", "flat+opencv"],
-                   help="روش پاکسازی متن: auto (خودکار: flat+lama یا flat+opencv) | "
-                        "flat (پرکردن صاف) | lama | opencv | "
-                        "flat+lama | flat+opencv — پیش‌فرض auto")
+                   choices=["auto", "flat", "lama", "aot", "opencv", "flat+lama", "flat+opencv", "flat+aot"],
+                   help="روش پاکسازی متن: auto (خودکار: flat + AOT-GAN/LaMa) | "
+                        "flat (پرکردن صاف) | lama | aot (AOT-GAN yakuyomi) | opencv | "
+                        "flat+lama | flat+aot | flat+opencv — پیش‌فرض auto")
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--keep-old", action="store_true")
     p.add_argument("--request-delay", type=float, default=0.0)
@@ -14806,6 +15228,8 @@ def main():
         clean_only=bool(getattr(args, "clean_only", False)),
         style_fonts=not getattr(args, "no_style_fonts", False),
         clean_method=str(getattr(args, "clean_method", "auto") or "auto"),
+        force_aot=bool(getattr(args, "force_aot", False)),
+        no_aot=bool(getattr(args, "no_aot", False)),
         instruction_text=(
             open(args.instruction, encoding="utf-8").read()
             if getattr(args, "instruction", None) and os.path.isfile(args.instruction) else None

@@ -47,9 +47,39 @@ def _normalize(t: str) -> str:
     t = re.sub(r"\s+", " ", t).strip()
     return t
 
+_STRUCT_URL_RE = re.compile(r"(?i)(?:https?://|www\.)\S+")
+_STRUCT_TLD_RE = re.compile(r"(?i)\b[\w-]+\.(?:com|org|net|gg|io|me|tv|to|cc|xyz|ru|info)\b")
+_STRUCT_STRETCH_RE = re.compile(r"([A-Za-z\uac00-\ud7a3\u3040-\u30ff\u4e00-\u9fff])\1{2,}")
+_STRUCT_KOR_RE = re.compile(r"[\uac00-\ud7a3\u1100-\u11ff]")
+_STRUCT_CJK_RE = re.compile(r"[\u3040-\u30ff\u4e00-\u9fff]")
+
+def _struct_tokens(t: str, raw: str = "") -> list:
+    """cheap but high-signal structural tokens (v3) — mirrored 1:1 in
+    manga.py::_tf_featurize so the shared npz stays consistent.
+    `raw` = original (non-lowercased) text for the all-caps check."""
+    out = []
+    if _STRUCT_URL_RE.search(t):
+        out.append("f:url")
+    if _STRUCT_TLD_RE.search(t):
+        out.append("f:tld")
+    if _STRUCT_STRETCH_RE.search(t):
+        out.append("f:stretch")
+    src = raw if raw else t
+    letters = [c for c in src if c.isalpha()]
+    if len(letters) >= 3 and \
+            (sum(1 for c in letters if c.isupper()) / len(letters)) > 0.85:
+        out.append("f:allcaps")
+    if re.search(r"\d", t) and _STRUCT_KOR_RE.search(t):
+        out.append("f:kor_num")
+    if re.search(r"\d", t) and _STRUCT_CJK_RE.search(t):
+        out.append("f:cjk_num")
+    return out
+
 def featurize(text: str, buckets: int = B, dense: bool = False):
-    """hashed char-ngrams (1..4, word-bounded) + word uni/bigrams → sparse
-    (indices, values) or dense L2-normalized vector when dense=True"""
+    """hashed char-ngrams (1..4, word-bounded) + word uni/bigrams + structural
+    tokens → sparse (indices, values) or dense L2-normalized vector.
+    v3: structural tokens (url/tld/stretch/allcaps/digit-cjk) — MUST stay
+    byte-identical with manga.py::_tf_featurize (same npz is shared)."""
     t = _normalize(text)
     words = t.split(" ")
     feats = []
@@ -63,6 +93,7 @@ def featurize(text: str, buckets: int = B, dense: bool = False):
                 feats.append("c%d:%s" % (n, ww[i:i + n]))
     for i in range(len(words) - 1):
         feats.append("b:" + words[i] + "_" + words[i + 1])
+    feats.extend(_struct_tokens(t, text or ""))
     if not feats:
         feats = ["c1:<empty>"]
     counts = {}
@@ -721,6 +752,34 @@ def build_corpus(verbose: bool = True):
             data.append(("dialogue", nm.capitalize() + rng.choice(
                 ["!", "!!", "?"])))
 
+    # v3: imperative shouts — «STOP!! / NO!!! / WATCH OUT!» are DIALOGUE,
+    # even when ALL-CAPS with heavy punctuation (was the top user miss)
+    _imper = ["STOP", "NO", "WAIT", "GO", "HELP", "LOOK", "LISTEN", "RUN",
+              "HURRY", "MOVE", "DUCK", "DODGE", "COME", "BEHIND YOU",
+              "WATCH OUT", "LOOK OUT", "GET DOWN", "SHUT UP", "COME ON",
+              "HOLD ON", "CALM DOWN", "DON'T", "DON'T MOVE", "NOT SO FAST",
+              "OVER THERE", "THIS WAY", "WHAT ARE YOU DOING", "ARE YOU OKAY",
+              "STAY BACK", "GET AWAY", "THAT'S ENOUGH", "LET GO", "RELEASE",
+              "DO SOMETHING", "ANSWER ME", "SAY SOMETHING", "FOCUS"]
+    for _ in range(420):
+        s = rng.choice(_imper)
+        s += rng.choice(["!!", "!", "!!!", "?!", "...!", "", "!", "!!"])
+        _st = rng.random()
+        if _st < 0.45:
+            s = s.upper()
+        elif _st < 0.65:
+            s = s.capitalize()
+        data.append(("dialogue", s))
+    # v3: stretched-letter dialogue (REALLY→REEEALLY) stays dialogue
+    _stretch_dlg = ["NOO", "NOOO", "YESS", "YESSS", "WHAAT", "WHAAAT",
+                    "REEALLY", "STOOOP", "WAITT", "HEYY", "OMGG",
+                    "PLEASEE", "GOOO", "WHYY", "HIIM", "STOPP"]
+    for _ in range(180):
+        s = rng.choice(_stretch_dlg) + rng.choice(["", "!", "??", "..."])
+        if rng.random() < 0.5:
+            s = s.upper() if rng.random() < 0.5 else s.lower()
+        data.append(("dialogue", s))
+
     # localized profile captions (KO/JA/ZH)
     _ko_names = ["김하늘", "이서준", "박지민", "최유리", "정태양", "한별",
                  "오세림", "남주하", "차도연", "윤그림"]
@@ -789,6 +848,20 @@ def build_corpus(verbose: bool = True):
             if len(w) >= 2:
                 data.append(("sfx", w[0] * 2 + w[1:]))
                 data.append(("sfx", w + w[-1] * rng.randint(2, 5)))
+    # v3: laughter is SFX art in manga (HAHAHA / ㅋㅋㅋ / アハハ)
+    _laugh = ["HAHAHA", "HAHAHAHA", "HEHEHE", "HEEHEE", "HIHIHI", "HUHUHU",
+              "KUKUKU", "KEKEKE", "FUHAHA", "MUHAHA", "NYAHAHA", "GYAHAHA",
+              "KAKAKA", "GEHAHA", "OHOHO", "OH-HOHO", "TEHEE", "UHUHU",
+              "アハハ", "ハハハ", "ウフフ", "ヘヘヘ", "クスクス", "ゲラゲラ",
+              "フフフ", "ククク", "にやり", "ニヤニヤ", "オホホ",
+              "ㅋㅋㅋ", "ㅋㅋㅋㅋ", "ㅎㅎㅎ", "히히히", "허허허", "킥킥킥",
+              "哈哈哈", "嘿嘿嘿", "呵呵呵", "嘻嘻嘻", "噗嗤"]
+    for w in _laugh:
+        data.append(("sfx", w))
+        data.append(("sfx", w + "!"))
+        data.append(("sfx", w.lower()))
+        if rng.random() < 0.3:
+            data.append(("sfx", w + w[-1] * 3))
 
     # ---------------- ads / promo / watermark ----------------
     dom = lambda: rng.choice(SITES).replace(" ", "").lower()
@@ -848,6 +921,24 @@ def build_corpus(verbose: bool = True):
     # chapter headers
     for t in CHAPTER_HEADERS:
         templates += [t.format(n=n()), t.format(n=n()) + "!"]
+    # v3: bare digit + CJK/KR chapter forms and reader-UI strings —
+    # «12화 / 第3話 / (2) / EP07» were misread as junk or dialogue
+    for _ in range(140):
+        templates += [
+            f"{n()}화", f"제{n()}화", f"{n()} 화", f"第{n()}話", f"第{n()}话",
+            f"{n()}話", f"({n()})", f"{n()}-{n()}", f"EP{n():02d}",
+            f"#{n():03d}", f"#{n()}", f"Part {n()}-{n()}",
+        ]
+    templates += [
+        "Next", "Previous", "Comments", "Like", "Share", "Reply",
+        "Waitlist", "Notify me", "Already read", "Keep reading",
+        "Start from beginning", "Daily ranking", "Top 10", "Trending",
+        "AD", "Ad", "SPONSORED", "Sponsored", "ads", "AD:",
+        "Read on", "Original series", "Every monday", "Every week",
+        "Now available", "Ongoing", "Completed", "Hiatus",
+        "Branch story", "Spin-off", "Side story 1", "Prologue",
+        "Episode 1", "Episode 0", "Final episode", "Special episode",
+    ]
     templates += END_MARKS
     templates += ["NEW EPISODE", "DAILY PASS", "FREE EPISODE",
                   "UNLOCK NOW", "1 COIN", "10 IMAGES", "SEASON FINALE",
@@ -914,6 +1005,17 @@ def build_corpus(verbose: bool = True):
               "!!!!!!", "??????", "......…", "———", "~~~~", "★★★",
               "※※※", "☆☆☆", "::::::", "++++++", "...!", "!!..."]:
         data.append(("junk", s))
+    # v3: exclamation/question runs of any length are junk, not SFX
+    for _ in range(420):
+        base = rng.choice(["!", "?", ".", "~", "*", "…"])
+        s = base * rng.randint(2, 8)
+        if rng.random() < 0.35:
+            s = rng.choice(["?", "!"]) + s + rng.choice(["?", "!"])
+        data.append(("junk", s))
+    # v3: digit punctuation mixes (OCR noise around page numbers)
+    for _ in range(220):
+        s = "".join(rng.choice("0123456789.-%()#/") for _ in range(rng.randint(2, 7)))
+        data.append(("junk", s))
 
     rng.shuffle(data)
     return data
@@ -942,7 +1044,7 @@ def train():
     bias = np.zeros(C, dtype=np.float32)
     G = np.ones((C, B), dtype=np.float32)
     Gb = np.ones(C, dtype=np.float32)
-    lr, epochs, l2 = 0.3, 16, 1e-6
+    lr, epochs, l2 = 0.3, 20, 1e-6
     bs = 64
     # class weights — balance dialogue against the big junk/sfx pools
     from collections import Counter as _C2
