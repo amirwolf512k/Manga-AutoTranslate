@@ -712,10 +712,9 @@ def run_cli_interactive():
     f = input("انتخاب [1-5] (پیش‌فرض 1): ").strip() or "1"
     ext = {"1": ".pdf", "2": ".zip", "3": ".html", "4": "", "5": ".psd"}.get(f, ".pdf")
 
-    print("\nروش پاکسازی:  1) خودکار  2) flat+lama  3) flat+opencv  4) فقط flat  5) فقط lama  6) فقط opencv")
+    print("\nروش پاکسازی:  1) خودکار  2) AOT-GAN  3) LaMa-lite  4) OpenCV")
     cm = input("انتخاب [1-6] (پیش‌فرض 1): ").strip() or "1"
-    clean_m = {"1": "auto", "2": "flat+lama", "3": "flat+opencv",
-               "4": "flat", "5": "lama", "6": "opencv"}.get(cm, "auto")
+    clean_m = {"1": "auto", "2": "aot", "3": "lama", "4": "opencv"}.get(cm, "auto")
 
     print("\nارائه‌دهندهٔ AI را انتخاب کنید:")
     prov_menu = [
@@ -1044,8 +1043,7 @@ def run_desktop():
     ttk.Label(row_cm, text="روش پاکسازی متن:").pack(side="right", padx=(0, 4))
     clean_var = tk.StringVar(value=str(cfg.get("clean_method", "auto") or "auto"))
     ttk.Combobox(row_cm, textvariable=clean_var, state="readonly", width=15,
-                 values=("auto", "flat+lama", "flat+opencv",
-                         "flat", "lama", "opencv")).pack(side="right")
+                 values=("auto", "aot", "lama", "opencv")).pack(side="right")
 
     
     card_ai = ttk.LabelFrame(tab_body, text=" حساب و مدل ", padding=12)
@@ -2690,12 +2688,10 @@ def run_web():
                                         value=False)
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
             clean_method = gr.Radio(
-                choices=[("خودکار (flat + LaMa/OpenCV)", "auto"),
-                         ("flat + LaMa", "flat+lama"),
-                         ("flat + OpenCV", "flat+opencv"),
-                         ("فقط flat — پرکردن صاف", "flat"),
-                         ("فقط LaMa", "lama"),
-                         ("فقط OpenCV", "opencv")],
+                choices=[("خودکار (بر اساس رم/GPU)", "auto"),
+                         ("AOT-GAN", "aot"),
+                         ("LaMa-lite", "lama"),
+                         ("OpenCV", "opencv")],
                 value=str(cfg.get("clean_method", "auto")) or "auto",
                 label="روش پاکسازی متن (حذف متن اصلی از تصویر)")
             with gr.Row():

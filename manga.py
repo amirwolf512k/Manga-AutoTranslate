@@ -2815,17 +2815,19 @@ class MangaTranslator:
             print(f"[*] GPU هست ({name}, {vram:.1f} GB) ولی VRAM کم → OpenCV. "
                   f"برای اجبار: --lama یا --gpu")
             return False
+        # دسکتاپ/وب بدون GPU: big-lama.pt سنگین است و پیش‌فرض نمی‌شود.
+        # حالت auto از AOT-GAN + LaMa-lite (سبک) استفاده می‌کند؛
+        # فقط با --lama یا GPU قوی big-lama روشن می‌شود.
         if has_torch and not _on_android():
-            print("[*] دسکتاپ/وب → پاک‌سازی پیش‌فرض با big-lama.pt "
-                  "(روی CPU کندتر ولی تمیزتر). برای غیرفعال‌سازی: --cpu")
-            return True
+            print("[*] دسکتاپ/وب بدون GPU مناسب → big-lama.pt خاموش "
+                  "(AOT/LaMa-lite خودکار). اجبار: --lama")
+            return False
 
         if has_ort and not _on_android():
             avail = self._available_ram_gb()
-            if avail is None or avail >= 2.2:
-                print("[*] GPU نیست ولی onnxruntime هست → پاک‌سازی پیش‌فرض با "
-                      "LaMa ONNX (روی CPU کندتر ولی تمیزتر از OpenCV). "
-                      "برای غیرفعال‌سازی: --cpu")
+            if avail is None or avail >= 1.5:
+                print("[*] onnxruntime هست → LaMa-lite در دسترس "
+                      "(auto بر اساس رم بین AOT/lite/OpenCV انتخاب می‌کند).")
                 return True
             print(f"[*] رم آزاد کم است ({avail:.1f}GB) → OpenCV سریع. "
                   f"برای اجبار: --lama")
@@ -6944,7 +6946,27 @@ class MangaTranslator:
         mode = self._normalize_clean_method(getattr(self, "clean_method", "auto"))
         mode_is_auto = (getattr(self, "clean_method", "auto") == "auto")
         if mode == "auto":
-            mode = "lama" if lama_ready else ("aot" if aot_ready else "opencv")
+            # انتخاب هوشمند بر اساس پلتفرم و منابع:
+            # موبایل/رم‌کم → AOT (سبک) ؛ GPU قوی → LaMa ؛ وگرنه AOT سپس lite
+            try:
+                _android = _on_android()
+            except Exception:
+                _android = False
+            try:
+                _avail = self._available_ram_gb()
+            except Exception:
+                _avail = None
+            try:
+                _cuda = bool(self._detect_torch_cuda() or _ort_has_cuda())
+                _vram = float(self._cuda_vram_gb() or 0)
+            except Exception:
+                _cuda, _vram = False, 0.0
+            if _android or (_avail is not None and _avail < 2.0):
+                mode = "aot" if aot_ready else ("lama" if lama_ready else "opencv")
+            elif _cuda and _vram >= getattr(self, "_LAMA_MIN_VRAM_GB", 3.5):
+                mode = "lama" if lama_ready else ("aot" if aot_ready else "opencv")
+            else:
+                mode = "aot" if aot_ready else ("lama" if lama_ready else "opencv")
         elif mode == "lama" and not lama_ready:
             if aot_ready:
                 print("  [!] LaMa در دسترس نیست → بازسازی با AOT-GAN (yakuyomi)")

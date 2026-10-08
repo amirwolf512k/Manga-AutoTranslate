@@ -712,10 +712,9 @@ def run_cli_interactive():
     f = input("انتخاب [1-5] (پیش‌فرض 1): ").strip() or "1"
     ext = {"1": ".pdf", "2": ".zip", "3": ".html", "4": "", "5": ".psd"}.get(f, ".pdf")
 
-    print("\nروش پاکسازی:  1) خودکار  2) flat+lama  3) flat+opencv  4) فقط flat  5) فقط lama  6) فقط opencv")
+    print("\nروش پاکسازی:  1) خودکار  2) AOT-GAN  3) LaMa-lite  4) OpenCV")
     cm = input("انتخاب [1-6] (پیش‌فرض 1): ").strip() or "1"
-    clean_m = {"1": "auto", "2": "aot", "3": "lama",
-               "4": "opencv"}.get(cm, "auto")
+    clean_m = {"1": "auto", "2": "aot", "3": "lama", "4": "opencv"}.get(cm, "auto")
 
     print("\nارائه‌دهندهٔ AI را انتخاب کنید:")
     prov_menu = [
@@ -2689,10 +2688,10 @@ def run_web():
                                         value=False)
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
             clean_method = gr.Radio(
-                choices=[("خودکار (AOT + LaMa-lite — مناسب موبایل)", "auto"),
-                         ("AOT-GAN سبک (~۲۳MB)", "aot"),
-                         ("LaMa-lite / LaMa", "lama"),
-                         ("OpenCV سریع", "opencv")],
+                choices=[("خودکار (بر اساس رم/GPU)", "auto"),
+                         ("AOT-GAN", "aot"),
+                         ("LaMa-lite", "lama"),
+                         ("OpenCV", "opencv")],
                 value=str(cfg.get("clean_method", "auto")) or "auto",
                 label="روش پاکسازی متن (حذف متن اصلی از تصویر)")
             with gr.Row():
