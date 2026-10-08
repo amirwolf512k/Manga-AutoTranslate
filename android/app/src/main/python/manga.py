@@ -4335,6 +4335,8 @@ class MangaTranslator:
                                        "text_filter.npz")
                     urls = (
                         "https://github.com/amirwolf512k/Manga-AutoTranslate/"
+                        "releases/download/models-v3/text_filter.npz",
+                        "https://github.com/amirwolf512k/Manga-AutoTranslate/"
                         "releases/download/models-v2/text_filter.npz",
                     )
                     for u in urls:
