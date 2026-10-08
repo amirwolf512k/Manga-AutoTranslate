@@ -3039,7 +3039,15 @@ class MangaTranslator:
                 self.stitch_max_height = 4200
                 print("[*] Lite: حداکثر ارتفاع نوار چسبانده → ۴۲۰۰px (کاهش پیک رم).")
 
-        self.ocr_langs = ocr_langs or ["en"]
+        # «--ocr-lang "ch en"» با nargs=+ یک توکنِ "ch en" می‌سازد —
+        # قبلاً همین رشتهٔ جوین‌شده در نقشهٔ زبان پیدا نمی‌شد و موتورِ
+        # اصلی به en برمی‌گشت (OCR چینی/ژاپنی خالی برمی‌گشت!)
+        _langs: List[str] = []
+        for _l in (ocr_langs or []):
+            for _part in str(_l).replace(",", " ").split():
+                if _part and _part.lower() not in [x.lower() for x in _langs]:
+                    _langs.append(_part)
+        self.ocr_langs = _langs or ["en"]
         self._init_extraction_models()
 
         if self.provider_type == "gemini":
@@ -5788,27 +5796,36 @@ class MangaTranslator:
                             _bands.append(_bb)
                     if _bands:
                         _jm = np.zeros((ch, cw), np.uint8)
-                        _big_band = any(
-                            (_b[2] - _b[0]) * (_b[3] - _b[1]) > 14000
-                            or (_b[3] - _b[1]) > 90 for _b in _bands)
                         for _b in _bands:
                             _jx0 = max(0, int(_b[0]) - x0 - 2)
                             _jy0 = max(0, int(_b[1]) - y0 - 2)
                             _jx1 = min(cw, int(_b[2]) - x0 + 3)
                             _jy1 = min(ch, int(_b[3]) - y0 + 3)
                             _jm[_jy0:_jy1, _jx0:_jx1] = 255
-                        if _big_band:
-                            # نوارِ غول‌پیکر = احتمالاً خوانشِ اشتباهِ هنر؛
-                            # به‌جای مستطیلِ کامل فقط خودِ جوهر پاک شود
+                        # نوارِ خام = مستطیل — ممنوع. همیشه اول تصفیهٔ حرفی؛
+                        # اگر درنیامد و زمینه بافت‌دار بود اصلاً دست نمی‌زنیم
+                        _gr = None
+                        try:
+                            _gr = self._glyph_refine_mask(
+                                image[y0:y1, x0:x1], _jm)
+                        except Exception:
+                            _gr = None
+                        if _gr is not None and int((_gr > 0).sum()) >= 60:
+                            _jm = _gr
+                        else:
                             try:
-                                _gr = self._glyph_refine_mask(
+                                _flat_j = self._zone_bg_is_flat(
                                     gray[y0:y1, x0:x1], _jm)
-                                if _gr is not None and int((_gr > 0).sum()) >= 60:
-                                    _jm = _gr
                             except Exception:
-                                pass
-                        ink = _jm
-                        _msrc = "junkLineBand"
+                                _flat_j = True
+                            if not _flat_j:
+                                _jm = None
+                        if _jm is not None:
+                            ink = _jm
+                            _msrc = "junkLineBand"
+                        else:
+                            ink = None
+                            _msrc = "skip"
                 except Exception:
                     pass
             if ink is not None and _msrc != "junkLineBand" \
@@ -5837,26 +5854,36 @@ class MangaTranslator:
                         ink = _ga
                         _msrc += "+anchored"
                 else:
-                    # هیچ ماسک حرفی درنیامد: در ناحیهٔ غیرصاف، پرکردنِ کل
-                    # کادر ممنوع است (سفیدسازی هنر) — فقط خودِ خطوطِ OCR
-                    # با کمی فرسایش، آن هم وقتی زمین صاف است
-                    try:
-                        _flat_z = self._zone_bg_is_flat(gray[y0:y1, x0:x1], ink)
-                    except Exception:
-                        _flat_z = True
-                    if _flat_z:
-                        _msrc = "zoneFlat"
+                    # ممنوعِ مطلق: پرکردنِ کلِ کادر (= مستطیل — اعتراضِ
+                    # کاربر). اول تصفیهٔ حرفیِ داخلِ چندضلعی‌های OCR؛ بعد
+                    # جوهرِ نوار فقط روی زمینهٔ کاملاً صاف؛ وگرنه دست نمی‌زنیم.
+                    _pm = np.zeros_like(ink)
+                    for _p in (getattr(region, "ocr_polys", None) or []):
+                        try:
+                            _pts = np.asarray(_p, np.int32).reshape(-1, 2).copy()
+                            _pts[:, 0] -= x0
+                            _pts[:, 1] -= y0
+                            cv2.fillPoly(_pm, [_pts], 255)
+                        except Exception:
+                            continue
+                    _ref = None
+                    if int(np.count_nonzero(_pm)) > 40:
+                        try:
+                            _ref = self._glyph_refine_mask(
+                                image[y0:y1, x0:x1], _pm)
+                        except Exception:
+                            _ref = None
+                    if _ref is not None and int(np.count_nonzero(_ref)) >= 50:
+                        ink = _ref
+                        _msrc = "polyRefined"
                     else:
-                        _pm = np.zeros_like(ink)
-                        for _p in (getattr(region, "ocr_polys", None) or []):
-                            try:
-                                _pts = np.asarray(_p, np.int32).reshape(-1, 2).copy()
-                                _pts[:, 0] -= x0
-                                _pts[:, 1] -= y0
-                                cv2.fillPoly(_pm, [_pts], 255)
-                            except Exception:
-                                continue
-                        if int(np.count_nonzero(_pm)) > 0:
+                        try:
+                            _flat_z = self._zone_bg_is_flat(
+                                gray[y0:y1, x0:x1],
+                                _pm if int(np.count_nonzero(_pm)) else ink)
+                        except Exception:
+                            _flat_z = True
+                        if int(np.count_nonzero(_pm)) > 0 and _flat_z:
                             ink = cv2.erode(_pm, np.ones((3, 3), np.uint8))
                             _msrc = "polyShrunk"
                         else:
@@ -5924,13 +5951,58 @@ class MangaTranslator:
                             _gm = _ink_t
                     except Exception:
                         pass
+                # ۵) v4: تفاضلِ میانه‌ایِ رنگ‌آگاه (روشِ جارو) — حروفِ
+                # کم‌کنتراست/بولدِ کامیک را هم می‌گیرد و به هنرِ پشتِ
+                # حباب دست نمی‌زند
+                if _gm is None:
+                    try:
+                        _gm5 = self._glyph_refine_mask(
+                            gray[y0:y1, x0:x1], zone)
+                        if _gm5 is not None:
+                            _gn5 = int(np.count_nonzero(_gm5))
+                            if 30 <= _gn5 <= 0.85 * _zc:
+                                _gm = _gm5
+                    except Exception:
+                        _gm5 = None
                 if _gm is not None:
                     ink = _gm
                     if _msrc == "zone":
                         _msrc = "bubbleGlyph"
                     else:
                         _msrc += "+bubbleGlyph"
-                # اگر ماسک حرفی نیامد، همان zone (بهتر از جاماندن متن)
+                else:
+                    # v4 — اعتراضِ کاربر: «پاکسازی به اندازهٔ متن، نه کلِ
+                    # حباب». fallback دیگر هرگز کلِ داخلِ حباب نیست؛ فقط
+                    # نوارِ خودِ خطوطِ OCR — و آن هم اول تصفیهٔ حرفی می‌شود
+                    # تا «مستطیلِ نوار» روی زمینه بافت‌دار پاک نشود.
+                    _pm = np.zeros_like(zone)
+                    for _p in (getattr(region, "ocr_polys", None) or []):
+                        try:
+                            _pts = np.asarray(_p, np.int32).reshape(-1, 2).copy()
+                            _pts[:, 0] -= x0
+                            _pts[:, 1] -= y0
+                            cv2.fillPoly(_pm, [_pts], 255)
+                        except Exception:
+                            continue
+                    if int(np.count_nonzero(_pm)) > 0:
+                        _ref = None
+                        try:
+                            _ref = self._glyph_refine_mask(
+                                image[y0:y1, x0:x1], _pm)
+                        except Exception:
+                            _ref = None
+                        _ref_ok = False
+                        if _ref is not None:
+                            _rna = int(np.count_nonzero(_ref))
+                            _ref_ok = 40 <= _rna <= 4 * max(1, int(np.count_nonzero(_pm)))
+                        if _ref_ok:
+                            ink = cv2.bitwise_and(_ref, zone)
+                            _msrc = "ocrRefined"
+                        else:
+                            _pm = cv2.dilate(_pm, np.ones((9, 9), np.uint8))
+                            ink = cv2.bitwise_and(_pm, zone)
+                            _msrc = "ocrBand"
+                    # بدون چندضلعیِ OCR: zone می‌ماند (خیلی نادر)
             if ink is None:
 
                 ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
@@ -9167,7 +9239,13 @@ class MangaTranslator:
             area0 = int(m0.sum())
             if area0 < 80:
                 return None
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            # ورودی می‌تواند BGR یا خاکستری باشد — قبلاً ورودیِ خاکستری
+            # cvtColor را خراب می‌کرد و تابع همیشه None برمی‌گرداند
+            # (نتیجه: نوارهای مستطیلیِ خام پاک می‌شدند!)
+            if image.ndim == 3:
+                gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            else:
+                gray = image
             bg = cv2.medianBlur(gray, 31)
             # رنگ‌آگاه: متنِ گلودار/رنگی (مثلاً هالهٔ بنفش روی خاکستری) در
             # «روشنایی» جابه‌جایی کمی دارد ولی در کانال‌های رنگی زیاد —
@@ -9731,6 +9809,17 @@ class MangaTranslator:
             return "whisper"
         return "normal"
 
+
+    @staticmethod
+    def _is_meaningless_translation(t: str) -> bool:
+        """ترجمهٔ بی‌محتوا («ooo»، «0»، «…»، «؟؟؟»، فقط علائم/نقطه) —
+        پاکسازی و رندرِ آن ممنوع؛ متنِ اصلی باید بماند تا حباب خالی نشود
+        و حباب «ooo» زشت ساخته نشود (اعتراضِ کاربر)."""
+        if not t:
+            return True
+        s = re.sub(r"[\W_]+", "", t or "", flags=re.UNICODE)
+        s = re.sub(r"[o0]", "", s, flags=re.IGNORECASE)
+        return len(s) == 0
 
     @staticmethod
     def _is_watermark_text(text: str) -> bool:
@@ -12736,18 +12825,28 @@ class MangaTranslator:
         page_debug: Optional[np.ndarray] = None
 
         dialogue_regions = [r for r in regions if r.kind == "dialogue"]
+        # v4: SFX داخلِ حباب = کلمهٔ گفته‌شدهٔ شخصیت → ترجمه می‌شود تا
+        # حباب بعد از پاکسازی «خالی» نماند (اعتراضِ کاربر)
+        _bubble_sfx = [r for r in regions if r.kind == "sfx"
+                       and r.det_class in ("bubble", "text_bubble")]
         promo_regions = [r for r in regions if r.kind == "promo"]
         sfx_regions = [r for r in regions if r.kind == "sfx"]
         junk_regions = [r for r in regions if r.kind == "junk"]
+        # v5: SFX روی هنر (بیرون حباب) = پیکسلِ اصلی دست‌نخورده، ولی
+        # ترجمه‌اش به‌صورت حاشیه‌نویسیِ کوچکِ کنارِ SFX رندر می‌شود
+        _outside_sfx = [r for r in sfx_regions
+                        if r.det_class not in ("bubble", "text_bubble")]
         raw_image_copy = image.copy()
 
         if getattr(self, "clean_only", False):
             print("[فاز ۳ - پاکسازی بدون ترجمه] API زده نمی‌شود.")
             # تبلیغ/واترمارک و SFX دست نخورده می‌مانند (سیاست کاربر)؛
-            # فقط دیالوگ و متن‌های خرد (junk) پاک می‌شوند. SFX داخل
-            # حبابِ گفت‌وگو استثناست — حباب نباید متن جامانده داشته باشد.
+            # فقط دیالوگ پاک می‌شود. junkِ داخلِ حباب = متنِ واقعیِ
+            # ناخوانا → دست نمی‌خورد تا حباب «خالی» نشود (اعتراضِ کاربر)
             clean_targets = [r for r in regions
-                             if r.kind in ("dialogue", "junk")
+                             if r.kind == "dialogue"
+                             or (r.kind == "junk"
+                                 and r.det_class not in ("bubble", "text_bubble"))
                              or (r.kind == "sfx"
                                  and r.det_class in ("bubble", "text_bubble"))]
             for r in dialogue_regions:
@@ -12770,17 +12869,24 @@ class MangaTranslator:
             return final_image, page_debug
 
         if skip_translate:
-            
             pass
-        elif dialogue_regions:
-            print(f"[فاز ۳ - ترجمه] {len(dialogue_regions)} دیالوگ → {self.provider}/{self.model_name} ...")
-            self.translate_regions(dialogue_regions)
+        elif dialogue_regions or _bubble_sfx or _outside_sfx:
+            _tt = len(dialogue_regions) + len(_bubble_sfx) + len(_outside_sfx)
+            print(f"[فاز ۳ - ترجمه] {_tt} ناحیه (دیالوگ + SFXِ داخلِ حباب + SFXِ روی هنر) → {self.provider}/{self.model_name} ...")
+            self.translate_regions(dialogue_regions + _bubble_sfx + _outside_sfx)
         else:
             print("[فاز ۳ - ترجمه] دیالوگ معتبری نبود.")
 
-        translated_regions = [r for r in dialogue_regions if r.translated_text]
+        def _good_trans(rr) -> bool:
+            # ترجمهٔ بی‌محتوا («ooo»، «…»، «؟؟؟»، فقط علامت) = بدون ترجمه؛
+            # نه پاکسازی می‌شود نه رندر — متنِ اصلی می‌ماند (حبابِ خالی ممنوع)
+            t = (rr.translated_text or "").strip()
+            return bool(t) and not self._is_meaningless_translation(t)
+
+        translated_regions = [r for r in (dialogue_regions + _bubble_sfx + _outside_sfx)
+                              if _good_trans(r)]
         print("--- ترجمهٔ هر بالن ---")
-        for r in dialogue_regions:
+        for r in (dialogue_regions + _bubble_sfx + _outside_sfx):
             st = (getattr(r, "bubble_style", None) or "").strip()
             st_tag = f" | نوع={st}" if st else ""
             src_t = (r.source_text or "").replace("\n", " ").strip()
@@ -12798,31 +12904,36 @@ class MangaTranslator:
         if promo_regions:
             print(f"  [*] {len(promo_regions)} تبلیغ/واترمارک → دست‌نخورده می‌ماند (بدون ترجمه)")
         if sfx_regions:
-            print(f"  [*] {len(sfx_regions)} SFX → دست‌نخورده می‌ماند (بدون ترجمه)")
+            _sfx_free = [r for r in sfx_regions
+                         if r.det_class not in ("bubble", "text_bubble")]
+            print(f"  [*] {len(_sfx_free)} SFX روی هنر → پیکسلِ اصلی دست‌نخورده | "
+                  f"{len(sfx_regions) - len(_sfx_free)} SFX داخل حباب → ترجمه می‌شود")
         if junk_regions:
-            print(f"  [*] {len(junk_regions)} junk → پاک می‌شود (بدون ترجمه)")
+            _junk_out = [r for r in junk_regions
+                         if r.det_class not in ("bubble", "text_bubble")]
+            print(f"  [*] {len(_junk_out)} junk → پاک می‌شود | "
+                  f"{len(junk_regions) - len(_junk_out)} junk داخل حباب → دست‌نخورده (حباب خالی نمی‌شود)")
 
         
         if self.debug and regions:
             page_debug = self._draw_debug_regions(image, regions)
 
         print("[فاز ۴ - پاکسازی متن + رندر] ...")
-        # تبلیغ/واترمارک و SFX دست‌نخورده می‌مانند (سیاست کاربر)؛
-        # حباب‌های بدون ترجمه و junk پاک می‌شوند تا متنی جا نماند.
-        # SFX داخل حبابِ گفت‌وگو استثناست — حباب نباید متن جامانده داشته باشد.
-        # ← اصلاحِ «متنِ جدید می‌پرد»: دیالوگی که AI برایش ترجمه نداد
-        #   پاک نمی‌شود؛ متنِ اصلی می‌ماند تا حباب خالی نشود.
-        _untrans = [r for r in dialogue_regions
-                    if not (r.translated_text or "").strip()]
+        # تبلیغ/واترمارک و SFXِ روی هنر دست‌نخورده می‌مانند (سیاست کاربر).
+        # حبابِ بدونِ ترجمهٔ معتبر پاک نمی‌شود — متنِ اصلی می‌ماند تا حباب
+        # «خالی» نشود (اعتراضِ کاربر). junkِ داخلِ حباب هم دست‌نخورده.
+        _untrans = [r for r in (dialogue_regions + _bubble_sfx)
+                    if not _good_trans(r)]
         if _untrans:
-            print(f"  [!] {len(_untrans)} حباب بدون ترجمه → متنِ اصلی "
+            print(f"  [!] {len(_untrans)} حباب/SFXِ حبابی بدون ترجمهٔ معتبر → متنِ اصلی "
                   f"دست‌نخورده می‌ماند (حباب خالی نمی‌شود)")
         clean_targets = [r for r in regions
-                         if (r.kind == "dialogue"
-                             and (r.translated_text or "").strip())
-                         or r.kind == "junk"
+                         if (r.kind == "dialogue" and _good_trans(r))
+                         or (r.kind == "junk"
+                             and r.det_class not in ("bubble", "text_bubble"))
                          or (r.kind == "sfx"
-                             and r.det_class in ("bubble", "text_bubble"))]
+                             and r.det_class in ("bubble", "text_bubble")
+                             and _good_trans(r))]
         if clean_targets:
             cleaned_image = precleaned if precleaned is not None else self.clean_image(
                 image, clean_targets)
@@ -14804,7 +14915,94 @@ html, body { background: #0a0a0b; }
             except Exception as e:
                 print(f"    [!] ساخت HTML همراه ناموفق: {e}")
 
+    def _render_sfx_annotation(self, pil_img, draw, image, region) -> None:
+        """SFX روی هنر (بیرون حباب): پیکسلِ اصلی دست‌نخورده می‌ماند —
+        فقط ترجمهٔ فارسیِ کوچکی کنارِ خودِ SFX اضافه می‌شود (بدون هیچ
+        جعبه/مستطیلی، بدون پاکسازی — سیاستِ صریحِ کاربر)."""
+        text = (region.translated_text or "").strip()
+        if not text:
+            return
+        W, H = pil_img.size
+        _pts = []
+        for p in (getattr(region, "ocr_polys", None) or []):
+            try:
+                arr = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                if arr.shape[0] >= 3:
+                    _pts.append(arr)
+            except Exception:
+                continue
+        if _pts:
+            allp = np.concatenate(_pts, axis=0)
+            bx0, by0 = float(allp[:, 0].min()), float(allp[:, 1].min())
+            bx1, by1 = float(allp[:, 0].max()), float(allp[:, 1].max())
+        else:
+            x, y, w, h = region.rect
+            bx0, by0, bx1, by1 = float(x), float(y), float(x + w), float(y + h)
+        bw = max(10.0, bx1 - bx0)
+        bh = max(10.0, by1 - by0)
+
+        max_w = int(min(max(bw * 2.2, 90.0), W * 0.46))
+        fs = int(np.clip(round(bh * 0.42), 11, 26))
+        font, lines, _sw0 = self._wrap_and_fit(
+            draw, text, max_w, int(fs * 2.8), style="sfx", max_size=fs)
+        try:
+            fs_real = int(font.size)
+        except Exception:
+            fs_real = fs
+        sw = max(2, fs_real // 9)
+
+        shaped_lines = [self._shape_farsi(ln) for ln in lines]
+        lh = font.getbbox("آیگچ", stroke_width=sw)[3] + 3
+        tw = 0
+        for shaped in shaped_lines:
+            lw = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
+            tw = max(tw, lw)
+        tw += 2 * sw
+        th = lh * max(1, len(shaped_lines)) + 2 * sw
+
+        # جای‌گذاری: زیرِ SFX؛ اگر به لبهٔ صفحه خورد بالای آن
+        gap = max(2, int(bh * 0.14))
+        cx = (bx0 + bx1) / 2.0
+        ty = int(round(by1 + gap))
+        if ty + th > H - 2:
+            ty = int(round(by0 - gap - th))
+        if ty < 2:
+            ty = int(max(2, min(H - th - 2, by1 + gap)))
+        tx = int(round(cx - tw / 2.0))
+        tx = max(2, min(W - tw - 2, tx))
+
+        # رنگ از خودِ محلِ هدف (زیرنویس روی همان پس‌زمینه می‌نشیند)
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) \
+                if getattr(image, "ndim", 2) == 3 else image
+            px0 = int(np.clip(tx, 0, W - 1))
+            py0 = int(np.clip(ty, 0, H - 1))
+            px1 = int(np.clip(tx + tw, px0 + 1, W))
+            py1 = int(np.clip(ty + th, py0 + 1, H))
+            patch = gray[py0:py1, px0:px1]
+            m = float(patch.mean()) if patch.size else 200.0
+        except Exception:
+            m = 200.0
+        if m < 110:
+            text_rgb, stroke_rgb = (255, 255, 255), (0, 0, 0)
+        else:
+            text_rgb, stroke_rgb = (24, 24, 24), (255, 255, 255)
+
+        y_off = ty
+        for shaped in shaped_lines:
+            lw = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
+            lx = tx + max(0, (tw - lw) // 2)
+            draw.text((lx, y_off), shaped, font=font, fill=text_rgb,
+                      stroke_width=sw, stroke_fill=stroke_rgb)
+            y_off += lh
+
     def _render_one_region(self, pil_img, draw, image, original_image, region) -> None:
+        # SFXِ روی هنر: پاکسازی ممنوع، فقط حاشیه‌نویسیِ ترجمه کنار آن
+        if (getattr(region, "kind", "") == "sfx"
+                and (getattr(region, "det_class", "") or "")
+                not in ("bubble", "text_bubble")):
+            self._render_sfx_annotation(pil_img, draw, image, region)
+            return
         x, y, w, h = region.rect
         try:
             _polys = [np.asarray(p, dtype=np.float32).reshape(-1, 2)
