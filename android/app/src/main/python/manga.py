@@ -3086,6 +3086,12 @@ class MangaTranslator:
         """بارگذاری OCR + تشخیص‌دهندهٔ حباب (قابل فراخوانی مجدد در حالت Lite)."""
         lang_map = {
             "en": "en", "fa": "fa", "ko": "korean", "ja": "japan", "zh": "ch",
+            # v3: نام‌های رایجِ چینی — «--ocr-lang ch» قبلاً نادیده گرفته
+            # می‌شد و OCR چینی هرگز اصلی نمی‌شد (مانهوای چینی خالی می‌ماند)
+            "ch": "ch", "cn": "ch", "chinese": "ch", "zh-cn": "ch",
+            "zh_hans": "ch", "zh-hans": "ch", "chi_sim": "ch",
+            "ko-kr": "korean", "ja-jp": "japan",
+            "korean": "korean", "japan": "japan",
             "fr": "french", "de": "german", "es": "spanish", "it": "italian",
             "pt": "portuguese", "ru": "russian", "ar": "arabic",
         }
@@ -5780,12 +5786,25 @@ class MangaTranslator:
                             _bands.append(_bb)
                     if _bands:
                         _jm = np.zeros((ch, cw), np.uint8)
+                        _big_band = any(
+                            (_b[2] - _b[0]) * (_b[3] - _b[1]) > 14000
+                            or (_b[3] - _b[1]) > 90 for _b in _bands)
                         for _b in _bands:
                             _jx0 = max(0, int(_b[0]) - x0 - 2)
                             _jy0 = max(0, int(_b[1]) - y0 - 2)
                             _jx1 = min(cw, int(_b[2]) - x0 + 3)
                             _jy1 = min(ch, int(_b[3]) - y0 + 3)
                             _jm[_jy0:_jy1, _jx0:_jx1] = 255
+                        if _big_band:
+                            # نوارِ غول‌پیکر = احتمالاً خوانشِ اشتباهِ هنر؛
+                            # به‌جای مستطیلِ کامل فقط خودِ جوهر پاک شود
+                            try:
+                                _gr = self._glyph_refine_mask(
+                                    gray[y0:y1, x0:x1], _jm)
+                                if _gr is not None and int((_gr > 0).sum()) >= 60:
+                                    _jm = _gr
+                            except Exception:
+                                pass
                         ink = _jm
                         _msrc = "junkLineBand"
                 except Exception:
@@ -6728,6 +6747,12 @@ class MangaTranslator:
         if not np.any(mask):
             return image.copy()
 
+        if os.environ.get("MANGA_DBG_MASK"):
+            try:
+                cv2.imwrite(os.environ["MANGA_DBG_MASK"], mask)
+            except Exception:
+                pass
+
         try:
             ratio = float((mask > 0).sum()) / float(mask.size)
             print(f"  [*] ماسک متن: {ratio*100:.2f}% پیکسل")
@@ -6901,6 +6926,16 @@ class MangaTranslator:
             done = 0
             for c in pl:
                 cx0, cy0, cx1, cy1, crop_msk = c[:5]
+                # ماسک را به «خودِ حروف» محدود کن — نه کلِ داخلِ حباب:
+                # بازسازیِ AOT فقط جای جوهر می‌نشیند؛ شفافیت/سایهٔ خودِ
+                # حباب و هنرِ پشت آن دست‌نخورده می‌ماند (بدون واشِ سفید).
+                try:
+                    _ref = self._glyph_refine_mask(
+                        image[cy0:cy1, cx0:cx1], crop_msk)
+                    if _ref is not None and int((_ref > 0).sum()) >= 60:
+                        crop_msk = _ref
+                except Exception:
+                    pass
                 result = aot_bgr[cy0:cy1, cx0:cx1]
                 try:
                     _fm = (cv2.dilate(crop_msk, page_kernel) > 0)
@@ -6975,6 +7010,14 @@ class MangaTranslator:
                                     print(f"    [aot-dbg] cluster{_ci} "
                                           f"box=({_cc[0]},{_cc[1]},{_cc[2]},{_cc[3]}) "
                                           f"method={_cc[6]} filled={_cc[5] is not None}")
+                                    try:
+                                        _dmp = os.environ.get("MANGA_DBG_AOT")
+                                        cv2.imwrite(f"{_dmp}_c{_ci}_msk.png",
+                                                    _cc[4])
+                                        cv2.imwrite(f"{_dmp}_c{_ci}_res.png",
+                                                    _cc[5])
+                                    except Exception:
+                                        pass
                     else:
                         aot_bgr = None
                         aot_page_mask = None
@@ -12644,6 +12687,11 @@ class MangaTranslator:
                         px2 = int(poly[:, 0].max()) + 1
                         py2 = int(poly[:, 1].max()) + 1
                         if px2 - px1 < 10 or py2 - py1 < 8:
+                            continue
+                        # v3: جعبه‌های خیلی بزرگ «متنِ جامانده» نیستند —
+                        # OCR گاهی هنر/حباب را یک‌جا می‌خواند؛ پرکردنِ
+                        # نوارِ چنین جعبه‌ای لکهٔ مستطیلی روی هنر می‌گذاشت
+                        if (px2 - px1) * (py2 - py1) > 14000 or (py2 - py1) > 90:
                             continue
                         # فقط داخل خودِ ناحیهٔ پاک‌شده (گرنه متن همسایه است)
                         if px1 < rx - 10 or py1 < ry - 10 or \
