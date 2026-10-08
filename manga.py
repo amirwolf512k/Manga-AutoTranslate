@@ -3057,7 +3057,12 @@ class MangaTranslator:
         self.ocr_langs = _langs or ["en"]
         self._init_extraction_models()
 
-        if self.provider_type == "gemini":
+        if getattr(self, "clean_only", False):
+            print("[*] --clean-only → بدون نیاز به API/ترجمه‌کننده")
+            self._api_keys = self._api_keys or ["clean-only"]
+            self._key_index = 0
+            self._model_cascade = [getattr(self, "model_name", "n/a") or "n/a"]
+        elif self.provider_type == "gemini":
             if not _HAS_GEMINI and _HAS_OPENAI:
                 print("[!] google-genai روی این دستگاه نیست → "
                       "Gemini از مسیر سازگار openai (SDK واقعی) اجرا می‌شود")
@@ -4537,6 +4542,11 @@ class MangaTranslator:
         _cta_probe = re.sub(r"[!?.:;,~\-_—–\s]+", " ",
                             stripped).strip().lower()
         if _cta_probe in MangaTranslator._CTA_PROMO:
+            return "promo"
+
+        # واترمارک/سایت‌های اسکن (CJK+لاتین) همیشه تبلیغ — قبل از ML
+        # تا «知音漫客» و مشابه به اشتباه SFX نشوند
+        if cls._is_watermark_text(stripped):
             return "promo"
 
         # ---------- ۱) مدلِ ML (اولویت) — تصمیمِ نهایی با مدلِ آموخته است.
@@ -7611,7 +7621,9 @@ class MangaTranslator:
                 except Exception:
                     _thick0 = 0.0
 
-                _kd = int(np.clip(2 * int(round(max(3.0, _thick0 * 0.55))) + 1, 7, 25))
+                # v2 OpenCV: گشادگی کمتر تا «مربع پر» روی حباب ساخته نشود
+                # (فقط لبهٔ حروف + کمی حاشیه؛ glyph_refine بعداً دقیق می‌کند)
+                _kd = int(np.clip(2 * int(round(max(2.0, _thick0 * 0.35))) + 1, 5, 15))
                 _oc_k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_kd, _kd))
                 _dil = cv2.morphologyEx(
                     cv2.dilate(crop_msk, _oc_k, iterations=1),
@@ -9917,25 +9929,101 @@ class MangaTranslator:
             return None
 
     def _opencv_inpaint_hq(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
+        """OpenCV HQ: flat-local fill برای کاغذ/حباب سفید + TELEA/NS
+        تطبیقی برای بقیه — بدون لکهٔ مربعیِ بزرگ."""
         if mask is None or not np.any(mask):
             return image.copy()
-        m = (mask > 0).astype(np.uint8) * 255
-        radius = max(1, int(getattr(self, "inpaint_radius", 3)))
+        m0 = (mask > 0).astype(np.uint8)
+        if not m0.any():
+            return image.copy()
+        out = image.copy()
+        h, w = image.shape[:2]
+        base_r = max(1, int(getattr(self, "inpaint_radius", 3)))
 
-        out = cv2.inpaint(image, m, inpaintRadius=radius, flags=cv2.INPAINT_TELEA)
-        out[m == 0] = image[m == 0]
+        # ---- per-component: flat paper → median fill؛ else TELEA/NS ----
+        n_lab, lab, st, _ = cv2.connectedComponentsWithStats(m0, 8)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        for i in range(1, n_lab):
+            area = int(st[i, cv2.CC_STAT_AREA])
+            if area < 2:
+                continue
+            x, y, bw, bh = (int(st[i, k]) for k in range(4))
+            pad = max(8, int(0.15 * max(bw, bh)))
+            x0, y0 = max(0, x - pad), max(0, y - pad)
+            x1, y1 = min(w, x + bw + pad), min(h, y + bh + pad)
+            comp = (lab[y0:y1, x0:x1] == i)
+            if not comp.any():
+                continue
+            # ring of clean pixels around component
+            dil = cv2.dilate(comp.astype(np.uint8),
+                             np.ones((9, 9), np.uint8)) > 0
+            ring = dil & (~comp)
+            crop = out[y0:y1, x0:x1]
+            gcrop = gray[y0:y1, x0:x1]
+            flat = False
+            color = None
+            if ring.any() and int(ring.sum()) >= 12:
+                px = crop[ring].astype(np.float32)
+                lum = gcrop[ring].astype(np.float32)
+                med_lum = float(np.median(lum))
+                std_lum = float(np.std(lum))
+                # کاغذ سفید / حباب صاف
+                if med_lum >= 195 and std_lum < 28:
+                    paper = px[lum >= 180]
+                    color = np.median(paper if paper.shape[0] >= 16 else px, axis=0)
+                    flat = True
+                elif std_lum < 12 and med_lum >= 40:
+                    # زمینهٔ رنگی خیلی یکنواخت (حباب رنگی بدون بافت)
+                    color = np.median(px, axis=0)
+                    flat = True
+            if flat and color is not None:
+                soft = np.clip(
+                    cv2.GaussianBlur(comp.astype(np.float32), (0, 0), 1.1) * 1.4,
+                    0, 1)[..., None]
+                c = crop.astype(np.float32)
+                c = c * (1.0 - soft) + color[None, None, :] * soft
+                out[y0:y1, x0:x1] = np.clip(c, 0, 255).astype(np.uint8)
+                continue
+            # non-flat: TELEA با radius تطبیقی + NS برای ناحیهٔ بزرگ
+            sub_m = (comp.astype(np.uint8) * 255)
+            # کمی گشاد برای پوشش لبهٔ حروف
+            sub_m = cv2.dilate(sub_m, np.ones((3, 3), np.uint8), iterations=1)
+            rad = int(np.clip(base_r + 0.12 * max(bw, bh) ** 0.5, 2, 12))
+            try:
+                if area >= 900:
+                    filled = cv2.inpaint(crop, sub_m, inpaintRadius=rad,
+                                         flags=cv2.INPAINT_NS)
+                else:
+                    filled = cv2.inpaint(crop, sub_m, inpaintRadius=rad,
+                                         flags=cv2.INPAINT_TELEA)
+            except Exception:
+                filled = cv2.inpaint(crop, sub_m, inpaintRadius=max(2, base_r),
+                                     flags=cv2.INPAINT_TELEA)
+            out[y0:y1, x0:x1][sub_m > 0] = filled[sub_m > 0]
 
+        # ---- residual dark ink left on bright bg ----
         try:
-            h, w = image.shape[:2]
-            if cv2.countNonZero(m) > 0.004 * h * w and max(h, w) > 640:
-                sc = 640.0 / float(max(h, w))
-                sm = cv2.resize(out, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA)
-                mm = cv2.resize(m, None, fx=sc, fy=sc, interpolation=cv2.INTER_NEAREST)
-                sm = cv2.inpaint(sm, mm, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-                up = cv2.resize(sm, (w, h), interpolation=cv2.INTER_CUBIC)
-                out[m > 0] = up[m > 0]
+            m_all = (m0 > 0)
+            zone = cv2.dilate(m0, np.ones((11, 11), np.uint8)) > 0
+            g2 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+            # فقط جایی که زمینه روشن است و هنوز جوهر تیره مانده
+            dark = ((g2 < 130) & zone).astype(np.uint8) * 255
+            dark = cv2.morphologyEx(dark, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+            n2, lab2, st2, _ = cv2.connectedComponentsWithStats(dark, 8)
+            keep = np.zeros_like(dark)
+            for j in range(1, n2):
+                a = int(st2[j, cv2.CC_STAT_AREA])
+                if 3 <= a <= 8000:
+                    keep[lab2 == j] = 255
+            if keep.any():
+                keep = cv2.dilate(keep, np.ones((3, 3), np.uint8), iterations=1)
+                out = cv2.inpaint(out, keep, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+                out[~zone] = image[~zone]  # خارج از ناحیهٔ متن دست‌نخورده
         except Exception:
             pass
+
+        # خارج از ماسک اصلی همیشه پیکسل اصلی
+        out[m0 == 0] = image[m0 == 0]
         return out
 
     @staticmethod
