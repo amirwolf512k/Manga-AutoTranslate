@@ -847,6 +847,7 @@ class LamaMangaONNX:
                  use_int8: bool = False):
         self.prefer_gpu = bool(prefer_gpu)
         self.use_int8 = bool(use_int8)
+        self.SIZE = 384 if _on_android() else 512
         if not model_path or not os.path.isfile(model_path):
             model_path = self._download_model(cache_dir=cache_dir,
                                               use_int8=self.use_int8)
@@ -961,7 +962,9 @@ class LamaMangaONNX:
         o = (o * 255).astype(np.uint8)
         predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
         result = img_rgb.copy()
-        result[original_mask] = predicted[original_mask]
+        feather = cv2.GaussianBlur(original_mask.astype(np.float32), (7, 7), 0)
+        feather = feather[..., None]
+        result = (predicted * feather + img_rgb.astype(np.float32) * (1 - feather)).astype(np.uint8)
         return Image.fromarray(result)
 
 
