@@ -335,6 +335,28 @@ def manifest():
                                         and len(keep[0]) >= 2 else "PDF")
     except Exception:
         traceback.print_exc()
+    # اندروید: aot+lama در UI نباشد (auto همان کار را می‌کند)
+    # و فیلدهای اجبار CPU / LaMa-Manga حذف شوند
+    try:
+        hide_ids = {"use_lama", "force_cpu", "force_lama"}
+        for sec in mf.get("sections", []):
+            fields = sec.get("fields") or []
+            sec["fields"] = [f for f in fields if f.get("id") not in hide_ids]
+            for f in sec["fields"]:
+                if f.get("id") != "clean_method":
+                    continue
+                ch = f.get("choices")
+                if not isinstance(ch, list):
+                    continue
+                def _is_aot_lama(c):
+                    val = str(c[1] if isinstance(c, (list, tuple)) and len(c) >= 2 else c).strip().lower()
+                    return val in ("aot+lama", "aotlama", "aot_lama")
+                keep = [c for c in ch if not _is_aot_lama(c)]
+                f["choices"] = keep
+                if str(f.get("default", "")).strip().lower() in ("aot+lama", "aotlama"):
+                    f["default"] = "auto"
+    except Exception:
+        traceback.print_exc()
     try:
         _defaults(mf)
     except Exception:

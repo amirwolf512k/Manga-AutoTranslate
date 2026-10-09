@@ -6864,11 +6864,20 @@ class MangaTranslator:
         m_dil = cv2.dilate(m0, np.ones((5, 5), np.uint8), iterations=2)
         gray = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
         zone = cv2.dilate(m_dil, np.ones((13, 13), np.uint8)) > 0
-        # جوهر تیره روی زمینه روشن
-        dark = ((gray < 145) & zone).astype(np.uint8) * 255
-        # جوهر روشن روی زمینه تیره
+        # جوهر تیره/خاکستری روی زمینه روشن (شبح CJK عمودی اغلب خاکستری است)
+        # نسبت به median حلقهٔ اطراف هم انحراف بگیر
+        dark = ((gray < 175) & zone).astype(np.uint8) * 255
         bright = ((gray > 200) & zone & (gray < 255)).astype(np.uint8) * 255
         ink = cv2.bitwise_or(dark, bright)
+        try:
+            # پیکسل‌هایی که از median زمینهٔ zone خیلی فاصله دارند
+            ring = zone & (m_dil == 0)
+            if ring.any():
+                med = float(np.median(gray[ring]))
+                dev = (np.abs(gray.astype(np.float32) - med) > 22) & zone
+                ink = cv2.bitwise_or(ink, (dev.astype(np.uint8) * 255))
+        except Exception:
+            pass
         ink = cv2.morphologyEx(ink, cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
         # فقط اجزای اندازهٔ حرف
         n, lab, st, _ = cv2.connectedComponentsWithStats(ink, 8)
@@ -7318,7 +7327,14 @@ class MangaTranslator:
                     _ref = self._glyph_refine_mask(
                         image[cy0:cy1, cx0:cx1], crop_msk)
                     if _ref is not None and int((_ref > 0).sum()) >= 60:
-                        crop_msk = _ref
+                        # متن عمودی: glyph ممکن است ناقص باشد → OR با ماسک اصلی
+                        _bh = max(1, cy1 - cy0)
+                        _bw = max(1, cx1 - cx0)
+                        if _bh > 1.6 * _bw:  # عمودی
+                            crop_msk = cv2.bitwise_or(crop_msk, _ref)
+                            crop_msk = cv2.dilate(crop_msk, np.ones((5, 5), np.uint8), iterations=2)
+                        else:
+                            crop_msk = _ref
                 except Exception:
                     pass
                 result = aot_bgr[cy0:cy1, cx0:cx1]

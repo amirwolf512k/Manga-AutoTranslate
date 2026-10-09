@@ -1267,9 +1267,7 @@ def run_desktop():
     cpu_var = tk.BooleanVar(value=bool(cfg.get("force_cpu", False)))
     twopass_var = tk.BooleanVar(value=True)
     debug_var = tk.BooleanVar(value=False)
-    ttk.Checkbutton(row4, text="اجبار LaMa-Manga (خالی = خودکار)",
-                    variable=lama_var).pack(side="right", padx=6)
-    ttk.Checkbutton(row4, text="اجبار CPU", variable=cpu_var).pack(side="right", padx=6)
+    # اجبار LaMa/CPU حذف شد — انتخاب خودکار بر اساس رم/GPU
     ttk.Checkbutton(row4, text="OCR دومرحله‌ای", variable=twopass_var).pack(side="right", padx=6)
     ttk.Checkbutton(row4, text="دیباگ", variable=debug_var).pack(side="right", padx=6)
     fake_var = tk.BooleanVar(value=bool(cfg.get("fake_test", False)))
@@ -2682,10 +2680,8 @@ def run_web():
                 readord = gr.Radio(["rtl", "ltr"], value=str(cfg.get("reading_order", "rtl")),
                                    label="ترتیب خواندن حباب‌ها")
             with gr.Row():
-                use_lama = gr.Checkbox(label="اجبار LaMa-Manga (خالی = خودکار)",
-                                       value=False)
-                force_cpu = gr.Checkbox(label="اجبار CPU (خالی = GPU اگر بود)",
-                                        value=False)
+                use_lama = gr.State(False)  # اجبار حذف شد
+                force_cpu = gr.State(False)  # اجبار حذف شد
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
             clean_method = gr.Radio(
                 choices=[("خودکار (بر اساس رم/GPU)", "auto"),
