@@ -1242,14 +1242,43 @@ class AotOnnx:
         scale = tile / float(max(ow, oh))
         scale = min(scale, 1.0) if max(ow, oh) <= tile * 1.25 else scale
         rw, rh = max(8, int(round(ow * scale))), max(8, int(round(oh * scale)))
-        interp = cv2.INTER_AREA if max(ow, oh) > tile else cv2.INTER_CUBIC
-        img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
-        msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
-                          interpolation=cv2.INTER_NEAREST_EXACT
-                          if scale < 1 else cv2.INTER_NEAREST) > 0).astype(np.uint8)
+        if min(rw, rh) >= 96:
+            # صفحهٔ معمولی: یک‌جا
+            interp = cv2.INTER_AREA if max(ow, oh) > tile else cv2.INTER_CUBIC
+            img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
+            msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
+                              interpolation=cv2.INTER_NEAREST_EXACT
+                              if scale < 1 else cv2.INTER_NEAREST) > 0
+                   ).astype(np.uint8)
+            pred = self._infer(img_np, msk)
+            predicted = cv2.resize(pred, (ow, oh),
+                                   interpolation=cv2.INTER_LANCZOS4)
+        else:
+            # نوارِ کشیده (وب‌تونِ بلند): ورودیِ له‌شده (مثلاً ۹۶×۷۶۸
+            # برای صفحهٔ ۶۹۰×۱۱۲۰۰) هم مدل را کرش می‌کرد (Pad reflect)
+            # و هم پس‌زمینه را خمیر می‌کرد — پس در امتدادِ ضلعِ بلند
+            # تایل‌بندی می‌کنیم؛ هر تایل رزولوشنِ معقول دارد و اورلپ‌ها
+            # نرم ترکیب می‌شوند.
+            predicted = self._infer_tiled(img_rgb, original_mask, ow, oh)
+        result = img_rgb.copy()
+        result[original_mask] = predicted[original_mask]
+        return result
+
+    def _infer(self, img_np: np.ndarray, msk: np.ndarray) -> np.ndarray:
+        """یک اجرای مدل روی ورودیِ هم‌اندازه؛ خروجیِ RGB هم‌اندازه برمی‌گرداند."""
+        h, w = img_np.shape[:2]
+        # حداقلِ ابعادِ ۹۶px: مدل داخلش Pad(reflect, 16) دارد و روی
+        # ورودیِ باریک‌تر از ~۸۰px کرش می‌کند (INVALID_ARGUMENT).
+        if min(h, w) < 96:
+            _sc = 96.0 / max(1, min(h, w))
+            _nw, _nh = max(96, int(round(w * _sc))), max(96, int(round(h * _sc)))
+            img_np = cv2.resize(img_np, (_nw, _nh), interpolation=cv2.INTER_CUBIC)
+            msk = (cv2.resize(msk.astype(np.float32), (_nw, _nh),
+                              interpolation=cv2.INTER_NEAREST) > 0).astype(np.uint8)
+            h, w = _nh, _nw
         # پد به ضریب ۸ (دو بار stride=2 داخل مدل) — بازتابی تا لبه طبیعی بماند
-        ph = (8 - rh % 8) % 8
-        pw = (8 - rw % 8) % 8
+        ph = (8 - h % 8) % 8
+        pw = (8 - w % 8) % 8
         if ph or pw:
             img_np = cv2.copyMakeBorder(img_np, 0, ph, 0, pw, cv2.BORDER_REFLECT)
             msk = cv2.copyMakeBorder(msk, 0, ph, 0, pw, cv2.BORDER_REFLECT)
@@ -1261,11 +1290,64 @@ class AotOnnx:
         })[0]
         o = out[0].transpose(1, 2, 0).astype(np.float32)
         o = np.clip((o + 1.0) * 127.5, 0, 255).astype(np.uint8)
-        o = o[:rh, :rw]
-        predicted = cv2.resize(o, (ow, oh), interpolation=cv2.INTER_LANCZOS4)
-        result = img_rgb.copy()
-        result[original_mask] = predicted[original_mask]
-        return result
+        return o[:h, :w]
+
+    def _infer_tiled(self, img_rgb: np.ndarray, original_mask: np.ndarray,
+                     ow: int, oh: int) -> np.ndarray:
+        """اجرای تایل‌بندی‌شده برای نوارهای کشیده: ضلعِ کوتاه در رزولوشنِ
+        اجرا به tile//2 می‌رسد، ضلعِ بلند به تایل‌های ≤ tile با اورلپ
+        تقسیم و با وزنِ ذوزنقه‌ای نرم ترکیب می‌شود."""
+        tile = int(self.tile)
+        ss = max(192, tile // 2)
+        scale2 = ss / float(max(1, min(ow, oh)))
+        rw2, rh2 = max(8, int(round(ow * scale2))), max(8, int(round(oh * scale2)))
+        img_s = cv2.resize(img_rgb, (rw2, rh2), interpolation=cv2.INTER_AREA)
+        msk_s = (cv2.resize(original_mask.astype(np.float32), (rw2, rh2),
+                            interpolation=cv2.INTER_NEAREST) > 0).astype(np.uint8)
+        vertical = rh2 >= rw2
+        L = rh2 if vertical else rw2
+        ov = min(128, max(32, tile // 6))
+        n = max(1, int(np.ceil((L - ov) / max(1, tile - ov))))
+        if n == 1:
+            bounds = [(0, L)]
+        else:
+            step = (L - tile) / float(n - 1)
+            bounds = [(int(round(i * step)), int(round(i * step)) + tile)
+                      for i in range(n)]
+            bounds[-1] = (L - tile, L)
+        acc = np.zeros((rh2, rw2, 3), np.float32)
+        wsum = np.zeros((rh2, rw2), np.float32)
+        for (a, b) in bounds:
+            a = max(0, a); b = min(L, b)
+            if b - a < 16:
+                continue
+            if vertical:
+                t_img, t_msk = img_s[a:b, :], msk_s[a:b, :]
+            else:
+                t_img, t_msk = img_s[:, a:b], msk_s[:, a:b]
+            try:
+                pred = self._infer(t_img, t_msk)
+            except Exception:
+                continue
+            tl = b - a
+            ramp = np.ones(tl, np.float32)
+            if a > 0:
+                k = min(ov, tl)
+                ramp[:k] = np.linspace(0.0, 1.0, k, dtype=np.float32)
+            if b < L:
+                k = min(ov, tl)
+                ramp[-k:] = np.linspace(1.0, 0.0, k, dtype=np.float32)
+            if vertical:
+                w = ramp[:, None]
+                acc[a:b] += pred.astype(np.float32) * w[..., None]
+                wsum[a:b] += w
+            else:
+                w = ramp[None, :]
+                acc[:, a:b] += pred.astype(np.float32) * w[..., None]
+                wsum[:, a:b] += w
+        blended = acc / np.maximum(wsum, 1e-6)[..., None]
+        blended = np.clip(np.rint(blended), 0, 255).astype(np.uint8)
+        return cv2.resize(blended, (ow, oh), interpolation=cv2.INTER_LANCZOS4)
 
 
 class LamaTorch:
@@ -2816,8 +2898,11 @@ class MangaTranslator:
         no_aot: bool = False,
     ):
         # روش پاکسازی: اگر لحن LaMa بخواهد، مثل --lama رفتار می‌کنیم
+        # (شامل aot+lama — وگرنه گیتِ رمِ _decide_lama روی گوشی/سیستمِ
+        # کم‌رم use_lama را False می‌کند و ترکیبِ درخواستیِ کاربر ساکت
+        # به «فقط AOT» تنزل می‌یابد؛ نگهبانِ نهاییِ رم در _get_lama هست)
         self.clean_method = self._normalize_clean_method(clean_method)
-        if self.clean_method in ("lama",):
+        if self.clean_method in ("lama", "aot+lama"):
             force_lama = True
         self.fake_translate = bool(fake_translate)
         self.clean_only = bool(clean_only)
@@ -9244,12 +9329,20 @@ class MangaTranslator:
                 # از خودِ همسایگی‌اش می‌آید.
                 _w2 = cells_ok.astype(np.float32)
                 _v2 = small_filled * _w2[..., None]
-                for _ in range(60):
-                    _wsum = cv2.blur(_w2, (5, 5))
-                    _vsum = cv2.blur(_v2, (5, 5))
-                    _fillv = _vsum / np.maximum(_wsum, 1e-6)[..., None]
-                    _v2 = np.where(cells_ok[..., None], small_filled, _fillv)
-                small_filled = _v2
+                # گاردِ عددی: نسبتِ دو عددِ خیلی کوچک (_vsum/_wsum) می‌تواند
+                # منفجر شود (inf/NaN) و پیکسل‌های خراب بسازد — هر گام کلیپ
+                # می‌شود و در پایان NaNها خنثی می‌گردند.
+                with np.errstate(divide="ignore", invalid="ignore",
+                                 over="ignore"):
+                    for _ in range(60):
+                        _wsum = cv2.blur(_w2, (5, 5))
+                        _vsum = cv2.blur(_v2, (5, 5))
+                        _fillv = _vsum / np.maximum(_wsum, 1e-6)[..., None]
+                        _fillv = np.clip(_fillv, 0.0, 255.0)
+                        _v2 = np.where(cells_ok[..., None], small_filled,
+                                       _fillv)
+                small_filled = np.nan_to_num(_v2, nan=0.0, posinf=255.0,
+                                             neginf=0.0)
             surf = small_filled
             # نرم‌سازی کم‌بسامد
             surf = cv2.GaussianBlur(surf, (0, 0), max(1.0, sc * 0.6))
