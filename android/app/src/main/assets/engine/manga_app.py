@@ -2683,6 +2683,7 @@ def run_web():
                 use_lama = gr.State(False)  # اجبار حذف شد
                 force_cpu = gr.State(False)  # اجبار حذف شد
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
+                turbo = gr.Checkbox(label="حالت توربو (خیلی سریع: فقط OCR + OpenCV)", value=False)
             clean_method = gr.Radio(
                 choices=[("خودکار (بر اساس رم/GPU)", "auto"),
                          ("LaMa-fp32", "lama"),
@@ -3602,7 +3603,7 @@ def run_web():
                             out_fmt_v, quality_v, font_up,
                             workers_v, bubbles_v, timeout_v,
                             batchw_v, maxre_v, reqdelay_v, temp_v, readord_v,
-                            use_lama_v, force_cpu_v, two_pass_v, clean_method_v,
+                            use_lama_v, force_cpu_v, two_pass_v, turbo_v, clean_method_v,
                             fake_test_v, clean_only_v, web_debug_v, instruction_text_v,
                             glossary_text_v, story_brief_v, api_base_v,
                             *tone_args):
@@ -3726,6 +3727,8 @@ def run_web():
                 cmd += ["--cpu"]
             if not two_pass_v:
                 cmd += ["--no-two-pass-ocr"]
+            if turbo_v:
+                cmd += ["--turbo"]
             if fake_test_v:
                 cmd += ["--fake-translate"]
             if clean_only_v:
@@ -3816,7 +3819,7 @@ def run_web():
                     out_fmt, quality, font_upload,
                     workers, bubbles, timeout,
                     batchw, maxre, reqdelay, temp, readord,
-                    use_lama, force_cpu, two_pass, clean_method,
+                    use_lama, force_cpu, two_pass, turbo, clean_method,
                     fake_test, clean_only, web_debug, instruction_text,
                     glossary_text, story_brief, api_base] + tone_uploads,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,

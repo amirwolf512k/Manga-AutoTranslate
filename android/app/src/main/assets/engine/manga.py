@@ -289,10 +289,10 @@ def _ensure_all_dependencies() -> None:
     _ram_total = _total_system_ram_gb()
     if (_IS_ANDROID or _lite_mode() or _env_flag("MANGA_NO_TORCH")):
         print("[*] حالت کم‌مصرف/Lite یا MANGA_NO_TORCH → torch نصب/لود نمی‌شود "
-              "(پاک‌سازی با lama-lite ONNX — وزن int8، سبک و سریع).")
+              "(پاک‌سازی با lama-fp32 ONNX — تمیز و دقیق).")
     elif _ram_total and _ram_total < 6.0:
         print(f"[*] رم کل سیستم کم است ({_ram_total:.1f}GB < 6GB) → torch نصب نمی‌شود؛ "
-              "پاک‌سازی با lama-lite ONNX (کم‌مصرف‌تر از torch).")
+              "پاک‌سازی با lama-fp32 ONNX (کم‌مصرف‌تر از torch).")
     elif not _torch_available():
         print("[*] نصب torch CPU برای big-lama.pt — فقط بار اول (~۲۰۰MB) ...")
         try:
@@ -613,8 +613,7 @@ def _ort_session_options(threads: int = 0, arena: Optional[bool] = None):
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     # نکتهٔ اندازه‌گیری‌شده: arena فعال معمولاً پیک رم پایین‌تری دارد؛
-    # ولی برای مدل‌های DQ (lama-lite) در حالت Lite، arena-off بهتر است:
-    # وزن‌های dequant شده پس از هر اجرا آزاد می‌شوند و fragmentation کم است.
+    # ولی در حالت Lite، arena-off بهتر است (fragmentation کمتر).
     if arena is None:
         arena = not _lite_mode()
     so.enable_cpu_mem_arena = bool(arena)
@@ -974,168 +973,6 @@ class LamaMangaONNX:
         return Image.fromarray(result)
 
 
-class LamaLiteONNX:
-    """big-LaMa سبک: وزن‌های int8 کانالی (۵۶MB) + ورودی داینامیک (ضریب ۸).
-
-    - کیفیت ≈ fp32 (کوانتیزیشن فقط وزن‌ها، بدون کوانتیزیشن اکتیویشن)
-    - رم جلسه ~۶۵MB (به‌جای ~۴۶۰MB) → مناسب اندروید و سیستم‌های کم‌رم
-    - اندازهٔ اجرای تطبیقی (۱۹۲/۲۵۶/۳۲۰/۴۴۸/۵۱۲) → حباب‌های کوچک تا ۴× سریع‌تر
-    """
-
-    FILE = "lama-lite.onnx"
-    URLS = (
-        "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/"
-        "download/files/lama-lite.onnx",
-    )
-    MAX_RUN = 512
-
-    def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
-                 threads: int = 4, cache_dir: Optional[str] = None,
-                 max_side: Optional[int] = None):
-        if not model_path or not os.path.isfile(model_path):
-            model_path = self._download_model(cache_dir=cache_dir)
-        self.model_path = model_path
-        if not prefer_gpu:
-            use_threads = max(1, min(4, os.cpu_count() or 2))
-        else:
-            use_threads = max(1, int(threads))
-        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu,
-                                         threads=use_threads)
-        self.session, use_threads = _cpu_thread_fallback(
-            self.session, model_path, use_threads)
-        self.max_side = int(max_side or self.MAX_RUN)
-        if _lite_mode():
-            # کیفیتِ PC: ۵۱۲ (به‌جای ۳۸۴) — مناطقِ بزرگِ SFX/هنر با جزئیات
-            # بیشتری بازسازی می‌شوند؛ اندروید برای ایمنیِ رم روی ۳۸۴ می‌ماند.
-            # با MANGA_LAMA_MAXSIDE می‌توان کیفیت را روی PC بالا هم برد
-            # (مثلاً ۷۶۸ برای صفحاتِ رنگی با جعبه‌های تیره — دودِ LaMa کمتر)
-            _env_ms = os.environ.get("MANGA_LAMA_MAXSIDE", "").strip()
-            if _env_ms.isdigit() and int(_env_ms) >= 192:
-                _cap = int(_env_ms)
-                if _on_android():
-                    _cap = min(_cap, 384)
-                self.max_side = _cap
-            else:
-                self.max_side = min(self.max_side, 512)
-        # dynamic dims?
-        self._dynamic = True
-        try:
-            for inp in self.session.get_inputs():
-                dims = list(inp.shape)[-2:]
-                if len(dims) == 2 and all(isinstance(d, int) and d > 0 for d in dims):
-                    self._dynamic = False
-                    self.max_side = min(self.max_side, min(dims))
-        except Exception:
-            pass
-        names = [i.name for i in self.session.get_inputs()]
-        self._in_image = names[0]
-        self._in_mask = names[1] if len(names) > 1 else "mask"
-        for n in names:
-            low = n.lower()
-            if "mask" in low:
-                self._in_mask = n
-            elif "image" in low or "img" in low:
-                self._in_image = n
-        print(
-            f"[+] lama-lite ONNX آماده (int8، داینامیک) | "
-            f"providers={self.session.get_providers()} | threads={use_threads} | "
-            f"dynamic={self._dynamic} | max_side={self.max_side}"
-        )
-
-    @classmethod
-    def _download_model(cls, cache_dir: Optional[str] = None) -> str:
-        env_p = os.environ.get("LAMA_MODEL")
-        if env_p and os.path.isfile(env_p):
-            return env_p
-        _m = _mirror_model(cls.FILE)
-        if _m:
-            return _m
-        dst = os.path.join(_model_cache_dir("det_models"), cls.FILE)
-        if os.path.isfile(dst) and os.path.getsize(dst) > 10_000_000:
-            print(f"[*] مدل lama-lite.onnx از کش: {dst}")
-            return dst
-        last = None
-        for url in cls.URLS:
-            try:
-                print(f"[*] دانلود lama-lite.onnx (~۵۶MB، فقط بار اول) از "
-                      f"{url.split('/')[2]} ...")
-                _dl_to(url, dst, name=cls.FILE)
-                return dst
-            except Exception as e:
-                last = e
-                print(f"    [!] دانلود از {url.split('/')[2]} نشد: {e}")
-                try:
-                    if os.path.isfile(dst + ".part"):
-                        os.remove(dst + ".part")
-                except Exception:
-                    pass
-        raise RuntimeError(f"دانلود lama-lite.onnx ناموفق: {last}")
-
-    def _pick_size(self, w: int, h: int) -> int:
-        m = max(int(w), int(h))
-        if m <= 160:
-            s = 192
-        elif m <= 224:
-            s = 256
-        elif m <= 300:
-            s = 320
-        elif m <= 420:
-            s = 448
-        else:
-            s = 512
-        return min(s, self.max_side)
-
-    def __call__(self, image, mask):
-        if isinstance(image, np.ndarray):
-            if image.ndim == 3 and image.shape[2] in (3, 4):
-                img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            else:
-                img_rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
-        else:
-            img_rgb = np.array(image.convert("RGB"))
-        if isinstance(mask, np.ndarray):
-            if mask.ndim == 3:
-                mask_u8 = mask[..., 0] if mask.shape[2] == 1 else cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
-            else:
-                mask_u8 = mask
-        else:
-            mask_u8 = np.array(mask.convert("L"))
-        if mask_u8.shape != img_rgb.shape[:2]:
-            raise ValueError("Image and mask dimensions must match")
-        original_mask = mask_u8 > 0
-        if not np.any(original_mask):
-            return Image.fromarray(img_rgb.copy())
-        oh, ow = img_rgb.shape[:2]
-        if self._dynamic:
-            s = self._pick_size(ow, oh)
-        else:
-            s = self.max_side
-        scale = s / max(ow, oh)
-        rw, rh = max(1, round(ow * scale)), max(1, round(oh * scale))
-        interp = cv2.INTER_AREA if max(ow, oh) > s else cv2.INTER_CUBIC
-        img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
-        mask_interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_NEAREST_EXACT
-        msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
-                          interpolation=mask_interp) > 0).astype(np.uint8)
-        img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
-        msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
-        img_np[msk > 0] = 0
-        img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
-        mask_in = msk.astype(np.float32)[None, None]
-        out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
-
-        o = out[0].transpose(1, 2, 0).astype(np.float32)
-        try:
-            if float(np.max(o)) > 1.5:
-                o = o / 255.0
-        except Exception:
-            pass
-        o = np.clip(o, 0.0, 1.0)
-        o = (o * 255).astype(np.uint8)
-        predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
-        result = img_rgb.copy()
-        result[original_mask] = predicted[original_mask]
-        return Image.fromarray(result)
 
 
 class AotOnnx:
@@ -2773,7 +2610,7 @@ class MangaTranslator:
             "flat+aot": "aot", "flat+aotgan": "aot", "aot+flat": "aot",
             "flataot": "aot",
             "aot+lama": "aot+lama", "aotlama": "aot+lama",
-            "aot+lamalite": "aot+lama", "lama+aot": "aot+lama",
+            "lama+aot": "aot+lama",
             # بقیه
             "smart": "auto", "پیش‌فرض": "auto",
             "aotgan": "aot", "aot-gan": "aot", "gan": "aot",
@@ -2797,9 +2634,9 @@ class MangaTranslator:
         if force_gpu is False and not force_lama:
             if has_ort:
                 # --cpu یعنی «بدون GPU»، نه «بدون بازسازی هوشمند» —
-                # lama-lite (int8، سبک) روی همان CPU تمیزکاری می‌کند؛
+                # lama-fp32 ONNX روی همان CPU تمیزکاری می‌کند؛
                 # OpenCV فقط برای آن دسته از زمینه‌ها می‌ماند که صافی‌اند.
-                print("[*] --cpu → پاک‌سازی با lama-lite ONNX روی CPU "
+                print("[*] --cpu → پاک‌سازی با lama-fp32 ONNX روی CPU "
                       "(تمیزتر از Telea؛ برای OpenCV سریع: --clean-method opencv).")
                 try:
                     self._lama_prefer_lite = True
@@ -2816,8 +2653,8 @@ class MangaTranslator:
         if _lite_mode() and not _on_android() and force_gpu is None and not force_lama:
             avail = self._available_ram_gb()
             if avail is None or avail >= 1.2:
-                print("[*] حالت کم‌مصرف (Lite) → پاک‌سازی با lama-lite ONNX "
-                      "(int8، ~۶۵MB رم). برای غیرفعال‌سازی: --cpu")
+                print("[*] حالت کم‌مصرف (Lite) → پاک‌سازی با lama-fp32 ONNX "
+                      "(~۱۹۸MB مدل). برای غیرفعال‌سازی: --cpu")
                 return True
             print(f"[*] رم آزاد خیلی کم است ({avail:.1f}GB) → OpenCV سریع. "
                   f"برای اجبار: --lama")
@@ -2829,8 +2666,8 @@ class MangaTranslator:
                 print(f"[*] خودکار اندروید: رم کل گوشی {total:.1f}GB "
                       f"(< 3GB) → OpenCV سریع.")
                 return False
-            print(f"[*] خودکار اندروید: رم کل {total:.1f}GB → lama-lite فعال "
-                  f"(int8، سبک؛ اگر لحظهٔ بارگذاری رمِ آزاد خیلی کم باشد، "
+            print(f"[*] خودکار اندروید: رم کل {total:.1f}GB → lama-fp32 فعال "
+                  f"(اگر لحظهٔ بارگذاری رمِ آزاد خیلی کم باشد، "
                   f"همان‌جا هشدار می‌دهد یا به OpenCV برمی‌گردد).")
             return True
 
@@ -2851,18 +2688,18 @@ class MangaTranslator:
                   f"برای اجبار: --lama یا --gpu")
             return False
         # دسکتاپ/وب بدون GPU: big-lama.pt سنگین است و پیش‌فرض نمی‌شود.
-        # حالت auto از AOT-GAN + LaMa-lite (سبک) استفاده می‌کند؛
+        # حالت auto بدون GPU مناسب → OpenCV؛
         # فقط با --lama یا GPU قوی big-lama روشن می‌شود.
         if has_torch and not _on_android():
             print("[*] دسکتاپ/وب بدون GPU مناسب → big-lama.pt خاموش "
-                  "(AOT/LaMa-lite خودکار). اجبار: --lama")
+                  "(خودکار: OpenCV). اجبار: --lama")
             return False
 
         if has_ort and not _on_android():
             avail = self._available_ram_gb()
             if avail is None or avail >= 1.5:
-                print("[*] onnxruntime هست → LaMa-lite در دسترس "
-                      "(auto بر اساس رم بین AOT/lite/OpenCV انتخاب می‌کند).")
+                print("[*] onnxruntime هست → lama-fp32 در دسترس "
+                      "(auto بر اساس رم بین lama-fp32/OpenCV انتخاب می‌کند).")
                 return True
             print(f"[*] رم آزاد کم است ({avail:.1f}GB) → OpenCV سریع. "
                   f"برای اجبار: --lama")
@@ -3322,7 +3159,7 @@ class MangaTranslator:
                     _gc.collect()
                 except Exception:
                     pass
-                # لِمَـلایت (int8، جلسهٔ ~۶۵MB) → آستانهٔ رم پایین‌تر از قبل
+                # آستانهٔ رم برای فعال‌سازی LaMa روی گوشی
                 _min_total = 3.0 if total < self._ANDROID_LAMA_MIN_TOTAL_GB \
                     else self._ANDROID_LAMA_MIN_TOTAL_GB
                 _min_avail = 0.25 if total < self._ANDROID_LAMA_MIN_TOTAL_GB \
@@ -3350,8 +3187,8 @@ class MangaTranslator:
                     print(f"    [!] رم آزاد کمی پایین است ({avail:.1f}GB)؛ اگر وسط کار "
                           f"کرش شد، اپ‌های بیکار را ببند یا چند لحظه بعد امتحان کن.")
                 print(f"[*] رم گوشی: کل {total:.1f}GB / آزاد {avail:.1f}GB / "
-                      f"{cores} هستهٔ CPU → lama-lite (int8) روی CPU اجرا می‌شود "
-                      f"(سبک، سریع و تمیزتر از OpenCV).")
+                      f"{cores} هستهٔ CPU → lama-fp32 روی CPU اجرا می‌شود "
+                      f"(تمیزتر از OpenCV).")
             if _on_android() or _lite_mode() or getattr(self, "_lama_prefer_lite", False):
                 # اندروید و حالت کم‌مصرف → lama-fp32 (بهترین کیفیت)
                 # نکته: نسخهٔ int8 کوانتایزشده خراب بود (خروجی سیاه) → از fp32 استفاده می‌شود
@@ -4386,7 +4223,7 @@ class MangaTranslator:
                     pth = p
                     break
             if pth is None:
-                # دانلود خودکار از آینهٔ releases (مثل lama-lite)
+                # دانلود خودکار از آینهٔ releases
                 try:
                     dst = os.path.join(_model_cache_dir("models_cache"),
                                        "text_filter.npz")
@@ -7497,9 +7334,9 @@ class MangaTranslator:
 
         _qc_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
         crop_img_global = image
-        # AOT اول وقتی: روشِ صریح aot است، یا LaMa موجود «کلاسِ سبک» است
-        # (lama-lite int8 / اندروید / حالت Lite / --cpu) یا torch اصلاً نیست.
-        # big-LaMaٔ کامل (torch CUDA/CPU) همچنان اولویت دارد و AOT شانسِ دوم.
+        # AOT حذف شده (_get_aot همیشه None برمی‌گرداند) و lama-lite هم حذف شده؛
+        # ترتیب پاکسازی حالا: big-LaMa (torch، اگر موجود) وگرنه lama-fp32،
+        # وگرنه OpenCV. شرط‌های aot_ready زیر عملاً همیشه False‌اند.
         _lama_is_lite = (getattr(self, "_lama_prefer_lite", False)
                          or _lite_mode() or _on_android())
         _aot_runs_first = use_aot_now or (
@@ -16472,6 +16309,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--inpaint-radius", type=int, default=3)
     p.add_argument("--mag-ratio", type=float, default=1.35)
     p.add_argument("--no-two-pass-ocr", action="store_true")
+    p.add_argument("--turbo", action="store_true",
+                   help="حالت توربو (گوشی): بدون RT-DETR (فقط OCR) + OpenCV — "
+                        "خیلی سریع‌تر، کیفیت پاکسازی کمتر")
     p.add_argument("--fake-translate", action="store_true",
                    help="حالت تست: به‌جای API، متن فارسی الکی داخل حباب‌ها رندر می‌شود "
                         "(برای چک کردن استخراج/پاکسازی/رندر بدون کلید API)")
@@ -16593,6 +16433,7 @@ def main():
         inpaint_radius=args.inpaint_radius,
         mag_ratio=args.mag_ratio,
         two_pass_ocr=not args.no_two_pass_ocr,
+        turbo=args.turbo,
         translation_temperature=args.temperature,
         max_output_width=(args.max_width or None),
         stitch_max_height=args.stitch_max_height,

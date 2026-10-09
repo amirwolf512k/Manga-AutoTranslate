@@ -1074,6 +1074,7 @@ class MainActivity : AppCompatActivity() {
         val fmtV = (firstNonEmpty(o, "out_fmt", "fmt") ?: "PDF").trim()
         map.put("fmt", if (fmtV.equals("PSD", ignoreCase = true)) "PDF" else fmtV)
         map.put("clean_method", firstNonEmpty(o, "clean_method") ?: "auto")
+        map.put("turbo", optBool(o, "turbo"))
         map.put("quality", optInt(o, "quality", 92))
         map.put("debug", optBool(o, "web_debug", "debug"))
         map.put("fake", optBool(o, "fake_test", "fake"))

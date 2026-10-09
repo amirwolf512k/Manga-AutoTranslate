@@ -684,6 +684,7 @@ def _run(job):
                     fake_translate=bool(p.get("fake")),
                     clean_only=bool(p.get("clean_only")),
                     clean_method=str(p.get("clean_method", "auto") or "auto"),
+                    turbo=bool(p.get("turbo")),
                     max_workers=_i("workers", 2),
                     bubbles_per_request=_i("bubbles", 6),
                     api_timeout=_f("timeout", 40.0),
