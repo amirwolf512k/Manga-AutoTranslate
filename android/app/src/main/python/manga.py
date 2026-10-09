@@ -796,6 +796,13 @@ class LamaONNX:
         original_mask = mask_u8 > 0
         if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
+        try:
+            _eroded = cv2.erode((original_mask.astype(np.uint8) * 255),
+                                np.ones((5, 5), np.uint8), iterations=1) > 0
+            if int(_eroded.sum()) >= 0.3 * int(original_mask.sum()):
+                original_mask = _eroded
+        except Exception:
+            pass
         orig_size = (img_rgb.shape[1], img_rgb.shape[0])
         run_size = self._pick_size(orig_size[0], orig_size[1])
         if not self.prefer_gpu and not getattr(self, "_fixed_size", False):
