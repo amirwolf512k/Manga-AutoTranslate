@@ -3102,7 +3102,7 @@ class MangaTranslator:
             for _part in str(_l).replace(",", " ").split():
                 if _part and _part.lower() not in [x.lower() for x in _langs]:
                     _langs.append(_part)
-        self.ocr_langs = _langs or ["en"]
+        self.ocr_langs = _langs or ["en", "ja", "ko", "ch"]
         self._init_extraction_models()
 
         if getattr(self, "clean_only", False):
