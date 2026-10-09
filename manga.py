@@ -9449,16 +9449,18 @@ class MangaTranslator:
             out = crop_img.copy()
             out[m] = np.clip(np.rint(surf[m]), 0, 255).astype(np.uint8)
             # دانهٔ ملایم = واریانسِ زمینه — سطحِ کاملاً تخت مصنوعی دیده نشود
+            # (مقدار کم برای جلوگیری از خش‌خشِ قابل مشاهده)
             try:
                 g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
                 gv = g[valid]
                 grain = float(np.std(gv)) if gv.size else 0.0
                 if 2.5 < grain < 24.0:
                     rng = np.random.default_rng(12345)
-                    noise = rng.normal(0.0, grain * 0.9,
+                    # 0.35 به‌جای 0.9 — نویز ملایم‌تر، خش‌خش کمتر
+                    noise = rng.normal(0.0, grain * 0.35,
                                        (h, w)).astype(np.float32)
-                    noise = cv2.GaussianBlur(noise, (0, 0), 0.7)
-                    a = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 1.0)
+                    noise = cv2.GaussianBlur(noise, (0, 0), 1.2)
+                    a = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 1.5)
                     a = np.clip(a, 0, 1)[..., None]
                     base = out.astype(np.float32)
                     gn = cv2.cvtColor(
@@ -9647,13 +9649,15 @@ class MangaTranslator:
         """تزریق دانهٔ بافت به پرکردنِ صاف‌شده با واریانسِ زمینهٔ اطراف:
         ساختار کم‌بسامدِ خودِ پرکردن (LaMa/TELEA) حفظ می‌شود، ته‌رنگ به
         زمینه جابه‌جا می‌شود و دانهٔ مصنوعیِ هم‌واریانس اضافه می‌شود —
-        «لکهٔ صاف» بافت‌دار و بی‌لکه دیده می‌شود. رنگ حفظ می‌شود."""
+        «لکهٔ صاف» بافت‌دار و بی‌لکه دیده می‌شود. رنگ حفظ می‌شود.
+        (مقدار ملایم برای جلوگیری از خش‌خشِ قابل مشاهده)"""
         try:
             m = (msk > 0)
             if not m.any():
                 return None
             tgt = max(model.get("tex_local", 0.0), min(model["std"], 30.0))
-            if tgt < 5.0:
+            # آستانه بالاتر (8 به‌جای 5) و مقدار کمتر — خش‌خش کمتر
+            if tgt < 8.0:
                 return None
             # فقط داخل ماسک (با محو لبه) — پیکسل‌های اطراف دست‌نخورده
             alpha = cv2.GaussianBlur(m.astype(np.float32), (0, 0), 3.0)
@@ -9662,7 +9666,7 @@ class MangaTranslator:
             g0 = cv2.cvtColor(fill_img, cv2.COLOR_BGR2GRAY).astype(np.float32)
             rng = np.random.RandomState(31)
             n = rng.randn(*g0.shape).astype(np.float32)
-            n = cv2.GaussianBlur(n, (0, 0), 0.8)
+            n = cv2.GaussianBlur(n, (0, 0), 1.5)
             _nb = cv2.boxFilter(n, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
             _nsb = cv2.boxFilter(n * n, -1, (9, 9), borderType=cv2.BORDER_REFLECT)
             _nl = np.sqrt(np.maximum(_nsb - _nb * _nb, 0.0))
@@ -9676,7 +9680,8 @@ class MangaTranslator:
                 shift[c] = float(np.clip(d, -48.0, 48.0))
             base = fill_img.astype(np.float32)
             base = base + np.array(shift, np.float32)[None, None, :]
-            out = base + (n * tgt)[..., None] * alpha
+            # 0.5 ضریب ملایم‌سازی — نصف مقدار قبلی
+            out = base + (n * tgt * 0.5)[..., None] * alpha
             return np.clip(np.rint(out), 0, 255).astype(np.uint8)
         except Exception:
             return None
