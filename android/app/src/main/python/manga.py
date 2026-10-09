@@ -4629,7 +4629,7 @@ class MangaTranslator:
                          or 0xF900 <= ord(_c) <= 0xFAFF
                          or 0x3040 <= ord(_c) <= 0x30FF
                          or 0xAC00 <= ord(_c) <= 0xD7A3)
-            if _lab == "junk" and _cf >= (0.95 if (in_bubble and _cjk_n >= 3) else 0.75):
+            if _lab == "junk" and _cf >= (0.95 if (in_bubble and _cjk_n >= 2) else 0.75):
                 return "junk"
             # ---------- ناحیهٔ نامطمئنِ مدل ----------
             if cls._structural_promo(stripped):
@@ -16128,9 +16128,19 @@ html, body { background: #0a0a0b; }
                 px0, py0 = float(_pts[:, 0].min()), float(_pts[:, 1].min())
                 px1, py1 = float(_pts[:, 0].max()), float(_pts[:, 1].max())
                 if (px1 - px0) >= 10 and (py1 - py0) >= 8:
+                    # متنِ ترجمه دقیقاً جایِ متنِ اصلی می‌نشیند — نه وسطِ
+                    # کادرِ بزرگِ ناحیه: اگر ناحیهٔ متنِ OCR به‌طورِ محسوس
+                    # کوچک‌تر از کادرِ ناحیه است، از همان ناحیهٔ متن برای
+                    # جاگذاری استفاده می‌شود (حتی اگر مرکزش نزدیک باشد).
+                    _tw, _th = px1 - px0, py1 - py0
+                    _use_text_area = (
+                        _tw * _th < 0.70 * max(1.0, w * h)
+                    )
                     _off = max(abs((px0 + px1) / 2 - (x + w / 2)) / max(1.0, w),
                                abs((py0 + py1) / 2 - (y + h / 2)) / max(1.0, h))
                     if _off > 0.35:
+                        _use_text_area = True
+                    if _use_text_area:
                         _padx = max(6, int(0.06 * (px1 - px0)))
                         _pady = max(5, int(0.08 * (py1 - py0)))
                         x = max(0, int(px0 - _padx))
@@ -16182,8 +16192,10 @@ html, body { background: #0a0a0b; }
             if _hs:
                 _orig_h = float(np.median(_hs))
                 if _orig_h >= 9.0:
+                    # اندازهٔ فونت نزدیک به متنِ اصلی (۹۵٪ ارتفاعِ حروفِ
+                    # اصلی) — نه کوچک‌ترِ محسوس
                     max_font = max(10, min(int(max_font),
-                                           int(round(_orig_h * 0.80))))
+                                           int(round(_orig_h * 0.95))))
         except Exception:
             pass
 
