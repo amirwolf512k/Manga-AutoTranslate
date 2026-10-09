@@ -4620,7 +4620,16 @@ class MangaTranslator:
             # (باکسِ معرفیِ شخصیت → بدونِ ترجمه می‌ماند) → آستانهٔ سخت‌گیرانه
             if _lab == "ads" and _cf >= (0.80 if in_bubble else 0.50):
                 return "promo"
-            if _lab == "junk" and _cf >= 0.75:
+            # داخلِ حباب با متنِ CJK: OCR متنِ عمودیِ ژاپنی/چینی را خراب
+            # می‌خواند (ترتیبِ حروف به‌هم‌ریخته) و مدلِ ML آن را junk
+            # می‌داند — ولی حبابِ واقعیِ دیالوگ است. آستانهٔ junk داخلِ
+            # حبابِ CJK خیلی سخت‌گیرانه‌تر می‌شود.
+            _cjk_n = sum(1 for _c in stripped
+                         if 0x2E80 <= ord(_c) <= 0x9FFF
+                         or 0xF900 <= ord(_c) <= 0xFAFF
+                         or 0x3040 <= ord(_c) <= 0x30FF
+                         or 0xAC00 <= ord(_c) <= 0xD7A3)
+            if _lab == "junk" and _cf >= (0.95 if (in_bubble and _cjk_n >= 3) else 0.75):
                 return "junk"
             # ---------- ناحیهٔ نامطمئنِ مدل ----------
             if cls._structural_promo(stripped):
