@@ -4308,6 +4308,13 @@ class MangaTranslator:
         if not stripped:
             return "junk"
 
+        _cjk_compact = re.sub(r"[\s]", "", stripped)
+        if _cjk_compact and len(_cjk_compact) <= 2 and all(
+                0x2E80 <= ord(_c) <= 0x9FFF or 0xF900 <= ord(_c) <= 0xFAFF
+                or 0x3040 <= ord(_c) <= 0x30FF or 0xAC00 <= ord(_c) <= 0xD7A3
+                for _c in _cjk_compact):
+            return "dialogue"
+
         _cta_probe = re.sub(r"[!?.:;,~\-_—–\s]+", " ",
                             stripped).strip().lower()
         if _cta_probe in MangaTranslator._CTA_PROMO:
