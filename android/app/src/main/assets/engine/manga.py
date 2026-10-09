@@ -962,9 +962,7 @@ class LamaMangaONNX:
         o = (o * 255).astype(np.uint8)
         predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
         result = img_rgb.copy()
-        feather = cv2.GaussianBlur(original_mask.astype(np.float32), (7, 7), 0)
-        feather = feather[..., None]
-        result = (predicted * feather + img_rgb.astype(np.float32) * (1 - feather)).astype(np.uint8)
+        result[original_mask] = predicted[original_mask]
         return Image.fromarray(result)
 
 
@@ -9313,6 +9311,12 @@ class MangaTranslator:
                 except Exception:
                     pass
             try:
+                if why == "texture-flat" and guide is not None:
+                    _fb = fill_img.copy()
+                    _mm = (msk > 0)
+                    _fb[_mm] = guide[_mm]
+                    print(f"    [!] لکهٔ پرکردن ({why}) → با رنگ پس‌زمینه جایگزین شد")
+                    return _fb, method + "+bgflat"
                 print(f"    [!] لکهٔ پرکردن ({why}) → ترمیم نشد؛ همان روش {method} نگه داشته شد")
             except Exception:
                 pass
