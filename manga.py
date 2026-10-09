@@ -4292,11 +4292,13 @@ class MangaTranslator:
                     # باکسِ حبابِ تشخیصی گم شده ولی زمینِ اطرافِ متن
                     # کاغذِ حباب است → رفتارِ «داخلِ حباب»
                     in_bubble = True
-                if in_bubble and r.kind == "sfx" and p_dlg >= 0.24:
+                if in_bubble and r.kind == "sfx" and p_dlg >= 0.40:
+                    # آستانه بالاتر (0.40 به‌جای 0.24) — کمتر اشتباه می‌کند
                     r.kind = "dialogue"
                     fd += 1
                 elif (not in_bubble and r.kind == "dialogue"
-                      and p_sfx >= 0.35 and p_sfx >= 0.75 * p_dlg):
+                      and p_sfx >= 0.50 and p_sfx >= 0.90 * p_dlg):
+                    # آستانه بالاتر (0.50/0.90 به‌جای 0.35/0.75) — محافظه‌کارتر
                     r.kind = "sfx"
                     fx += 1
             if fx or fd:
@@ -4595,6 +4597,20 @@ class MangaTranslator:
         # ---------- ۱) مدلِ ML (اولویت) — تصمیمِ نهایی با مدلِ آموخته است.
         # آستانه‌ها از اعتبارسنجیِ مجموعهٔ واقعی تنظیم شده‌اند ----------
         _probs = cls._ml_distribution(stripped)
+        # ---------- تشخیص SFX ژاپنی/کره‌ای/چینی ----------
+        # متن کوتاهِ فقط کانا (هیراگانا/کاتاکانا) → احتمالاً SFX است
+        # مثال: プカ، きゃ， おお， つるん
+        if stripped:
+            import unicodedata as _ud
+            _kana = sum(1 for c in stripped if '\u3040' <= c <= '\u309F' or '\u30A0' <= c <= '\u30FF')
+            _total = len([c for c in stripped if not c.isspace()])
+            if _total > 0 and _kana / _total >= 0.6 and _total <= 12 and not in_bubble:
+                return "sfx"
+            # هانگول کوتاه بیرون حباب → SFX
+            _hangul = sum(1 for c in stripped if '\uAC00' <= c <= '\uD7AF')
+            if _total > 0 and _hangul / _total >= 0.6 and _total <= 12 and not in_bubble:
+                return "sfx"
+
         if _probs is not None:
             _lab = max(_probs, key=_probs.get)
             _cf = _probs[_lab]
