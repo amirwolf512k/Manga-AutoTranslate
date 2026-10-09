@@ -957,7 +957,16 @@ class LamaMangaONNX:
         img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
         
         msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
-        img_np[msk > 0] = 0
+        try:
+            _dil = cv2.dilate(msk, np.ones((21, 21), np.uint8), iterations=1)
+            _ring = (_dil > 0) & (msk == 0)
+            if np.any(_ring):
+                _bg_col = np.median(img_np[_ring], axis=0)
+                img_np[msk > 0] = _bg_col.astype(np.uint8)
+            else:
+                img_np[msk > 0] = 0
+        except Exception:
+            img_np[msk > 0] = 0
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
         mask_in = msk.astype(np.float32)[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
