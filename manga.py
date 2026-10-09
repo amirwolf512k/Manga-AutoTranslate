@@ -1325,10 +1325,15 @@ class AotOnnx:
                 t_img, t_msk = img_s[a:b, :], msk_s[a:b, :]
             else:
                 t_img, t_msk = img_s[:, a:b], msk_s[:, a:b]
-            try:
-                pred = self._infer(t_img, t_msk)
-            except Exception:
-                continue
+            # تایلِ بدون ماسک: اجرای مدل لازم نیست (فقط کپی) — روی گوشی
+            # نوارهای بلندِ کم‌متن خیلی سریع‌تر می‌شوند
+            if not np.any(t_msk):
+                pred = t_img
+            else:
+                try:
+                    pred = self._infer(t_img, t_msk)
+                except Exception:
+                    continue
             tl = b - a
             ramp = np.ones(tl, np.float32)
             if a > 0:
@@ -7899,6 +7904,7 @@ class MangaTranslator:
             counts[method] = counts.get(method, 0) + 1
 
         # ---- دور دوم: جاروی حروف جامانده (دوگذر — ردِّ پرکردنِ خود دور دوم هم پاک می‌شود) ----
+        # (خوشه‌های AOT/LaMa از جارو معاف‌اند — داخل _sweep_leftover_glyphs)
         if _dbg_dir:
             _dbg("06_presweep.png", cleaned)
         try:
@@ -7926,13 +7932,16 @@ class MangaTranslator:
                 _um[_y0:_y1, _x0:_x1] = np.maximum(
                     _um[_y0:_y1, _x0:_x1],
                     (_cm > 0).astype(np.uint8) * 255)
-            if _um.any():
+            if _um.any() and not os.environ.get("MANGA_NO_HARDSCRUB"):
                 cleaned = self._hard_residual_scrub(cleaned, _um)
                 cleaned = self._hard_residual_scrub(cleaned, _um)
         except Exception as _hre:
             print(f"  [!] hard residual scrub: {_hre}")
 
-        # نجات شبح: هر خوشهٔ پرشده که هنوز جوهر دارد → hard-fill ماسک (نه مستطیل)
+        # نجات شبح: فقط اجزای «جوهرِ جامانده» (متن‌شبحِ واقعی) بازرنگ
+        # می‌شوند — نه کلِ ماسک! برای پس‌زمینهٔ بافت‌دار (ساختمان/درخت/
+        # آسمان) انحرافِ گسترده طبیعی است؛ پرکردنِ کلِ ماسک با رنگِ ثابت
+        # (سفیدشدن) ممنوع است.
         try:
             _g = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
             for _c in crops:
@@ -7946,6 +7955,15 @@ class MangaTranslator:
                 _m = (_cm > 0)
                 if int(_m.sum()) < 40:
                     continue
+                # ماسکِ بزرگ (بیش از ۲۵٪ کادر): انحرافِ گسترده «بافتِ
+                # پس‌زمینه» است نه شبحِ متن — نجات اعمال نشود تا AOT/LaMa
+                # سفید نشود
+                try:
+                    _mfrac = float(np.mean(_m.astype(np.float32)))
+                except Exception:
+                    _mfrac = 0.0
+                if _mfrac > 0.25:
+                    continue
                 _dil = cv2.dilate(_m.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
                 _ring = _dil & (~_m)
                 if not _ring.any():
@@ -7958,14 +7976,37 @@ class MangaTranslator:
                     continue
                 _med = float(np.median(_gs[_ring]))
                 _inside = _gs[_m].astype(np.float32)
-                _ghost = float(np.mean(np.abs(_inside - _med) > 16))
+                _devm = (np.abs(_inside - _med) > 16)
+                _ghost = float(np.mean(_devm))
                 if _ghost < 0.06:
                     continue
+                # اجزای متصلِ منحرف: فقط این‌ها «شبح»‌اند (مثل
+                # _scrub_ghost_residuals) — بافتِ گستردهٔ پس‌زمینه نه
+                _cand = cv2.morphologyEx(
+                    _devm.astype(np.uint8) * 255,
+                    cv2.MORPH_OPEN, np.ones((2, 2), np.uint8))
+                _n2, _lab2, _st2, _ = cv2.connectedComponentsWithStats(
+                    _cand, 8)
+                _cap = int(max(60, 0.30 * int(_m.sum())))
+                _lcap = int(0.55 * max(_sub.shape[0], _sub.shape[1]))
+                _fill = np.zeros_like(_cand)
+                for _ii in range(1, _n2):
+                    _ar = int(_st2[_ii, cv2.CC_STAT_AREA])
+                    if _ar < 24 or _ar > _cap:
+                        continue
+                    _bw = int(_st2[_ii, cv2.CC_STAT_WIDTH])
+                    _bh = int(_st2[_ii, cv2.CC_STAT_HEIGHT])
+                    if max(_bw, _bh) > _lcap:
+                        continue
+                    _fill[_lab2 == _ii] = 255
+                if int(np.count_nonzero(_fill)) < 24:
+                    continue
                 _color = np.median(_sub[_ring].astype(np.float32), axis=0)
-                # فقط خودِ ماسک حروف (+1px) — نه مستطیل کامل کادر
-                _fill_m = cv2.dilate(_m.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
+                _fill = cv2.dilate(_fill, np.ones((3, 3), np.uint8),
+                                   iterations=1) > 0
+                _fill[_m == 0] = 0
                 _sub2 = _sub.copy()
-                _sub2[_fill_m] = np.clip(np.rint(_color), 0, 255).astype(np.uint8)
+                _sub2[_fill] = np.clip(np.rint(_color), 0, 255).astype(np.uint8)
                 cleaned[_y0:_y1, _x0:_x1] = _sub2
         except Exception as _ve:
             print(f"  [!] residual rescue: {_ve}")
@@ -8011,9 +8052,32 @@ class MangaTranslator:
             return cleaned
         out = cleaned
         swept = 0
+        # نقشهٔ ناحیه → روشِ پرکردن: خوشه‌های مولد (AOT/LaMa) از جارو
+        # معاف‌اند — پرکردنِ مولد شبحِ حروفی باقی نمی‌گذارد و جارو بافتِ
+        # پس‌زمینهٔ پیچیده (ساختمان/هنر) را «جوهر» می‌پندارد و سفید می‌کند.
+        _gen_crops = []
+        try:
+            for _cc in (crops or []):
+                _me = str((_cc[6] if len(_cc) > 6 else "") or "")
+                if _me.startswith("AOT") or _me.startswith("LaMa"):
+                    _gen_crops.append((int(_cc[0]), int(_cc[1]),
+                                       int(_cc[2]), int(_cc[3])))
+        except Exception:
+            _gen_crops = []
+        def _in_gen_crop(_x, _y, _w, _h):
+            try:
+                _cx = _x + _w / 2.0; _cy = _y + _h / 2.0
+                for (_gx0, _gy0, _gx1, _gy1) in _gen_crops:
+                    if _gx0 <= _cx <= _gx1 and _gy0 <= _cy <= _gy1:
+                        return True
+            except Exception:
+                pass
+            return False
         for region in regions:
             try:
                 x, y, w, h = [int(v) for v in region.rect]
+                if _in_gen_crop(x, y, w, h):
+                    continue
                 pad = 18
                 x0, y0 = max(0, x - pad), max(0, y - pad)
                 x1 = min(out.shape[1], x + w + pad)
@@ -9030,6 +9094,17 @@ class MangaTranslator:
             lf = cv2.GaussianBlur(fillf, (0, 0), 7.0)
             trans = fillf - lf + guide.astype(np.float32)
             w_guide = 0.35 if textured else 0.90
+            # راهنما وقتی ماسک بزرگ است نامعتبر می‌شود (Telea از فاصلهٔ
+            # دور حدس می‌زند و معمولاً به سفیدِ هاله/آسمان میل می‌کند) —
+            # اعتماد به راهنما با بزرگ‌شدنِ ماسک کم می‌شود تا پرکردنِ
+            # مولد (AOT/LaMa) سفید نشود.
+            try:
+                _mfrac = float(np.mean(m.astype(np.float32)))
+                if _mfrac > 0.15:
+                    _rel = max(0.25, 1.0 - (_mfrac - 0.15) / 0.45)
+                    w_guide = w_guide * _rel
+            except Exception:
+                pass
             mixed = (1.0 - w_guide) * trans + w_guide * guide.astype(np.float32)
             alpha = cv2.GaussianBlur(
                 m.astype(np.float32), (0, 0), 2.5)
@@ -9052,6 +9127,11 @@ class MangaTranslator:
             h, w = m.shape[:2]
             mask_area = int(np.count_nonzero(m))
             if mask_area < 120:
+                return result
+            # ماسکِ بزرگ: راهنما (Telea از دور) نامعتبر است و «انحراف»
+            # یعنی بافتِ خودِ پس‌زمینه — بازرنگ با راهنمای سفید، کلِ ناحیه
+            # را سفید می‌کند. رد شو.
+            if float(mask_area) / float(max(1, h * w)) > 0.25:
                 return result
             dev = np.abs(result.astype(np.float32)
                          - guide.astype(np.float32)).max(axis=2)
