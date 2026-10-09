@@ -797,6 +797,29 @@ class LamaONNX:
         if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
         try:
+            _n, _lb, _st, _ = cv2.connectedComponentsWithStats(
+                original_mask.astype(np.uint8), connectivity=8)
+            _new_mask = np.zeros_like(original_mask)
+            for _i in range(1, _n):
+                _area = int(_st[_i, cv2.CC_STAT_AREA])
+                _comp = (_lb == _i)
+                if _area > 30000:
+                    _x = int(_st[_i, cv2.CC_STAT_LEFT])
+                    _y = int(_st[_i, cv2.CC_STAT_TOP])
+                    _w = int(_st[_i, cv2.CC_STAT_WIDTH])
+                    _h = int(_st[_i, cv2.CC_STAT_HEIGHT])
+                    _er = cv2.erode(_comp.astype(np.uint8),
+                                    np.ones((15, 15), np.uint8), iterations=2) > 0
+                    if int(_er.sum()) > 1000:
+                        _new_mask |= _er
+                    else:
+                        _new_mask |= _comp
+                else:
+                    _new_mask |= _comp
+            original_mask = _new_mask
+        except Exception:
+            pass
+        try:
             _gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
             _bg = cv2.medianBlur(_gray, 21)
             _dark = (_bg.astype(np.int16) - _gray.astype(np.int16) > 25) & original_mask
@@ -807,13 +830,14 @@ class LamaONNX:
         except Exception:
             pass
         try:
+            _mask_area = int(original_mask.sum())
             _ring_m = cv2.dilate(original_mask.astype(np.uint8),
                                  np.ones((31, 31), np.uint8), iterations=1) > 0
             _ring_m = _ring_m & (~original_mask)
             if np.any(_ring_m):
                 _ring_px = img_rgb[_ring_m]
                 _flat_std = float(_ring_px.std())
-                if _flat_std < 18:
+                if _flat_std < 18 or _mask_area > 30000:
                     _flat_col = np.median(_ring_px, axis=0).astype(np.uint8)
                     _res = img_rgb.copy()
                     _res[original_mask] = _flat_col
