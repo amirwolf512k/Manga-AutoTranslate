@@ -799,12 +799,11 @@ class LamaONNX:
         try:
             _gray = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2GRAY)
             _bg = cv2.medianBlur(_gray, 21)
-            _diff = cv2.absdiff(_gray, _bg)
-            _text_px = (_diff > 25) & original_mask
-            _text_px = cv2.dilate(_text_px.astype(np.uint8),
-                                  np.ones((3, 3), np.uint8), iterations=2) > 0
-            if int(_text_px.sum()) > 100:
-                original_mask = _text_px
+            _dark = (_bg.astype(np.int16) - _gray.astype(np.int16) > 25) & original_mask
+            _dark = cv2.dilate(_dark.astype(np.uint8),
+                               np.ones((3, 3), np.uint8), iterations=2) > 0
+            if int(_dark.sum()) > 100:
+                original_mask = _dark
         except Exception:
             pass
         orig_size = (img_rgb.shape[1], img_rgb.shape[0])
