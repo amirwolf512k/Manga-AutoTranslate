@@ -9313,9 +9313,13 @@ class MangaTranslator:
             try:
                 if why == "texture-flat" and guide is not None:
                     _fb = fill_img.copy()
-                    _mm = (msk > 0)
-                    _fb[_mm] = guide[_mm]
-                    print(f"    [!] لکهٔ پرکردن ({why}) → با رنگ پس‌زمینه جایگزین شد")
+                    _mm = (msk > 0).astype(np.uint8) * 255
+                    _er = cv2.erode(_mm, np.ones((9, 9), np.uint8))
+                    _edge = (_mm > 0) & (_er == 0)
+                    _fb[_mm > 0] = guide[_mm > 0]
+                    _blur = cv2.GaussianBlur(_fb, (7, 7), 0)
+                    _fb[_edge] = _blur[_edge]
+                    print(f"    [!] لکهٔ پرکردن ({why}) → با رنگ پس‌زمینه (لبه نرم) جایگزین شد")
                     return _fb, method + "+bgflat"
                 print(f"    [!] لکهٔ پرکردن ({why}) → ترمیم نشد؛ همان روش {method} نگه داشته شد")
             except Exception:
