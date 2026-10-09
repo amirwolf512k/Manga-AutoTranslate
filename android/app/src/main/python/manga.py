@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.13.0"
+APP_VER = "1.14.0"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -7847,7 +7847,7 @@ class MangaTranslator:
         except Exception as _hre:
             print(f"  [!] hard residual scrub: {_hre}")
 
-        # نجات متن عمودی: اگر هنوز شبح مانده، کل ناحیه با رنگ زمینه hard-fill
+        # نجات شبح: هر خوشهٔ پرشده که هنوز جوهر دارد → hard-fill ماسک (نه مستطیل)
         try:
             _g = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
             for _c in crops:
@@ -7856,33 +7856,34 @@ class MangaTranslator:
                 _x0, _y0, _x1, _y1, _cm = _c[0], _c[1], _c[2], _c[3], _c[4]
                 if _cm is None or not np.any(_cm):
                     continue
-                _bh = max(1, _y1 - _y0)
-                _bw = max(1, _x1 - _x0)
-                if _bh < 1.35 * _bw:
-                    continue  # فقط عمودی
                 _sub = cleaned[_y0:_y1, _x0:_x1]
                 _gs = _g[_y0:_y1, _x0:_x1]
                 _m = (_cm > 0)
-                if not _m.any():
+                if int(_m.sum()) < 40:
                     continue
-                _dil = cv2.dilate(_m.astype(np.uint8), np.ones((7, 7), np.uint8)) > 0
+                _dil = cv2.dilate(_m.astype(np.uint8), np.ones((9, 9), np.uint8)) > 0
                 _ring = _dil & (~_m)
-                # شبح؟ انحراف داخل ماسک نسبت به حلقه
+                if not _ring.any():
+                    # حلقه از حاشیهٔ کادر
+                    _border = np.zeros_like(_m)
+                    _border[:2, :] = True; _border[-2:, :] = True
+                    _border[:, :2] = True; _border[:, -2:] = True
+                    _ring = _border & (~_m)
                 if not _ring.any():
                     continue
                 _med = float(np.median(_gs[_ring]))
                 _inside = _gs[_m].astype(np.float32)
-                _ghost = float(np.mean(np.abs(_inside - _med) > 18))
-                if _ghost < 0.08:
+                _ghost = float(np.mean(np.abs(_inside - _med) > 16))
+                if _ghost < 0.06:
                     continue
-                # hard fill کل ماسک (+ کمی گشاد) با رنگ حلقه
                 _color = np.median(_sub[_ring].astype(np.float32), axis=0)
-                _fill_m = cv2.dilate(_m.astype(np.uint8), np.ones((5, 5), np.uint8)) > 0
+                # فقط خودِ ماسک حروف (+1px) — نه مستطیل کامل کادر
+                _fill_m = cv2.dilate(_m.astype(np.uint8), np.ones((3, 3), np.uint8)) > 0
                 _sub2 = _sub.copy()
                 _sub2[_fill_m] = np.clip(np.rint(_color), 0, 255).astype(np.uint8)
                 cleaned[_y0:_y1, _x0:_x1] = _sub2
         except Exception as _ve:
-            print(f"  [!] vertical rescue: {_ve}")
+            print(f"  [!] residual rescue: {_ve}")
 
         print(f"  - Cleanup: {counts}")
         # ---------- دیباگ: نقشهٔ روشِ هر خوشه + خروجی نهایی ----------
