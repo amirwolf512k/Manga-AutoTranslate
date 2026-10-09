@@ -853,13 +853,17 @@ class LamaMangaONNX:
     
     
     URL = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
+    INT8_URL = None  # set via env LAMA_INT8_URL or local file; 58MB quantized
     SIZE = 512
 
     def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
-                 threads: int = 4, cache_dir: Optional[str] = None):
+                 threads: int = 4, cache_dir: Optional[str] = None,
+                 use_int8: bool = False):
         self.prefer_gpu = bool(prefer_gpu)
+        self.use_int8 = bool(use_int8)
         if not model_path or not os.path.isfile(model_path):
-            model_path = self._download_model(cache_dir=cache_dir)
+            model_path = self._download_model(cache_dir=cache_dir,
+                                              use_int8=self.use_int8)
         self.model_path = model_path
         if not prefer_gpu:
             use_threads = max(1, min(8, os.cpu_count() or 4))
@@ -876,10 +880,27 @@ class LamaMangaONNX:
         )
 
     @classmethod
-    def _download_model(cls, cache_dir: Optional[str] = None) -> str:
+    def _download_model(cls, cache_dir: Optional[str] = None,
+                        use_int8: bool = False) -> str:
         from pathlib import Path
         cache_root = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "manga_translator_models"
         cache_root.mkdir(parents=True, exist_ok=True)
+        if use_int8:
+            # مدل کوانتایزشدهٔ int8 (۵۸MB) — سبک و سریع برای گوشی
+            dst = cache_root / "lama-manga-int8.onnx"
+            if dst.is_file() and dst.stat().st_size > 1_000_000:
+                print(f"[*] مدل LaMa-Manga int8 از کش: {dst}")
+                return str(dst)
+            int8_url = os.environ.get("LAMA_INT8_URL") or cls.INT8_URL
+            if int8_url:
+                print("[*] دانلود مدل LaMa-Manga int8 (~۵۸MB، فقط بار اول) ...")
+                try:
+                    _dl_to(int8_url, str(dst), name="lama-manga-int8.onnx")
+                    print(f"[+] مدل LaMa-Manga int8 ذخیره شد: {dst}")
+                    return str(dst)
+                except Exception as e:
+                    print(f"    [!] دانلود int8 نشد ({e}) → نسخهٔ fp32")
+            # fallback به fp32
         dst = cache_root / "lama-manga.onnx"
         if dst.is_file() and dst.stat().st_size > 1_000_000:
             print(f"[*] مدل LaMa-Manga از کش: {dst}")
@@ -2739,7 +2760,7 @@ class MangaTranslator:
     # روش‌های مجاز — «flat» (پرکردن ساده/بلوکی) کامل حذف شد (سیاستِ
     # صریحِ کاربر): هر پاکسازی با بازسازیِ طبیعیِ بافت انجام می‌شود
     # (LaMa / AOT-GAN / OpenCV) و هیچ مسیری مستطیل رسم نمی‌کند.
-    _CLEAN_METHODS = ("auto", "lama", "aot", "aot+lama", "opencv")
+    _CLEAN_METHODS = ("auto", "lama", "opencv")
 
     @classmethod
     def _normalize_clean_method(cls, value) -> str:
@@ -3210,23 +3231,17 @@ class MangaTranslator:
                 except Exception as e:
                     print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
-        if self.ocr is None and _on_android():
-            try:
-                self.ocr = MlKitBackend(lang=main_lang)
-                self._ocr_backend_name = "mlkit"
-            except Exception as e:
-                print(f"[!] ML Kit لود نشد ({e}) → RapidOCR")
-
         if self.ocr is None:
+            # اندروید و PC هر دو RapidOCR (یکسان برای استخراج کامل و یکدست)
+            # ML Kit حذف شد چون خروجی‌اش با PC فرق داشت
             try:
                 self.ocr = RapidOCRBackend(lang=main_lang)
                 self._ocr_backend_name = "rapidocr"
             except Exception as e:
-                print(f"[!] RapidOCR هم لود نشد ({e})", file=sys.stderr)
+                print(f"[!] RapidOCR لود نشد ({e})", file=sys.stderr)
                 raise ImportError(
                     "هیچ OCR در دسترس نیست.\n"
-                    "  پیشنهاد: pip install paddleocr\n"
-                    "  یا: pip install rapidocr  (یا rapidocr-onnxruntime)"
+                    "  پیشنهاد: pip install rapidocr  (یا rapidocr-onnxruntime)"
                 ) from e
 
         print(f"[*] موتور OCR فعال: {self._ocr_backend_name} | workers={self.max_workers}")
@@ -3287,20 +3302,8 @@ class MangaTranslator:
         return 0.0
 
     def _get_aot(self):
-        """بارگذاری تنبلِ AOT-GAN (پاکسازی yakuyomi) — None = در دسترس نیست."""
-        if self._aot is None and getattr(self, "use_aot", True) \
-                and not getattr(self, "_aot_failed", False):
-            try:
-                self._aot = AotOnnx(
-                    prefer_gpu=self.use_gpu,
-                    threads=max(1, int(getattr(self, "max_workers", 2) or 2)),
-                )
-                self._inpainter_name = "AOT-GAN"
-            except Exception as e:
-                self._aot_failed = True
-                print(f"[!] AOT-GAN بارگذاری نشد ({e}) → LaMa/OpenCV")
-                return None
-        return self._aot
+        """AOT-GAN حذف شده (درخواست کاربر) — همیشه None."""
+        return None
 
     def _get_lama(self):
         if self._lama is None and self.use_lama:
@@ -3345,16 +3348,17 @@ class MangaTranslator:
                       f"{cores} هستهٔ CPU → lama-lite (int8) روی CPU اجرا می‌شود "
                       f"(سبک، سریع و تمیزتر از OpenCV).")
             if _on_android() or _lite_mode() or getattr(self, "_lama_prefer_lite", False):
-                # اندروید و حالت کم‌مصرف (و --cpu) → همیشه lama-lite
-                # (int8، ۵۶MB، داینامیک، CPU)
+                # اندروید و حالت کم‌مصرف → lama-fp32 (بهترین کیفیت)
+                # نکته: نسخهٔ int8 کوانتایزشده خراب بود (خروجی سیاه) → از fp32 استفاده می‌شود
                 try:
-                    self._lama = LamaLiteONNX(
+                    self._lama = LamaMangaONNX(
                         prefer_gpu=self.use_gpu,
                         threads=max(1, int(getattr(self, "max_workers", 2) or 2)),
+                        use_int8=False,  # int8 خراب است؛ fp32
                     )
-                    self._inpainter_name = "lama-lite"
+                    self._inpainter_name = "lama-fp32"
                 except Exception as e0:
-                    print(f"    [!] lama-lite ناموفق ({e0}) → مسیر جایگزین")
+                    print(f"    [!] lama-fp32 ناموفق ({e0}) → مسیر جایگزین")
             if self._lama is None and self.use_lama and not _lite_mode():
                 if _torch_available():
                     try:
@@ -7064,25 +7068,18 @@ class MangaTranslator:
             except Exception:
                 _cuda, _vram = False, 0.0
             if _android or (_avail is not None and _avail < 2.0):
-                mode = "aot" if aot_ready else ("lama" if lama_ready else "opencv")
+                mode = "lama" if lama_ready else "opencv"
             elif _cuda and _vram >= getattr(self, "_LAMA_MIN_VRAM_GB", 3.5):
-                mode = "lama" if lama_ready else ("aot" if aot_ready else "opencv")
+                mode = "lama" if lama_ready else "opencv"
             else:
-                mode = "aot" if aot_ready else ("lama" if lama_ready else "opencv")
+                mode = "lama" if lama_ready else "opencv"
         elif mode == "lama" and not lama_ready:
-            if aot_ready:
-                print("  [!] LaMa در دسترس نیست → بازسازی با AOT-GAN (yakuyomi)")
-                mode = "aot"
-            else:
-                print("  [!] LaMa در دسترس نیست → بازسازی این خوشه‌ها با OpenCV")
-                mode = "opencv"
-        elif mode == "aot" and not aot_ready:
-            print("  [!] AOT-GAN در دسترس نیست → LaMa/OpenCV")
-            mode = "lama" if lama_ready else "opencv"
-        use_lama_now = (mode in ("lama", "aot+lama"))
-        use_aot_now = (mode in ("aot", "aot+lama"))
-        # aot+lama: اول AOT، بعد residual با LaMa-lite روی همان ماسک
-        _force_aot_then_lama = (mode == "aot+lama")
+            print("  [!] LaMa در دسترس نیست → بازسازی با OpenCV")
+            mode = "opencv"
+        use_lama_now = (mode == "lama")
+        use_aot_now = False
+        # aot+lama حذف شده
+        _force_aot_then_lama = False
         print(f"  [*] روش پاکسازی: {mode}"
               + (" (خودکار)" if mode_is_auto else ""))
 
@@ -12697,10 +12694,8 @@ class MangaTranslator:
             return cache[lang_key]
         eng = None
         try:
-            if _on_android():
-                eng = MlKitBackend(lang=lang_key)
-            else:
-                eng = RapidOCRBackend(lang=lang_key)
+            # RapidOCR روی همه پلتفرم‌ها (یکسان‌سازی اندروید و PC)
+            eng = RapidOCRBackend(lang=lang_key)
         except Exception as _e:
             print(f"    [!] موتور OCR جایگزین ({lang_key}) لود نشد: {_e}")
             eng = None
