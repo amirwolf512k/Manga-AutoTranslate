@@ -969,7 +969,24 @@ class LamaMangaONNX:
         o = (o * 255).astype(np.uint8)
         predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
         result = img_rgb.copy()
-        result[original_mask] = predicted[original_mask]
+        try:
+            _pm = original_mask
+            _pred_area = predicted[_pm]
+            if _pred_area.size > 0:
+                _mean = float(_pred_area.mean())
+                _std = float(_pred_area.std())
+                _orig_area = img_rgb[_pm]
+                _orig_std = float(_orig_area.std()) if _orig_area.size > 0 else 0
+                if _mean > 235 and _std < 12 and _orig_std > 18:
+                    _cv_mask = (_pm.astype(np.uint8)) * 255
+                    _cv_inpaint = cv2.inpaint(img_rgb, _cv_mask, 7, cv2.INPAINT_TELEA)
+                    result[_pm] = _cv_inpaint[_pm]
+                else:
+                    result[_pm] = predicted[_pm]
+            else:
+                result[_pm] = predicted[_pm]
+        except Exception:
+            result[original_mask] = predicted[original_mask]
         return Image.fromarray(result)
 
 
