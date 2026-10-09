@@ -959,13 +959,15 @@ class LamaMangaONNX:
         
         msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
         img_np[msk > 0] = 0
-        img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
+        img_in = (img_np.astype(np.float32) / 127.5 - 1.0).transpose(2, 0, 1)[None]
         mask_in = msk.astype(np.float32)[None, None]
         out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
 
         o = out[0].transpose(1, 2, 0).astype(np.float32)
         try:
-            if float(np.max(o)) > 1.5:
+            if float(np.min(o)) < -0.5:
+                o = (o + 1.0) / 2.0
+            elif float(np.max(o)) > 1.5:
                 o = o / 255.0
         except Exception:
             pass
