@@ -712,9 +712,9 @@ def run_cli_interactive():
     f = input("انتخاب [1-5] (پیش‌فرض 1): ").strip() or "1"
     ext = {"1": ".pdf", "2": ".zip", "3": ".html", "4": "", "5": ".psd"}.get(f, ".pdf")
 
-    print("\nروش پاکسازی:  1) خودکار  2) AOT+LaMa-lite  3) AOT-GAN  4) LaMa-lite  5) OpenCV")
+    print("\nروش پاکسازی:  1) خودکار  2) LaMa-fp32  3) OpenCV")
     cm = input("انتخاب [1-6] (پیش‌فرض 1): ").strip() or "1"
-    clean_m = {"1": "auto", "2": "aot+lama", "3": "aot", "4": "lama", "5": "opencv"}.get(cm, "auto")
+    clean_m = {"1": "auto", "2": "lama", "3": "opencv"}.get(cm, "auto")
 
     print("\nارائه‌دهندهٔ AI را انتخاب کنید:")
     prov_menu = [
@@ -1043,7 +1043,7 @@ def run_desktop():
     ttk.Label(row_cm, text="روش پاکسازی متن:").pack(side="right", padx=(0, 4))
     clean_var = tk.StringVar(value=str(cfg.get("clean_method", "auto") or "auto"))
     ttk.Combobox(row_cm, textvariable=clean_var, state="readonly", width=15,
-                 values=("auto", "aot+lama", "aot", "lama", "opencv")).pack(side="right")
+                 values=("auto", "lama", "opencv")).pack(side="right")
 
     
     card_ai = ttk.LabelFrame(tab_body, text=" حساب و مدل ", padding=12)
@@ -2685,9 +2685,7 @@ def run_web():
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
             clean_method = gr.Radio(
                 choices=[("خودکار (بر اساس رم/GPU)", "auto"),
-                         ("AOT + LaMa-lite", "aot+lama"),
-                         ("AOT-GAN", "aot"),
-                         ("LaMa-lite", "lama"),
+                         ("LaMa-fp32", "lama"),
                          ("OpenCV", "opencv")],
                 value=str(cfg.get("clean_method", "auto")) or "auto",
                 label="روش پاکسازی متن (حذف متن اصلی از تصویر)")
