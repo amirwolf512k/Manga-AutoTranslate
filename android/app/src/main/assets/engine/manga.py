@@ -806,6 +806,20 @@ class LamaONNX:
                 original_mask = _dark
         except Exception:
             pass
+        try:
+            _ring_m = cv2.dilate(original_mask.astype(np.uint8),
+                                 np.ones((31, 31), np.uint8), iterations=1) > 0
+            _ring_m = _ring_m & (~original_mask)
+            if np.any(_ring_m):
+                _ring_px = img_rgb[_ring_m]
+                _flat_std = float(_ring_px.std())
+                if _flat_std < 18:
+                    _flat_col = np.median(_ring_px, axis=0).astype(np.uint8)
+                    _res = img_rgb.copy()
+                    _res[original_mask] = _flat_col
+                    return Image.fromarray(_res)
+        except Exception:
+            pass
         orig_size = (img_rgb.shape[1], img_rgb.shape[0])
         run_size = self._pick_size(orig_size[0], orig_size[1])
         if not self.prefer_gpu and not getattr(self, "_fixed_size", False):
