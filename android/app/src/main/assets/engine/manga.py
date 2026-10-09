@@ -3009,6 +3009,13 @@ class MangaTranslator:
                 except Exception as e:
                     print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
+        if self.ocr is None and _on_android():
+            try:
+                self.ocr = MlKitBackend(lang=main_lang)
+                self._ocr_backend_name = "mlkit"
+            except Exception as e:
+                print(f"[!] ML Kit لود نشد ({e}) → RapidOCR")
+
         if self.ocr is None:
             try:
                 self.ocr = RapidOCRBackend(lang=main_lang)
@@ -11944,6 +11951,8 @@ class MangaTranslator:
         """زبان‌های OCR جایگزین برای بازخوانی متن‌های خرابِ مدل اصلی
         (مثلاً متن ژاپنی که با مدل کره‌ای خراب خوانده شده). فقط وقتی فعال
         که کاربر چند زبانِ متفاوت داده باشد."""
+        if _on_android() and getattr(self, "_ocr_backend_name", "") == "mlkit":
+            return []
         main = str(getattr(self, "_ocr_main_lang", "") or "")
         allow_en, allow_ko, allow_ja, allow_zh = self._ocr_lang_flags()
         keys = []
