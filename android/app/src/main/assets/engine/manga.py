@@ -937,6 +937,9 @@ class MiGANONNX:
                 if not np.any(_ring):
                     continue
                 _px = img_rgb[_ring].reshape(-1, 3).astype(np.float32)
+                _nw = _px[(_px.sum(axis=1) < 700)]
+                if len(_nw) > 100:
+                    _px = _nw
                 _med = np.median(_px, axis=0)
                 _std = float(_px.std())
                 _dist = np.sqrt(((_px - _med) ** 2).sum(axis=1))
@@ -1097,7 +1100,11 @@ class LamaMangaONNX:
             _dil = cv2.dilate(msk, np.ones((21, 21), np.uint8), iterations=1)
             _ring = (_dil > 0) & (msk == 0)
             if np.any(_ring):
-                _bg_col = np.median(img_np[_ring], axis=0)
+                _rpx = img_np[_ring].reshape(-1, 3).astype(np.float32)
+                _nw = _rpx[(_rpx.sum(axis=1) < 700)]
+                if len(_nw) > 100:
+                    _rpx = _nw
+                _bg_col = np.median(_rpx, axis=0)
                 img_np[msk > 0] = _bg_col.astype(np.uint8)
             else:
                 img_np[msk > 0] = 0
