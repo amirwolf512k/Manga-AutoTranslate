@@ -922,21 +922,47 @@ class MiGANONNX:
         if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
         try:
-            _ring_m = cv2.dilate(original_mask.astype(np.uint8),
-                                 np.ones((41, 41), np.uint8), iterations=1) > 0
-            _ring_m = _ring_m & (~original_mask)
-            if np.any(_ring_m):
-                _ring_px = img_rgb[_ring_m].reshape(-1, 3).astype(np.float32)
-                # Yakuyomi-style: if bg is uniform (bubble), flat-fill, never inpaint
-                _std = float(_ring_px.std())
-                # Also check if most pixels are similar (bubble interior)
-                _med = np.median(_ring_px, axis=0)
-                _dist = np.sqrt(((_ring_px - _med) ** 2).sum(axis=1))
-                _uniform_ratio = float((_dist < 30).sum()) / max(1, len(_dist))
-                if _std < 25 or _uniform_ratio > 0.85:
-                    _flat_col = _med.astype(np.uint8)
-                    _res = img_rgb.copy()
-                    _res[original_mask] = _flat_col
+            # Process each connected component separately for flat-fill
+            # (Yakuyomi-style: bubbles get flat-filled, never inpainted)
+            _n, _lbl, _stats, _ = cv2.connectedComponentsWithStats(
+                original_mask.astype(np.uint8), connectivity=8)
+            _flat_done = np.zeros_like(original_mask)
+            for _i in range(1, _n):
+                _comp = (_lbl == _i)
+                _ring = cv2.dilate(_comp.astype(np.uint8),
+                                   np.ones((41, 41), np.uint8), iterations=1) > 0
+                _ring = _ring & (~_comp)
+                # Exclude other mask components from ring
+                _ring = _ring & (~original_mask)
+                if not np.any(_ring):
+                    continue
+                _px = img_rgb[_ring].reshape(-1, 3).astype(np.float32)
+                _med = np.median(_px, axis=0)
+                _std = float(_px.std())
+                _dist = np.sqrt(((_px - _med) ** 2).sum(axis=1))
+                _uratio = float((_dist < 30).sum()) / max(1, len(_dist))
+                _colored = (abs(float(_med[0]) - float(_med[1])) > 20 or
+                            abs(float(_med[1]) - float(_med[2])) > 20 or
+                            abs(float(_med[0]) - float(_med[2])) > 20)
+                if _std < 25 or _uratio > 0.85 or _colored:
+                    _res_c = img_rgb.copy()
+                    # We'll collect flat fills and apply after
+                    _flat_done |= _comp
+                    # Store color per component (use dict)
+                    if not hasattr(self, '_flat_colors'):
+                        self._flat_colors = {}
+                    self._flat_colors[_i] = _med.astype(np.uint8)
+            if np.any(_flat_done):
+                _res = img_rgb.copy()
+                for _i, _col in getattr(self, '_flat_colors', {}).items():
+                    _res[(_lbl == _i)] = _col
+                # If ALL mask is flat-filled, return early
+                if not np.any(original_mask & (~_flat_done)):
+                    return Image.fromarray(_res)
+                # Otherwise, continue with MI-GAN for remaining, but start from flat-filled
+                img_rgb = _res
+                original_mask = original_mask & (~_flat_done)
+                if not np.any(original_mask):
                     return Image.fromarray(_res)
         except Exception:
             pass
