@@ -3284,7 +3284,6 @@ class MangaTranslator:
                         self._inpainter_name = "OpenCV"
         return self._lama
 
-    @staticmethod
     def _get_migan(self):
         if self._migan is None:
             try:
