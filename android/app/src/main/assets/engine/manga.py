@@ -923,12 +923,18 @@ class MiGANONNX:
             return Image.fromarray(img_rgb.copy())
         try:
             _ring_m = cv2.dilate(original_mask.astype(np.uint8),
-                                 np.ones((31, 31), np.uint8), iterations=1) > 0
+                                 np.ones((41, 41), np.uint8), iterations=1) > 0
             _ring_m = _ring_m & (~original_mask)
             if np.any(_ring_m):
-                _ring_px = img_rgb[_ring_m]
-                if float(_ring_px.std()) < 18:
-                    _flat_col = np.median(_ring_px, axis=0).astype(np.uint8)
+                _ring_px = img_rgb[_ring_m].reshape(-1, 3).astype(np.float32)
+                # Yakuyomi-style: if bg is uniform (bubble), flat-fill, never inpaint
+                _std = float(_ring_px.std())
+                # Also check if most pixels are similar (bubble interior)
+                _med = np.median(_ring_px, axis=0)
+                _dist = np.sqrt(((_ring_px - _med) ** 2).sum(axis=1))
+                _uniform_ratio = float((_dist < 30).sum()) / max(1, len(_dist))
+                if _std < 25 or _uniform_ratio > 0.85:
+                    _flat_col = _med.astype(np.uint8)
                     _res = img_rgb.copy()
                     _res[original_mask] = _flat_col
                     return Image.fromarray(_res)
