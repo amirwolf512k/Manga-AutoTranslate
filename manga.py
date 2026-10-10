@@ -883,6 +883,58 @@ class LamaONNX:
         return Image.fromarray(result)
 
 
+class MiGANONNX:
+
+
+    URL = "https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx"
+
+    def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
+                 threads: int = 4, cache_dir: Optional[str] = None):
+        self.prefer_gpu = bool(prefer_gpu)
+        if not model_path or not os.path.isfile(model_path):
+            model_path = self._download_model(cache_dir=cache_dir)
+        self.model_path = model_path
+        use_threads = max(1, min(8, os.cpu_count() or 4)) if not prefer_gpu else max(1, int(threads))
+        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
+        names = [i.name for i in self.session.get_inputs()]
+        self._in_image = names[0]
+        self._in_mask = names[1] if len(names) > 1 else "mask"
+        print(f"[+] MI-GAN ONNX ready | providers={self.session.get_providers()}")
+
+    def _download_model(self, cache_dir=None):
+        base = cache_dir or os.environ.get("MANGA_FILES_DIR") or os.path.join(os.path.expanduser("~"), ".cache", "manga")
+        os.makedirs(base, exist_ok=True)
+        dest = os.path.join(base, "migan_pipeline_v2.onnx")
+        if os.path.isfile(dest) and os.path.getsize(dest) > 1000000:
+            return dest
+        print("[*] Downloading MI-GAN model...")
+        import urllib.request
+        urllib.request.urlretrieve(self.URL, dest)
+        return dest
+
+    def __call__(self, img_rgb: np.ndarray, mask_u8: np.ndarray) -> Image.Image:
+        if img_rgb.ndim != 3 or img_rgb.shape[2] != 3:
+            raise ValueError("img_rgb must be HxWx3")
+        h, w = img_rgb.shape[:2]
+        if mask_u8.shape[:2] != (h, w):
+            raise ValueError("Image and mask dimensions must match")
+        if not np.any(mask_u8 > 0):
+            return Image.fromarray(img_rgb.copy())
+        # MI-GAN mask: 0=inpaint, 255=keep (inverted from LaMa)
+        migan_mask = np.where(mask_u8 > 0, 0, 255).astype(np.uint8)
+        img_in = np.ascontiguousarray(img_rgb.transpose(2, 0, 1)[None].astype(np.uint8))
+        mask_in = np.ascontiguousarray(migan_mask[None, None].astype(np.uint8))
+        out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})
+        res = out[0]
+        if res.ndim == 4:
+            res = res[0].transpose(1, 2, 0)
+        if res.dtype != np.uint8:
+            res = np.clip(res, 0, 255).astype(np.uint8)
+        if res.shape[:2] != (h, w):
+            res = cv2.resize(res, (w, h), interpolation=cv2.INTER_LINEAR)
+        return Image.fromarray(res)
+
+
 class LamaMangaONNX:
     
     
@@ -2614,7 +2666,7 @@ class MangaTranslator:
             pass
         return 8.0
 
-    _CLEAN_METHODS = ("auto", "lama", "opencv")
+    _CLEAN_METHODS = ("auto", "lama", "migan", "opencv")
 
     @classmethod
     def _normalize_clean_method(cls, value) -> str:
@@ -2891,6 +2943,7 @@ class MangaTranslator:
         if glossary_path and os.path.isfile(glossary_path):
             self._load_glossary_file(glossary_path)
         self._lama = None
+        self._migan = None
         self._aot = None
         self._aot_failed = False
         self._title_skip_patterns: List[str] = []
@@ -3232,6 +3285,22 @@ class MangaTranslator:
         return self._lama
 
     @staticmethod
+    def _get_migan(self):
+        if self._migan is None:
+            try:
+                mp = None
+                base = os.environ.get("MANGA_FILES_DIR")
+                if base:
+                    cand = os.path.join(base, "migan_pipeline_v2.onnx")
+                    if os.path.isfile(cand):
+                        mp = cand
+                self._migan = MiGANONNX(model_path=mp, prefer_gpu=False, threads=4)
+                self._inpainter_name = "MI-GAN"
+            except Exception as e:
+                print(f"[!] MI-GAN load failed: {e}")
+                self._migan = None
+        return self._migan
+
     def _cpu_core_count() -> int:
         try:
             n = os.cpu_count()
@@ -6751,6 +6820,21 @@ class MangaTranslator:
         elif mode == "lama" and not lama_ready:
             print("  [!] LaMa در دسترس نیست → بازسازی با OpenCV")
             mode = "opencv"
+        elif mode == "migan":
+            migan = self._get_migan()
+            if migan is not None:
+                print(f"  [*] روش پاکسازی: migan")
+                try:
+                    img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    result = migan(img_rgb, mask)
+                    cleaned = cv2.cvtColor(np.array(result), cv2.COLOR_RGB2BGR)
+                    counts = {"tone": 0, "LaMa": 0, "MI-GAN": 1, "OpenCV": 0, "AOT": 0}
+                    return cleaned, counts
+                except Exception as e:
+                    print(f"  [!] MI-GAN failed: {e} → OpenCV")
+                    mode = "opencv"
+            else:
+                mode = "opencv"
         use_lama_now = (mode == "lama")
         use_aot_now = False
         _force_aot_then_lama = False
