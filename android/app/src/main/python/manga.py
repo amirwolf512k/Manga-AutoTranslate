@@ -918,8 +918,22 @@ class MiGANONNX:
         h, w = img_rgb.shape[:2]
         if mask_u8.shape[:2] != (h, w):
             raise ValueError("Image and mask dimensions must match")
-        if not np.any(mask_u8 > 0):
+        original_mask = mask_u8 > 0
+        if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
+        try:
+            _ring_m = cv2.dilate(original_mask.astype(np.uint8),
+                                 np.ones((31, 31), np.uint8), iterations=1) > 0
+            _ring_m = _ring_m & (~original_mask)
+            if np.any(_ring_m):
+                _ring_px = img_rgb[_ring_m]
+                if float(_ring_px.std()) < 18:
+                    _flat_col = np.median(_ring_px, axis=0).astype(np.uint8)
+                    _res = img_rgb.copy()
+                    _res[original_mask] = _flat_col
+                    return Image.fromarray(_res)
+        except Exception:
+            pass
         # MI-GAN mask: 0=inpaint, 255=keep (inverted from LaMa)
         migan_mask = np.where(mask_u8 > 0, 0, 255).astype(np.uint8)
         img_in = np.ascontiguousarray(img_rgb.transpose(2, 0, 1)[None].astype(np.uint8))
