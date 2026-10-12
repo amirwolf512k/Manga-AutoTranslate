@@ -678,11 +678,15 @@ def _run(job):
                     tr.stitch_max_height = 4000
                 tr.batch_workers = _i("batchw", 3)
 
-                if bool(p.get("use_lama")):
-                    tr.use_lama = True
-                    _log(job, "🩹 پاک‌سازی LaMa-Manga فعال شد (تنظیمات) — بار اول "
-                              "مدل ~۱۹۸MB دانلود می‌شود؛ کندتر ولی تمیزتر از OpenCV."
-                              " اگر رم گوشی کم باشد خودکار به OpenCV برمی‌گردد.")
+                if "use_lama" in p:
+                    if bool(p.get("use_lama")):
+                        tr.use_lama = True
+                        _log(job, "🩹 پاک‌سازی LaMa-Manga فعال (تنظیمات) — بار اول "
+                                  "مدل ~۱۹۸MB دانلود می‌شود؛ پچ‌به‌پچ مثل K3 سریع "
+                                  "تمام می‌شود. رم کم → خودکار OpenCV.")
+                    else:
+                        tr.use_lama = False
+                        _log(job, "⚡ پاک‌سازی سریع OpenCV (LaMa از تنظیمات خاموش شد)")
                 if font_by_style:
                     tr.font_by_style = font_by_style
                     tr.style_fonts = True

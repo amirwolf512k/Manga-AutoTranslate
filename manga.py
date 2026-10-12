@@ -611,11 +611,13 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
 
 
 def _cpu_thread_fallback(session, model_path: str, use_threads: int):
-    
-    
+
+
     try:
         provs = list(session.get_providers())
-        cpu_n = max(1, min(8, os.cpu_count() or 4))
+        # 📱 اندروید: هسته‌های LITTLE با ۸ نخ فقط رقابت می‌سازند → سقف ۴
+        _cap = 4 if _on_android() else 8
+        cpu_n = max(1, min(_cap, os.cpu_count() or 4))
         if "CUDAExecutionProvider" not in provs and use_threads < cpu_n:
             print(f"    [*] اینپینت روی CPU است → threads: {use_threads} → {cpu_n}")
             return _make_ort_session(model_path, prefer_gpu=False, threads=cpu_n), cpu_n
@@ -776,8 +778,10 @@ class LamaMangaONNX:
         if not model_path or not os.path.isfile(model_path):
             model_path = self._download_model(cache_dir=cache_dir)
         self.model_path = model_path
+        # 📱 اندروید: سقف ۴ نخ (هسته‌های LITTLE به‌درد نمی‌خورند)
         if not prefer_gpu:
-            use_threads = max(1, min(8, os.cpu_count() or 4))
+            _cap = 4 if _on_android() else 8
+            use_threads = max(1, min(_cap, os.cpu_count() or 4))
         else:
             use_threads = max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
@@ -785,9 +789,25 @@ class LamaMangaONNX:
         names = [i.name for i in self.session.get_inputs()]
         self._in_image = names[0]
         self._in_mask = names[1] if len(names) > 1 else "mask"
+        # 🩹 الگوی K3 (CleanSinglePatchInMemory): اگر ورودی مدل داینامیک باشد،
+        # پچ‌های کوچک را در رزولوشن اصلی‌شان اجرا کن — بدون بزرگ‌نمایی به ۵۱۲
+        # (تا ~۴x سریع‌تر برای حباب‌های کوچک و کیفیت یکسان).
+        self._fixed_size = False
+        self._dyn_size = 512
+        try:
+            for inp in self.session.get_inputs():
+                dims = list(inp.shape)[-2:]
+                fixed = [d for d in dims if isinstance(d, int) and d > 0]
+                if len(fixed) == 2 and fixed[0] == fixed[1] and fixed[0] >= 64:
+                    self._fixed_size = True
+                    self._dyn_size = int(fixed[0])
+                    break
+        except Exception:
+            pass
         print(
             f"[+] LaMa-Manga ONNX آماده | providers={self.session.get_providers()} | "
-            f"threads={use_threads} | size={self.SIZE}"
+            f"threads={use_threads} | size={self.SIZE} | "
+            f"{'fixed' if self._fixed_size else 'dynamic (پچ در رزولوشن اصلی)'}"
         )
 
     @classmethod
@@ -843,19 +863,40 @@ class LamaMangaONNX:
         if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
         oh, ow = img_rgb.shape[:2]
-        s = self.SIZE
+        s = self._dyn_size if self._fixed_size else self.SIZE
+        _mx = max(ow, oh)
 
-        scale = s / max(ow, oh)
-        rw, rh = max(1, round(ow * scale)), max(1, round(oh * scale))
-        interp = cv2.INTER_AREA if max(ow, oh) > s else cv2.INTER_CUBIC
-        img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
-        
-        mask_interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_NEAREST_EXACT
-        msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
-                          interpolation=mask_interp) > 0).astype(np.uint8)
-        img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
-        
-        msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
+        if not self._fixed_size and _mx <= s:
+            # 🩹 الگوی K3 (CleanSinglePatchInMemory): پچ کوچک/متوسط → اجرا در
+            # رزولوشن اصلی (فقط pad به مضرب ۳۲) — بدون بزرگ‌نمایی به ۵۱۲.
+            _tgt = max(_mx, 128)
+            _sc = _tgt / _mx
+            if abs(_sc - 1.0) < 1e-6:
+                rw, rh = ow, oh
+                img_np = img_rgb.copy()
+                msk = original_mask.astype(np.uint8)
+            else:
+                rw, rh = max(1, round(ow * _sc)), max(1, round(oh * _sc))
+                img_np = cv2.resize(img_rgb, (rw, rh), interpolation=cv2.INTER_CUBIC)
+                msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
+                                  interpolation=cv2.INTER_NEAREST_EXACT) > 0).astype(np.uint8)
+            _pw, _ph = (-rw) % 32, (-rh) % 32
+            if _pw or _ph:
+                img_np = cv2.copyMakeBorder(img_np, 0, _ph, 0, _pw, cv2.BORDER_REFLECT)
+                msk = cv2.copyMakeBorder(msk, 0, _ph, 0, _pw,
+                                         cv2.BORDER_CONSTANT, value=0)
+        else:
+            scale = s / _mx
+            rw, rh = max(1, round(ow * scale)), max(1, round(oh * scale))
+            interp = cv2.INTER_AREA if _mx > s else cv2.INTER_CUBIC
+            img_np = cv2.resize(img_rgb, (rw, rh), interpolation=interp)
+
+            mask_interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_NEAREST_EXACT
+            msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
+                              interpolation=mask_interp) > 0).astype(np.uint8)
+            img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
+
+            msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
         img_np[msk > 0] = 0
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
         mask_in = msk.astype(np.float32)[None, None]
@@ -2322,12 +2363,18 @@ class MangaTranslator:
             return False
 
         if _on_android() and not force_lama:
-            # 📱 حالت سرعت (الگوی K3): پرکردن سریع OpenCV — بدون دانلود ۱۹۸MB و
-            # بدون استنتاج سنگین. برای LaMa: سوییچ «پاک‌سازی LaMa-Manga» را
-            # در تنظیمات روشن کن.
-            print("[📱] اندروید: پاک‌سازی سریع OpenCV (الگوی K3) — "
-                  "LaMa فقط با فعال‌کردن دستی سوییچ LaMa روشن می‌شود.")
-            return False
+            # 🩹 الگوی K3 (CleanSinglePatchInMemory): پاک‌سازی LaMa پچ‌به‌پچ
+            # پیش‌فرض است — مثل K3 مدل ~۱۹۸MB بار اول دانلود می‌شود ولی چون
+            # هر پچ فقط برشِ حباب/خوشهٔ متنی است (نه کل صفحه)، روی CPU هم
+            # سریع تمام می‌شود. خاموش‌کردن: MANGA_ANDROID_LAMA=0 یا سوییچ
+            # «پاک‌سازی LaMa» را در تنظیمات خاموش کن (جایگزین: OpenCV سریع).
+            if os.environ.get("MANGA_ANDROID_LAMA", "1") == "0":
+                print("[📱] اندروید: پاک‌سازی سریع OpenCV (MANGA_ANDROID_LAMA=0) — "
+                      "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
+                return False
+            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ (الگوی K3) — "
+                  "بار اول مدل ~۱۹۸MB دانلود می‌شود؛ پچ‌های کوچک = سرعت بالا.")
+            return True
 
         if force_gpu is True:
             print(f"[*] --gpu → big-LaMa فعال ({name or 'CUDA'}, {vram:.1f} GB).")
@@ -2774,6 +2821,16 @@ class MangaTranslator:
                 print(f"[*] رم گوشی: کل {total:.1f}GB / آزاد {avail:.1f}GB / "
                       f"{cores} هستهٔ CPU → LaMa-Manga روی CPU اجرا می‌شود "
                       f"(کندتر ولی تمیزتر از OpenCV).")
+            else:
+                # 🛡️ گارد رم بحرانی دسکتاپ/وب — حتی با اجبار کاربر:
+                # زیر ۱GB رم آزاد، بارگذاری LaMa می‌تواند پروسه را بکشد.
+                _av = self._available_ram_gb()
+                if _av and _av < 1.0:
+                    print(f"[!] رم آزاد خیلی کم است ({_av:.1f}GB) → پاک‌سازی "
+                          "OpenCV (بارگذاری LaMa حذف شد تا کرش نکند).")
+                    self.use_lama = False
+                    self._inpainter_name = "OpenCV"
+                    return None
             if _torch_available():
                 try:
                     print("    [*] بارگذاری big-lama.pt (TorchScript) ...")

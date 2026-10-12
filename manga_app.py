@@ -2877,8 +2877,8 @@ def run_web():
                 readord = gr.Radio(["rtl", "ltr"], value=str(cfg.get("reading_order", "rtl")),
                                    label="ترتیب خواندن حباب‌ها")
             with gr.Row():
-                use_lama = gr.Checkbox(label="اجبار LaMa-Manga (خالی = خودکار)",
-                                       value=False)
+                use_lama = gr.Checkbox(label="پاک‌سازی LaMa-Manga (پیش‌فرض روشن — خاموش = OpenCV سریع)",
+                                       value=True)
                 force_cpu = gr.Checkbox(label="اجبار CPU (خالی = GPU اگر بود)",
                                         value=False)
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
