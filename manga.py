@@ -1818,6 +1818,88 @@ class TextRegion:
     ocr_polys: List[np.ndarray] = field(default_factory=list)
 
 
+class BalloonToneClassifier:
+    TONES = (
+        "normal", "shout", "comedy_shout", "whisper",
+        "sun_thought", "thought", "free_text", "system",
+        "monster", "cry", "fear", "broadcast", "letter",
+        "narrator", "square_thought", "black",
+    )
+
+    def __init__(self):
+        pass
+
+    def classify(self, crop_bgr: np.ndarray) -> str:
+        try:
+            if crop_bgr is None or crop_bgr.size == 0:
+                return "normal"
+            h, w = crop_bgr.shape[:2]
+            if h < 10 or w < 10:
+                return "normal"
+            gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+            _, bw = cv2.threshold(gray, 0, 255,
+                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            n_fg = int((bw > 0).sum())
+            n_bg = bw.size - n_fg
+            if n_bg < bw.size * 0.02:
+                return "free_text"
+            inv = 255 - bw
+            cnts, _ = cv2.findContours(inv, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_SIMPLE)
+            if not cnts:
+                return "normal"
+            cnt = max(cnts, key=cv2.contourArea)
+            area = cv2.contourArea(cnt)
+            if area < 100:
+                return "normal"
+            peri = cv2.arcLength(cnt, True)
+            if peri < 1:
+                return "normal"
+            x, y, bw_, bh_ = cv2.boundingRect(cnt)
+            rect_area = float(bw_ * bh_)
+            rectangularity = area / rect_area if rect_area > 0 else 0
+            hull = cv2.convexHull(cnt)
+            hull_area = cv2.contourArea(hull)
+            solidity = area / hull_area if hull_area > 0 else 1.0
+            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+            n_vertices = len(approx)
+            defects = 0
+            try:
+                hull_idx = cv2.convexHull(cnt, returnPoints=False)
+                if hull_idx is not None and len(hull_idx) > 3:
+                    d = cv2.convexityDefects(cnt, hull_idx)
+                    if d is not None:
+                        for i in range(d.shape[0]):
+                            _, _, f, _ = d[i, 0]
+                            if f > 1500:
+                                defects += 1
+            except Exception:
+                pass
+            mean_val = float(np.mean(gray))
+            dark_ratio = float((gray < 80).mean())
+            if dark_ratio > 0.55 and mean_val < 100:
+                return "black"
+            if rectangularity > 0.88 and n_vertices <= 6 and solidity > 0.92:
+                if defects >= 3:
+                    return "square_thought"
+                return "narrator"
+            if n_vertices >= 12 and solidity < 0.82:
+                return "shout"
+            if defects >= 6 and solidity < 0.88:
+                return "thought"
+            if defects >= 3 and 0.82 <= solidity < 0.95:
+                return "sun_thought"
+            circularity = 4 * 3.14159 * area / (peri * peri)
+            if circularity > 0.75 and solidity > 0.93:
+                return "normal"
+            return "normal"
+        except Exception:
+            return "normal"
+
+    def classify_batch(self, crops):
+        return [self.classify(c) for c in crops]
+
+
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 PUNCTUATION_SET = set(string.punctuation + "؟«»٪٫،؛…")
 
@@ -5286,7 +5368,10 @@ class MangaTranslator:
             if allowed:
                 st = str(st).strip().lower().replace("-", "_").replace(" ", "_")
                 st = tone_aliases.get(st, st)
-                if st in allowed:
+                _visual = (getattr(region, "bubble_style", "") or "").strip()
+                if _visual and _visual != "normal":
+                    pass
+                elif st in allowed:
                     region.bubble_style = st
                 elif not (region.bubble_style or "").strip():
                     region.bubble_style = "normal"
@@ -7642,8 +7727,38 @@ class MangaTranslator:
             self._last_debug_image = None
         if not regions:
             return image
+        try:
+            self._classify_balloon_tones(image, regions)
+        except Exception:
+            pass
         final_image, _ = self.finish_page_phase(image, regions)
         return final_image
+
+    def _classify_balloon_tones(self, image: np.ndarray,
+                                regions: List[TextRegion]) -> None:
+        clf = getattr(self, "_tone_clf", None)
+        if clf is None:
+            clf = BalloonToneClassifier()
+            self._tone_clf = clf
+        h, w = image.shape[:2]
+        for r in regions:
+            try:
+                x0, y0, x1, y1 = r.rect
+                x0, y0 = max(0, int(x0)), max(0, int(y0))
+                x1, y1 = min(w, int(x1)), min(h, int(y1))
+                if x1 - x0 < 10 or y1 - y0 < 10:
+                    continue
+                pad = 8
+                px0 = max(0, x0 - pad)
+                py0 = max(0, y0 - pad)
+                px1 = min(w, x1 + pad)
+                py1 = min(h, y1 + pad)
+                crop = image[py0:py1, px0:px1]
+                tone = clf.classify(crop)
+                if tone and tone in BalloonToneClassifier.TONES:
+                    r.bubble_style = tone
+            except Exception:
+                continue
 
     @staticmethod
     def _is_mostly_blank(image: np.ndarray, std_thresh: float = 12.0, unique_thresh: int = 24) -> bool:
