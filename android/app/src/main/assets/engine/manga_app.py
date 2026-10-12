@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.0"
+APP_VER = "1.15.1"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -82,7 +82,7 @@ FONT_BUNDLES = [
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Regular.ttf",
     ]),
     ("shout",        "Lalezar-Fixed.ttf", "داد خشم", [
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
         "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
     ]),
@@ -294,7 +294,7 @@ def download_fonts(log=print) -> int:
     return n
 
 GITHUB_RAW_BASE = ("https://raw.githubusercontent.com/"
-                   "amirwolf5122/Manga-AutoTranslate/main/")
+                   "amirwolf512k/Manga-AutoTranslate/main/")
 UPDATE_FILES = ("manga.py", "manga_app.py")
 
 _MANGA_SHARED = None

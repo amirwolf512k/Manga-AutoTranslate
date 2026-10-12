@@ -1702,7 +1702,7 @@ class RTDetrV2ONNXDetector:
         return MangaTranslator._drop_contained_boxes(cleaned, contain_thresh=0.68)
 
 
-_RAPIDOCR_MIRROR = ("https://github.com/amirwolf5122/Manga-AutoTranslate/"
+_RAPIDOCR_MIRROR = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
                     "releases/download/models/")
 _RAPIDOCR_MS = ("https://www.modelscope.cn/models/RapidAI/RapidOCR/"
                 "resolve/v3.9.2/onnx")
@@ -2540,7 +2540,7 @@ FONT_BUNDLES = [
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazirmatn-Regular.ttf",
     ]),
     ("shout",        "Lalezar-Fixed.ttf", "داد خشم", [
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
         "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
     ]),
