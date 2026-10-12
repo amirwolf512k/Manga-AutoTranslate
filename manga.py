@@ -1885,7 +1885,29 @@ class BalloonToneClassifier:
                 return "narrator"
             if n_vertices >= 12 and solidity < 0.82:
                 return "shout"
-            if defects >= 4 and solidity < 0.90:
+            bumpiness = 0
+            try:
+                if len(cnt) > 20:
+                    pts = cnt[:, 0, :].astype(np.float32)
+                    n = len(pts)
+                    angs = []
+                    for i in range(0, n, max(1, n // 60)):
+                        p0 = pts[(i - 2) % n]
+                        p1 = pts[i]
+                        p2 = pts[(i + 2) % n]
+                        v1 = p1 - p0
+                        v2 = p2 - p1
+                        a1 = np.arctan2(v1[1], v1[0])
+                        a2 = np.arctan2(v2[1], v2[0])
+                        da = abs(a2 - a1)
+                        if da > np.pi:
+                            da = 2 * np.pi - da
+                        angs.append(da)
+                    if angs:
+                        bumpiness = sum(1 for a in angs if a > 0.5)
+            except Exception:
+                pass
+            if (defects >= 4 and solidity < 0.90) or (bumpiness >= 10 and solidity < 0.97):
                 return "thought"
             if defects >= 3 and 0.82 <= solidity < 0.95:
                 return "sun_thought"
