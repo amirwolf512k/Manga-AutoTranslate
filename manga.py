@@ -5472,7 +5472,7 @@ class MangaTranslator:
                 if not _HAS_GEMINI:
                     return False, "کتابخانه google-genai نصب نیست."
                 client = genai.Client(api_key=key)
-                m = (model or "").strip() or "gemini-2.0-flash"
+                m = (model or "").strip() or "gemini-3.8-flash"
                 resp = client.models.generate_content(
                     model=m, contents="Reply with: OK",
                     config=genai_types.GenerateContentConfig(

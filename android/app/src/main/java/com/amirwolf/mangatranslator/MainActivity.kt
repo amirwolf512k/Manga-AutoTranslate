@@ -687,6 +687,7 @@ class MainActivity : AppCompatActivity() {
                     val testLbl = TextView(this).apply {
                         setTextColor(MUT); textSize = 12f
                         setPadding(dp(2), dp(4), dp(2), dp(2))
+                        visibility = View.GONE
                     }
                     testBtn.setOnClickListener {
                         testLbl.text = "⏳ در حال تست..."
@@ -704,11 +705,15 @@ class MainActivity : AppCompatActivity() {
                                 runOnUiThread {
                                     testLbl.text = (if (ok) "✅ " else "❌ ") + msg
                                     testLbl.setTextColor(if (ok) Color.parseColor("#2e7d32") else Color.parseColor("#c62828"))
+                                    testLbl.visibility = View.VISIBLE
+                                    testLbl.postDelayed({ testLbl.visibility = View.GONE }, 60000)
                                 }
                             } catch (e: Exception) {
                                 runOnUiThread {
                                     testLbl.text = "❌ خطا: " + (e.message ?: e.toString())
                                     testLbl.setTextColor(Color.parseColor("#c62828"))
+                                    testLbl.visibility = View.VISIBLE
+                                    testLbl.postDelayed({ testLbl.visibility = View.GONE }, 60000)
                                 }
                             }
                         }.start()

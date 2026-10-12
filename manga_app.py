@@ -1018,7 +1018,7 @@ def run_desktop():
     test_key_btn_tk = ttk.Button(test_key_row, text="تست کلید")
     test_key_btn_tk.pack(side="right")
     test_key_lbl = ttk.Label(test_key_row, text="", foreground=C_MUT)
-    test_key_lbl.pack(side="right", padx=(0, 8))
+    # hidden by default, shown on test
 
     def _do_test_key_tk():
         try:
@@ -2500,7 +2500,8 @@ def run_web():
                 test_key_btn = gr.Button("تست کلید", scale=1, size="sm",
                                          elem_id="manga_test_key")
                 test_key_out = gr.Textbox(label="نتیجه تست", interactive=False,
-                                          scale=2, elem_id="manga_test_key_out")
+                                          scale=2, elem_id="manga_test_key_out",
+                                          visible=False)
                 model = gr.Textbox(label="مدل (خالی = پیش‌فرض)",
                                    value="",
                                    placeholder="gemini-3.8-flash", scale=2,
@@ -3493,9 +3494,10 @@ def run_web():
                 from manga import MangaTranslator
                 ok, msg = MangaTranslator.test_api_key(
                     provider_v, api_keys_v, model_v, api_base_v)
-                return ("✅ " if ok else "❌ ") + msg
+                return gr.update(value=("✅ " if ok else "❌ ") + msg,
+                                 visible=True)
             except Exception as e:
-                return f"❌ خطا: {e}"
+                return gr.update(value=f"❌ خطا: {e}", visible=True)
 
         def run_translation(sid, sid_box_v, inp_path_v, upload, provider_v, api_keys_v, model_v,
                             ocr_lang_v,
@@ -3731,11 +3733,22 @@ def run_web():
                      dl_btn_debug, btn_view_debug, debug_row, html_debug_state],
             concurrency_limit=8,
         )
+        _hide_test_js = """
+            () => {
+                setTimeout(() => {
+                    const el = document.getElementById('manga_test_key_out');
+                    if (el) {
+                        el.style.display = 'none';
+                    }
+                }, 60000);
+            }
+            """
         try:
             test_key_btn.click(
                 _do_test_key,
                 inputs=[provider, api_keys, model, api_base],
                 outputs=[test_key_out],
+                js=_hide_test_js,
             )
         except Exception:
             pass
