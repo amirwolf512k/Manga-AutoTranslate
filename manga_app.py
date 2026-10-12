@@ -2218,6 +2218,55 @@ footer { display: none !important; }
   border-radius: 12px !important;
   direction: rtl !important;
 }
+
+/* ---- چیپ وضعیت زندهٔ ترجمه (فاز/زمان/صفحه) ---- */
+#manga_status_chip {
+  display: none; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin: 2px 0 10px; padding: 9px 16px;
+  background: linear-gradient(180deg, #101014, #0a0a0c);
+  border: 1px solid var(--ink-line); border-radius: 999px;
+  width: fit-content; max-width: 100%;
+  color: var(--ink-text); font-size: .85rem; line-height: 1;
+  box-shadow: 0 4px 14px rgba(0,0,0,.4);
+  animation: rise .35s ease both;
+}
+#manga_status_chip b { color: var(--ink-text); font-weight: 700; }
+#manga_status_chip span { background: transparent !important; box-shadow: none !important; }
+.chip-sep { color: var(--ink-dim) !important; opacity: .55; }
+.chip-dot {
+  width: 9px; height: 9px; border-radius: 50%; flex: none;
+}
+.chip-dot.run  { background: #ffb02e; box-shadow: 0 0 8px #ffb02e; animation: chipPulse 1.15s ease-in-out infinite; }
+.chip-dot.ok   { background: #38c98a; box-shadow: 0 0 8px #38c98a; }
+.chip-dot.err  { background: var(--ink-red); box-shadow: 0 0 8px var(--ink-red); }
+.chip-dot.idle { background: var(--ink-dim); }
+@keyframes chipPulse { 50% { opacity: .3; } }
+
+/* ---- دکمه‌های ابزار لاگ (کپی/پاک‌کردن) ---- */
+.log-tools { display: flex; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
+.log-tool-btn {
+  background: #121216; color: var(--ink-dim);
+  border: 1px solid var(--ink-line); border-radius: 999px;
+  padding: 7px 16px; font-size: .78rem; cursor: pointer;
+  font-family: inherit; min-height: 34px;
+  transition: color .18s, border-color .18s, transform .18s;
+}
+.log-tool-btn:hover { color: var(--ink-red); border-color: var(--ink-red); transform: translateY(-1px); }
+.log-tool-btn:active { transform: translateY(0); }
+
+/* ---- موبایل: لمس راحت‌تر و چیدمان فشرده‌تر ---- */
+@media (max-width: 620px) {
+  .gradio-container { max-width: 100% !important; }
+  .stepcard { padding: 14px 12px 12px !important; border-radius: 14px !important; }
+  .nav { padding: 14px 12px !important; }
+  .nav-brand { font-size: 1.12rem !important; white-space: normal !important; }
+  #runbtn, #manga_test_key { min-height: 56px !important; font-size: 1.04rem !important; }
+  .stepcard button { min-height: 44px !important; }
+  #manga_live_log textarea { font-size: 10.5px !important; max-height: 34vh !important; }
+  #manga_status_chip { font-size: .78rem; padding: 8px 13px; }
+  .credit { gap: 8px; }
+  .credit a { padding: 8px 13px; }
+}
 """
 
 
@@ -2305,6 +2354,104 @@ def _dark_js_src() -> str:
       if (document.visibilityState === 'visible' && isRunning()) req();
     });
   } catch (e) {}
+  // ---- چیپ وضعیت زنده (فاز + زمان + صفحه‌ها) ----
+  window.__mangaUpdateChip = (logText, btnLabel) => {
+    try {
+      const el = document.getElementById('manga_status_chip');
+      if (!el) return;
+      const log = (logText || '').toString();
+      const t = (btnLabel || '').toString();
+      const running = (t.indexOf('متوقف') >= 0 || t.indexOf('⏹') >= 0);
+      const done = (log.indexOf('✅') >= 0 || log.indexOf('تمام شد') >= 0);
+      const err = (log.indexOf('❌') >= 0 || log.indexOf('خطا — کد خروج') >= 0);
+      if (!running && !done && !err &&
+          (!log || log.indexOf('— لاگ بعد') === 0)) {
+        el.style.display = 'none';
+        el.innerHTML = '';
+        return;
+      }
+      let phase = 'شروع';
+      const ph = [
+        [/\\[فاز ۱/, 'فاز ۱ — تشخیص حباب + OCR'],
+        [/\\[فاز ۲/, 'فاز ۲ — ترجمه'],
+        [/\\[فاز ۳/, 'فاز ۳ — ترجمهٔ بافر'],
+        [/\\[فاز ۴/, 'فاز ۴ — پاکسازی + رندر'],
+      ];
+      for (const p of ph) {
+        if (log.lastIndexOf(p[0]) >= 0) phase = p[1];
+      }
+      if (log.indexOf('ذخیرهٔ نهایی') >= 0) phase = 'ذخیرهٔ نهایی';
+      const tm = log.match(/⏱\\s*([0-9]+:[0-9]{2})/);
+      const time = tm ? tm[1] : '';
+      const pages = (log.match(/شروع عملیات جدید/g) || []).length;
+      let state = running ? 'run' : (err ? 'err' : (done ? 'ok' : 'idle'));
+      const stateTxt = running ? 'در حال اجرا' : (err ? 'خطا' : (done ? 'تمام شد' : 'آماده'));
+      let html = '<span class="chip-dot ' + state + '"></span>' +
+        '<b>' + stateTxt + '</b>';
+      if (time) html += '<span class="chip-sep">•</span><span>⏱ ' + time + '</span>';
+      html += '<span class="chip-sep">•</span><span>' + phase + '</span>';
+      if (pages > 0) html += '<span class="chip-sep">•</span><span>📄 ' + pages + ' صفحه</span>';
+      el.innerHTML = html;
+      el.style.display = 'flex';
+    } catch (e) {}
+  };
+  try { window.__mangaUpdateChip('', ''); } catch (e) {}
+  // ---- دکمه‌های کپی/پاک‌کردن لاگ ----
+  try {
+    const copyBtn = document.getElementById('manga_copy_log');
+    if (copyBtn && !copyBtn._bound) {
+      copyBtn._bound = true;
+      copyBtn.addEventListener('click', () => {
+        const ta = document.querySelector('#manga_live_log textarea');
+        const txt = ta ? ta.value : '';
+        const ok = () => {
+          const old = copyBtn.textContent;
+          copyBtn.textContent = '✔ کپی شد';
+          setTimeout(() => { copyBtn.textContent = old; }, 1400);
+        };
+        const fallback = () => {
+          let tmp = null;
+          try {
+            tmp = document.createElement('textarea');
+            tmp.value = txt;
+            tmp.style.position = 'fixed';
+            tmp.style.opacity = '0';
+            document.body.appendChild(tmp);
+            tmp.focus();
+            tmp.select();
+            document.execCommand('copy');
+            tmp.remove();
+            tmp = null;
+          } catch (e) {
+            if (tmp) { try { tmp.remove(); } catch (e2) {} }
+          }
+          ok();
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(txt).then(ok).catch(fallback);
+        } else {
+          fallback();
+        }
+      });
+    }
+    const clearBtn = document.getElementById('manga_clear_log');
+    if (clearBtn && !clearBtn._bound) {
+      clearBtn._bound = true;
+      clearBtn.addEventListener('click', () => {
+        const ta = document.querySelector('#manga_live_log textarea');
+        if (!ta) return;
+        try {
+          const setter = Object.getOwnPropertyDescriptor(
+            HTMLTextAreaElement.prototype, 'value').set;
+          setter.call(ta, '— لاگ بعد از شروع ترجمه اینجا می‌آید —');
+          ta.dispatchEvent(new Event('input', { bubbles: true }));
+          ta.dispatchEvent(new Event('change', { bubbles: true }));
+        } catch (e) {}
+        const chip = document.getElementById('manga_status_chip');
+        if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
+      });
+    }
+  } catch (e) {}
   return [];
 }
 """
@@ -2337,6 +2484,15 @@ def run_web():
     def natural_key(s):
         return [int(t) if t.isdigit() else t.lower()
                 for t in re.split(r"(\d+)", s)]
+
+    def _dl_label(path: str) -> str:
+        """برچسب دکمهٔ دانلود با حجم فایل."""
+        try:
+            if path and os.path.isfile(path):
+                return f"⬇ دانلود ({human_size(os.path.getsize(path))})"
+        except Exception:
+            pass
+        return "⬇ دانلود"
 
 
 
@@ -3213,6 +3369,15 @@ def run_web():
         run_btn = gr.Button("🚀  شروع ترجمه", variant="primary", elem_id="runbtn")
 
         with gr.Accordion("📡 لاگ زنده", open=True):
+            gr.HTML(
+                """
+<div id="manga_status_chip"></div>
+<div class="log-tools">
+  <button type="button" class="log-tool-btn" id="manga_copy_log" title="کپی متن لاگ">📋 کپی لاگ</button>
+  <button type="button" class="log-tool-btn" id="manga_clear_log" title="پاک کردن کادر لاگ">🧹 پاک کردن</button>
+</div>
+"""
+            )
             log_box = _safe(gr.Textbox, lines=16, max_lines=50, autoscroll=True,
                             show_label=False, interactive=True,
                             elem_id="manga_live_log",
@@ -3298,6 +3463,7 @@ def run_web():
         
         save_job_js = f"""
 (sid, sidBox, btnLabel, logText) => {{
+  try {{ if (window.__mangaUpdateChip) window.__mangaUpdateChip(logText, btnLabel); }} catch (e) {{}}
   try {{
     const JOB = "{JOB_KEY}";
     let prev = {{}};
@@ -4066,7 +4232,7 @@ def run_web():
                 gr.update(value=sid),
                 gr.update(value=btn),
                 gr.update(value=log),
-                gr.update(value=dl, visible=vis) if vis else gr.update(),
+                gr.update(value=dl, label=_dl_label(dl), visible=vis) if vis else gr.update(),
                 gr.update(visible=vis),
                 gr.update(visible=vis),
                 gr.update(visible=False),
@@ -4166,7 +4332,7 @@ def run_web():
                     gr.update(value=sid),
                     gr.update(value=btn),
                     gr.update(value=log),
-                    gr.update(value=dl, visible=vis) if vis else gr.update(),
+                    gr.update(value=dl, label=_dl_label(dl), visible=vis) if vis else gr.update(),
                     gr.update(visible=vis),
                     gr.update(visible=vis),
                     gr.update(visible=False),
@@ -4217,6 +4383,12 @@ def run_web():
                 
                 running = _job_running(job)
                 log = job.get("log") or ""
+                # لاگ فقط وقتی از نظر سرور تغییر کرده به مرورگر فرستاده می‌شود —
+                # وگرنه هر ثانیه لاگ قدیمی روی تعامل تازهٔ کاربر بازنویسی می‌شد.
+                _last_pushed = job.get("_last_poll_log")
+                log_changed = bool(log) and log != _last_pushed
+                if log_changed:
+                    job["_last_poll_log"] = log
                 vis = bool(job.get("result_visible"))
                 dl = job.get("download_path")
                 dl_dbg = job.get("download_debug")
@@ -4240,8 +4412,8 @@ def run_web():
                 gr.update(value=sid),
                 gr.update(value=sid),
                 gr.update(value=btn),
-                gr.update(value=log) if log else gr.update(),
-                gr.update(value=dl, visible=vis) if vis else gr.update(),
+                gr.update(value=log) if (log and log_changed) else gr.update(),
+                gr.update(value=dl, label=_dl_label(dl), visible=vis) if vis else gr.update(),
                 gr.update(visible=vis),
                 gr.update(visible=vis),
                 gr.update(),
