@@ -1467,16 +1467,28 @@ class RapidOCRBackend:
                     _ensure_rapidocr_models(_mdir)
                 except Exception as _e:
                     print(f"[!] پیش‌دانلود مدل‌ها ناموفق: {_e}")
+            try:
+                import os as _os2
+                _cpu_n = _os2.cpu_count() or 4
+            except Exception:
+                _cpu_n = 4
+            _threads = {
+                "EngineConfig.onnxruntime.intra_op_num_threads": int(_cpu_n),
+                "EngineConfig.onnxruntime.inter_op_num_threads": 1,
+            }
             if _rec_params is not None:
                 _p = dict(_rec_params)
                 _p.update(_base)
+                _p.update(_threads)
                 self.engine = NewRapidOCR(params=_p)
                 self._new_api = True
-                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang}")
+                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_cpu_n}")
                 return
-            self.engine = NewRapidOCR(params=_base)
+            _pb = dict(_base)
+            _pb.update(_threads)
+            self.engine = NewRapidOCR(params=_pb)
             self._new_api = True
-            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang}")
+            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_cpu_n}")
             return
         except Exception as e:
             import traceback as _tb
