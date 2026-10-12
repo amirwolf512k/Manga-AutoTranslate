@@ -2497,15 +2497,16 @@ def run_web():
                                       type="password", scale=3,
                                       elem_id="manga_api_keys",
                                       info="کلید فقط در localStorage مرورگر شما می‌ماند — نه روی سرور و نه در config دسکتاپ.")
-                test_key_btn = gr.Button("تست کلید", scale=1, size="sm",
+                test_key_btn = gr.Button("تست کلید", scale=0, size="sm",
+                                         min_width=90,
                                          elem_id="manga_test_key")
-                test_key_out = gr.Textbox(label="نتیجه تست", interactive=False,
-                                          scale=2, elem_id="manga_test_key_out",
-                                          visible=False)
                 model = gr.Textbox(label="مدل (خالی = پیش‌فرض)",
                                    value="",
                                    placeholder="gemini-3.8-flash", scale=2,
                                    elem_id="manga_model")
+            test_key_out = gr.Textbox(label="نتیجه تست", interactive=False,
+                                          elem_id="manga_test_key_out",
+                                          visible=False)
             api_base = gr.Textbox(label="دامنهٔ API سفارشی (فقط برای provider «custom»)",
                                   value=str(cfg.get("api_base", "") or ""),
                                   placeholder="https://your-server.example.com/v1",
