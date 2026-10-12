@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.2"
+APP_VER = "1.14.3"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -4909,6 +4909,119 @@ class MangaTranslator:
         except Exception:
             return None
 
+    @staticmethod
+    def _group_nearby_patches(pending: List[list], gap: int = 24,
+                              max_members: int = 6) -> List[List[list]]:
+        # 🇰3 GroupNearby: خوشه‌های نزدیک (فاصله ≤ gap) یک پچ LaMa می‌شوند —
+        # هر فراخوانی LaMa سربار ثابت دارد؛ ادغام حباب‌های چسبیده سرعت را
+        # چند برابر می‌کند. member = [cx0, cy0, cx1, cy1, msk, result, method]
+        n = len(pending)
+        if n < 2:
+            return [list(pending)] if pending else []
+        rects = [[c[0] - gap, c[1] - gap, c[2] + gap, c[3] + gap]
+                 for c in pending]
+        parent = list(range(n))
+
+        def _find(i: int) -> int:
+            while parent[i] != i:
+                parent[i] = parent[parent[i]]
+                i = parent[i]
+            return i
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = rects[i], rects[j]
+                if a[0] < b[2] and a[2] > b[0] and a[1] < b[3] and a[3] > b[1]:
+                    ri, rj = _find(i), _find(j)
+                    if ri != rj:
+                        parent[rj] = ri
+        buckets: Dict[int, List[int]] = {}
+        for i in range(n):
+            buckets.setdefault(_find(i), []).append(i)
+        out: List[List[list]] = []
+        for idxs in buckets.values():
+            for k in range(0, len(idxs), max_members):
+                out.append([pending[i] for i in idxs[k:k + max_members]])
+        return out
+
+    def _lama_run_group(self, image: np.ndarray, members: List[list],
+                        lama, page_kernel) -> None:
+        # 🇰3 FastRepair: پدینگ ۱۵٪ باکس (حداقل ۱۲/حداکثر ۴۸px)، حداقل ۹۶px،
+        # اجرای LaMa فقط روی همین پچ کوچک و برگرداندن نتیجه به جای اصلی.
+        img_h, img_w = image.shape[:2]
+        gx0 = min(c[0] for c in members)
+        gy0 = min(c[1] for c in members)
+        gx1 = max(c[2] for c in members)
+        gy1 = max(c[3] for c in members)
+        bw = max(1, gx1 - gx0)
+        bh = max(1, gy1 - gy0)
+        pad_x = int(np.clip(round(bw * 0.15), 12, 48))
+        pad_y = int(np.clip(round(bh * 0.15), 12, 48))
+        ex0 = max(0, gx0 - pad_x)
+        ey0 = max(0, gy0 - pad_y)
+        ex1 = min(img_w, gx1 + pad_x)
+        ey1 = min(img_h, gy1 + pad_y)
+        # حداقل ۹۶px — گسترش متقارن مثل K3
+        if ex1 - ex0 < 96:
+            d = 96 - (ex1 - ex0)
+            ex0 = max(0, ex0 - d // 2)
+            ex1 = min(img_w, max(96, ex0 + 96))
+        if ey1 - ey0 < 96:
+            d = 96 - (ey1 - ey0)
+            ey0 = max(0, ey0 - d // 2)
+            ey1 = min(img_h, max(96, ey0 + 96))
+        if ex1 - ex0 < 32 or ey1 - ey0 < 32:
+            return
+        sub_img = image[ey0:ey1, ex0:ex1]
+        sub_msk = np.zeros(sub_img.shape[:2], dtype=np.uint8)
+        for c in members:
+            cx0, cy0, cx1, cy1, crop_msk = c[:5]
+            cx1, cy1 = min(cx1, img_w), min(cy1, img_h)
+            if cx1 <= cx0 or cy1 <= cy0:
+                continue
+            dm = cv2.dilate(crop_msk, page_kernel)
+            region = sub_msk[cy0 - ey0:cy1 - ey0, cx0 - ex0:cx1 - ex0]
+            sub_msk[cy0 - ey0:cy1 - ey0, cx0 - ex0:cx1 - ex0] = \
+                np.maximum(region, dm)
+        if not sub_msk.any():
+            return
+        out = lama(sub_img, sub_msk)
+        sub_bgr = out if isinstance(out, np.ndarray) else np.array(out)
+        if sub_bgr.ndim == 2:
+            sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_GRAY2BGR)
+        else:
+            sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
+        if sub_bgr.shape[:2] != sub_img.shape[:2]:
+            return
+        # QC حلقه‌ای (ضد لکهٔ تیره) — یک بار برای کل پچ
+        try:
+            _qc = getattr(self, "_qc_kernel31", None)
+            if _qc is None:
+                _qc = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+                self._qc_kernel31 = _qc
+            _fm = sub_msk > 0
+            _ring = (cv2.dilate(sub_msk, _qc) > 0) & (~_fm)
+            if _fm.any() and _ring.any():
+                _g = cv2.cvtColor(sub_bgr, cv2.COLOR_BGR2GRAY)
+                _bg_px = _g[_ring]
+                _bright = _bg_px[_bg_px >= 160.0]
+                if (_bright.size >= max(50, int(0.02 * _bg_px.size))
+                        and _bright.size >= 0.55 * _bg_px.size):
+                    _bg_med = float(np.median(_bright))
+                    _fill_med = float(np.median(_g[_fm]))
+                    if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
+                        return
+        except Exception:
+            pass
+        for c in members:
+            cx0, cy0, cx1, cy1, crop_msk = c[:5]
+            cx1, cy1 = min(cx1, img_w), min(cy1, img_h)
+            if cx1 <= cx0 or cy1 <= cy0:
+                continue
+            c[4] = cv2.dilate(crop_msk, page_kernel)
+            c[5] = sub_bgr[cy0 - ey0:cy1 - ey0, cx0 - ex0:cx1 - ex0]
+            c[6] = "LaMa"
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
@@ -4923,7 +5036,18 @@ class MangaTranslator:
         cleaned = image.copy()
         counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
-        page_wall = self._wall_lines(image)
+        # 🇰3 بهینه: Canny/وال‌لاین کل‌صفحه فقط وقتی OpenCV واقعاً لازم شد
+        _wall_cache = {"tried": False, "val": None}
+
+        def _page_wall():
+            if not _wall_cache["tried"]:
+                _wall_cache["tried"] = True
+                try:
+                    _wall_cache["val"] = self._wall_lines(image)
+                except Exception:
+                    _wall_cache["val"] = None
+            return _wall_cache["val"]
+
         crops = []
         _raise_if_stop()  # ⏹ لغو فوری — شروع پاکسازی
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
@@ -4944,72 +5068,38 @@ class MangaTranslator:
         if pending and getattr(self, "use_lama", False):
             lama = self._get_lama()
             if lama is not None:
-                _qc_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+                _qc_kernel = getattr(self, "_qc_kernel31", None)
+                if _qc_kernel is None:
+                    _qc_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+                    self._qc_kernel31 = _qc_kernel
                 _img_h, _img_w = image.shape[:2]
-                # 🇰3 الگوی K3 (CleanSinglePatchInMemory): LaMa همیشه پچ‌به‌پچ
-                # روی برشِ هر خوشه در رزولوشن اصلی اجرا می‌شود — کیفیت خیلی
-                # بهتر از کل‌صفحهٔ downscale‌شده به ۵۱۲px و کاملاً قابل لغو.
-                # بازگشت به مسیر قدیمی کل‌صفحه: MANGA_LAMA_FULLPAGE=1
+                # 🇰3 الگوی K3 (CleanSinglePatchInMemory + GroupNearby): LaMa
+                # پچ‌به‌پچ — خوشه‌های نزدیک در «یک پچ» ادغام می‌شوند تا تعداد
+                # فراخوانی‌های سنگین کم شود (دقیقاً مثل FastRepair رقیب).
                 _extreme = os.environ.get("MANGA_LAMA_FULLPAGE", "0") != "1"
                 _long = float(max(_img_h, _img_w))
                 _short = float(max(1.0, min(_img_h, _img_w)))
                 if _extreme:
                     _mode = "پچ‌به‌پچ (الگوی K3)"
+                    groups = pending
+                    if os.environ.get("MANGA_LAMA_GROUP", "1") != "0" and len(pending) > 1:
+                        groups = self._group_nearby_patches(pending, gap=24)
                     if _short * 2.5 < _long:
                         _mode += " — صفحهٔ کشیده"
-                    print(f"  [*] LaMa {_mode}: {len(pending)} خوشه "
-                          f"روی صفحهٔ {_img_w}x{_img_h}")
+                    print(f"  [*] LaMa {_mode}: {len(pending)} خوشه → "
+                          f"{len(groups)} پچ روی صفحهٔ {_img_w}x{_img_h}")
                     t0 = time.time()
-                    _pad = 32
-                    for c in pending:
-                        _raise_if_stop()  # ⏹ لغو فوری بین خوشه‌های LaMa
-                        cx0, cy0, cx1, cy1, crop_msk = c[:5]
+                    for grp in groups:
+                        _raise_if_stop()  # ⏹ لغو فوری بین پچ‌های LaMa
                         try:
-                            ex0, ey0 = max(0, cx0 - _pad), max(0, cy0 - _pad)
-                            ex1 = min(_img_w, cx1 + _pad)
-                            ey1 = min(_img_h, cy1 + _pad)
-                            if ex1 - ex0 < 16 or ey1 - ey0 < 16:
-                                continue
-                            sub_img = image[ey0:ey1, ex0:ex1]
-                            sub_msk = np.zeros(sub_img.shape[:2], dtype=np.uint8)
-                            sub_msk[cy0 - ey0:cy1 - ey0,
-                                    cx0 - ex0:cx1 - ex0] = \
-                                cv2.dilate(crop_msk, page_kernel)
-                            out = lama(sub_img, sub_msk)
-                            sub_bgr = out if isinstance(out, np.ndarray) \
-                                else np.array(out)
-                            if sub_bgr.ndim == 2:
-                                sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_GRAY2BGR)
-                            else:
-                                sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
-                            if sub_bgr.shape[:2] != sub_img.shape[:2]:
-                                continue
-                            result = sub_bgr[cy0 - ey0:cy1 - ey0,
-                                             cx0 - ex0:cx1 - ex0]
-                            try:
-                                _fm = (cv2.dilate(crop_msk, page_kernel) > 0)
-                                _ring_m = (cv2.dilate(crop_msk, _qc_kernel) > 0) & (~_fm)
-                                if _fm.any() and _ring_m.any():
-                                    _g = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-                                    _bg_px = _g[_ring_m]
-                                    _bright = _bg_px[_bg_px >= 160.0]
-                                    if _bright.size >= max(50, int(0.02 * _bg_px.size)) and _bright.size >= 0.55 * _bg_px.size:
-                                        _bg_med = float(np.median(_bright))
-                                        _fill_med = float(np.median(_g[_fm]))
-                                        if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
-                                            result = None
-                            except Exception:
-                                pass
-                            if result is not None:
-                                c[4] = cv2.dilate(crop_msk, page_kernel)
-                                c[5] = result
-                                c[6] = "LaMa"
+                            self._lama_run_group(image, grp, lama, page_kernel)
                         except Exception:
                             continue
                     dt = time.time() - t0
                     _done = sum(1 for c in pending if c[6] == "LaMa")
                     if _done:
-                        print(f"  [*] LaMa خوشه‌ای: {dt:.1f}s ({_done}/{len(pending)} خوشه)")
+                        print(f"  [*] LaMa خوشه‌ای: {dt:.1f}s "
+                              f"({_done}/{len(pending)} خوشه در {len(groups)} پچ)")
                 else:
                     try:
                         page_mask = cv2.dilate(mask, page_kernel)
@@ -5105,7 +5195,7 @@ class MangaTranslator:
                     if result is None:
                         result = self._opencv_fill_components(crop_img,
                                                               crop_msk,
-                                                              wall=page_wall)
+                                                              wall=_page_wall())
                 method = "OpenCV"
                 try:
                     result = self._scrub_dark_residuals(result, crop_msk)
