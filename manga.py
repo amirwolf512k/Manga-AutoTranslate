@@ -910,6 +910,13 @@ class LamaMangaONNX:
         names = [i.name for i in self.session.get_inputs()]
         self._in_image = names[0]
         self._in_mask = names[1] if len(names) > 1 else "mask"
+        try:
+            _ishp0 = self.session.get_inputs()[0].shape
+            _fx = [d for d in _ishp0[-2:] if isinstance(d, int) and d and d > 0]
+            if len(_fx) == 2 and _fx[0] == _fx[1]:
+                self.SIZE = int(_fx[0])
+        except Exception:
+            pass
         print(
             f"[+] LaMa-Manga ONNX آماده | providers={self.session.get_providers()} | "
             f"threads={use_threads} | size={self.SIZE}"
@@ -1008,7 +1015,15 @@ class LamaMangaONNX:
             img_np[msk > 0] = 0
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
         mask_in = msk.astype(np.float32)[None, None]
-        out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
+        try:
+            _ishp = self.session.get_inputs()[0].shape
+            _ch4 = (len(_ishp) == 4 and _ishp[1] == 4)
+        except Exception:
+            _ch4 = False
+        if _ch4:
+            out = self.session.run(None, {self._in_image: np.concatenate([img_in, mask_in], axis=1)})[0]
+        else:
+            out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
 
         o = out[0].transpose(1, 2, 0).astype(np.float32)
         try:
