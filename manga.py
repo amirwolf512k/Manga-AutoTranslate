@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.1"
+APP_VER = "1.14.2"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -1129,36 +1129,65 @@ class RTDetrV2ONNXDetector:
                     except _cf.TimeoutError:
                         raise RuntimeError("huggingface: تایم‌اوت ۲۴۰s (در ایران قطع است)") from None
 
-            for fname in self.DET_FILES:
+            # 🎯 اولویت صریح: detector-v4-s_int8.onnx اول (سبک + دقیق، مناسب موبایل).
+            # با MANGA_DET_MODEL می‌توان فایل/مسیر دیگری را تحمیل کرد.
+            _forced = (os.environ.get("MANGA_DET_MODEL") or "").strip()
+            files = list(self.DET_FILES)
+            if _forced:
+                _fb = os.path.basename(_forced)
+                files = [_fb] + [f for f in files if f != _fb]
+
+            self.session = None
+            for fname in files:
+                cand = None
                 try:
-                    _m = _mirror_model(fname)
-                    if _m:
-                        model_path = _m
-                        break
-                    print(f"[*] دانلود مدل RT-DETR ONNX از {self.DET_REPO}/{fname} ...")
-                    cand = _hf_with_timeout(fname)
-                    if cand and os.path.isfile(cand) and os.path.getsize(cand) > 1000:
-                        model_path = cand
-                        break
-                    print(f"    [!] {fname} خالی/ناقص بود → دانلود مستقیم...")
-                    url = f"https://huggingface.co/{self.DET_REPO}/resolve/main/{fname}"
-                    dest = os.path.join(
-                        cache_dir or _model_cache_dir("det_models"), fname)
-                    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
-                    _dl_to(url, dest, name=fname)
-                    if os.path.isfile(dest) and os.path.getsize(dest) > 1000:
-                        model_path = dest
-                        break
+                    if _forced and fname == os.path.basename(_forced) \
+                            and os.path.isfile(_forced):
+                        cand = _forced
+                    if cand is None:
+                        cand = _mirror_model(fname)
+                    if not cand:
+                        print(f"[*] دانلود مدل RT-DETR ONNX از {self.DET_REPO}/{fname} ...")
+                        cand = _hf_with_timeout(fname)
+                    if not (cand and os.path.isfile(cand) and os.path.getsize(cand) > 1000):
+                        print(f"    [!] {fname} خالی/ناقص بود → دانلود مستقیم...")
+                        url = f"https://huggingface.co/{self.DET_REPO}/resolve/main/{fname}"
+                        dest = os.path.join(
+                            cache_dir or _model_cache_dir("det_models"), fname)
+                        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+                        _dl_to(url, dest, name=fname)
+                        if os.path.isfile(dest) and os.path.getsize(dest) > 1000:
+                            cand = dest
+                    if not cand:
+                        continue
+                    # 🔧 ساخت سشن داخل حلقه: فایل خراب/ناسازگار → فایل بعدی
+                    try:
+                        _sess = _make_ort_session(cand, prefer_gpu=prefer_gpu, threads=threads)
+                    except Exception as _se:
+                        print(f"    [!] {fname} سشن ONNX نساخت ({_se}) → فایل بعدی")
+                        try:
+                            if os.path.isfile(cand) and cand.endswith(".onnx"):
+                                os.remove(cand)  # کش خراب پاک شود تا دوباره دانلود شود
+                        except Exception:
+                            pass
+                        continue
+                    model_path, self.session = cand, _sess
+                    break
                 except Exception as e:
                     last_err = e
                     print(f"    [!] {fname} پیدا نشد: {e}")
-            if not model_path:
+            if not (model_path and self.session):
                 raise RuntimeError(
                     f"نتوانست مدل RT-DETR را از {self.DET_REPO} دانلود کند: {last_err}"
                 )
+        else:
+            self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=threads)
 
         self.model_path = model_path
-        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=threads)
+        try:
+            print(f"[+] مدل تشخیص حباب: {os.path.basename(self.model_path)}")
+        except Exception:
+            pass
         in_names = [i.name for i in self.session.get_inputs()]
         self._in_images = "images" if "images" in in_names else in_names[0]
         self._in_sizes = "orig_target_sizes" if "orig_target_sizes" in in_names else (
@@ -2710,26 +2739,22 @@ class MangaTranslator:
         
         self.det = None
         self.det_confidence = float(getattr(self, "det_confidence", 0.28) or 0.28)
-        # 📱 حالت سرعت اندروید (الگوی APK رقیب K3): مدل سنگین RT-DETR حذف —
-        # ماسک پاکسازی از همان چندضلعی‌های OCR ساخته می‌شود و حباب‌بندی از
-        # خوشهٔ خطوط OCR. خیلی سریع‌تر: بدون دانلود ~۱۰۰MB و بدون استنتاج سنگین.
-        # فعال‌سازی دستی: MANGA_ANDROID_DET=1
-        if _on_android() and os.environ.get(
-                "MANGA_ANDROID_DET", "").strip().lower() not in ("1", "true", "yes"):
-            print("[📱] اندروید: RT-DETR حذف شد (حالت سرعت) — ماسک از خطوط OCR.")
-        else:
-            try:
-                print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
-                self.det = RTDetrV2ONNXDetector(
-                    prefer_gpu=self.use_gpu,
-                    conf_thresh=self.det_confidence,
-                    iou_thresh=0.45,
-                    threads=max(1, int(self.max_workers or 2)),
-                    multi_scale=not _IS_ANDROID,
-                )
-            except Exception as e:
-                print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
-                self.det = None
+        # 🔧 رفع باگ «حباب‌های نزدیک»: RT-DETR باید روی همهٔ پلتفرم‌ها (شامل
+        # اندروید) لود شود — مدل detector-v4-s_int8.onnx سبک است و روی موبایل
+        # هم سریع. حذفِ آن باعث می‌شد حباب‌بندی از خوشهٔ خطوط OCR انجام شود و
+        # حباب‌های نزدیک به‌هم ادغام شوند.
+        try:
+            print("[*] بارگذاری RT-DETR ONNX (تشخیص حباب — detector-v4-s_int8) ...")
+            self.det = RTDetrV2ONNXDetector(
+                prefer_gpu=self.use_gpu,
+                conf_thresh=self.det_confidence,
+                iou_thresh=0.45,
+                threads=max(1, int(self.max_workers or 2)),
+                multi_scale=not _IS_ANDROID,
+            )
+        except Exception as e:
+            print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
+            self.det = None
 
         if self.provider_type == "gemini":
             if not _HAS_GEMINI and _HAS_OPENAI:
@@ -7479,6 +7504,32 @@ class MangaTranslator:
             ua = _area(a) + _area(b) - inter
             return inter / float(ua) if ua > 0 else 0.0
 
+        # 🎯 حباب‌های نزدیک: باکسِ «گروهی» که ۲+ باکسِ مجزای غیرهم‌پوشان را در
+        # بر گرفته، خودش حذف شود نه اعضایش (وگرنه دو حباب یکی می‌شوند)
+        def _contain(big, small):
+            ix = max(0, min(big[2], small[2]) - max(big[0], small[0]))
+            iy = max(0, min(big[3], small[3]) - max(big[1], small[1]))
+            a_s = _area(small)
+            return (ix * iy) / a_s if a_s > 0 else 0.0
+
+        n_all = len(boxes)
+        is_group = [False] * n_all
+        if n_all >= 3:
+            for i in range(n_all):
+                members = [j for j in range(n_all) if j != i
+                           and _contain(boxes[i]["rect"], boxes[j]["rect"]) >= 0.82]
+                disjoint: List[int] = []
+                for j in members:
+                    if all(_iou(boxes[j]["rect"], boxes[k]["rect"]) < 0.10
+                           for k in disjoint):
+                        disjoint.append(j)
+                if len(disjoint) >= 2:
+                    is_group[i] = True
+            if any(is_group):
+                print(f"    [*] {sum(is_group)} باکس گروهی (حباب‌های چسبیده) حذف شد → "
+                      "حباب‌های مجزا حفظ شدند")
+        boxes = [b for i, b in enumerate(boxes) if not is_group[i]]
+
         priority = {"text_bubble": 2, "text_free": 1, "bubble": 0}
         boxes = sorted(
             boxes,
@@ -7511,6 +7562,65 @@ class MangaTranslator:
             if not dup:
                 kept.append(b)
         return kept
+
+    @staticmethod
+    def _split_adjacent_balloons(image_bgr: np.ndarray, rect,
+                                 min_area_frac: float = 0.16) -> List[list]:
+        
+        
+        
+        
+        
+        try:
+            x1, y1, x2, y2 = [int(v) for v in rect[:4]]
+            h_img, w_img = image_bgr.shape[:2]
+            x1, y1 = max(0, x1), max(0, y1)
+            x2, y2 = min(w_img, x2), min(h_img, y2)
+            full = [x1, y1, x2, y2]
+            if x2 - x1 < 48 or y2 - y1 < 48:
+                return [full]
+            crop = image_bgr[y1:y2, x1:x2]
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            # ناحیهٔ روشن = داخل حباب؛ اگر صفحه عمدتاً تاریک بود معکوس
+            if float(np.mean(bw)) < 127:
+                bw = 255 - bw
+            # close کوچک فقط حفره‌های ریز را پر می‌کند — نباید سد مشکی بین
+            # دو حباب نزدیک را پل بزند (به همین دلیل سقف ۹px)
+            k = min(9, max(3, min(bw.shape) // 80))
+            bw = cv2.morphologyEx(bw, cv2.MORPH_CLOSE, np.ones((k, k), np.uint8))
+            n, _lab, st, _ = cv2.connectedComponentsWithStats(bw, connectivity=8)
+            box_area = float((x2 - x1) * (y2 - y1))
+            comps: List[list] = []
+            for i in range(1, n):
+                area = float(st[i, cv2.CC_STAT_AREA])
+                cw_, ch_ = int(st[i, cv2.CC_STAT_WIDTH]), int(st[i, cv2.CC_STAT_HEIGHT])
+                if area >= box_area * min_area_frac and cw_ >= 32 and ch_ >= 32:
+                    comps.append([int(st[i, cv2.CC_STAT_LEFT]), int(st[i, cv2.CC_STAT_TOP]),
+                                  cw_, ch_, area])
+            if len(comps) < 2:
+                return [full]
+            comps.sort(key=lambda c: -c[4])
+            comps = comps[:4]
+            if sum(c[4] for c in comps) < box_area * 0.50:
+                return [full]
+            subs: List[list] = []
+            for cx, cy, cw_, ch_, _a in comps:
+                sx1, sy1 = max(x1, x1 + cx), max(y1, y1 + cy)
+                sx2, sy2 = min(x2, x1 + cx + cw_), min(y2, y1 + cy + ch_)
+                if sx2 - sx1 >= 28 and sy2 - sy1 >= 28:
+                    subs.append([sx1, sy1, sx2, sy2])
+            if len(subs) < 2:
+                return [full]
+            ded = MangaTranslator._drop_contained_boxes(
+                [{"rect": r} for r in subs], contain_thresh=0.85)
+            subs = [d["rect"] for d in ded]
+            return subs if len(subs) >= 2 else [full]
+        except Exception:
+            try:
+                return [[int(v) for v in rect[:4]]]
+            except Exception:
+                return [rect]
 
     @staticmethod
     def _merge_overlapping_regions(regions: List[TextRegion],
@@ -7750,6 +7860,28 @@ class MangaTranslator:
         if len(boxes) < n0:
             print(f"    [*] {n0 - len(boxes)} باکس تودرتو/تکراری حذف شد (از {n0})")
 
+        # 🎯 حباب‌های چسبیده: باکس‌هایی که ۲+ حباب مجزا را پوشش داده‌اند،
+        # قبل از OCR به زیرباکس (هر حباب) شکسته می‌شوند تا متن‌ها قاطی نشوند.
+        expanded: List[dict] = []
+        split_groups: List[Tuple[List[int], list]] = []
+        for b in boxes:
+            try:
+                parts = MangaTranslator._split_adjacent_balloons(image, b["rect"])
+            except Exception:
+                parts = [b["rect"]]
+            if len(parts) > 1:
+                print(f"    [*] باکس {b['rect']} شامل {len(parts)} حباب چسبیده → جدا شدند")
+                idxs: List[int] = []
+                for p in parts:
+                    idxs.append(len(expanded))
+                    nb = dict(b)
+                    nb["rect"] = p
+                    expanded.append(nb)
+                split_groups.append((idxs, [int(v) for v in b["rect"][:4]]))
+            else:
+                expanded.append(b)
+        boxes = expanded
+
         regions: List[TextRegion] = []
         h, w = image.shape[:2]
         page_area = float(max(1, h * w))
@@ -7779,6 +7911,29 @@ class MangaTranslator:
                 ocr_results = [
                     self._ocr_crop(image, [t[2], t[3], t[4], t[5]]) for t in cand
                 ]
+
+        # 🔙 اگر همهٔ اجزای یک باکسِ شکسته متن خالی دادند → باکس کامل OCR شود
+        if split_groups:
+            for idxs, full_rect in split_groups:
+                try:
+                    any_text = any(
+                        str(ocr_results[j][0] or "").strip()
+                        for j in idxs if 0 <= j < len(ocr_results)
+                    )
+                except Exception:
+                    any_text = True
+                if any_text:
+                    continue
+                full_txt, full_polys, full_angs = self._ocr_crop(image, full_rect)
+                if not str(full_txt or "").strip():
+                    continue
+                print(f"    [*] اجزای شکسته خالی بودند → OCR باکس کامل {full_rect}")
+                fx1, fy1, fx2, fy2 = full_rect
+                cand.append((len(cand), {
+                    "class_name": "text_bubble", "confidence": 0.40,
+                    "rect": full_rect, "shape_type": "round", "mask_poly": None,
+                }, fx1, fy1, fx2, fy2, fx2 - fx1, fy2 - fy1))
+                ocr_results.append((full_txt, full_polys, full_angs))
 
         for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs) in zip(
                 cand, ocr_results):
