@@ -1,5 +1,5 @@
 from __future__ import annotations
-APP_VER = "1.15.0"
+APP_VER = "1.15.1"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -4783,7 +4783,11 @@ class MangaTranslator:
             if _lab == "sfx" and _cf >= (0.75 if in_bubble else 0.60) \
                     and not _long_real:
                 return "sfx"
-            if _lab == "ads" and _cf >= (0.80 if in_bubble else 0.50):
+            # متنِ واقعیِ بلند (تیترِ سند/روایت) با برچسبِ MLِ ads تبلیغ
+            # نمی‌شود — فیلترِ قبلی تیترِ ALL-CAPSِ سند را تبلیغ می‌زد و
+            # پاکسازی از قلم می‌افتاد (متنِ جامانده)
+            if _lab == "ads" and _cf >= (0.80 if in_bubble else 0.50) \
+                    and not _long_real:
                 return "promo"
             _cjk_n = sum(1 for _c in stripped
                          if 0x2E80 <= ord(_c) <= 0x9FFF
@@ -7149,19 +7153,24 @@ class MangaTranslator:
         CPU/اندروید). افکت‌ها و نوشتهٔ روی نقاشی مثل نمونه‌های مرجع
         دست‌نخورده می‌مانند."""
         try:
+            import gc as _gc
+            _gc.collect()
+        except Exception:
+            pass
+        try:
             avail = self._available_ram_gb()
         except Exception:
             avail = None
         if avail is not None and avail < 1.2:
-            print(f"[!] رم آزاد کم است ({avail:.1f}GB) → روش ctd انجام نشد؛ "
-                  "پاکسازی حذف شد")
-            return image.copy()
+            print(f"[!] رم آزاد کم است ({avail:.1f}GB) → ctd رد شد؛ "
+                  "پاکسازی با روش جایگزین ادامه پیدا می‌کند")
+            return self.clean_image(image, regions, _skip_ctd=True)
         try:
             if getattr(self, "_ctd_det", None) is None:
                 self._ctd_det = ComicTextDetectorDNN()
         except Exception as e:
-            print(f"[!] CTD آماده نشد ({e}) → پاکسازی این صفحه رد شد")
-            return image.copy()
+            print(f"[!] CTD آماده نشد ({e}) → پاکسازی با روش جایگزین")
+            return self.clean_image(image, regions, _skip_ctd=True)
         self._check_cancel()
         ctd_mask = self._ctd_det.glyph_mask(image)
         if not np.any(ctd_mask):
@@ -7624,9 +7633,10 @@ class MangaTranslator:
                 pass
         return out
 
-    def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+    def clean_image(self, image: np.ndarray, regions: List[TextRegion],
+                    _skip_ctd: bool = False) -> np.ndarray:
         self._check_cancel()
-        if self._normalize_clean_method(
+        if not _skip_ctd and self._normalize_clean_method(
                 getattr(self, "clean_method", "auto")) == "ctd":
             return self._clean_ctd(image, regions)
         mask = self._build_text_mask(image, regions)
@@ -7704,6 +7714,11 @@ class MangaTranslator:
 
         mode = self._normalize_clean_method(getattr(self, "clean_method", "auto"))
         mode_is_auto = (getattr(self, "clean_method", "auto") == "auto")
+        if mode == "ctd":
+            # حالتِ جایگزینِ ctd (رمِ کم/مدلِ نیامده): انتخابِ خودکارِ
+            # lama/opencv — نه پرکردنِ ساده
+            mode = "auto"
+            mode_is_auto = True
         if mode == "auto":
             try:
                 _android = _on_android()
@@ -13451,6 +13466,71 @@ class MangaTranslator:
                 kept.append(b)
         return kept
 
+    @staticmethod
+    def _norm_text_key(s: str) -> str:
+        return re.sub(
+            r"[^a-z0-9\u0400-\u04ff\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7a3]+",
+            "", (s or "").lower())
+
+    @classmethod
+    def _drop_same_text_regions(cls, regions: List["TextRegion"]) -> List["TextRegion"]:
+        """حذفِ متنِ دوبارِ شناسایی‌شده: تشخیصِ پنجره‌ای روی نوارِ بلند گاهی
+        یک متن را دو بار می‌دهد (دو جعبهٔ هم‌پوشان با متنِ یکی) — دو رندرِ
+        روی‌هم می‌سازد. اگر متنِ نرمال‌شدهٔ دو ناحیه خیلی شبیه باشد و
+        جعبه‌هایشان هم‌پوشانی داشته باشد، ناحیهٔ کوتاه‌تر حذف می‌شود."""
+        if len(regions) < 2:
+            return regions
+        import difflib as _difflib
+        items = []
+        for r in regions:
+            key = cls._norm_text_key(getattr(r, "source_text", "") or "")
+            items.append((r, key))
+        drop = [False] * len(items)
+        n_dup = 0
+        for i in range(len(items)):
+            if drop[i]:
+                continue
+            ri, ki = items[i]
+            if len(ki) < 8:
+                continue
+            xi, yi, wi, hi = ri.rect
+            for j in range(len(items)):
+                if i == j or drop[j]:
+                    continue
+                rj, kj = items[j]
+                if len(kj) < 8:
+                    continue
+                similar = False
+                if ki == kj:
+                    similar = True
+                elif len(ki) >= 20 and (ki in kj or kj in ki):
+                    similar = True
+                else:
+                    try:
+                        if _difflib.SequenceMatcher(
+                                None, ki, kj).ratio() >= 0.70:
+                            similar = True
+                    except Exception:
+                        similar = False
+                if not similar:
+                    continue
+                xj, yj, wj, hj = rj.rect
+                ix = max(0, min(xi + wi, xj + wj) - max(xi, xj))
+                iy = max(0, min(yi + hi, yj + hj) - max(yi, yj))
+                if ix <= 0 or iy <= 0:
+                    continue
+                if len(kj) > len(ki):
+                    drop[i] = True
+                    n_dup += 1
+                    break
+                drop[j] = True
+                n_dup += 1
+        if not n_dup:
+            return regions
+        kept = [items[i][0] for i in range(len(items)) if not drop[i]]
+        print(f"    [*] {n_dup} متنِ تکراری حذف شد (تشخیصِ دوباره)")
+        return kept
+
     def _extract_regions_from_bubbles(self, image: np.ndarray) -> List[TextRegion]:
         
         if self.det is None:
@@ -13615,6 +13695,7 @@ class MangaTranslator:
 
         before = len(regions)
         regions = self._merge_overlapping_regions(regions, iou_thresh=0.35, contain_thresh=0.65)
+        regions = self._drop_same_text_regions(regions)
         print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
         for r in regions:
             ang = float(getattr(r, "angle", 0.0) or 0.0)
@@ -14082,17 +14163,28 @@ class MangaTranslator:
 
         if getattr(self, "clean_only", False):
             print("[فاز ۳ - پاکسازی بدون ترجمه] API زده نمی‌شود.")
+            def _true_wm(rr) -> bool:
+                _t = (rr.source_text or "").strip()
+                return bool(_t) and bool(
+                    MangaTranslator._structural_promo(_t)
+                    or MangaTranslator._is_watermark_text(_t))
+            # حالتِ پاکسازی: همه‌چیز پاک می‌شود جز واترمارکِ واقعی —
+            # فیلترِ sfx/pro اشتباه می‌کند و متنِ جامانده می‌گذاشت
             clean_targets = [r for r in regions
                              if r.kind in ("dialogue", "text")
                              or (r.kind == "junk"
-                                 and r.det_class in ("bubble", "text_bubble"))]
+                                 and r.det_class in ("bubble", "text_bubble"))
+                             or (r.kind in ("promo", "sfx")
+                                 and not _true_wm(r))]
             for r in dialogue_regions:
                 src_t = (r.source_text or "").replace("\n", " ").strip()
                 print(f"  [بالن {r.id}] OCR: {src_t}")
-            if promo_regions:
-                print(f"  [*] {len(promo_regions)} تبلیغ/واترمارک دست‌نخورده می‌ماند")
-            if sfx_regions:
-                print(f"  [*] {len(sfx_regions)} SFX دست‌نخورده می‌ماند")
+            _left_promo = [r for r in promo_regions if _true_wm(r)]
+            _left_sfx = [r for r in sfx_regions if _true_wm(r)]
+            if _left_promo:
+                print(f"  [*] {len(_left_promo)} واترمارکِ واقعی دست‌نخورده می‌ماند")
+            if _left_sfx:
+                print(f"  [*] {len(_left_sfx)} SFX/لوگوی واقعی دست‌نخورده می‌ماند")
             if self.debug and regions:
                 page_debug = self._draw_debug_regions(image, regions)
             print("[فاز ۴ - فقط پاکسازی متن] ...")
