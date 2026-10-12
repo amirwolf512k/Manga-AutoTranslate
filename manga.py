@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.3"
+APP_VER = "1.14.4"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -4585,7 +4585,62 @@ class MangaTranslator:
         keep = cv2.dilate(keep, np.ones((2, 2), np.uint8), iterations=1)
         return keep
 
+    def _build_text_mask_fast(self, image: np.ndarray,
+                              regions: List[TextRegion]) -> Optional[np.ndarray]:
+        # 🇰3 TurboClean الگو — ماسکِ فوری از چندضلعی‌های OCR:
+        # هر چندضلعی خط متن از مرکزش ۱.۲x گسترده و مستقیم پر می‌شود
+        # (رقیب همین کار را می‌کند و همین جایی است که سرعتش می‌آید —
+        # بدون مراحل سنگین جوهر/گلیف به‌ازای هر ناحیه)
+        try:
+            h, w = image.shape[:2]
+            m = np.zeros((h, w), dtype=np.uint8)
+        except Exception:
+            return None
+        padding = max(0, int(getattr(self, "mask_padding", 3)))
+        n_ok = 0
+        for region in regions:
+            pts_list = []
+            for p in (getattr(region, "ocr_polys", None) or []):
+                try:
+                    pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                if pp.shape[0] < 3:
+                    continue
+                c = pp.mean(axis=0)
+                pts_list.append(np.rint(c + (pp - c) * 1.2).astype(np.int32))
+            if pts_list:
+                cv2.fillPoly(m, pts_list, 255)
+                n_ok += 1
+            else:
+                try:
+                    x, y, rw, rh = [int(v) for v in region.rect]
+                    x0, y0 = max(0, x + 2), max(0, y + 2)
+                    x1, y1 = min(w, x + rw - 2), min(h, y + rh - 2)
+                    if x1 - x0 >= 6 and y1 - y0 >= 4:
+                        cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                        n_ok += 1
+                except Exception:
+                    continue
+        if n_ok <= 0 or not m.any():
+            return None
+        if padding > 0:
+            k = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * padding + 1, 2 * padding + 1))
+            m = cv2.dilate(m, k)
+        return m
+
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+
+        # 📱 سرعت پاکسازی (الگوی K3): روی اندروید ماسکِ سریع چندضلعی‌ها —
+        # خاموشی: MANGA_FAST_MASK=0 ؛ اگر ماسک سریع ممکن نشد → مسیر کامل
+        if ((_on_android() or os.environ.get("MANGA_FAST_MASK", "0") == "1")
+                and os.environ.get("MANGA_FAST_MASK", "1") != "0"
+                and not getattr(self, "erase_bubble_interior", False)):
+            _fm = self._build_text_mask_fast(image, regions)
+            if _fm is not None:
+                print("  [*] ماسک سریع چندضلعی (الگوی K3) — بدون مراحل سنگین جوهر")
+                return _fm
 
         h_img, w_img = image.shape[:2]
         text_mask = np.zeros((h_img, w_img), dtype=np.uint8)
@@ -4786,6 +4841,33 @@ class MangaTranslator:
             if cov < 0.06 or cov > 0.92:
                 return None
             return g
+        except Exception:
+            return None
+
+    @staticmethod
+    def _flat_fill_uniform(crop_img: np.ndarray,
+                           crop_msk: np.ndarray) -> Optional[np.ndarray]:
+        # 🇰3 TurboClean الگو (ProcessAndCleanSimpleBlockIfValid): اگر حاشیهٔ
+        # دور متن یکدست بود → پُرکردن تختِ فوری؛ تقریباً بدون هزینه.
+        # (فقط صفحات ساده را از lstsq/LaMa عبور می‌دهد — دقیقاً مثل رقیب)
+        try:
+            m = crop_msk > 0
+            if not m.any():
+                return None
+            ring = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0) & (~m)
+            n_ring = int(np.count_nonzero(ring))
+            if n_ring < 60:
+                return None
+            rp = crop_img[ring].astype(np.int16)
+            med = np.median(rp, axis=0)
+            d = np.abs(rp - med[None, :]).max(axis=1)
+            if float((d <= 20).mean()) < 0.97:
+                return None
+            sel = rp[d <= 22]
+            fill = np.median(sel, axis=0) if sel.shape[0] >= 30 else med
+            out = crop_img.copy()
+            out[m] = np.clip(fill, 0, 255).astype(np.uint8)
+            return out
         except Exception:
             return None
 
@@ -5057,7 +5139,10 @@ class MangaTranslator:
             crop_msk = np.zeros((cy1 - cy0, cx1 - cx0), dtype=np.uint8)
             ex1, ey1 = min(bx1, image.shape[1]), min(by1, image.shape[0])
             crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
-            result = self._flat_fill_cluster(crop_img, crop_msk)
+            # 🇰3 اول چک یکنواختی فوری (TurboClean)؛ اگر نشد مسیر گرادیانی
+            result = self._flat_fill_uniform(crop_img, crop_msk)
+            if result is None:
+                result = self._flat_fill_cluster(crop_img, crop_msk)
             method = "flat"
             if (result is not None
                     and self._bg_is_textured(crop_img, crop_msk, strong=True)):
@@ -7329,6 +7414,14 @@ class MangaTranslator:
                         if len(pair) > 2:
                             try:
                                 eng_ang = float(pair[2])
+                                # 🩹 ML Kit زاویه را در بازهٔ [0,360) می‌دهد —
+                                # نرمال‌سازی به [-180,180) تا 358 = -2 درجه شود
+                                if eng_ang > 180.0:
+                                    eng_ang -= 360.0
+                                # 🩹 متن عمودی (ژاپنی) ≈ ±90° → رندر افقی؛
+                                # فقط کج‌شدگی واقعی ±45° معنا دارد
+                                if abs(eng_ang) > 45.0:
+                                    eng_ang = 0.0
                             except (TypeError, ValueError):
                                 eng_ang = 0.0
                     else:
@@ -7471,6 +7564,20 @@ class MangaTranslator:
                     and len(re.sub(r"[^A-Za-z]", "", txt or "")) >= 8):
                 early_stop = True
                 break
+
+            # 📱 سرعت استخراج: توقف زودهنگام برای ژاپنی/چینی/کره‌ای —
+            # ML Kit نیتیو روی برش تمیز قابل‌اعتماد است؛ بدون این شرط
+            # صفحات CJK همیشه هر ۴ واریانت را اجرا می‌کردند (۴ برابر کندتر)
+            if (not _tilted0) and conf >= 0.80:
+                _cjk = 0
+                for _ch in (txt or ""):
+                    _o = ord(_ch)
+                    if (0x3040 <= _o <= 0x30FF or 0x3400 <= _o <= 0x9FFF
+                            or 0xAC00 <= _o <= 0xD7AF):
+                        _cjk += 1
+                if _cjk >= 3:
+                    early_stop = True
+                    break
 
         if merged:
             _allow_en, _allow_ko, _allow_ja, _allow_zh = self._ocr_lang_flags()
@@ -8060,6 +8167,12 @@ class MangaTranslator:
                     _af = float(_a)
                 except (TypeError, ValueError):
                     continue
+                # 🩹 نرمال‌سازی [0,360) → [-180,180)
+                if _af > 180.0:
+                    _af -= 360.0
+                # 🩹 متن عمودی ژاپنی (~±90°) → زاویه نادیده (رندر افقی)
+                if abs(_af) > 45.0:
+                    continue
                 if abs(_af) >= 1.0:
                     eng_angs.append(_af)
             ang_src = "ink"
@@ -8130,6 +8243,10 @@ class MangaTranslator:
                             regions: List["TextRegion"]) -> None:
         for r in regions:
             ang = float(getattr(r, "angle", 0.0) or 0.0)
+            # 🩹 متن عمودی (ژاپنی ~±90°) → رندر افقی، نه چرخش ۹۰ درجه
+            if abs(ang) > 45.0:
+                r.angle = 0.0
+                continue
             if abs(ang) < 6.0:
                 continue
             try:
@@ -10332,6 +10449,9 @@ html, body { background: #0a0a0b; }
         except (TypeError, ValueError):
             angle = 0.0
         if angle != angle or angle in (float("inf"), float("-inf")):
+            angle = 0.0
+        # 🩹 متن عمودی ژاپنی (~±90°) → رندر افقی؛ چرخش ۹۰ درجه ممنوع
+        if abs(angle) > 45.0:
             angle = 0.0
 
         try:
