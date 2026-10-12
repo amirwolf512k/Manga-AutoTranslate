@@ -888,7 +888,7 @@ class LamaMangaONNX:
     
     
     URL = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
-    INT8_URL = None
+    INT8_URL = "https://huggingface.co/Liiesl/lama-manga-onnx-quant/resolve/main/lama-manga_int8.onnx"
     SIZE = 512
 
     def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
@@ -7167,6 +7167,13 @@ class MangaTranslator:
         if np.any(base):
             base = cv2.dilate(base, cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, (9, 9)), 1)
+        raw_for_model = cv2.bitwise_or(base.copy(), ctd_mask) if ctd_mask is not None else base.copy()
+        try:
+            _dm = self._dense_ctd_mask(image)
+            if _dm is not None:
+                raw_for_model = cv2.bitwise_or(raw_for_model, _dm)
+        except Exception:
+            pass
         if zone_ok:
             base = cv2.bitwise_and(base, zone)
 
@@ -7222,15 +7229,248 @@ class MangaTranslator:
                 glyph_h = float(np.median(_hs[_areas <= max(_med_a * 4, 60)]))
         except Exception:
             pass
-        del ctd_mask
+        # ctd_mask kept for model pass
         try:
             del _grayf, _edges, _flat, _dark_raw
         except Exception:
             pass
         gc.collect()
         self._check_cancel()
+        try:
+            _r = self._ctd_model_pass(image, mask, raw=raw_for_model)
+            if _r is not None:
+                return _r
+            print("  [!] مدل در دسترس نیست → flatfill")
+        except Exception as _e:
+            print(f"  [!] پاکسازی مدل ناموفق ({str(_e)[:80]}) → flatfill")
         return ctd_flatfill(image, mask, glyph_h=glyph_h)
 
+
+    def _ctd_complete_mask(self, mask, close_k=51):
+        n, lab, st, _ = cv2.connectedComponentsWithStats(
+            (mask > 0).astype(np.uint8), 8)
+        out = np.zeros_like(mask)
+        k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                      (close_k, close_k))
+        Hh, Ww = mask.shape[:2]
+        for i in range(1, n):
+            x, y, w, h, a = st[i]
+            mg = close_k
+            x0 = max(0, x - mg)
+            y0 = max(0, y - mg)
+            x1 = min(Ww, x + w + mg)
+            y1 = min(Hh, y + h + mg)
+            comp = np.where(lab[y0:y1, x0:x1] == i, 255, 0).astype(np.uint8)
+            c = cv2.morphologyEx(comp, cv2.MORPH_CLOSE, k)
+            cnts, _ = cv2.findContours(c, cv2.RETR_EXTERNAL,
+                                       cv2.CHAIN_APPROX_NONE)
+            cv2.drawContours(out[y0:y1, x0:x1], cnts, -1, 255, -1)
+        return out
+
+    def _ctd_red_protect(self, image, mask):
+        try:
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            h0 = hsv[:, :, 0].astype(np.int16)
+            s0 = hsv[:, :, 1]
+            v0 = hsv[:, :, 2]
+            hot = ((s0 > 90) & (v0 > 90)
+                   & ((h0 < 25) | (h0 > 165)))
+            n, lab, st, _ = cv2.connectedComponentsWithStats(
+                (mask > 0).astype(np.uint8), 8)
+            keep = np.ones(n, np.float32)
+            dropped = 0
+            for i in range(1, n):
+                area = int(st[i, cv2.CC_STAT_AREA])
+                if area > 3000:
+                    continue
+                comp = (lab == i)
+                hotn = int(np.logical_and(hot, comp).sum())
+                if hotn > 0.5 * area:
+                    keep[i] = 0.0
+                    dropped += 1
+            if dropped:
+                mask = np.where(keep[lab] > 0.5, mask, 0).astype(np.uint8)
+                print(f"  [*] محافظت SFX رنگی: {dropped} جزء از ماسک حذف شد")
+            return mask
+        except Exception:
+            return mask
+
+    def _ctd_region_lama(self, image, mask, model, size, min_area=400, max_regions=999):
+        Hh, Ww = image.shape[:2]
+        mk = cv2.dilate(mask, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (9, 9)), 1)
+        n, lab, st, _ = cv2.connectedComponentsWithStats(
+            (mk > 0).astype(np.uint8), 8)
+        order = [i for i in sorted(range(1, n),
+                key=lambda i: -int(st[i, cv2.CC_STAT_AREA]))
+                if int(st[i, cv2.CC_STAT_AREA]) >= min_area][:max_regions]
+        PAD = 96
+        out = image.copy()
+        used = 0
+        for i in order:
+            x, y, w, h, a = st[i]
+            if a < 400:
+                continue
+            x0 = max(0, x - PAD)
+            y0 = max(0, y - PAD)
+            x1 = min(Ww, x + w + PAD)
+            y1 = min(Hh, y + h + PAD)
+            sub = out[y0:y1, x0:x1]
+            msub = mk[y0:y1, x0:x1]
+            if sub.shape[0] < 48 or sub.shape[1] < 48:
+                continue
+            try:
+                res = model(sub, msub)
+                pred = np.array(res.convert("RGB"))[:, :, ::-1].copy()
+                out[y0:y1, x0:x1] = np.where(
+                    msub[:, :, None] > 0, pred, sub)
+                used += 1
+            except Exception as e:
+                print(f"    [!] ناحیه {i} ناموفق: {str(e)[:60]}")
+            gc.collect()
+        return out, used
+
+    def _ctd_residual_sweep(self, image, base, mask):
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        medg = cv2.medianBlur(gray, 21).astype(np.int16)
+        contrast = np.abs(gray.astype(np.int16) - medg)
+        zone = cv2.dilate(mask, cv2.getStructuringElement(
+            cv2.MORPH_ELLIPSE, (151, 151)))
+        cand = ((contrast > 40) & (zone > 0)
+                & (mask == 0)).astype(np.uint8) * 255
+        cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE,
+                                cv2.getStructuringElement(
+                                    cv2.MORPH_ELLIPSE, (5, 5)))
+        n, lab, st, _ = cv2.connectedComponentsWithStats(cand, 8)
+        extra = np.zeros_like(mask)
+        kept = 0
+        for i in range(1, n):
+            x, y, w, h, a = st[i]
+            if 40 <= a <= 8000 and w <= 280 and h <= 200 \
+                    and max(w, h) / max(1, min(w, h)) <= 14:
+                comp = (lab == i)
+                if float(contrast[comp].mean()) > 42:
+                    extra[comp] = 255
+                    kept += 1
+        if kept:
+            print(f"  [*] جاروی بقایا: {kept} جزء")
+        return extra
+
+    def _dense_ctd_mask(self, image, thresh=0.30):
+        """ماسک CTD متراکم: تایل‌بندی ۱۰۲۴ با هم‌پوشانی — متن کوچک هم ضبط می‌شود."""
+        det = getattr(self, "_ctd_det", None)
+        if det is None or getattr(det, "net", None) is None:
+            return None
+        try:
+            ih, iw = image.shape[:2]
+            TILE = 1024
+            OV = 96
+
+            def _pos(total):
+                if total <= TILE:
+                    return [0]
+                step = TILE - OV
+                ps = []
+                p = 0
+                while True:
+                    if p + TILE >= total:
+                        ps.append(max(0, total - TILE))
+                        break
+                    ps.append(p)
+                    p += step
+                return ps
+
+            prob = np.zeros((ih, iw), np.float32)
+            wsum = np.zeros((ih, iw), np.float32)
+            for y0 in _pos(ih):
+                for x0 in _pos(iw):
+                    y1 = min(ih, y0 + TILE)
+                    x1 = min(iw, x0 + TILE)
+                    patch = image[y0:y1, x0:x1]
+                    ph, pw = patch.shape[:2]
+                    canvas = np.zeros((TILE, TILE, 3), np.uint8)
+                    canvas[:ph, :pw] = patch
+                    blob = cv2.dnn.blobFromImage(
+                        canvas, 1.0 / 255.0, (TILE, TILE),
+                        swapRB=True, crop=False)
+                    det.net.setInput(blob)
+                    outs = det.net.forward(det._out_names)
+                    m = None
+                    for o in outs:
+                        if o.ndim == 4 and o.shape[1] == 1:
+                            m = o
+                    if m is None:
+                        for o in outs:
+                            if o.ndim == 4 and o.shape[1] == 2:
+                                m = o
+                    mm = np.clip(m[0, 0], 0, 1)
+                    mm = cv2.resize(mm, (pw, ph),
+                                    interpolation=cv2.INTER_LINEAR)
+                    prob[y0:y1, x0:x1] += mm
+                    rx = np.minimum(np.arange(pw),
+                                    np.arange(pw)[::-1]).astype(np.float32)
+                    ry = np.minimum(np.arange(ph),
+                                    np.arange(ph)[::-1]).astype(np.float32)
+                    rx = np.clip(rx / (OV / 2), 0.35, 1.0)
+                    ry = np.clip(ry / (OV / 2), 0.35, 1.0)
+                    wsum[y0:y1, x0:x1] += rx[None, :] * ry[:, None]
+            prob = prob / np.maximum(wsum, 1e-6)
+            gm = np.where(prob > thresh, 255, 0).astype(np.uint8)
+            print(f"  [*] CTD متراکم: {int((gm > 0).sum())}px")
+            return gm
+        except Exception as e:
+            print(f"  [!] CTD متراکم ناموفق: {str(e)[:60]}")
+            return None
+
+
+    def _ctd_model_pass(self, image, mask, zone=None, raw=None):
+        try:
+            _det = getattr(self, "_ctd_det", None)
+            if _det is not None and getattr(_det, "net", None) is not None:
+                _det.net = None
+                print("  [*] حافظهٔ CTD آزاد شد")
+        except Exception:
+            pass
+        gc.collect()
+        model = self._get_lama()
+        if model is None:
+            return None
+        if raw is not None and np.any(raw):
+            mask = cv2.bitwise_or(mask, raw)
+        mk = self._ctd_red_protect(image, mask)
+        mk = self._ctd_complete_mask(mk, 51)
+        if zone is not None and np.any(zone):
+            _zl = cv2.dilate(zone, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (151, 151)), 1)
+            mk = cv2.bitwise_and(mk, _zl)
+        if not np.any(mk):
+            return None
+        size = getattr(model, "SIZE", 512)
+        try:
+            if getattr(model, "prefer_gpu", False) and not _on_android():
+                size = max(size, 640)
+        except Exception:
+            pass
+        print(f"  [*] پاکسازی مدل منطقه‌ای (اندازهٔ {size}) ...")
+        out, used = self._ctd_region_lama(image, mk, model, size)
+        if not used:
+            return None
+        extra = self._ctd_residual_sweep(image, out, mk)
+        if np.any(extra):
+            mk2 = cv2.dilate(cv2.bitwise_or(mk, extra),
+                             cv2.getStructuringElement(
+                                 cv2.MORPH_ELLIPSE, (7, 7)), 1)
+            if zone is not None and np.any(zone):
+                mk2 = cv2.bitwise_and(mk2, zone)
+            try:
+                out2, used2 = self._ctd_region_lama(
+                    image, mk2, model, size,
+                    min_area=1200, max_regions=18)
+                if used2:
+                    out = out2
+            except Exception:
+                pass
+        return out
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         self._check_cancel()
