@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.0"
+APP_VER = "1.14.1"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3542,11 +3542,14 @@ class MangaTranslator:
 
         
         latin_core = re.sub(r"[^A-Za-z]", "", stripped)
-        if len(latin_core) >= 3 and re.fullmatch(r"[A-Za-z][A-Za-z\s.'\-]*[.!?…~]*", stripped.replace("...", ".").replace("…", ".")):
+        # گارد تبلیغ: URL/دامنه/پرومو هرگز وارد میان‌بر دیالوگ نمی‌شود
+        # (مثل www.sexyversecomics.com که قبلاً دیالوگ حساب می‌شد)
+        _looks_promo = bool(DOMAIN_RE.search(stripped) or PROMO_RE.search(stripped))
+        if len(latin_core) >= 3 and not _looks_promo and re.fullmatch(r"[A-Za-z][A-Za-z\s.'\-]*[.!?…~]*", stripped.replace("...", ".").replace("…", ".")):
             
             if any(c in "AEIOUaeiou" for c in latin_core):
                 return "dialogue"
-        if len(latin_core) >= 2 and stripped.endswith(("?", "!", "?!", "!?", "...?", "...!")):
+        if len(latin_core) >= 2 and not _looks_promo and stripped.endswith(("?", "!", "?!", "!?", "...?", "...!")):
             if any(c in "AEIOUaeiou" for c in latin_core):
                 return "dialogue"
 
@@ -3935,7 +3938,12 @@ class MangaTranslator:
         if width_ratio > 0.60 and centers_aligned and vgap < 18:
           return True
 
-        margin = max(2, int(avg_h * 0.08))
+        # ردیف‌های هم‌ستون: مراکز هم‌تراز + فاصلهٔ عمودی کم = قطعاً یک حباب
+        # (حباب‌هایی که خطوط عریض/تنگ متناوب دارند — مثل کارت مشخصات یا خط کوتاه پایانی)
+        if centers_aligned and vgap <= max(8.0, avg_h * 0.45):
+          return True
+
+        margin = max(3, int(avg_h * 0.18))
         if small_attach:
           margin = max(margin, 10)
         x1, y1, w1, h1 = r1
@@ -3956,12 +3964,17 @@ class MangaTranslator:
         if small_attach and vgap < 20 and cx_dist < max(avg_w * 0.7, 50):
           return True
 
+        # آخرین شانس: فاصلهٔ عمودی خیلی کم حتی اگر مرکز کمی خط داشته باشد
+        if vgap <= 4.0 and cx_dist < max(avg_w * 0.5, 40):
+          return True
+
         return False
  
     
       for i in range(n):
         ki = detections[i].get("kind", "dialogue")
-        if ki not in ("sfx", "promo", "junk"):
+        # تبلیغ هرگز به دیالوگ نجات داده نمی‌شود (مثل www.site.com کنار حباب)
+        if ki not in ("sfx", "junk"):
             continue
         
         t_i = (detections[i].get("text") or "").strip()
@@ -4121,7 +4134,8 @@ class MangaTranslator:
       
       merged_flags = [False] * len(regions)
       for i, ri in enumerate(regions):
-        if merged_flags[i] or ri.kind not in ("sfx", "promo", "junk"):
+        # تبلیغ هرگز داخل حباب دیالوگ ادغام نمی‌شود (فقط sfx/junk نجات می‌یابند)
+        if merged_flags[i] or ri.kind not in ("sfx", "junk"):
             continue
         sfx_text = (ri.source_text or "").strip()
         for j, rj in enumerate(regions):
