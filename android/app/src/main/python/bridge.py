@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import shutil
 import threading
 import time
 import traceback
@@ -267,6 +268,14 @@ def _bundled_source(name):
     return loader.get_source(name)
 
 
+def _android() -> bool:
+    try:
+        import java  # noqa: F401 — فقط روی Chaquopy موجود است
+        return True
+    except Exception:
+        return False
+
+
 def manifest():
 
     files_dir = os.environ.get("MANGA_FILES_DIR") or os.getcwd()
@@ -301,6 +310,15 @@ def manifest():
             if f.get("id") in ("manga_api_base", "api_base"):
                 f["visible_if"] = {"field": "provider", "equals": "custom"}
                 f["label"] = "دامنهٔ API سفارشی (فقط برای custom — مثال: https://api.example.com/v1)"
+            # --- گوشی: گزینهٔ PSD از قالب خروجی حذف می‌شود (درخواست کاربر) ---
+            if f.get("id") in ("out_fmt", "manga_out_fmt", "fmt") and _android():
+                ch = f.get("choices") or []
+                kept = []
+                for c in ch:
+                    val = str(c[1] if isinstance(c, (list, tuple)) and len(c) > 1 else c)
+                    if val.upper() != "PSD":
+                        kept.append(c)
+                f["choices"] = kept
     try:
         _defaults(mf)
     except Exception:
@@ -391,6 +409,10 @@ def start_job(params_json, files_dir):
         os.makedirs(work, exist_ok=True)
         out = os.path.join(work, "out")
         fmt = str(p.get("fmt", "PDF")).upper()
+        # --- گوشی: PSD پشتیبانی نمی‌شود (حذف شد) → PDF ---
+        if fmt == "PSD" and _android():
+            fmt = "PDF"
+            p["fmt"] = "PDF"
         ext = "pdf" if fmt == "PDF" else fmt.lower()
         _stem = _out_stem_from_src(p.get("src") or p.get("url") or "")
         out_file = os.path.join(out, (_stem or "manga") + "." + ext)
@@ -398,8 +420,13 @@ def start_job(params_json, files_dir):
             "done": False, "log": "⏳ آماده‌سازی…", "error": None,
             "out_file": None, "images": [], "debug_images": [],
             "params": p, "out": out, "out_file_path": out_file,
+            "cancel_requested": False, "cancelled": False,
         }
         STATE["job"] = job
+    try:
+        _manga().clear_stop()
+    except Exception:
+        pass
     threading.Thread(target=_run, args=(job,), daemon=True).start()
     return json.dumps({"ok": True}, ensure_ascii=False)
 
@@ -537,6 +564,25 @@ def _run(job):
                 pass
         langs = [x for x in str(p.get("ocr_lang") or "en").split() if x.strip()]
         _src0 = str(p.get("src") or "")
+        # --- چند فایل انتخاب‌شده (اندروید: با کاما جدا شده) → پوشهٔ دسته‌ای ---
+        if ("," in _src0 and "://" not in _src0
+                and not _src0.lower().startswith(("http://", "https://"))):
+            _parts = [s.strip() for s in _src0.split(",") if s.strip()]
+            if len(_parts) > 1 and all(os.path.isfile(s) for s in _parts):
+                try:
+                    _batch_dir = os.path.join(
+                        os.path.dirname(os.path.abspath(_parts[0])), "batch_input")
+                    os.makedirs(_batch_dir, exist_ok=True)
+                    for _bi, _bp in enumerate(_parts, 1):
+                        _extb = os.path.splitext(_bp)[1].lower() or ".bin"
+                        _dstb = os.path.join(_batch_dir, "file_%03d%s" % (_bi, _extb))
+                        with open(_bp, "rb") as _fa, open(_dstb, "wb") as _fb:
+                            shutil.copyfileobj(_fa, _fb, 1024 * 512)
+                    _src0 = _batch_dir
+                    _log(job, "📚 %d فایل ورودی در پوشهٔ دسته‌ای آماده شد — همه با هم ترجمه می‌شوند" % len(_parts))
+                except Exception as _be:
+                    _log(job, "⚠ ساخت پوشهٔ دسته‌ای ناموفق (%s) — فقط اولین فایل" % _be)
+                    _src0 = _parts[0]
         _src1 = _fix_input_ext(_src0)
         if _src1 != _src0:
             p["src"] = _src1
@@ -579,6 +625,13 @@ def _run(job):
         hb = threading.Thread(target=_heartbeat, args=(job,), daemon=True)
         hb.start()
         handlers = _attach_log_handlers(tee)
+
+        def _def_workers():
+            try:
+                return max(2, min(4, os.cpu_count() or 2))
+            except Exception:
+                return 2
+
         try:
             with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
                 _log(job, "🚀 در حال بارگذاری موتور و مدل‌ها…"
@@ -606,7 +659,7 @@ def _run(job):
                     story_brief=bool(p.get("story_brief", True)),
                     fake_translate=bool(p.get("fake")),
                     clean_only=bool(p.get("clean_only")),
-                    max_workers=_i("workers", 2),
+                    max_workers=_i("workers", _def_workers()),
                     bubbles_per_request=_i("bubbles", 6),
                     api_timeout=_f("timeout", 40.0),
                     max_retries=_i("maxre", 8),
@@ -695,6 +748,12 @@ def _run(job):
         if bool(p.get("debug")) and not dbg:
             _log(job, "🔍 دیباگ روشن بود ولی تصویر دیباگی ساخته نشد — "
                       "تصویر دیباگ فقط برای صفحه‌هایی که متن/حباب دارند تولید می‌شود.")
+    except _manga().JobCancelled:
+        _log(job, "⏹ ترجمه لغو شد — توسط کاربر")
+        with STATE["lock"]:
+            job["done"] = True
+            job["cancelled"] = True
+            job["error"] = False
     except BaseException:
         try:
             _txt = tee.getvalue()
@@ -717,6 +776,8 @@ def poll():
             "idle": False,
             "done": bool(job.get("done")),
             "error": bool(job.get("error")),
+            "cancelled": bool(job.get("cancelled")),
+            "cancel_requested": bool(job.get("cancel_requested")),
             "log": job.get("log", ""),
             "images": job.get("images", []),
             "debug_images": job.get("debug_images", []),
@@ -726,10 +787,18 @@ def poll():
 
 
 def cancel():
+    """لغو واقعی کار در حال اجرا — پرچم توقف موتور را می‌گذارد؛ حلقهٔ
+    اصلی manga.py بین صفحه‌ها آن را می‌بیند و JobCancelled می‌دهد."""
     with STATE["lock"]:
         job = STATE["job"]
-    if job and not job.get("done"):
-        _log(job, "⏹ درخواست توقف ثبت شد (پایان مرحله فعلی)")
+    if not job or job.get("done"):
+        return json.dumps({"ok": True, "idle": True}, ensure_ascii=False)
+    job["cancel_requested"] = True
+    _log(job, "⏹ درخواست لغو ثبت شد — موتور در اولین فرصت توقف می‌شود…")
+    try:
+        _manga().request_stop()
+    except Exception:
+        pass
     return json.dumps({"ok": True}, ensure_ascii=False)
 
 
@@ -746,20 +815,10 @@ def test_keys(params_json):
     try:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from manga import test_api_keys
+        from manga import test_api_keys, format_key_test_text
         res = test_api_keys(keys, provider, api_base)
-        lines = []
-        for i, r in enumerate(res, 1):
-            if r.get("ok") and r.get("error"):
-                state = "سالم (با هشدار)"
-            elif r.get("ok"):
-                state = "سالم است"
-            else:
-                state = "کار نمی‌کند"
-            err = (" — " + str(r.get("error"))) if r.get("error") else ""
-            lines.append("کلید %d (%s): %s%s  [%dms]" % (
-                i, r.get("key", ""), state,
-                err, int(r.get("ms") or 0)))
-        return json.dumps({"ok": True, "text": "\n".join(lines)}, ensure_ascii=False)
+        return json.dumps(
+            {"ok": True, "text": format_key_test_text(res)},
+            ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)

@@ -1,0 +1,11 @@
+# runtime artifacts (downloaded at first run — never commit)
+det_models/
+rapidocr_models/
+workspace/
+paddle_models/
+*.pt
+*.onnx
+__pycache__/
+*.pyc
+nohup.out
+*.log

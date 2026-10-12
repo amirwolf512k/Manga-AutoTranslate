@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.12.3"
+APP_VER = "1.13.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -974,13 +974,34 @@ def run_desktop():
     ttk.Entry(row_in, textvariable=inp_var).pack(side="left", fill="x", expand=True)
 
     def pick_input():
-        p = filedialog.askopenfilename(
+        paths = filedialog.askopenfilenames(
             initialdir=UPLOAD_DIR if os.path.isdir(UPLOAD_DIR) else HERE,
             filetypes=[("مانگا", "*.pdf *.zip *.cbz *.webp *.jpg *.jpeg *.png *.html"),
                        ("همه", "*.*")])
-        if p:
-            inp_var.set(p)
-    ttk.Button(row_in, text="📁 انتخاب", command=pick_input).pack(side="left", padx=(6, 0))
+        if not paths:
+            return
+        paths = [p for p in paths if p and os.path.isfile(p)]
+        if not paths:
+            return
+        if len(paths) == 1:
+            inp_var.set(paths[0])
+            return
+        # چند فایل انتخاب شد — همه در یک پوشهٔ دسته‌ای کپی می‌شوند
+        try:
+            batch_dir = os.path.join(
+                UPLOAD_DIR, "batch_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
+            os.makedirs(batch_dir, exist_ok=True)
+            for bi, bf in enumerate(paths, 1):
+                ext_b = os.path.splitext(bf)[1].lower() or ".bin"
+                shutil.copyfile(bf, os.path.join(batch_dir, f"file_{bi:03d}{ext_b}"))
+            inp_var.set(batch_dir)
+            messagebox.showinfo(
+                APP_NAME,
+                f"✔ {len(paths)} فایل انتخاب شد\nهمه با هم ترجمه می‌شوند.\n\n{batch_dir}")
+        except Exception as e:
+            inp_var.set(paths[0])
+            messagebox.showwarning(APP_NAME, f"کپی دسته‌ای نشد — فقط اولین فایل: {e}")
+    ttk.Button(row_in, text="📁 انتخاب (چندتایی)", command=pick_input).pack(side="left", padx=(6, 0))
 
     row_out = ttk.Frame(card_io); row_out.pack(fill="x", pady=(8, 0))
     fmt_var = tk.StringVar(value=cfg.get("out_fmt", "PDF"))
@@ -1033,29 +1054,17 @@ def run_desktop():
                 root.after_cancel(testk_after[0])
             except Exception:
                 pass
-        testk_after[0] = root.after(30000, _testk_hide)
+        testk_after[0] = root.after(60000, _testk_hide)
 
     def _run_test_keys_pc():
         testk_out.set("در حال تست کلیدها…")
         def _worker():
             try:
-                from manga import test_api_keys
+                from manga import test_api_keys, format_key_test_text
                 res = test_api_keys(
                     keys_var.get() or "", str(prov_var.get() or "gemini"),
-                    api_base_var.get() if "api_base_var" in dir() else "")
-                out = []
-                for i, r in enumerate(res, 1):
-                    if r.get("ok") and r.get("error"):
-                        state = "سالم (با هشدار)"
-                    elif r.get("ok"):
-                        state = "سالم است"
-                    else:
-                        state = "کار نمی‌کند"
-                    err = f" — {r['error']}" if r.get("error") else ""
-                    out.append(f"کلید {i} ({r.get('key', '')}): "
-                               + state
-                               + err + f"  [{r.get('ms', 0)}ms]")
-                msg = "\n".join(out) if out else "کلیدی وارد نشده"
+                    apibase_var.get() if "apibase_var" in dir() else "")
+                msg = format_key_test_text(res) if res else "کلیدی وارد نشده"
             except Exception as e:
                 msg = f"خطا در تست: {e}"
             def _show():
@@ -2181,6 +2190,34 @@ footer { display: none !important; }
 @media (prefers-reduced-motion: reduce) {
   .nav, .stepcard { animation: none; }
 }
+
+/* ---- دکمهٔ قرمز «تست کلیدها / لینک» — یک دکمه، هر سه پلتفرم ---- */
+#manga_test_key {
+  background: linear-gradient(160deg, #ff4a3d, #c9271c) !important;
+  color: #fff !important;
+  border: none !important;
+  border-radius: 14px !important;
+  font-weight: 800 !important;
+  font-size: 1rem !important;
+  padding: 14px 18px !important;
+  min-height: 52px !important;
+  box-shadow: 0 8px 22px rgba(224,53,42,.35), inset 0 0 0 1.5px rgba(255,255,255,.18) !important;
+  transition: filter .18s ease, transform .18s ease !important;
+}
+#manga_test_key:hover { filter: brightness(1.08); transform: translateY(-1px); }
+#manga_test_key:active { transform: translateY(0); filter: brightness(.96); }
+#manga_test_key span, #manga_test_key div { color: #fff !important; }
+
+/* ---- جعبهٔ نتیجهٔ تست هر کلید ---- */
+#manga_test_key_out textarea {
+  background: #08080a !important;
+  color: #ffd7d2 !important;
+  font-family: 'IBM Plex Mono', monospace !important;
+  font-size: .88rem !important;
+  border: 1px solid rgba(255,74,61,.35) !important;
+  border-radius: 12px !important;
+  direction: rtl !important;
+}
 """
 
 
@@ -2233,6 +2270,44 @@ def _gradio_major() -> int:
     except Exception:
         return 0
 
+
+
+def _dark_js_src() -> str:
+    return """() => {
+  document.body.classList.add('dark');
+  document.documentElement.classList.add('dark');
+  // ---- Wake Lock (ماندن روشن بودن صفحه هنگام استخراج/پاکسازی/ترجمه) ----
+  try {
+    if (window.__mangaWakeLockInstalled) return [];
+    window.__mangaWakeLockInstalled = true;
+    window.__mangaWL = null;
+    const isRunning = () => {
+      try {
+        const root = document.getElementById('runbtn');
+        const btn = root ? (root.querySelector('button') || root) : null;
+        const t = (btn && btn.textContent) || '';
+        return (t.indexOf('متوقف') >= 0 || t.indexOf('⏹') >= 0);
+      } catch (e) { return false; }
+    };
+    const req = async () => {
+      try {
+        if (!window.__mangaWL && navigator.wakeLock && navigator.wakeLock.request) {
+          window.__mangaWL = await navigator.wakeLock.request('screen');
+        }
+      } catch (e) {}
+    };
+    const rel = () => {
+      try { if (window.__mangaWL) { window.__mangaWL.release(); } } catch (e) {}
+      window.__mangaWL = null;
+    };
+    setInterval(() => { if (isRunning()) req(); else rel(); }, 4000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && isRunning()) req();
+    });
+  } catch (e) {}
+  return [];
+}
+"""
 
 def run_web():
     
@@ -2519,11 +2594,13 @@ def run_web():
         
         with gr.Group(elem_classes=["stepcard"]):
             gr.HTML('<div class="steptitle"><span class="stepnum">۱</span> ورودی — فایل یا لینک مانهوا</div>')
-            inp_upload = gr.File(label="آپلود فایل (pdf / zip / cbz / تصویر / html)",
-                                 file_count="single", type="filepath",
+            inp_upload = gr.File(label="آپلود فایل‌ها (چندتایی) — کلیک کن",
+                                 file_count="multiple", type="filepath",
+                                 file_types=[".pdf", ".zip", ".cbz", ".webp", ".jpg", ".jpeg", ".png"],
                                  elem_classes=["compact-upload"])
             inp_path = gr.Textbox(label="یا URL تصویر/مانهوا",
-                                  placeholder="https://cdn.example.com/chapter/1/001.webp")
+                                  placeholder="https://cdn.example.com/chapter/1/001.webp",
+                                  info="چند لینک = با کاما جدا کن — چند فایل هم می‌توانی بالا بفرستی و همه با هم ترجمه می‌شوند.")
 
         
         with gr.Group(elem_classes=["stepcard"]):
@@ -2541,14 +2618,13 @@ def run_web():
                                    value="",
                                    placeholder="gemini-3.8-flash", scale=2,
                                    elem_id="manga_model")
-            with gr.Row():
-                test_key_btn = gr.Button(
-                    "تست کلیدها / لینک (هر کلید جداگانه بررسی می‌شود)",
-                    scale=1, elem_id="manga_test_key")
-                test_key_out = gr.Textbox(
-                    label="نتیجهٔ تست", value="", interactive=False, scale=3,
-                    elem_id="manga_test_key_out", visible=False,
-                    placeholder="بعد از کلیک، وضعیت هر کلید اینجا نمایش داده می‌شود — بعد از ۳۰ ثانیه خودش بسته می‌شود")
+            test_key_btn = gr.Button(
+                "تست کلیدها / لینک",
+                scale=1, elem_id="manga_test_key")
+            test_key_out = gr.Textbox(
+                label="", value="", interactive=False, show_label=False,
+                elem_id="manga_test_key_out", visible=False,
+                placeholder="وضعیت هر کلید — سالم ✔ / خراب ✘ (بعد از ۶۰ ثانیه خودکار پاک می‌شود)")
             api_base = gr.Textbox(label="دامنهٔ API سفارشی (فقط برای provider «custom»)",
                                   value=str(cfg.get("api_base", "") or ""),
                                   placeholder="https://your-server.example.com/v1",
@@ -3163,13 +3239,17 @@ def run_web():
 (sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord, lama, cpu, twopass, fake) => {{
   try {{
     const realSid = (sid || sidBox || "").toString().trim();
+    const clean = (v) => {{
+      const s = (v === null || v === undefined) ? "" : String(v).trim();
+      return (s === "null" || s === "undefined") ? "" : s;
+    }};
     const data = {{
       sid: realSid,
-      inp: inp || "",
-      prov: prov || "",
-      keys: keys || "",
-      model: model || "",
-      fmt: fmt || "",
+      inp: clean(inp),
+      prov: clean(prov),
+      keys: clean(keys),
+      model: clean(model),
+      fmt: clean(fmt),
       qual: qual,
       workers: workers,
       bubbles: bubbles,
@@ -3534,22 +3614,10 @@ def run_web():
 
         def _do_test_key(provider_v, api_keys_v, model_v, api_base_v):
             try:
-                from manga import test_api_keys
+                from manga import test_api_keys, format_key_test_text
                 res = test_api_keys(api_keys_v or "", provider_v or "gemini",
                                     api_base_v or "")
-                out_lines = []
-                for i, r in enumerate(res, 1):
-                    if r.get("ok") and r.get("error"):
-                        state = "سالم (با هشدار)"
-                    elif r.get("ok"):
-                        state = "سالم است"
-                    else:
-                        state = "کار نمی‌کند"
-                    err = f" — {r['error']}" if r.get("error") else ""
-                    out_lines.append(
-                        f"کلید {i} ({r.get('key', '')}): "
-                        + state + err + f"  [{r.get('ms', 0)}ms]")
-                txt = "\n".join(out_lines) if out_lines else "کلیدی وارد نشده"
+                txt = format_key_test_text(res)
                 return gr.update(value=txt, visible=True)
             except Exception as e:
                 return gr.update(value=f"خطا در تست: {e}", visible=True)
@@ -3598,7 +3666,32 @@ def run_web():
                 msg = job.get("log") or "⏹ ترجمه متوقف شد.\n(پروسه manga.py بسته شد)"
                 return _pack("🚀  شروع ترجمه", msg)
 
-            src = upload or (inp_path_v or "").strip()
+            up_files = upload if isinstance(upload, (list, tuple)) else (
+                [upload] if upload else [])
+            up_files = [u for u in up_files if u and os.path.isfile(u)]
+            src = (inp_path_v or "").strip()
+            multi_base = ""
+            if up_files:
+                if len(up_files) == 1:
+                    src = up_files[0]
+                else:
+                    # چند فایل انتخاب شده — همه در یک پوشهٔ دسته‌ای قرار می‌گیرند
+                    # و همان پوشه به‌عنوان ورودی به موتور داده می‌شود.
+                    batch_dir = os.path.join(OUT_DIR, sid[:12], "input_batch")
+                    shutil.rmtree(batch_dir, ignore_errors=True)
+                    os.makedirs(batch_dir, exist_ok=True)
+                    for bi, bf in enumerate(sorted(up_files, key=natural_key), 1):
+                        ext_b = os.path.splitext(bf)[1].lower() or ".bin"
+                        try:
+                            shutil.copyfile(bf, os.path.join(
+                                batch_dir, f"file_{bi:03d}{ext_b}"))
+                        except Exception:
+                            shutil.copyfile(bf, os.path.join(
+                                batch_dir, f"file_{bi:03d}" + ext_b.replace(".", "_")))
+                    src = batch_dir
+                    _mb = smart_output_base(up_files[0]) or "batch"
+                    multi_base = re.sub(r'[\\/:*?"<>|]+', "_", _mb)[:60] \
+                        + f"_{len(up_files)}files"
 
             if not src:
                 return _pack("🚀  شروع ترجمه",
@@ -3623,7 +3716,7 @@ def run_web():
                 api_base_v = _ab
 
             ext = {"PDF": ".pdf", "ZIP": ".zip", "HTML": ".html", "PSD": ".psd", "پوشهٔ تصاویر": ""}[out_fmt_v]
-            base = smart_output_base(str(src))
+            base = multi_base or smart_output_base(str(src))
             user_out_dir = os.path.join(OUT_DIR, sid[:12])
             os.makedirs(user_out_dir, exist_ok=True)
             _prev_src = ""
@@ -3795,16 +3888,20 @@ def run_web():
                     if (el) {
                         el.style.display = 'none';
                     }
-                }, 30000);
+                }, 60000);
             }
             """
         try:
-            test_key_btn.click(
+            _test_evt = test_key_btn.click(
                 _do_test_key,
                 inputs=[provider, api_keys, model, api_base],
                 outputs=[test_key_out],
-                js=_hide_test_js,
             )
+            # پنهان‌سازی بعد از ۶۰ ثانیه — جدا از رویداد اصلی تا ورودی‌ها خراب نشوند
+            try:
+                _test_evt.then(fn=None, inputs=None, outputs=None, js=_hide_test_js)
+            except Exception:
+                pass
         except Exception:
             pass
         try:
@@ -3940,7 +4037,10 @@ def run_web():
                 v = data.get(key)
                 if v is None:
                     return gr.update()
-                return gr.update(value=v)
+                s = str(v).strip()
+                if s.lower() in ("null", "undefined"):
+                    return gr.update()
+                return gr.update(value=s)
 
             def u_num(key):
                 if key not in data:
@@ -4097,7 +4197,12 @@ def run_web():
             with job["lock"]:
                 mem_log = job.get("log") or ""
                 meta_log = meta.get("log") or ""
-                if meta_log and (len(meta_log) > len(mem_log) or not mem_log or mem_log.startswith("—")):
+                running = _job_running(job)
+                # لاگ متادیتا فقط وقتی کار واقعاً در جریان است برمی‌گردد —
+                # وگرنه نتیجهٔ تازهٔ کاربر هر ثانیه با لاگ قدیمی جلسهٔ قبل بازنویسی می‌شد!
+                if running and meta_log and (
+                        len(meta_log) > len(mem_log) or not mem_log
+                        or mem_log.startswith("—")):
                     job["log"] = meta_log
                 if meta.get("result_visible") and not job.get("result_visible"):
                     job["result_visible"] = True
@@ -4109,6 +4214,7 @@ def run_web():
                     job["reader_path"] = meta.get("reader_path")
                 if meta.get("reader_debug_path") and not job.get("reader_debug_path"):
                     job["reader_debug_path"] = meta.get("reader_debug_path")
+                
                 running = _job_running(job)
                 log = job.get("log") or ""
                 vis = bool(job.get("result_visible"))
@@ -4118,6 +4224,13 @@ def run_web():
                 want_dbg = bool(job.get("want_debug") or meta.get("want_debug") or has_dbg)
                 
                 show_dbg = bool(want_dbg and (vis or running))
+            # وقتی هیچ کاری در جریان نیست و لاگ همان جای‌نگهدارِ اولیه است،
+            # هیچ‌کدام از ۱۴ خروجی را هر ثانیه بازنویسی نکن (هم روان‌تر است
+            # هم جلوی پر شدن صفحه با حالت‌های قدیمی را می‌گیرد).
+            # ولی اگر کار تمام/خطا شده، وضعیت دکمه و لاگ تازه باید برسد.
+            default_log = "— لاگ بعد از شروع ترجمه اینجا می‌آید —"
+            if not running and not vis and (not log or log.strip() == default_log):
+                return empty
             btn = "⏹  متوقف ترجمه" if running else "🚀  شروع ترجمه"
             html_dbg = ""
             with job["lock"]:
@@ -4148,6 +4261,8 @@ def run_web():
                 _poll_job_status,
                 inputs=[sid_holder, sid_box],
                 outputs=_poll_outputs,
+                queue=False,
+                concurrency_limit=1,
             )
             try:
                 
@@ -4156,6 +4271,7 @@ def run_web():
                     inputs=[session_id, sid_box, run_btn, log_box],
                     outputs=[],
                     js=save_job_js,
+                    queue=False,
                 )
             except Exception:
                 pass
@@ -4471,6 +4587,14 @@ def run_web():
             except Exception:
                 pass
 
+        try:
+            demo.load(None, None, None, js=_dark_js_src())
+        except Exception:
+            try:
+                demo.load(js=_dark_js_src())
+            except Exception:
+                pass
+
         gr.Markdown(
             "<div style='text-align:center; opacity:.45; margin-top:16px'>"
             "مانگا مترجم PRO · RT-DETR + Gemini/… + LaMa-Manga · اجرا روی CPU</div>"
@@ -4499,6 +4623,35 @@ def run_web():
 () => {
   document.body.classList.add('dark');
   document.documentElement.classList.add('dark');
+  // ---- Wake Lock (ماندن روشن بودن صفحه هنگام استخراج/پاکسازی/ترجمه) ----
+  try {
+    if (window.__mangaWakeLockInstalled) return;
+    window.__mangaWakeLockInstalled = true;
+    window.__mangaWL = null;
+    const isRunning = () => {
+      try {
+        const btn = (document.getElementById('runbtn') || {}).querySelector
+          ? document.getElementById('runbtn').querySelector('button') : null;
+        const t = (btn || document.getElementById('runbtn') || {}).textContent || '';
+        return (t.indexOf('متوقف') >= 0 || t.indexOf('⏹') >= 0);
+      } catch (e) { return false; }
+    };
+    const req = async () => {
+      try {
+        if (!window.__mangaWL && navigator.wakeLock && navigator.wakeLock.request) {
+          window.__mangaWL = await navigator.wakeLock.request('screen');
+        }
+      } catch (e) {}
+    };
+    const rel = () => {
+      try { if (window.__mangaWL) { window.__mangaWL.release(); } } catch (e) {}
+      window.__mangaWL = null;
+    };
+    setInterval(() => { if (isRunning()) req(); else rel(); }, 4000);
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && isRunning()) req();
+    });
+  } catch (e) {}
   const tryBind = () => {
     try {
       const root = document.getElementById('manga_rdr') || document.querySelector('.rdr');
@@ -4510,13 +4663,7 @@ def run_web():
   } catch (e) {}
 }
 """
-    try:
-        demo.load(None, None, None, js=dark_js)
-    except Exception:
-        try:
-            demo.load(js=dark_js)
-        except Exception:
-            pass
+    # ثبت dark_js حالا داخل بلاک Blocks انجام می‌شود (نسخهٔ بیرون context کار نمی‌کرد)
     on_colab = ("google.colab" in sys.modules or bool(os.environ.get("COLAB_RELEASE_TAG")))
     on_codespace = _detect_codespace()
     codespace_name = (os.environ.get("CODESPACE_NAME")
@@ -4530,7 +4677,7 @@ def run_web():
     if _gradio_major() >= 6:
         launch_kw["theme"] = gr.themes.Soft(primary_hue="indigo", neutral_hue="slate")
         launch_kw["css"] = WEB_CSS
-    demo.queue(max_size=4).launch(
+    demo.queue(max_size=64).launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("MANGA_APP_PORT", "7860")),
         share=on_colab or on_codespace or (not has_display()),

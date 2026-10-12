@@ -60,7 +60,7 @@ PAGE = """<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 
 <div class="stepcard">
  <div class="steptitle"><span class="stepnum">۱</span> ورودی — فایل یا لینک</div>
- <input type="file" id="f" accept=".pdf,.zip,.cbz,image/*" style="width:100%%;background:#08080a;color:#e8e6e1;border:1px solid #1f1f24;border-radius:10px;padding:10px">
+ <input type="file" id="f" accept=".pdf,.zip,.cbz,image/*" multiple style="width:100%%;background:#08080a;color:#e8e6e1;border:1px solid #1f1f24;border-radius:10px;padding:10px">
  <input type="url" id="url" placeholder="یا URL تصویر/مانهوا" style="width:100%%;margin-top:8px;background:#08080a;color:#e8e6e1;border:1px solid #1f1f24;border-radius:10px;padding:12px">
 </div>
 
@@ -106,8 +106,8 @@ syncCustom();
 async function start(){
   const run=document.getElementById('run'); run.disabled=true; run.textContent='⏳ در حال ارسال…';
   const fd=new FormData();
-  const f=document.getElementById('f').files[0];
-  if(f) fd.append('file', f);
+  const fl=document.getElementById('f').files;
+  for (const f of fl) fd.append('file', f);
   fd.append('url', document.getElementById('url').value);
   fd.append('provider', document.getElementById('provider').value);
   fd.append('keys', document.getElementById('keys').value);
@@ -169,10 +169,22 @@ def _save_upload(handler, dest):
             continue
         if fn and fn.group(1):
             safe = os.path.basename(fn.group(1).replace("\\", "/"))
+            base_n, ext_n = os.path.splitext(safe or "upload.bin")
             path = os.path.join(dest, safe or "upload.bin")
+            _k = 2
+            while os.path.exists(path):
+                path = os.path.join(dest, "%s-%d%s" % (base_n, _k, ext_n))
+                _k += 1
             with open(path, "wb") as f:
                 f.write(data)
-            fields[nm.group(1)] = path
+            if nm.group(1) in fields and isinstance(fields[nm.group(1)], str) \
+                    and os.path.isfile(str(fields[nm.group(1)])):
+                fields.setdefault("_files", []).append(fields.pop(nm.group(1)))
+                fields["_files"].append(path)
+            elif nm.group(1) == "file" and "_files" in fields:
+                fields["_files"].append(path)
+            else:
+                fields[nm.group(1)] = path
         else:
             fields[nm.group(1)] = data.decode("utf-8", "replace")
     return fields
@@ -274,6 +286,18 @@ class Handler(BaseHTTPRequestHandler):
         fields = _save_upload(self, work) or {}
         sid = str(int(time.time() * 1000))
         src = fields.get("file") or fields.get("url") or ""
+        # چند فایل → پوشهٔ دسته‌ای
+        _flist = fields.get("_files") or []
+        if len(_flist) > 1:
+            try:
+                _bdir = os.path.join(work, "batch_%s" % sid)
+                os.makedirs(_bdir, exist_ok=True)
+                for _fi, _fp in enumerate(_flist, 1):
+                    _ex = os.path.splitext(_fp)[1].lower() or ".bin"
+                    shutil.copyfile(_fp, os.path.join(_bdir, "file_%03d%s" % (_fi, _ex)))
+                src = _bdir
+            except Exception:
+                src = _flist[0]
         cfg = {
             "src": src,
             "out": os.path.join(os.environ.get("MANGA_FILES_DIR", os.getcwd()), "work", "out", sid),

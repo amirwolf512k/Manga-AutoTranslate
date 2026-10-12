@@ -425,6 +425,32 @@ import numpy as np
 import cv2
 from PIL import Image, ImageDraw, ImageFont
 
+# ---------------------------------------------------------------------------
+# لغو همکارانه (Cancel) — از وب / پی‌سی / اندروید قابل ست‌شدن است.
+# bridge.py و manga_app.py با request_stop() درخواست توقف می‌دهند؛
+# حلقهٔ اصلی run() بین صفحه‌ها این پرچم را چک می‌کند و JobCancelled می‌دهد.
+# ---------------------------------------------------------------------------
+REQUEST_STOP = False
+
+
+class JobCancelled(Exception):
+    """وقتی کاربر دکمهٔ لغو را می‌زند پرتاب می‌شود."""
+
+
+def request_stop() -> None:
+    global REQUEST_STOP
+    REQUEST_STOP = True
+
+
+def clear_stop() -> None:
+    global REQUEST_STOP
+    REQUEST_STOP = False
+
+
+def stop_requested() -> bool:
+    return bool(globals().get("REQUEST_STOP"))
+
+
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
 os.environ.setdefault("FLAGS_onednn", "0")
 
@@ -1833,6 +1859,25 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
     return results
 
 
+def format_key_test_text(res: list) -> str:
+    """قالب یکسان نتیجهٔ تست کلیدها برای وب / پی‌سی / اندروید.
+    هر کلید با ✔ / ⚠️ / ✘ مشخص می‌شود؛ بعد از ۶۰ ثانیه در رابط پاک می‌شود."""
+    if not res:
+        return "کلیدی وارد نشده"
+    lines = []
+    for i, r in enumerate(res, 1):
+        key = str(r.get("key", "") or "***")
+        ms = int(r.get("ms") or 0)
+        err = str(r.get("error") or "")
+        if r.get("ok") and err:
+            lines.append(f"⚠️ کلید {i} ({key}): سالم ولی هشدار — {err}  [{ms}ms]")
+        elif r.get("ok"):
+            lines.append(f"✔ کلید {i} ({key}): سالم است  [{ms}ms]")
+        else:
+            lines.append(f"✘ کلید {i} ({key}): خراب" + (f" — {err}" if err else "") + f"  [{ms}ms]")
+    return "\n".join(lines)
+
+
 def _ask(prompt: str) -> str:
     try:
         return input(prompt).strip()
@@ -2292,6 +2337,12 @@ class MangaTranslator:
                   f"برای اجبار: --lama یا --gpu")
             return False
         if has_torch and not _on_android():
+            avail = self._available_ram_gb()
+            if avail and avail < 2.2:
+                print(f"[*] رم آزاد کم است ({avail:.1f}GB) → پاک‌سازی OpenCV "
+                      "(بارگذاری big-lama می‌توانست پروسه را بکشد). "
+                      "برای اجبار LaMa: --lama")
+                return False
             print("[*] دسکتاپ/وب → پاک‌سازی پیش‌فرض با big-lama.pt "
                   "(روی CPU کندتر ولی تمیزتر). برای غیرفعال‌سازی: --cpu")
             return True
@@ -2551,12 +2602,30 @@ class MangaTranslator:
             except Exception as e:
                 print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
+        # --- انتخاب موتور OCR روی اندروید ---
+        # طبق درخواست کاربر: استخراج روی گوشی باید «همان استخراج وب و پی‌سی»
+        # باشد — یعنی همان RapidOCR ONNX (همان مدل). ML Kit فقط به‌عنوان
+        # فال‌بک وقتی RapidOCR در دسترس نبود استفاده می‌شود.
+        # برای رفتار قدیمی: متغیر محیطی MANGA_ANDROID_OCR=mlkit
         if self.ocr is None and _on_android():
-            try:
-                self.ocr = MlKitBackend(lang=main_lang)
-                self._ocr_backend_name = "mlkit"
-            except Exception as e:
-                print(f"[!] ML Kit لود نشد ({e}) → RapidOCR")
+            if os.environ.get("MANGA_ANDROID_OCR", "").strip().lower() == "mlkit":
+                try:
+                    self.ocr = MlKitBackend(lang=main_lang)
+                    self._ocr_backend_name = "mlkit"
+                except Exception as e:
+                    print(f"[!] ML Kit لود نشد ({e}) → RapidOCR")
+            else:
+                try:
+                    self.ocr = RapidOCRBackend(lang=main_lang)
+                    self._ocr_backend_name = "rapidocr"
+                    print("[*] اندروید: از همان موتور وب/پی‌سی (RapidOCR) استفاده می‌شود.")
+                except Exception as e:
+                    print(f"[!] RapidOCR روی اندروید لود نشد ({e}) → ML Kit سبک")
+                    try:
+                        self.ocr = MlKitBackend(lang=main_lang)
+                        self._ocr_backend_name = "mlkit"
+                    except Exception as e2:
+                        print(f"[!] ML Kit هم لود نشد ({e2})")
 
         if self.ocr is None:
             try:
@@ -9660,10 +9729,15 @@ html, body { background: #0a0a0b; }
 
             def _job():
                 try:
+                    if stop_requested():
+                        raise JobCancelled("لغو توسط کاربر")
                     self.translate_regions(chunk)
                 except GeminiQuotaExhausted as e:
                     print(f"\n[!] {e}")
                     quota_flag["dead"] = True
+                except JobCancelled:
+                    _account_chunk(chunk)
+                    raise
                 except Exception as e:
                     print(f"    [!] خطای ترجمه در پس‌زمینه: {e}", file=sys.stderr)
                 finally:
@@ -9678,6 +9752,10 @@ html, body { background: #0a0a0b; }
         for item in pending:
             if quota_dead or quota_flag["dead"]:
                 break
+            if stop_requested():
+                print("[⏹] درخواست لغو کاربر — توقف پردازش صفحه‌ها…", flush=True)
+                trans_pool.shutdown(wait=False)
+                raise JobCancelled("لغو توسط کاربر")
             try:
                 page_i, out_file, image, regions, dbg = _extract_one(item)
             except GeminiQuotaExhausted as e:
@@ -9710,12 +9788,19 @@ html, body { background: #0a0a0b; }
             _finish_ready_pages()
 
 
+        if stop_requested():
+            trans_pool.shutdown(wait=False)
+            raise JobCancelled("لغو توسط کاربر")
+
         _flush_translate_buffer(force=True)
         for _f in trans_futures:
             try:
                 _f.result()
             except Exception:
                 pass
+        if stop_requested():
+            trans_pool.shutdown(wait=False)
+            raise JobCancelled("لغو توسط کاربر")
         _finish_ready_pages()
         for page_i in sorted(extracted_map.keys()):
             _finish_page_now(page_i)

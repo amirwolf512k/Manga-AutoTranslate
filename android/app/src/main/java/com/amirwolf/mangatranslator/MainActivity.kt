@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logBox: TextView
     private lateinit var resultsBox: LinearLayout
     private lateinit var runBtn: Button
+    private lateinit var cancelBtn: Button
     private lateinit var loadingRow: LinearLayout
     private val values = HashMap<String, Any?>()
     private val fieldViews = HashMap<String, View>()
@@ -70,6 +71,7 @@ class MainActivity : AppCompatActivity() {
     private var logFollow = true
     private val ui = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences("manga_settings", MODE_PRIVATE) }
+    private var wakeLock: android.os.PowerManager.WakeLock? = null
 
     private fun dp(v: Int): Int =
         TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
@@ -112,8 +114,55 @@ class MainActivity : AppCompatActivity() {
         depListeners[id]?.forEach { try { it() } catch (_: Exception) {} }
     }
 
-    private fun savedOr(id: String, dflt: Any?): Any? =
-        prefs.getString(id, null) ?: dflt
+    private fun savedOr(id: String, dflt: Any?): Any? {
+        val s = prefs.getString(id, null)
+        if (s != null) {
+            // فیکس باگ «null» — مقدار ذخیره‌شدهٔ خراب هرگز به فیلد لینک نمی‌رود
+            if (s.equals("null", true) || s.equals("undefined", true)) return null
+            return s
+        }
+        return dflt
+    }
+
+    private fun acquireKeepAwake() {
+        // دسترسی باتری/بیدار نگه‌داشتن برای استخراج متن و پاکسازی (مشکل ۴)
+        try {
+            window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            if (wakeLock == null) {
+                wakeLock = pm.newWakeLock(android.os.PowerManager.PARTIAL_WAKE_LOCK,
+                    "MangaApp:translation")
+            }
+            wakeLock?.takeIf { !it.isHeld }?.acquire(4 * 60 * 60 * 1000L)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun releaseKeepAwake() {
+        try {
+            window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+            wakeLock?.takeIf { it.isHeld }?.release()
+        } catch (_: Exception) {
+        }
+        wakeLock = null
+    }
+
+    private fun maybeAskBatteryExemption() {
+        if (prefs.getBoolean("battery_asked", false)) return
+        prefs.edit().putBoolean("battery_asked", true).apply()
+        try {
+            val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
+            if (Build.VERSION.SDK_INT >= 23 &&
+                !pm.isIgnoringBatteryOptimizations(packageName)) {
+                @Suppress("BatteryLife")
+                val i = Intent(
+                    android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:$packageName"))
+                startActivity(i)
+            }
+        } catch (_: Exception) {
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -153,8 +202,23 @@ class MainActivity : AppCompatActivity() {
         }
         root.addView(runBtn, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            topMargin = dp(14); bottomMargin = dp(8)
+            topMargin = dp(14); bottomMargin = dp(6)
         })
+
+        // دکمهٔ لغو — فقط حین اجرای ترجمه دیده می‌شود (مشکل ۶)
+        cancelBtn = Button(this).apply {
+            text = "⏹  لغو ترجمه"
+            setTextColor(Color.WHITE); textSize = 15f; typeface = Typeface.DEFAULT_BOLD
+            background = rounded(Color.parseColor("#3a1210"), 14, 2, ACC)
+            setPadding(0, dp(12), 0, dp(12))
+            stateListAnimator = null
+            visibility = View.GONE
+        }
+        root.addView(cancelBtn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(8)
+        })
+        cancelBtn.setOnClickListener { onCancelJob() }
 
         val logCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -678,11 +742,14 @@ class MainActivity : AppCompatActivity() {
                 infoView()?.let { row.addView(it) }
                 fieldViews[id] = et
                 if (id.lowercase().contains("key")) {
+                    // دکمهٔ قرمز یکدست «تست کلیدها / لینک» — مثل وب و پی‌سی (مشکل ۵)
                     val testBtn = Button(this).apply {
                         text = "تست کلیدها / لینک"
-                        setTextColor(TXT); textSize = 13f
-                        background = rounded(CARD2, 10, 1)
-                        setPadding(dp(12), dp(8), dp(12), dp(8))
+                        setTextColor(Color.WHITE); textSize = 13.5f
+                        typeface = Typeface.DEFAULT_BOLD
+                        background = gradBtn()
+                        setPadding(dp(12), dp(11), dp(12), dp(11))
+                        stateListAnimator = null
                     }
                     val testLbl = TextView(this).apply {
                         setTextColor(MUT); textSize = 12f
@@ -718,7 +785,8 @@ class MainActivity : AppCompatActivity() {
                                 testLbl.text = msg
                                 testLbl.setTextColor(if (okTxt != null) TXT else Color.parseColor("#c62828"))
                                 testLbl.visibility = View.VISIBLE
-                                testLbl.postDelayed({ testLbl.visibility = View.GONE }, 30000)
+                                // نتیجهٔ تست بعد از ۶۰ ثانیه خودکار پاک می‌شود (وب = پی‌سی = اندروید)
+                                testLbl.postDelayed({ testLbl.visibility = View.GONE }, 60000)
                             }
                         }.start()
                     }
@@ -911,12 +979,22 @@ class MainActivity : AppCompatActivity() {
                 fieldViews[id] = sl
             }
             "file" -> {
-                                val nameView = TextView(this).apply {
+                val isFontField = id.startsWith("up_") || id == "font_upload"
+                val nameView = TextView(this).apply {
                     text = "فایلی انتخاب نشده"
                     setTextColor(MUT); textSize = 11f; setPadding(dp(12), dp(2), dp(12), dp(2))
                 }
+                val clearBtn = Button(this).apply {
+                    text = "✕  لغو / حذف انتخاب"
+                    setTextColor(Color.WHITE); textSize = 12.5f
+                    background = rounded(Color.parseColor("#3a1210"), 10, 1, ACC)
+                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    stateListAnimator = null
+                    visibility = View.GONE
+                }
                 val btn = Button(this).apply {
-                    text = "⬆  آپلود فایل — کلیک کن"
+                    text = if (isFontField) "⬆  آپلود فونت — کلیک کن"
+                           else "⬆  آپلود فایل‌ها (چندتایی) — کلیک کن"
                     setTextColor(MUT); textSize = 13f
                     background = dashed()
                     gravity = Gravity.CENTER
@@ -925,21 +1003,45 @@ class MainActivity : AppCompatActivity() {
                 }
                 btn.setOnClickListener {
                     pickerField = id
+                    val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
+                        addCategory(Intent.CATEGORY_OPENABLE)
+                        setType("*/*")
+                        // چند انتخاب هم‌زمان — وب / پی‌سی / اندروید (مشکل ۲)
+                        if (!isFontField) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                    }
                     startActivityForResult(
-                        Intent.createChooser(Intent(Intent.ACTION_GET_CONTENT).apply {
-                            addCategory(Intent.CATEGORY_OPENABLE)
-                            setType("*/*")
-                        }, "انتخاب فایل"), REQ_FILE)
+                        Intent.createChooser(intent,
+                            if (isFontField) "انتخاب فونت" else "انتخاب فایل (می‌توانی چندتا بزنی)"),
+                        REQ_FILE)
+                }
+                // دکمهٔ لغو انتخاب فایل (مشکل ۱)
+                clearBtn.setOnClickListener {
+                    pickedFiles.remove(id)
+                    prefs.edit().remove(id + "_path").apply()
+                    nameView.text = "فایلی انتخاب نشده"
+                    btn.text = if (isFontField) "⬆  آپلود فونت — کلیک کن"
+                               else "⬆  آپلود فایل‌ها (چندتایی) — کلیک کن"
+                    clearBtn.visibility = View.GONE
+                    Toast.makeText(this, "انتخاب فایل لغو شد", Toast.LENGTH_SHORT).show()
                 }
                 row.addView(btn)
                 row.addView(nameView)
+                row.addView(clearBtn)
                 fieldViews[id] = nameView
                 fieldViews[id + "_btn"] = btn
+                fieldViews[id + "_clear"] = clearBtn
                 val prev = prefs.getString(id + "_path", null)
-                if (prev != null && File(prev).isFile()) {
-                    pickedFiles[id] = prev
-                    nameView.text = "✔ ${File(prev).name}"
-                    (fieldViews[id + "_btn"] as? Button)?.text = "✓ ${File(prev).name}"
+                if (prev != null && !prev.equals("null", true)) {
+                    val kept = prev.split(",").map { it.trim() }
+                        .filter { it.isNotBlank() && File(it).isFile() }
+                    if (kept.isNotEmpty()) {
+                        pickedFiles[id] = kept.joinToString(",")
+                        nameView.text = if (kept.size == 1) "✔ ${File(kept[0]).name}"
+                                        else "✔ ${kept.size} فایل انتخاب شد"
+                        btn.text = if (kept.size == 1) "✓ ${File(kept[0]).name}"
+                                   else "✓ ${kept.size} فایل — برای تغییر دوباره کلیک کن"
+                        clearBtn.visibility = View.VISIBLE
+                    }
                 }
             }
             "header" -> row.addView(TextView(this).apply {
@@ -965,8 +1067,10 @@ class MainActivity : AppCompatActivity() {
         }
         for ((id, path) in pickedFiles) o.put(id + "_file", path)
         val map = JSONObject()
-        map.put("src", firstNonEmpty(o, "inp_path", "url")
-            ?: pickedFiles["inp_upload"] ?: pickedFiles.values.firstOrNull() ?: "")
+        val urlVal = (firstNonEmpty(o, "inp_path", "url") ?: "")
+            .takeIf { it.isNotBlank() && !it.equals("null", true) && !it.equals("undefined", true) }
+        map.put("src", urlVal
+            ?: pickedFiles["inp_upload"] ?: "")
         map.put("file", pickedFiles["inp_upload"] ?: "")
         map.put("provider", firstNonEmpty(o, "provider") ?: "gemini")
         map.put("keys", firstNonEmpty(o, "manga_api_keys", "api_keys", "keys") ?: "")
@@ -990,6 +1094,7 @@ class MainActivity : AppCompatActivity() {
             if (o.has(k) && !o.isNull(k)) map.put(k, o.get(k))
         }
         for ((id, v) in values) {
+            if (v == null) continue
             if (id !in o.keysIteratorAsList()) {
                 o.put(id, v.toString())
             }
@@ -1051,15 +1156,35 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    private fun onCancelJob() {
+        // مشکل ۶ — لغو واقعی کار در حال اجرا (موتور در اولین فرصت توقف می‌شود)
+        cancelBtn.isEnabled = false
+        cancelBtn.text = "⏳ در حال توقف…"
+        Thread {
+            try {
+                bridge.callAttr("cancel")
+            } catch (_: Exception) {
+            }
+        }.start()
+        Toast.makeText(this, "درخواست لغو ثبت شد — تا پایان مرحلهٔ فعلی کمی صبر کن",
+            Toast.LENGTH_SHORT).show()
+    }
+
     private fun onStartJob() {
         try {
             val p = collect()
-            if ((p.optString("src") ?: "").isBlank()) {
+            if ((p.optString("src") ?: "").isBlank() ||
+                (p.optString("src") ?: "").equals("null", true)) {
                 Toast.makeText(this, "فایل یا لینک ورودی بده", Toast.LENGTH_SHORT).show()
                 return
             }
+            maybeAskBatteryExemption()
             runBtn.isEnabled = false
             runBtn.text = "⏳ در حال اجرا…"
+            cancelBtn.isEnabled = true
+            cancelBtn.text = "⏹  لغو ترجمه"
+            cancelBtn.visibility = View.VISIBLE
+            acquireKeepAwake()
             resultsBox.removeAllViews()
             Thread {
                 var res: JSONObject? = null
@@ -1077,22 +1202,31 @@ class MainActivity : AppCompatActivity() {
                         else {
                             logBox.text = "❌ " + (r?.optString("error", "")?.ifBlank { null }
                                 ?: err ?: "خطا")
-                            runBtn.isEnabled = true; runBtn.text = "🚀  شروع ترجمه"
+                            finishJobUi()
                         }
                     } catch (e: Exception) {
                         logBox.text = "❌ " + (e.message ?: e.toString())
-                        runBtn.isEnabled = true
+                        finishJobUi()
                     }
                 }
             }.start()
         } catch (e: Exception) {
             logBox.text = "❌ " + (e.message ?: e.toString())
-            runBtn.isEnabled = true
+            finishJobUi()
         }
     }
 
     private val pollExec = java.util.concurrent.Executors.newSingleThreadExecutor()
     private var lastLogTxt = ""
+
+    private fun finishJobUi() {
+        runBtn.isEnabled = true
+        runBtn.text = "🚀  شروع ترجمه"
+        cancelBtn.visibility = View.GONE
+        cancelBtn.isEnabled = true
+        cancelBtn.text = "⏹  لغو ترجمه"
+        releaseKeepAwake()
+    }
 
     private fun pollLoop() {
         pollExec.execute {
@@ -1108,8 +1242,7 @@ class MainActivity : AppCompatActivity() {
                     val s = st
                     if (s == null) {
                         logBox.text = "❌ poll: $err"
-                        runBtn.isEnabled = true
-                        runBtn.text = "🚀  شروع ترجمه"
+                        finishJobUi()
                         return@post
                     }
                     val lg = s.optString("log", "")
@@ -1117,14 +1250,21 @@ class MainActivity : AppCompatActivity() {
                         lastLogTxt = lg
                         setLog(lg)
                     }
+                    if (s.optBoolean("cancel_requested") && !s.optBoolean("done") &&
+                        cancelBtn.isEnabled) {
+                        cancelBtn.isEnabled = false
+                        cancelBtn.text = "⏳ در حال توقف…"
+                    }
                     if (s.optBoolean("done")) {
-                        runBtn.isEnabled = true
-                        runBtn.text = "🚀  شروع ترجمه"
+                        if (s.optBoolean("cancelled")) {
+                            setLog(lg + "\n\n⏹ ترجمه لغو شد.")
+                        }
+                        finishJobUi()
                         showResults(s)
                     } else ui.postDelayed({ pollLoop() }, 1500)
                 } catch (e: Exception) {
                     logBox.text = "❌ poll: " + (e.message ?: e.toString())
-                    runBtn.isEnabled = true
+                    finishJobUi()
                 }
             }
         }
@@ -1417,39 +1557,65 @@ class MainActivity : AppCompatActivity() {
 
 override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == REQ_FILE && resultCode == Activity.RESULT_OK && data?.data != null) {
-            val uri = data.data!!
-            val fid0 = pickerField ?: ""
-            var name = queryDisplayName(uri)
-            if (name.isNullOrBlank()) name = uri.lastPathSegment ?: "input.bin"
-            name = name.substringAfterLast('/')
-            if (!name.contains('.')) {
-                val mime = try { contentResolver.getType(uri) } catch (_: Exception) { null }
-                val ext = when {
-                    mime?.startsWith("image/") == true ->
-                        "." + mime.removePrefix("image/").substringBefore('+')
-                            .replace("jpeg", "jpg")
-                    mime == "application/pdf" -> ".pdf"
-                    mime == "application/zip" || mime == "application/x-zip-compressed" -> ".zip"
-                    mime?.startsWith("font/") == true || mime == "application/x-font-ttf" -> ".ttf"
-                    fid0.contains("font") -> ".ttf"
-                    else -> ".png"
+        if (requestCode == REQ_FILE && resultCode == Activity.RESULT_OK && data != null) {
+            // چند انتخاب (مشکل ۲): clipData چند فایل / data یک فایل
+            val uris = mutableListOf<Uri>()
+            data.data?.let { uris.add(it) }
+            data.clipData?.let { cd ->
+                for (i in 0 until cd.itemCount) {
+                    try { cd.getItemAt(i).uri?.let { u -> if (!uris.contains(u)) uris.add(u) } }
+                    catch (_: Exception) {}
                 }
-                name += ext
             }
-            name = name.replace(Regex("[\\\\/:*?\"<>|]"), "_")
-            val dest = File(cacheDir, "pick_" + System.currentTimeMillis() + "_" + name)
-            contentResolver.openInputStream(uri)?.use { input ->
-                dest.outputStream().use { output -> input.copyTo(output) }
+            if (uris.isEmpty()) return
+            val fid0 = pickerField ?: return
+            val isFontField = fid0.startsWith("up_") || fid0 == "font_upload"
+            val copied = mutableListOf<String>()
+            for (uri in uris) {
+                var name = queryDisplayName(uri)
+                if (name.isNullOrBlank()) name = uri.lastPathSegment ?: "input.bin"
+                name = name.substringAfterLast('/')
+                if (!name.contains('.')) {
+                    val mime = try { contentResolver.getType(uri) } catch (_: Exception) { null }
+                    val ext = when {
+                        mime?.startsWith("image/") == true ->
+                            "." + mime.removePrefix("image/").substringBefore('+')
+                                .replace("jpeg", "jpg")
+                        mime == "application/pdf" -> ".pdf"
+                        mime == "application/zip" || mime == "application/x-zip-compressed" -> ".zip"
+                        mime?.startsWith("font/") == true || mime == "application/x-font-ttf" -> ".ttf"
+                        fid0.contains("font") -> ".ttf"
+                        else -> ".png"
+                    }
+                    name += ext
+                }
+                name = name.replace(Regex("[\\\\/:*?\"<>|,]"), "_")
+                val dest = File(cacheDir, "pick_" + System.currentTimeMillis() + "_" + name)
+                try {
+                    contentResolver.openInputStream(uri)?.use { input ->
+                        dest.outputStream().use { output -> input.copyTo(output) }
+                    }
+                } catch (_: Exception) {}
+                if (dest.isFile && dest.length() > 0) copied.add(dest.absolutePath)
+                if (isFontField) break // فونت فقط تک‌انتخاب
             }
+            if (copied.isEmpty()) return
             val fid = pickerField ?: return
-            pickedFiles[fid] = dest.absolutePath
-            saveVal(fid + "_path", dest.absolutePath)
-            (fieldViews[fid] as? TextView)?.text = "✔ ${dest.name}"
-            if (fid.startsWith("up_") || fid == "font_upload") {
-                (fieldViews[fid + "_btn"] as? Button)?.text = "✓ ${dest.name}"
+            pickedFiles[fid] = copied.joinToString(",")
+            saveVal(fid + "_path", pickedFiles[fid] ?: "")
+            (fieldViews[fid] as? TextView)?.text =
+                if (copied.size == 1) "✔ ${File(copied[0]).name}"
+                else "✔ ${copied.size} فایل انتخاب شد"
+            if (isFontField) {
+                (fieldViews[fid + "_btn"] as? Button)?.text =
+                    "✓ ${File(copied[0]).name}"
+            } else {
+                (fieldViews[fid + "_btn"] as? Button)?.text =
+                    if (copied.size == 1) "✓ ${File(copied[0]).name}"
+                    else "✓ ${copied.size} فایل — برای تغییر دوباره کلیک کن"
             }
-            saveVal("last_file_name", dest.name)
+            (fieldViews[fid + "_clear"] as? Button)?.visibility = View.VISIBLE
+            saveVal("last_file_name", File(copied[0]).name)
         }
     }
 
