@@ -1013,6 +1013,26 @@ def run_desktop():
     keys_var = tk.StringVar(value=cfg.get("api_keys") or default_keys())
     keys_entry = ttk.Entry(card_ai, textvariable=keys_var, show="•")
     keys_entry.pack(fill="x")
+    test_key_row = ttk.Frame(card_ai)
+    test_key_row.pack(fill="x", pady=(4, 0))
+    test_key_btn_tk = ttk.Button(test_key_row, text="تست کلید")
+    test_key_btn_tk.pack(side="right")
+    test_key_lbl = ttk.Label(test_key_row, text="", foreground=C_MUT)
+    test_key_lbl.pack(side="right", padx=(0, 8))
+
+    def _do_test_key_tk():
+        try:
+            from manga import MangaTranslator
+            ok, msg = MangaTranslator.test_api_key(
+                prov_var.get(), keys_var.get(), model_var.get(),
+                api_base_var.get() if "api_base_var" in dir() else "")
+            test_key_lbl.config(
+                text=("✅ " if ok else "❌ ") + msg,
+                foreground="#2e7d32" if ok else "#c62828")
+        except Exception as e:
+            test_key_lbl.config(text=f"❌ خطا: {e}", foreground="#c62828")
+
+    test_key_btn_tk.config(command=_do_test_key_tk)
 
     def _toggle_custom_fields(*_a):
         if str(prov_var.get()).strip() == "custom":
@@ -2477,6 +2497,10 @@ def run_web():
                                       type="password", scale=3,
                                       elem_id="manga_api_keys",
                                       info="کلید فقط در localStorage مرورگر شما می‌ماند — نه روی سرور و نه در config دسکتاپ.")
+                test_key_btn = gr.Button("تست کلید", scale=1, size="sm",
+                                         elem_id="manga_test_key")
+                test_key_out = gr.Textbox(label="نتیجه تست", interactive=False,
+                                          scale=2, elem_id="manga_test_key_out")
                 model = gr.Textbox(label="مدل (خالی = پیش‌فرض)",
                                    value="",
                                    placeholder="gemini-3.8-flash", scale=2,
@@ -3464,6 +3488,15 @@ def run_web():
 """
 
 
+        def _do_test_key(provider_v, api_keys_v, model_v, api_base_v):
+            try:
+                from manga import MangaTranslator
+                ok, msg = MangaTranslator.test_api_key(
+                    provider_v, api_keys_v, model_v, api_base_v)
+                return ("✅ " if ok else "❌ ") + msg
+            except Exception as e:
+                return f"❌ خطا: {e}"
+
         def run_translation(sid, sid_box_v, inp_path_v, upload, provider_v, api_keys_v, model_v,
                             ocr_lang_v,
                             out_fmt_v, quality_v, font_up,
@@ -3698,6 +3731,14 @@ def run_web():
                      dl_btn_debug, btn_view_debug, debug_row, html_debug_state],
             concurrency_limit=8,
         )
+        try:
+            test_key_btn.click(
+                _do_test_key,
+                inputs=[provider, api_keys, model, api_base],
+                outputs=[test_key_out],
+            )
+        except Exception:
+            pass
         try:
             run_btn.click(run_translation, show_progress="hidden", **_click_kw)
         except TypeError:

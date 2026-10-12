@@ -5460,6 +5460,62 @@ class MangaTranslator:
             except TypeError:
                 ex.shutdown(wait=False)
 
+    @staticmethod
+    def test_api_key(provider: str, api_key: str, model: str = "",
+                     api_base: str = "") -> tuple:
+        try:
+            key = (api_key or "").strip().split(",")[0].strip()
+            if not key:
+                return False, "کلید خالی است."
+            prov = (provider or "gemini").strip().lower()
+            if prov == "gemini":
+                if not _HAS_GEMINI:
+                    return False, "کتابخانه google-genai نصب نیست."
+                client = genai.Client(api_key=key)
+                m = (model or "").strip() or "gemini-2.0-flash"
+                resp = client.models.generate_content(
+                    model=m, contents="Reply with: OK",
+                    config=genai_types.GenerateContentConfig(
+                        max_output_tokens=16, temperature=0),
+                )
+                txt = (getattr(resp, "text", "") or "").strip()
+                if txt:
+                    return True, f"اتصال موفق ({m})."
+                return False, "پاسخ خالی از سرور."
+            else:
+                if not _HAS_OPENAI:
+                    return False, "کتابخانه openai نصب نیست."
+                base = (api_base or "").strip()
+                kwargs = {"api_key": key}
+                if base:
+                    kwargs["base_url"] = base
+                elif prov == "openai":
+                    kwargs["base_url"] = "https://api.openai.com/v1"
+                elif prov == "deepseek":
+                    kwargs["base_url"] = "https://api.deepseek.com/v1"
+                elif prov == "groq":
+                    kwargs["base_url"] = "https://api.groq.com/openai/v1"
+                client = OpenAI(**kwargs)
+                m = (model or "").strip() or "gpt-4o-mini"
+                resp = client.chat.completions.create(
+                    model=m,
+                    messages=[{"role": "user", "content": "Reply with: OK"}],
+                    max_tokens=16, temperature=0,
+                )
+                txt = ""
+                try:
+                    txt = (resp.choices[0].message.content or "").strip()
+                except Exception:
+                    pass
+                if txt:
+                    return True, f"اتصال موفق ({m})."
+                return False, "پاسخ خالی از سرور."
+        except Exception as e:
+            msg = str(e)
+            if len(msg) > 200:
+                msg = msg[:200] + "..."
+            return False, f"خطا: {msg}"
+
     def _translate_with_gemini(self, user_prompt: str, system_instruction: str,
                                *, structured: bool = True) -> str:
         item_props = {
