@@ -1885,7 +1885,7 @@ class BalloonToneClassifier:
                 return "narrator"
             if n_vertices >= 12 and solidity < 0.82:
                 return "shout"
-            if defects >= 6 and solidity < 0.88:
+            if defects >= 4 and solidity < 0.90:
                 return "thought"
             if defects >= 3 and 0.82 <= solidity < 0.95:
                 return "sun_thought"
