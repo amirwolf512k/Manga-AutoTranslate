@@ -1861,7 +1861,7 @@ class BalloonToneClassifier:
             hull = cv2.convexHull(cnt)
             hull_area = cv2.contourArea(hull)
             solidity = area / hull_area if hull_area > 0 else 1.0
-            approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+            approx = cv2.approxPolyDP(cnt, 0.01 * peri, True)
             n_vertices = len(approx)
             defects = 0
             try:
@@ -1883,7 +1883,9 @@ class BalloonToneClassifier:
                 if defects >= 3:
                     return "square_thought"
                 return "narrator"
-            if n_vertices >= 12 and solidity < 0.82:
+            if n_vertices >= 16:
+                return "shout"
+            if n_vertices >= 12 and solidity < 0.85:
                 return "shout"
             bumpiness = 0
             try:
