@@ -42,6 +42,7 @@ DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 import os
 import sys
 import subprocess
+import gc
 
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
 os.environ.setdefault("FLAGS_onednn", "0")
@@ -2542,6 +2543,269 @@ def ensure_fonts(font_dir: str, log=print) -> int:
     return got
 
 
+class ComicTextDetectorDNN:
+    """تشخیص‌گر متن کمیک (comictextdetector نسخهٔ ONNX از manga-image-translator).
+
+    تفاوتش با کادرهای OCR: خروجی این مدل یک ماسکِ «حرف‌به‌حرف» است — دقیقاً روی
+    خودِ حروف می‌نشیند، نه دورِ کادرشان. برای همین حباب‌هایی که OCR متن‌شان را
+    کامل پیدا نمی‌کند (مثل حباب‌های فشفشه‌ای یا متن‌های عمودی آزاد) هم بدون
+    باقی‌مانده پاک می‌شوند."""
+
+    URL = ("https://github.com/zyddnys/manga-image-translator/releases/"
+           "download/beta-0.3/comictextdetector.pt.onnx")
+    SIZE = 1024
+    OVERLAP = 96
+    THRESH = 0.30
+
+    def __init__(self, model_path=None, cache_dir=None):
+        if not model_path or not os.path.isfile(model_path):
+            model_path = self._download_model(cache_dir=cache_dir)
+        self.model_path = model_path
+        self.net = cv2.dnn.readNetFromONNX(model_path)
+        self._out_names = self.net.getUnconnectedOutLayersNames()
+
+    @classmethod
+    def _download_model(cls, cache_dir=None):
+        from pathlib import Path
+        cache_root = (Path(cache_dir) if cache_dir
+                      else Path.home() / ".cache" / "manga_translator_models")
+        cache_root.mkdir(parents=True, exist_ok=True)
+        dst = cache_root / "comictextdetector.pt.onnx"
+        if dst.is_file() and dst.stat().st_size > 1_000_000:
+            print(f"[*] مدل CTD از کش: {dst}")
+            return str(dst)
+        print("[*] دانلود مدل تشخیص متن CTD (~۹۴MB، فقط بار اول) ...")
+        _dl_to(cls.URL, str(dst), name="comictextdetector.pt.onnx")
+        print(f"[+] مدل CTD ذخیره شد: {dst}")
+        return str(dst)
+
+    @staticmethod
+    def _tile_starts(total, tile, overlap):
+        if total <= tile:
+            return [0]
+        step = max(1, tile - overlap)
+        starts, pos = [], 0
+        while True:
+            if pos + tile >= total:
+                starts.append(max(0, total - tile))
+                break
+            starts.append(pos)
+            pos += step
+        return starts
+
+    def glyph_mask(self, image, tile=None, overlap=None, thresh=None):
+        """ماسک حروف کل صفحه. صفحه به کاشی‌های مربع برش می‌خورد تا حروف ریز در
+        مقیاس نزدیک اصل دیده شوند؛ احتمالِ کاشی‌ها با میانگین وزن‌دار (پَر پرند)
+        ترکیب می‌شود تا درزی بین کاشی‌ها نیفتد."""
+        tile = int(tile or self.SIZE)
+        overlap = int(overlap if overlap is not None else self.OVERLAP)
+        thresh = float(self.THRESH if thresh is None else thresh)
+        ih, iw = image.shape[:2]
+        prob_sum = np.zeros((ih, iw), np.float32)
+        wsum = np.zeros((ih, iw), np.float32)
+        ramp = np.minimum(np.arange(tile), np.arange(tile)[::-1]).astype(np.float32)
+        ramp = np.clip(ramp / max(1.0, overlap / 2.0), 0.35, 1.0)
+        wtile = ramp[None, :] * ramp[:, None]
+        for y0 in self._tile_starts(ih, tile, overlap):
+            for x0 in self._tile_starts(iw, tile, overlap):
+                y1, x1 = min(ih, y0 + tile), min(iw, x0 + tile)
+                patch = image[y0:y1, x0:x1]
+                ph, pw = patch.shape[:2]
+                canvas = np.zeros((tile, tile, 3), np.uint8)
+                canvas[:ph, :pw] = patch
+                blob = cv2.dnn.blobFromImage(canvas, scalefactor=1.0 / 255.0,
+                                             size=(tile, tile), swapRB=True)
+                self.net.setInput(blob)
+                outs = self.net.forward(self._out_names)
+                seg = None
+                for o in outs:
+                    if o.ndim == 4 and o.shape[1] == 1:
+                        seg = o[0, 0]
+                if seg is None:
+                    # بعضی نسخه‌های opencv سرِ خط ترتیب خروجی‌ها را برعکس می‌دهند
+                    for o in outs:
+                        if o.ndim == 4 and o.shape[1] == 2:
+                            seg = o[0, 0]
+                if seg is None:
+                    raise RuntimeError("خروجی ماسک از مدل CTD خوانده نشد")
+                seg = np.clip(seg.astype(np.float32), 0.0, 1.0)
+                seg = cv2.resize(seg, (pw, ph), interpolation=cv2.INTER_LINEAR)
+                prob_sum[y0:y1, x0:x1] += seg
+                wsum[y0:y1, x0:x1] += wtile[:ph, :pw]
+        prob = prob_sum / np.maximum(wsum, 1e-6)
+        return ((prob > thresh).astype(np.uint8)) * 255
+
+
+def _ctd_scale_for(side, base, lo, hi):
+    """بزرگیِ پنجرهٔ میانه/دیلِیت را با ابعاد صفحه تنظیم می‌کند (عددها برای ~۲۳۰۰px)."""
+    return int(max(lo, min(hi, round(base * max(1.0, side / 2300.0)))))
+
+
+def _onion_fill_region(im, msk, smooth_sigma=1.6, max_iter=400):
+    # مکِ جذبِ سیاهیِ کلفت: خط‌های مشکیِ ضخیم (outlineِ افکت و متنِ درشت) که
+    # به لبهٔ ماسک چسبیده‌اند داخل ماسک کشیده می‌شوند تا رنگِ سیاه به داخلِ
+    # ناحیهٔ پرشده پخش نشود؛ خطوطِ نازک (دیوارهٔ حباب) با open حذف می‌شوند
+    try:
+        _g = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY) if im.ndim == 3 else im
+        _m2 = msk.copy()
+        _kern_o = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+        _kern_d = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+        for _ in range(4):
+            _ring = cv2.dilate(_m2, _kern_d) & ~_m2
+            _dark = ((_g < 60) & (_ring > 0)).astype(np.uint8) * 255
+            _thick = cv2.morphologyEx(_dark, cv2.MORPH_OPEN, _kern_o)
+            _thick = cv2.dilate(_thick, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (5, 5)), 1)
+            _add = cv2.bitwise_and(_thick, _ring)
+            if not np.any(_add):
+                break
+            _m2 = cv2.bitwise_or(_m2, _add)
+        msk = _m2
+    except Exception:
+        pass
+
+    """بازسازیِ پیازی: رنگ‌های دورِ ماسک لایه‌به‌لایه به داخل پخش می‌شوند.
+    برخلاف میانه/تله‌آ رنگِ محلی را نگه می‌دارد (آسمان سفید سفید می‌ماند،
+    گرادیانِ حباب زنده می‌ماند) و روی CPU هم سبک است."""
+    out = im.astype(np.float32)
+    valid = (msk == 0).astype(np.float32)
+    for c in range(3):
+        out[:, :, c] *= valid
+    remaining = int((valid == 0).sum())
+    kern = np.ones((5, 5), np.float32) / 25.0
+    it = 0
+    while remaining > 0 and it < max_iter:
+        it += 1
+        vsum = cv2.filter2D(valid, -1, kern, borderType=cv2.BORDER_CONSTANT)
+        grow = (valid == 0) & (vsum > 1e-4)
+        if not grow.any():
+            break
+        for c in range(3):
+            cs = cv2.filter2D(out[:, :, c], -1, kern,
+                              borderType=cv2.BORDER_CONSTANT)
+            out[:, :, c][grow] = cs[grow] / vsum[grow]
+        valid[grow] = 1.0
+        for c in range(3):
+            out[:, :, c] *= valid
+        remaining = int((valid == 0).sum())
+    sm = np.stack([cv2.GaussianBlur(out[:, :, c], (0, 0), smooth_sigma)
+                   for c in range(3)], axis=2)
+    inside = cv2.dilate(msk, np.ones((3, 3), np.uint8)) > 0
+    out[inside] = sm[inside]
+    return np.clip(out, 0, 255).astype(np.uint8)
+
+
+def _onion_per_component(image, msk):
+    """پرکردنِ مولفه‌به‌مولفه: ناحیه‌های کوچک پیازیِ تمام‌قیاس، ناحیه‌های بزرگ
+    پیازیِ هرمی (تا جبهه‌های پرکننده در وسطِ ناحیهٔ بزرگ به‌هم نرسند و ضربدر
+    تیز نیفتد)."""
+    H, W = image.shape[:2]
+    out = image.copy()
+    n_lab, labels, stats, _ = cv2.connectedComponentsWithStats(msk, 8)
+    try:
+        gc.collect()
+    except Exception:
+        pass
+    for i in range(1, n_lab):
+        x, y, w, h, area = stats[i]
+        if area < 4:
+            continue
+        pad = 3
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
+        sub = out[y0:y1, x0:x1]
+        subm = (labels[y0:y1, x0:x1] == i).astype(np.uint8) * 255
+        md = max(w, h)
+        if md <= 200:
+            out[y0:y1, x0:x1] = _onion_fill_region(
+                sub, subm, max_iter=(md // 2) + 24)
+            continue
+        f = int(min(4, max(2, md // 200)))
+        sw, sh = max(8, w // f), max(8, h // f)
+        small = cv2.resize(sub, (sw, sh), interpolation=cv2.INTER_AREA)
+        sm_msk = cv2.resize(subm, (sw, sh), interpolation=cv2.INTER_NEAREST)
+        sm_msk = cv2.dilate(sm_msk, np.ones((3, 3), np.uint8))
+        filled = _onion_fill_region(small, sm_msk,
+                                    max_iter=(max(sw, sh) // 2) + 24)
+        # انتشارِ هارمونیک در همین مقیاسِ کوچک — سبک روی رم و کافی برای
+        # هموارِ شدنِ پَلکانیِ آپ‌سمپل
+        _ins = (sm_msk > 0)
+        _cur = filled.astype(np.float32)
+        _k9 = np.ones((9, 9), np.float32) / 81.0
+        for _ in range(40):
+            _bl = np.stack([cv2.filter2D(_cur[:, :, c], -1, _k9,
+                                         borderType=cv2.BORDER_REFLECT)
+                            for c in range(3)], axis=2)
+            _cur[_ins] = _bl[_ins]
+        filled = np.clip(_cur, 0, 255).astype(np.uint8)
+        out[y0:y1, x0:x1] = cv2.resize(
+            filled, (sub.shape[1], sub.shape[0]),
+            interpolation=cv2.INTER_CUBIC)
+    return out
+
+
+
+def ctd_flatfill(image, mask, glyph_h=None):
+    """پرکردنِ ماسکِ حروف بدون مدل سنگین: بازسازیِ پیازی (رنگِ محلی زنده
+    می‌ماند — هیچ لکهٔ خاکستری از دور درز نمی‌کند) + جاروی باقی‌مانده‌ها."""
+    H, W = image.shape[:2]
+    d = 25
+    if glyph_h and glyph_h > 4:
+        d = int(max(11, min(41, 1.2 * glyph_h)))
+        if d % 2 == 0:
+            d += 1
+    msk = cv2.dilate(mask, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (d, d)), 1)
+    if not np.any(msk):
+        return image.copy()
+    # ۱) بازسازیِ پیازیِ داخل ماسک
+    comp = _onion_per_component(image, msk)
+    # ۲) جاروی باقی‌مانده: لکه‌های پرکنتراستِ نزدیک ماسک را هم بگیر
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    medg = cv2.medianBlur(gray, 21)
+    contrast = cv2.absdiff(gray, medg)
+    zone_k = 51
+    if glyph_h and glyph_h > 4:
+        zone_k = int(max(31, min(151, 3.2 * glyph_h)))
+    else:
+        zone_k = _ctd_scale_for(max(H, W), 101, 51, 151)
+    if zone_k % 2 == 0:
+        zone_k += 1
+    zone = cv2.dilate(msk, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (zone_k, zone_k)))
+    cand = ((contrast > 55) & (zone > 0) & (msk == 0)).astype(np.uint8) * 255
+    cand = cv2.morphologyEx(cand, cv2.MORPH_CLOSE, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (5, 5)))
+    n_lab, _labels_tmp, stats, _ = cv2.connectedComponentsWithStats(cand, 8)
+    del _labels_tmp
+    extra = np.zeros_like(msk)
+    for i in range(1, n_lab):
+        x, y, w, h, area = stats[i]
+        if 30 <= area <= 6000 and w <= 160 and h <= 160 \
+                and max(w, h) / max(1, min(w, h)) <= 6:
+            _pad = 2
+            _x0, _y0 = max(0, x - _pad), max(0, y - _pad)
+            _x1, _y1 = min(W, x + w + _pad), min(H, y + h + _pad)
+            _cc = cand[_y0:_y1, _x0:_x1].copy()
+            _fmask = np.zeros((_cc.shape[0] + 2, _cc.shape[1] + 2), np.uint8)
+            _ys, _xs = np.nonzero(_cc)
+            if not len(_ys):
+                continue
+            cv2.floodFill(_cc, _fmask, (int(_xs[0]), int(_ys[0])), 255,
+                          loDiff=0, upDiff=0, flags=4 | (255 << 8))
+            _cc = (_cc > 0).astype(np.uint8) * 255
+            _cur = extra[_y0:_y1, _x0:_x1]
+            extra[_y0:_y1, _x0:_x1] = cv2.bitwise_or(_cur, _cc)
+    if not np.any(extra):
+        return comp
+    # ۳) ترمیمِ ناحیه‌های جامانده با همان پیازی
+    del gray, medg, contrast, cand, stats, n_lab
+    gc.collect()
+    msk2 = cv2.bitwise_or(msk, extra)
+    msk2 = cv2.dilate(msk2, cv2.getStructuringElement(
+        cv2.MORPH_ELLIPSE, (7, 7)), 1)
+    return _onion_per_component(comp, msk2)
+
 class MangaTranslator:
     _LAMA_MIN_VRAM_GB = 3.5
     _ANDROID_LAMA_MIN_TOTAL_GB = 4.0
@@ -2614,7 +2878,7 @@ class MangaTranslator:
             pass
         return 8.0
 
-    _CLEAN_METHODS = ("auto", "lama", "opencv")
+    _CLEAN_METHODS = ("auto", "lama", "opencv", "ctd")
 
     @classmethod
     def _normalize_clean_method(cls, value) -> str:
@@ -2637,6 +2901,8 @@ class MangaTranslator:
             "smart": "auto", "پیش‌فرض": "auto",
             "aotgan": "aot", "aot-gan": "aot", "gan": "aot",
             "yakuyomi": "aot", "yakuyomi-engine": "aot",
+            "ctd": "ctd", "comictext": "ctd", "glyph": "ctd",
+            "manga-image-translator": "ctd", "mit": "ctd",
         }
         v = aliases.get(v, v)
         if v not in cls._CLEAN_METHODS:
@@ -6651,8 +6917,326 @@ class MangaTranslator:
             out[~zone] = img[~zone]
         return out
 
+    @staticmethod
+    @staticmethod
+    def _ctd_filter_regions(regions):
+        """ناحیه‌های مجازِ پاکسازیِ ctd: افکت (sfx)، ناحیه‌های نویزی و
+        ضربه‌های کاذبِ ریزِ OCR حذف می‌شوند."""
+        kept = []
+        for r in (regions or []):
+            _kind = (getattr(r, "kind", "") or "")
+            _det = (getattr(r, "det_class", "") or "")
+            if _kind == "sfx":
+                continue
+            if _kind == "junk" and _det not in ("bubble", "text_bubble"):
+                # ناحیهٔ نویزیِ بی‌حباب (بنر/خطِ جامانده) — حباب‌هایی که فقط
+                # متن‌شان خوانده نشده نگه داشته می‌شوند (تشخیص‌گر حباب حرف
+                # آخر را می‌زند)
+                continue
+            try:
+                _txt = (getattr(r, "source_text", "") or "").strip()
+            except Exception:
+                _txt = ""
+            rect = getattr(r, "rect", None)
+            if (not _det) and len(_txt) <= 2 and rect \
+                    and int(rect[2]) <= 90 and int(rect[3]) <= 90:
+                continue
+            kept.append(r)
+        return kept
+
+
+    def _ctd_zone_from_regions(self, regions, shape):
+        """نقشهٔ «محدودهٔ مجاز» از کادرِ متن‌های تشخیص‌داده‌شده. فقط داخلِ همین
+        نواحی پاکسازی می‌شود؛ افکت‌ها و نوشتهٔ روی نقاشی (مثل نمونه‌های مرجع)
+        دست‌نخورده می‌مانند."""
+        H, W = shape[:2]
+        zone = np.zeros((H, W), np.uint8)
+        n_kept = 0
+        for r in self._ctd_filter_regions(regions):
+            rect = getattr(r, "rect", None)
+            if not rect or len(rect) != 4:
+                continue
+            try:
+                x, y, rw, rh = (int(rect[0]), int(rect[1]),
+                                int(rect[2]), int(rect[3]))
+            except Exception:
+                continue
+            if rw <= 0 or rh <= 0:
+                continue
+            n_kept += 1
+            m = int(max(28, 0.30 * max(rh, rw)))
+            x0, y0 = max(0, x - m), max(0, y - m)
+            x1, y1 = min(W, x + rw + m), min(H, y + rh + m)
+            if x1 > x0 and y1 > y0:
+                zone[y0:y1, x0:x1] = 255
+        if os.environ.get("MANGA_DEBUG_DIR"):
+            for r in (regions or []):
+                print(f"    [zone-dbg] rect={getattr(r, 'rect', None)} "
+                      f"kind={getattr(r, 'kind', '')} det={getattr(r, 'det_class', '')} "
+                      f"txt={(getattr(r, 'source_text', '') or '')[:18]!r}")
+        return zone, n_kept
+
+    @staticmethod
+    def _ctd_ocr_blobs(regions, shape):
+        """حباب‌های «خط‌به‌خط» از جعبه‌های OCR: هر جعبهٔ متن به‌اندازهٔ نصفِ
+        ارتفاعش پهن می‌شود و با بقیه یکی می‌شود — مثل ماسکِ نمونه‌های مرجع.
+        این‌طوری حتی حروفی که OCR/CTD تک‌تک پیدا نکرده‌اند داخلِ حباب می‌افتند."""
+        H, W = shape[:2]
+        blobs = np.zeros((H, W), np.uint8)
+        for r in (regions or []):
+            polys = list(getattr(r, "ocr_polys", None) or [])
+            if not polys:
+                rect = getattr(r, "rect", None)
+                if not rect or len(rect) != 4:
+                    continue
+                x, y, rw, rh = rect
+                if rw <= 0 or rh <= 0:
+                    continue
+                polys = [np.array([[x, y], [x + rw, y],
+                                   [x + rw, y + rh], [x, y + rh]], np.float32)]
+            for p in polys:
+                try:
+                    pa = np.asarray(p, np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                x0 = max(0, int(pa[:, 0].min()) - 2)
+                y0 = max(0, int(pa[:, 1].min()) - 2)
+                x1 = min(W, int(pa[:, 0].max()) + 3)
+                y1 = min(H, int(pa[:, 1].max()) + 3)
+                if x1 - x0 < 6 or y1 - y0 < 6:
+                    continue
+                m = np.zeros((y1 - y0, x1 - x0), np.uint8)
+                cv2.fillPoly(m, [np.rint(pa - [x0, y0]).astype(np.int32)], 255)
+                marg = int(max(8, 0.30 * min(y1 - y0, x1 - x0)))
+                marg = min(marg, 22)
+                if marg >= 3:
+                    m = cv2.dilate(m, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (2 * marg + 1, 2 * marg + 1)))
+                blobs[y0:y1, x0:x1] = cv2.bitwise_or(
+                    blobs[y0:y1, x0:x1], m)
+        return blobs
+
+
+    def _clean_ctd(self, image: np.ndarray,
+                   regions: Optional[List[TextRegion]] = None) -> np.ndarray:
+        """روش ctd: ماسک از خودِ جعبه‌های OCR (همان‌جا که متن دیده شده) +
+        داخلِ حباب برای حباب‌های بی‌OCR + ماسکِ حرف‌به‌حرفِ comictextdetector
+        فقط در همسایگیِ متن + پرکردنِ پیازیِ سبک (بدون مدلِ سنگین، سریع روی
+        CPU/اندروید). افکت‌ها و نوشتهٔ روی نقاشی مثل نمونه‌های مرجع
+        دست‌نخورده می‌مانند."""
+        try:
+            avail = self._available_ram_gb()
+        except Exception:
+            avail = None
+        if avail is not None and avail < 1.2:
+            print(f"[!] رم آزاد کم است ({avail:.1f}GB) → روش ctd انجام نشد؛ "
+                  "پاکسازی حذف شد")
+            return image.copy()
+        try:
+            if getattr(self, "_ctd_det", None) is None:
+                self._ctd_det = ComicTextDetectorDNN()
+        except Exception as e:
+            print(f"[!] CTD آماده نشد ({e}) → پاکسازی این صفحه رد شد")
+            return image.copy()
+        self._check_cancel()
+        ctd_mask = self._ctd_det.glyph_mask(image)
+        if not np.any(ctd_mask):
+            return image.copy()
+        zone, n_kept = self._ctd_zone_from_regions(regions, image.shape)
+        zone_ok = (n_kept > 0 and np.any(zone))
+        if zone_ok:
+            ctd_mask = cv2.bitwise_and(ctd_mask, zone)
+        H, W = image.shape[:2]
+
+        # نقشهٔ داخلِ حباب برای حباب‌های بی‌OCR (جعبهٔ کامل نخورد به هنر)
+        try:
+            fmap = self._build_interior_map(image, regions or [])
+        except Exception:
+            fmap = None
+
+        # ماسکِ پایه: تنگِ OCR + حروفِ با outlinedِ تیره (متنِ سفید روی آسمان)
+        # + تکمیلِ CTD در همسایگیِ متن
+        base = np.zeros((H, W), np.uint8)
+        try:
+            _tm = self._build_text_mask(image, regions or [])
+            if _tm is not None and np.any(_tm):
+                base = cv2.bitwise_or(base, _tm)
+        except Exception:
+            pass
+        try:
+            _grayf = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _edges = cv2.Canny(_grayf, 40, 120)
+            _flat = cv2.bitwise_not(cv2.dilate(
+                _edges, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))))
+            _flat = cv2.morphologyEx(_flat, cv2.MORPH_CLOSE,
+                                     cv2.getStructuringElement(
+                                         cv2.MORPH_ELLIPSE, (15, 15)))
+            # پاسِ تیره فقط برای ناحیه‌هایی که ماسکِ تنگشان کم است (متنِ
+            # سفیدِ outline‌دار که شکارِ تنگ گیر نمی‌دهد). بقیهٔ ناحیه‌ها با
+            # ماسکِ تنگ کفایت می‌کند تا هنرِ تیرهٔ داخل حباب (پیچک/سایه)
+            # دست‌نخورده بماند.
+            _kc = _ctd_scale_for(max(H, W), 15, 9, 21)
+            if _kc % 2 == 0:
+                _kc += 1
+            _kern_c = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_kc, _kc))
+            _kern_e = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+            _hs3 = []
+            for _r3 in self._ctd_filter_regions(regions):
+                for _p3 in (getattr(_r3, "ocr_polys", None) or []):
+                    try:
+                        _pa3 = np.asarray(_p3, np.float32).reshape(-1, 2)
+                        _hs3.append(float(_pa3[:, 1].max() - _pa3[:, 1].min()))
+                    except Exception:
+                        continue
+            _line_h_global = float(np.median(_hs3)) if _hs3 else 0.0
+            _dark_raw = ((_grayf < 110).astype(np.uint8)) * 255
+            for r in self._ctd_filter_regions(regions):
+                rect = getattr(r, "rect", None)
+                if not rect or len(rect) != 4 or rect[2] <= 4 or rect[3] <= 4:
+                    continue
+                x, y, rw, rh = [int(v) for v in rect]
+                xa0, ya0 = max(0, x - 8), max(0, y - 8)
+                xa1, ya1 = min(W, x + rw + 8), min(H, y + rh + 8)
+                if xa1 <= xa0 or ya1 <= ya0:
+                    continue
+                _ra = float(max(1, rw * rh))
+                _win = base[ya0:ya1, xa0:xa1]
+                _cov = float(np.count_nonzero(_win)) / _ra
+                if _cov >= 0.12:
+                    continue
+                _rm = np.zeros((H, W), np.uint8)
+                _rm[ya0:ya1, xa0:xa1] = 255
+                _rm = cv2.erode(_rm, _kern_e, 1)
+                _allow_r = _rm
+                if fmap is not None and np.any(fmap):
+                    _fl = cv2.bitwise_and(fmap, _rm)
+                    if _fl.any() and float(np.count_nonzero(_fl)) >= 0.15 * _ra:
+                        _allow_r = _fl
+                if zone_ok:
+                    _allow_r = cv2.bitwise_and(_allow_r, zone)
+                _dark = cv2.bitwise_and(cv2.bitwise_and(_dark_raw, _allow_r),
+                                        zone)
+                if not np.any(_dark):
+                    continue
+                _dark = cv2.morphologyEx(_dark, cv2.MORPH_CLOSE, _kern_c)
+                _dark = cv2.bitwise_and(cv2.bitwise_and(_dark, _allow_r), zone)
+                # حباب‌های تیرهٔ بلندتر از حرفِ معمول (افکتِ روی هنر) حذف
+                _lh = _line_h_global if _line_h_global > 4 else 0.0
+                _hl = max(80.0, 2.4 * _lh)
+                _fm2 = fmap if fmap is not None else np.zeros_like(_dark)
+                _n3, _lab3, _st3, _ = cv2.connectedComponentsWithStats(
+                    _dark, 8)
+                for _k3 in range(1, _n3):
+                    _h3 = _st3[_k3, cv2.CC_STAT_HEIGHT]
+                    if _h3 <= _hl:
+                        continue
+                    _sel3 = (_lab3 == _k3)
+                    _a3 = max(1, int(_st3[_k3, cv2.CC_STAT_AREA]))
+                    _ov3 = float(((_fm2 > 0) & _sel3).sum())
+                    if _ov3 < 0.30 * _a3:
+                        _dark[_sel3] = 0
+                base = cv2.bitwise_or(base, _dark)
+        except Exception:
+            pass
+        if np.any(base) and np.any(ctd_mask):
+            _near = cv2.dilate(base, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (41, 41)), 1)
+            _ctp = cv2.bitwise_and(ctd_mask, _near)
+            # حرف‌های درشتِ دور از متن (افکتِ روی نقاشی) از کمکِ CTD حذف
+            # می‌شوند تا مثل نمونه‌های مرجع دست‌نخورده بمانند
+            try:
+                _hs2 = []
+                for _r2 in self._ctd_filter_regions(regions):
+                    for _p2 in (getattr(_r2, "ocr_polys", None) or []):
+                        _pa2 = np.asarray(_p2, np.float32).reshape(-1, 2)
+                        _hs2.append(float(_pa2[:, 1].max() - _pa2[:, 1].min()))
+                _lh2 = float(np.median(_hs2)) if _hs2 else 0.0
+                _hl2 = max(80.0, 2.4 * _lh2)
+                _bnear = cv2.dilate(base, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (17, 17)), 1) > 0
+                _n2, _lab2, _st2, _ = cv2.connectedComponentsWithStats(_ctp, 8)
+                for _k2 in range(1, _n2):
+                    _sel2 = (_lab2 == _k2)
+                    _a2 = max(1, int(_st2[_k2, cv2.CC_STAT_AREA]))
+                    if _st2[_k2, cv2.CC_STAT_HEIGHT] > _hl2 \
+                            and float((_bnear & _sel2).sum()) < 0.20 * _a2:
+                        _ctp[_sel2] = 0
+            except Exception:
+                pass
+            base = cv2.bitwise_or(base, _ctp)
+        if np.any(base):
+            base = cv2.dilate(base, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (9, 9)), 1)
+        if zone_ok:
+            base = cv2.bitwise_and(base, zone)
+
+        mask = base
+        _src = "OCR تنگ + outlined تیره + CTD"
+
+        # بستنِ شکافِ حروف + بریدن به محدوده
+        k = _ctd_scale_for(max(image.shape[:2]), 19, 11, 27)
+        if k % 2 == 0:
+            k += 1
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE,
+                                cv2.getStructuringElement(
+                                    cv2.MORPH_ELLIPSE, (k, k)))
+        if zone_ok:
+            mask = cv2.bitwise_and(mask, zone)
+        if not np.any(mask):
+            return image.copy()
+        try:
+            print(f"  [*] ماسک پاکسازی ({_src}): {int((mask > 0).sum())}px")
+        except Exception:
+            pass
+        _dbg_dir = (os.environ.get("MANGA_DEBUG_DIR")
+                    or getattr(self, "debug_clean_dir", None) or "").strip()
+        if _dbg_dir:
+            try:
+                os.makedirs(_dbg_dir, exist_ok=True)
+                cv2.imwrite(os.path.join(_dbg_dir, "ctd_01_raw.png"), mask)
+                _zv = image.copy()
+                if np.any(zone):
+                    _zv[zone > 0] = (0.55 * _zv[zone > 0]
+                                     + 0.45 * np.array([0, 180, 0], np.float32)
+                                     ).astype(np.uint8)
+                cv2.imwrite(os.path.join(_dbg_dir, "ctd_02_zone.png"), _zv)
+                _ov = image.copy()
+                _mm = cv2.GaussianBlur((mask > 0).astype(np.float32),
+                                       (0, 0), 1.5)
+                _ov[_mm > 0.08] = (0.30 * _ov[_mm > 0.08]
+                                   + 0.70 * np.array([0, 0, 255], np.float32)
+                                   ).astype(np.uint8)
+                cv2.imwrite(os.path.join(_dbg_dir, "ctd_03_overlay.png"), _ov)
+                print(f"  [*] دیباگ CTD → {_dbg_dir}")
+            except Exception:
+                pass
+        # برآوردِ اندازهٔ حرف برای تنظیمِ پنجره‌های پرکننده
+        glyph_h = 0
+        try:
+            _n, _lab_tmp, _st, _ = cv2.connectedComponentsWithStats(mask, 8)
+            del _lab_tmp
+            _areas = _st[1:, cv2.CC_STAT_AREA]
+            _hs = _st[1:, cv2.CC_STAT_HEIGHT]
+            if len(_areas):
+                _med_a = float(np.median(_areas))
+                glyph_h = float(np.median(_hs[_areas <= max(_med_a * 4, 60)]))
+        except Exception:
+            pass
+        del ctd_mask
+        try:
+            del _grayf, _edges, _flat, _dark_raw
+        except Exception:
+            pass
+        gc.collect()
+        self._check_cancel()
+        return ctd_flatfill(image, mask, glyph_h=glyph_h)
+
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         self._check_cancel()
+        if self._normalize_clean_method(
+                getattr(self, "clean_method", "auto")) == "ctd":
+            return self._clean_ctd(image, regions)
         mask = self._build_text_mask(image, regions)
         page_interior = self._build_interior_map(image, regions)
         wall_prot = self._build_wall_protect(image, regions, page_interior)
@@ -13124,9 +13708,9 @@ class MangaTranslator:
         if getattr(self, "clean_only", False):
             print("[فاز ۳ - پاکسازی بدون ترجمه] API زده نمی‌شود.")
             clean_targets = [r for r in regions
-                             if r.kind == "dialogue"
+                             if r.kind in ("dialogue", "text")
                              or (r.kind == "junk"
-                                 and r.det_class not in ("bubble", "text_bubble"))]
+                                 and r.det_class in ("bubble", "text_bubble"))]
             for r in dialogue_regions:
                 src_t = (r.source_text or "").replace("\n", " ").strip()
                 print(f"  [بالن {r.id}] OCR: {src_t}")
@@ -15598,9 +16182,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-aot", dest="no_aot", action="store_true", default=False,
                    help="پاکسازی AOT-GAN (yakuyomi) را خاموش کن — فقط LaMa/OpenCV")
     p.add_argument("--clean-method", dest="clean_method", default="auto",
-                   choices=["auto", "lama", "aot", "opencv"],
+                   choices=["auto", "lama", "aot", "opencv", "ctd"],
                    help="روش پاکسازی متن: auto (خودکار: LaMa → AOT-GAN → OpenCV) | "
-                        "lama | aot (AOT-GAN yakuyomi) | opencv — پیش‌فرض auto. "
+                        "lama | aot (AOT-GAN yakuyomi) | opencv | ctd (ماسک "
+                        "حرف‌به‌حرف comictextdetector، دقیق‌ترین) — پیش‌فرض auto. "
                         "(پرکردنِ صافِ flat کلاً حذف شده — هیچ مستطیلی رسم نمی‌شود)")
     p.add_argument("--debug-clean", dest="debug_clean_dir", default=None,
                    help="پوشهٔ خروجی دیباگ پاکسازی: ماسک دقیق، اورلی رنگی، "

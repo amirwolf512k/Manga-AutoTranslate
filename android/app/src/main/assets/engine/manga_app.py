@@ -1043,7 +1043,7 @@ def run_desktop():
     ttk.Label(row_cm, text="روش پاکسازی متن:").pack(side="right", padx=(0, 4))
     clean_var = tk.StringVar(value=str(cfg.get("clean_method", "auto") or "auto"))
     ttk.Combobox(row_cm, textvariable=clean_var, state="readonly", width=15,
-                 values=("auto", "lama", "opencv")).pack(side="right")
+                 values=("auto", "ctd", "lama", "opencv")).pack(side="right")
 
     
     card_ai = ttk.LabelFrame(tab_body, text=" حساب و مدل ", padding=12)
@@ -2686,6 +2686,7 @@ def run_web():
                 turbo = gr.Checkbox(label="حالت توربو (خیلی سریع: فقط OCR + OpenCV)", value=False)
             clean_method = gr.Radio(
                 choices=[("خودکار (بر اساس رم/GPU)", "auto"),
+                         ("CTD (دقیق‌ترین — ماسک حرف‌به‌حرف)", "ctd"),
                          ("LaMa-fp32", "lama"),
                          ("OpenCV", "opencv")],
                 value=str(cfg.get("clean_method", "auto")) or "auto",
