@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.12.4"
+APP_VER = "1.14.0"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -6880,7 +6880,7 @@ class MangaTranslator:
         if max(h_p, w_p) < 1600:
             scale = max(scale, 2.2)
         if _IS_ANDROID:
-            scale = min(scale, 1.6)
+            scale = min(scale, 1.3)  # 📱 سرعت: بزرگ‌نمایی کمتر (ML Kit به آن نیاز ندارد)
         # 📱 ML Kit نیتیو روی رزولوشن اصلی بهترین دقت/سرعت را دارد —
         # بزرگ‌نمایی فقط وقت CPU تلف می‌کند (الگوی اپ رقیب K3).
         if _IS_ANDROID and getattr(self, "_ocr_backend_name", "") == "mlkit":
