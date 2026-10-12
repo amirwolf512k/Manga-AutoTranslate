@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.13.0"
+APP_VER = "1.14.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -3401,7 +3401,7 @@ def run_web():
         browser_form_json = gr.State("")
 
         save_form_js = f"""
-(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord, lama, cpu, twopass, fake) => {{
+(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord, lama, cpu, twopass, fake, cleano) => {{
   try {{
     const realSid = (sid || sidBox || "").toString().trim();
     const clean = (v) => {{
@@ -3428,6 +3428,7 @@ def run_web():
       cpu: !!cpu,
       twopass: twopass === null || twopass === undefined ? true : !!twopass,
       fake_test: !!fake,
+      clean_only: !!cleano,
       ts: Date.now()
     }};
     localStorage.setItem("{LS_KEY}", JSON.stringify(data));
@@ -3528,6 +3529,7 @@ def run_web():
 
         load_form_js = f"""
 () => {{
+  try {{ window.__mangaLoadJsRan = (window.__mangaLoadJsRan || 0) + 1; }} catch (e) {{}}
   try {{
     let raw = localStorage.getItem("{LS_KEY}");
     if (!raw) {{
@@ -4081,7 +4083,7 @@ def run_web():
         _save_inputs = [
             session_id, sid_box, inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord,
-            use_lama, force_cpu, two_pass, fake_test,
+            use_lama, force_cpu, two_pass, fake_test, clean_only,
         ]
 
         try:
@@ -4133,15 +4135,7 @@ def run_web():
             else:
                 sid = ""
             if not sid:
-                return (
-                    gr.update(), gr.update(), gr.update(), gr.update(),
-                    gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                    gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                    gr.update(), gr.update(), gr.update(), gr.update(),
-                    gr.update(), gr.update(), gr.update(), gr.update(), gr.update(),
-                    gr.update(), gr.update(), gr.update(),
-                    gr.update(),
-                )
+                return (gr.update(),) * 28
             job = _get_job(sid)
             meta = _load_job_meta(sid) if sid else {}
             
@@ -4262,25 +4256,29 @@ def run_web():
             session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
             inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord,
-            use_lama, force_cpu, two_pass, fake_test,
+            use_lama, force_cpu, two_pass, fake_test, clean_only,
         ]
 
+        # فرم از localStorage: جاوااسکریپت مقدار hidden ترباکس را روی load پر می‌کند،
+        # بعد change همان ترباکس، فن سرورِ ری‌استور را با JSON کامل صدا می‌زند.
+        hidden_restore_tb = gr.Textbox(visible=False, elem_id="manga_hidden_restore", container=False)
         try:
             demo.load(
-                _apply_browser_restore,
-                inputs=[browser_form_json],
-                outputs=_restore_outputs,
+                fn=None,
+                inputs=None,
+                outputs=[hidden_restore_tb],
                 js=load_form_js,
             )
         except Exception:
-            try:
-                demo.load(
-                    _apply_browser_restore,
-                    inputs=[browser_form_json],
-                    outputs=_restore_outputs,
-                )
-            except Exception:
-                pass
+            pass
+        try:
+            hidden_restore_tb.change(
+                _apply_browser_restore,
+                inputs=[hidden_restore_tb],
+                outputs=_restore_outputs,
+            )
+        except Exception:
+            pass
 
         try:
             demo.load(None, None, None, js=client_restore_js)

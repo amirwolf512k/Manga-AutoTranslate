@@ -451,6 +451,13 @@ def stop_requested() -> bool:
     return bool(globals().get("REQUEST_STOP"))
 
 
+def _raise_if_stop() -> None:
+    """لغو فوری — در همهٔ حلقه‌های ریز (OCR/پاکسازی/ترجمه/رندر) چک می‌شود
+    تا «لغو» بدون معطلی درجا عملی شود (درخواست کاربر)."""
+    if stop_requested():
+        raise JobCancelled("لغو توسط کاربر")
+
+
 os.environ.setdefault("FLAGS_use_mkldnn", "0")
 os.environ.setdefault("FLAGS_onednn", "0")
 
@@ -1613,7 +1620,12 @@ class MlKitBackend:
             return None
         try:
             import cv2
-            ok, buf = cv2.imencode(".png", image_bgr)
+            # 📱 سرعت: JPEG به‌جای PNG — کدگذاری/کدگشایی/انتقال بین پایتون و
+            # جاوا چند برابر سریع‌تر می‌شود (کیفیت 95 عملاً بی‌تفاوت برای OCR)
+            ok, buf = cv2.imencode(
+                ".jpg", image_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 95])
+            if not ok:
+                ok, buf = cv2.imencode(".png", image_bgr)
         except Exception as e:
             print(f"    [OCR] ML Kit کدگذاری تصویر نشد: {e}")
             return None
@@ -2309,16 +2321,13 @@ class MangaTranslator:
             print("[*] نه onnxruntime هست و نه torch → OpenCV inpaint.")
             return False
 
-        if _on_android() and force_gpu is None and not force_lama:
-            total = self._total_ram_gb()
-            if total and total < self._ANDROID_LAMA_MIN_TOTAL_GB:
-                print(f"[*] خودکار اندروید: رم کل گوشی {total:.1f}GB "
-                      f"(< {self._ANDROID_LAMA_MIN_TOTAL_GB:.0f}GB) → OpenCV سریع.")
-                return False
-            print(f"[*] خودکار اندروید: رم کل {total:.1f}GB → LaMa فعال "
-                  f"(اگر لحظهٔ بارگذاری رمِ آزاد خیلی کم باشد، همان‌جا هشدار "
-                  f"می‌دهد یا به OpenCV برمی‌گردد).")
-            return True
+        if _on_android() and not force_lama:
+            # 📱 حالت سرعت (الگوی K3): پرکردن سریع OpenCV — بدون دانلود ۱۹۸MB و
+            # بدون استنتاج سنگین. برای LaMa: سوییچ «پاک‌سازی LaMa-Manga» را
+            # در تنظیمات روشن کن.
+            print("[📱] اندروید: پاک‌سازی سریع OpenCV (الگوی K3) — "
+                  "LaMa فقط با فعال‌کردن دستی سوییچ LaMa روشن می‌شود.")
+            return False
 
         if force_gpu is True:
             print(f"[*] --gpu → big-LaMa فعال ({name or 'CUDA'}, {vram:.1f} GB).")
@@ -2482,7 +2491,10 @@ class MangaTranslator:
         self.max_workers = max(1, int(max_workers))
         self.mag_ratio = mag_ratio
         self.translation_temperature = translation_temperature
-        self.two_pass_ocr = two_pass_ocr
+        self.two_pass_ocr = bool(two_pass_ocr)
+        if _on_android() and os.environ.get(
+                "MANGA_ANDROID_TWO_PASS", "").strip().lower() not in ("1", "true", "yes"):
+            self.two_pass_ocr = False  # 📱 حالت سرعت گوشی: OCR تک‌پاس
         self.max_output_width = max_output_width
         self.stitch_max_height = int(stitch_max_height) if stitch_max_height else 0
         self.stitch_short_threshold = int(stitch_short_threshold) if stitch_short_threshold else 0
@@ -2603,29 +2615,36 @@ class MangaTranslator:
                 print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
         # --- انتخاب موتور OCR روی اندروید ---
-        # طبق درخواست کاربر: استخراج روی گوشی باید «همان استخراج وب و پی‌سی»
-        # باشد — یعنی همان RapidOCR ONNX (همان مدل). ML Kit فقط به‌عنوان
-        # فال‌بک وقتی RapidOCR در دسترس نبود استفاده می‌شود.
-        # برای رفتار قدیمی: متغیر محیطی MANGA_ANDROID_OCR=mlkit
+        # 📱 تغییر درخواستی کاربر: استخراج باید مثل اپ رقیب (K3) «سریع» باشد —
+        # اپ رقیب از ML Kit نیتیو (سخت‌افزار گوشی) استفاده می‌کند. پس پیش‌فرض
+        # اندروید = ML Kit نیتیو (چند ده برابر سریع‌تر از ONNX روی CPU پایتون).
+        # برای موتور وب/پی‌سی (RapidOCR): متغیر محیطی MANGA_ANDROID_OCR=rapidocr
         if self.ocr is None and _on_android():
-            if os.environ.get("MANGA_ANDROID_OCR", "").strip().lower() == "mlkit":
-                try:
-                    self.ocr = MlKitBackend(lang=main_lang)
-                    self._ocr_backend_name = "mlkit"
-                except Exception as e:
-                    print(f"[!] ML Kit لود نشد ({e}) → RapidOCR")
-            else:
+            if os.environ.get("MANGA_ANDROID_OCR", "").strip().lower() == "rapidocr":
                 try:
                     self.ocr = RapidOCRBackend(lang=main_lang)
                     self._ocr_backend_name = "rapidocr"
-                    print("[*] اندروید: از همان موتور وب/پی‌سی (RapidOCR) استفاده می‌شود.")
+                    print("[*] اندروید: RapidOCR (موتور وب/پی‌سی) به‌صورت دستی فعال شد.")
                 except Exception as e:
-                    print(f"[!] RapidOCR روی اندروید لود نشد ({e}) → ML Kit سبک")
+                    print(f"[!] RapidOCR روی اندروید لود نشد ({e}) → ML Kit نیتیو")
                     try:
                         self.ocr = MlKitBackend(lang=main_lang)
                         self._ocr_backend_name = "mlkit"
                     except Exception as e2:
                         print(f"[!] ML Kit هم لود نشد ({e2})")
+            else:
+                try:
+                    self.ocr = MlKitBackend(lang=main_lang)
+                    self._ocr_backend_name = "mlkit"
+                    print("[📱] اندروید: OCR نیتیو ML Kit فعال شد — "
+                          "استخراج سریع روی سخت‌افزار گوشی (مثل اپ‌های نیتیو).")
+                except Exception as e:
+                    print(f"[!] ML Kit لود نشد ({e}) → RapidOCR ONNX")
+                    try:
+                        self.ocr = RapidOCRBackend(lang=main_lang)
+                        self._ocr_backend_name = "rapidocr"
+                    except Exception as e2:
+                        print(f"[!] RapidOCR هم لود نشد ({e2})")
 
         if self.ocr is None:
             try:
@@ -2644,18 +2663,26 @@ class MangaTranslator:
         
         self.det = None
         self.det_confidence = float(getattr(self, "det_confidence", 0.28) or 0.28)
-        try:
-            print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
-            self.det = RTDetrV2ONNXDetector(
-                prefer_gpu=self.use_gpu,
-                conf_thresh=self.det_confidence,
-                iou_thresh=0.45,
-                threads=max(1, int(self.max_workers or 2)),
-                multi_scale=not _IS_ANDROID,
-            )
-        except Exception as e:
-            print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
-            self.det = None
+        # 📱 حالت سرعت اندروید (الگوی APK رقیب K3): مدل سنگین RT-DETR حذف —
+        # ماسک پاکسازی از همان چندضلعی‌های OCR ساخته می‌شود و حباب‌بندی از
+        # خوشهٔ خطوط OCR. خیلی سریع‌تر: بدون دانلود ~۱۰۰MB و بدون استنتاج سنگین.
+        # فعال‌سازی دستی: MANGA_ANDROID_DET=1
+        if _on_android() and os.environ.get(
+                "MANGA_ANDROID_DET", "").strip().lower() not in ("1", "true", "yes"):
+            print("[📱] اندروید: RT-DETR حذف شد (حالت سرعت) — ماسک از خطوط OCR.")
+        else:
+            try:
+                print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
+                self.det = RTDetrV2ONNXDetector(
+                    prefer_gpu=self.use_gpu,
+                    conf_thresh=self.det_confidence,
+                    iou_thresh=0.45,
+                    threads=max(1, int(self.max_workers or 2)),
+                    multi_scale=not _IS_ANDROID,
+                )
+            except Exception as e:
+                print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
+                self.det = None
 
         if self.provider_type == "gemini":
             if not _HAS_GEMINI and _HAS_OPENAI:
@@ -4802,6 +4829,7 @@ class MangaTranslator:
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         page_wall = self._wall_lines(image)
         crops = []
+        _raise_if_stop()  # ⏹ لغو فوری — شروع پاکسازی
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             cx0, cy0 = max(0, bx0 - 29), max(0, by0 - 29)
             cx1, cy1 = min(image.shape[1], bx1 + 29), min(image.shape[0], by1 + 29)
@@ -4831,6 +4859,7 @@ class MangaTranslator:
                     t0 = time.time()
                     _pad = 32
                     for c in pending:
+                        _raise_if_stop()  # ⏹ لغو فوری بین خوشه‌های LaMa
                         cx0, cy0, cx1, cy1, crop_msk = c[:5]
                         try:
                             ex0, ey0 = max(0, cx0 - _pad), max(0, cy0 - _pad)
@@ -5972,6 +6001,7 @@ class MangaTranslator:
             print(f"[!] ساخت بریف داستان ناموفق ({e}) — بدون بریف ادامه می‌دهیم")
 
     def translate_regions(self, regions: List[TextRegion]) -> None:
+        _raise_if_stop()  # ⏹ لغو فوری
         if not regions:
             return
 
@@ -6835,6 +6865,7 @@ class MangaTranslator:
 
     def _process_chunk_worker(self, args_tuple) -> List[TextRegion]:
         idx, y0, y1, image = args_tuple
+        _raise_if_stop()  # ⏹ لغو فوری
         print(f"    [>] OCR تیکه‌ی {idx + 1} (ردیف {y0} تا {y1})")
         piece = image[y0:y1, :]
 
@@ -6850,6 +6881,10 @@ class MangaTranslator:
             scale = max(scale, 2.2)
         if _IS_ANDROID:
             scale = min(scale, 1.6)
+        # 📱 ML Kit نیتیو روی رزولوشن اصلی بهترین دقت/سرعت را دارد —
+        # بزرگ‌نمایی فقط وقت CPU تلف می‌کند (الگوی اپ رقیب K3).
+        if _IS_ANDROID and getattr(self, "_ocr_backend_name", "") == "mlkit":
+            scale = 1.0
 
         if scale > 1.01:
             piece_up = cv2.resize(piece, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC)
@@ -6860,13 +6895,16 @@ class MangaTranslator:
         detections = self.detect_text(piece_up)
 
         if self.two_pass_ocr:
+            _raise_if_stop()  # ⏹ لغو فوری
             _base_n = len(detections)
             _skip_variants = _IS_ANDROID and _base_n >= 2
             if not (_IS_ANDROID and _base_n >= 3):
+                _raise_if_stop()  # ⏹ لغو فوری
                 enhanced = self._clahe_enhance(piece_up)
                 detections += self.detect_text(enhanced)
 
             if not _skip_variants:
+                _raise_if_stop()  # ⏹ لغو فوری
                 inverted = cv2.bitwise_not(piece_up)
                 detections += self.detect_text(inverted)
 
@@ -7805,9 +7843,11 @@ class MangaTranslator:
         h, w = image.shape[:2]
         unique_regions: List[TextRegion] = []
 
+        _raise_if_stop()  # ⏹ لغو فوری — قبل از تشخیص حباب
         if self.det is not None:
             print("[فاز ۱ - تشخیص حباب + OCR] شروع...")
             unique_regions = self._extract_regions_from_bubbles(image)
+        _raise_if_stop()  # ⏹ لغو فوری — بعد از تشخیص
 
         if not unique_regions:
             if self.det is not None:
@@ -7824,6 +7864,7 @@ class MangaTranslator:
             tasks = [(i, r[0], r[1], image) for i, r in enumerate(chunk_ranges)]
             if self.max_workers <= 1 or len(tasks) <= 1:
                 for t in tasks:
+                    _raise_if_stop()  # ⏹ لغو فوری بین تیکه‌ها
                     all_raw_regions.extend(self._process_chunk_worker(t))
             else:
                 with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
@@ -7832,6 +7873,7 @@ class MangaTranslator:
                         all_raw_regions.extend(res)
             unique_regions = self._deduplicate_regions(all_raw_regions)
 
+        _raise_if_stop()  # ⏹ لغو فوری
         if unique_regions:
             self._verify_angle_signs(image, unique_regions)
 
@@ -7862,6 +7904,7 @@ class MangaTranslator:
                           skip_translate: bool = False,
                           precleaned: Optional[np.ndarray] = None,
                           ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        _raise_if_stop()  # ⏹ لغو فوری
         if not regions:
             return image.copy(), None
 
@@ -9562,6 +9605,7 @@ html, body { background: #0a0a0b; }
 
         def _extract_one(item):
             page_i, f, out_file = item
+            _raise_if_stop()  # ⏹ لغو فوری — قبل از شروع صفحه
             MangaTranslator._title_skip_enabled = (page_i == 0)
             try:
                 image = cv2.imread(f)
@@ -9626,6 +9670,7 @@ html, body { background: #0a0a0b; }
                     pending_by_page[pi] = left
 
         def _finish_page_now(page_i: int) -> None:
+            _raise_if_stop()  # ⏹ لغو فوری
             if page_i in finished_pages:
                 return
             entry = extracted_map.get(page_i)

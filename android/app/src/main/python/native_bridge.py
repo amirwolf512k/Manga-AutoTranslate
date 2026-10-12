@@ -233,6 +233,15 @@ def cancel():
     return bridge.cancel()
 
 
+def test_keys(params_json):
+    """پروکسی تست کلیدها برای دکمهٔ «تست کلیدها / لینک» اندروید.
+    رفع خطای: AttributeError: module 'native_bridge' has no attribute 'test_keys'
+    (MainActivity ماژول native_bridge را صدا می‌زند)
+    """
+    import bridge
+    return bridge.test_keys(params_json)
+
+
 def status():
     try:
         import launcher

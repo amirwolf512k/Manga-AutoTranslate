@@ -62,7 +62,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logBox: TextView
     private lateinit var resultsBox: LinearLayout
     private lateinit var runBtn: Button
-    private lateinit var cancelBtn: Button
+    private var jobRunning = false
+    private var cancelPending = false
     private lateinit var loadingRow: LinearLayout
     private val values = HashMap<String, Any?>()
     private val fieldViews = HashMap<String, View>()
@@ -204,21 +205,6 @@ class MainActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(14); bottomMargin = dp(6)
         })
-
-        // دکمهٔ لغو — فقط حین اجرای ترجمه دیده می‌شود (مشکل ۶)
-        cancelBtn = Button(this).apply {
-            text = "⏹  لغو ترجمه"
-            setTextColor(Color.WHITE); textSize = 15f; typeface = Typeface.DEFAULT_BOLD
-            background = rounded(Color.parseColor("#3a1210"), 14, 2, ACC)
-            setPadding(0, dp(12), 0, dp(12))
-            stateListAnimator = null
-            visibility = View.GONE
-        }
-        root.addView(cancelBtn, LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-            bottomMargin = dp(8)
-        })
-        cancelBtn.setOnClickListener { onCancelJob() }
 
         val logCard = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -985,10 +971,10 @@ class MainActivity : AppCompatActivity() {
                     setTextColor(MUT); textSize = 11f; setPadding(dp(12), dp(2), dp(12), dp(2))
                 }
                 val clearBtn = Button(this).apply {
-                    text = "✕  لغو / حذف انتخاب"
-                    setTextColor(Color.WHITE); textSize = 12.5f
+                    text = "✕  لغو انتخاب"
+                    setTextColor(Color.WHITE); textSize = 12f
                     background = rounded(Color.parseColor("#3a1210"), 10, 1, ACC)
-                    setPadding(dp(12), dp(9), dp(12), dp(9))
+                    setPadding(dp(10), dp(11), dp(10), dp(11))
                     stateListAnimator = null
                     visibility = View.GONE
                 }
@@ -1024,9 +1010,21 @@ class MainActivity : AppCompatActivity() {
                     clearBtn.visibility = View.GONE
                     Toast.makeText(this, "انتخاب فایل لغو شد", Toast.LENGTH_SHORT).show()
                 }
-                row.addView(btn)
+                // مشکل ۱ — دکمهٔ لغو «کنار» دکمهٔ آپلود می‌آید، نه زیرش
+                btn.layoutParams = LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                val fileRow = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                }
+                fileRow.addView(btn)
+                fileRow.addView(clearBtn, LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                    marginStart = dp(6)
+                })
+                row.addView(fileRow)
                 row.addView(nameView)
-                row.addView(clearBtn)
                 fieldViews[id] = nameView
                 fieldViews[id + "_btn"] = btn
                 fieldViews[id + "_clear"] = clearBtn
@@ -1157,20 +1155,29 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onCancelJob() {
-        // مشکل ۶ — لغو واقعی کار در حال اجرا (موتور در اولین فرصت توقف می‌شود)
-        cancelBtn.isEnabled = false
-        cancelBtn.text = "⏳ در حال توقف…"
+        // مشکل ۳ — لغو فوری: پرچم توقف در موتور در تمام حلقه‌های ریز چک می‌شود
+        if (cancelPending) return
+        cancelPending = true
+        runBtn.isEnabled = false
+        runBtn.text = "⏳ در حال توقف…"
+        runBtn.background = rounded(Color.parseColor("#241009"), 14, 2, MUT)
+        setLog(logBox.text.toString() + "\n⏹ درخواست لغو ثبت شد — توقف فوری…")
         Thread {
             try {
                 bridge.callAttr("cancel")
             } catch (_: Exception) {
             }
         }.start()
-        Toast.makeText(this, "درخواست لغو ثبت شد — تا پایان مرحلهٔ فعلی کمی صبر کن",
+        Toast.makeText(this, "درخواست لغو ثبت شد — در حال توقف فوری…",
             Toast.LENGTH_SHORT).show()
     }
 
     private fun onStartJob() {
+        // مشکل ۴ — یک دکمهٔ یکپارچه: اگر کار در حال اجراست، همین دکمه = لغو
+        if (jobRunning) {
+            onCancelJob()
+            return
+        }
         try {
             val p = collect()
             if ((p.optString("src") ?: "").isBlank() ||
@@ -1179,11 +1186,13 @@ class MainActivity : AppCompatActivity() {
                 return
             }
             maybeAskBatteryExemption()
-            runBtn.isEnabled = false
-            runBtn.text = "⏳ در حال اجرا…"
-            cancelBtn.isEnabled = true
-            cancelBtn.text = "⏹  لغو ترجمه"
-            cancelBtn.visibility = View.VISIBLE
+            jobRunning = true
+            cancelPending = false
+            // همان دکمهٔ استارت → لغو (قرمز)
+            runBtn.isEnabled = true
+            runBtn.text = "⏹  لغو ترجمه"
+            runBtn.setTextColor(Color.WHITE)
+            runBtn.background = rounded(Color.parseColor("#3a1210"), 14, 2, ACC)
             acquireKeepAwake()
             resultsBox.removeAllViews()
             Thread {
@@ -1198,8 +1207,13 @@ class MainActivity : AppCompatActivity() {
                 ui.post {
                     try {
                         val r = res
-                        if (r != null && r.optBoolean("ok")) pollLoop()
-                        else {
+                        if (r != null && r.optBoolean("ok")) {
+                            // اگر کاربر قبل از ثبت کار لغو زده بود، الان لغو را اعمال کن
+                            if (cancelPending) {
+                                Thread { try { bridge.callAttr("cancel") } catch (_: Exception) {} }.start()
+                            }
+                            pollLoop()
+                        } else {
                             logBox.text = "❌ " + (r?.optString("error", "")?.ifBlank { null }
                                 ?: err ?: "خطا")
                             finishJobUi()
@@ -1220,11 +1234,12 @@ class MainActivity : AppCompatActivity() {
     private var lastLogTxt = ""
 
     private fun finishJobUi() {
+        jobRunning = false
+        cancelPending = false
         runBtn.isEnabled = true
         runBtn.text = "🚀  شروع ترجمه"
-        cancelBtn.visibility = View.GONE
-        cancelBtn.isEnabled = true
-        cancelBtn.text = "⏹  لغو ترجمه"
+        runBtn.setTextColor(Color.WHITE)
+        runBtn.background = gradBtn()
         releaseKeepAwake()
     }
 
@@ -1251,9 +1266,10 @@ class MainActivity : AppCompatActivity() {
                         setLog(lg)
                     }
                     if (s.optBoolean("cancel_requested") && !s.optBoolean("done") &&
-                        cancelBtn.isEnabled) {
-                        cancelBtn.isEnabled = false
-                        cancelBtn.text = "⏳ در حال توقف…"
+                        !cancelPending) {
+                        cancelPending = true
+                        runBtn.isEnabled = false
+                        runBtn.text = "⏳ در حال توقف…"
                     }
                     if (s.optBoolean("done")) {
                         if (s.optBoolean("cancelled")) {
@@ -1261,7 +1277,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         finishJobUi()
                         showResults(s)
-                    } else ui.postDelayed({ pollLoop() }, 1500)
+                    } else ui.postDelayed({ pollLoop() }, 800)
                 } catch (e: Exception) {
                     logBox.text = "❌ poll: " + (e.message ?: e.toString())
                     finishJobUi()
