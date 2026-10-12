@@ -731,3 +731,15 @@ def cancel():
     if job and not job.get("done"):
         _log(job, "⏹ درخواست توقف ثبت شد (پایان مرحله فعلی)")
     return json.dumps({"ok": True}, ensure_ascii=False)
+
+
+def test_api_key(provider, api_key, model="", api_base=""):
+    try:
+        import sys
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from manga import MangaTranslator
+        ok, msg = MangaTranslator.test_api_key(
+            provider or "gemini", api_key or "", model or "", api_base or "")
+        return json.dumps({"ok": bool(ok), "msg": str(msg)}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"ok": False, "msg": f"خطا: {e}"}, ensure_ascii=False)
