@@ -1836,6 +1836,11 @@ class BalloonToneClassifier:
             h, w = crop_bgr.shape[:2]
             if h < 10 or w < 10:
                 return "normal"
+            if crop_bgr.shape[2] == 4:
+                alpha = crop_bgr[:, :, 3:4].astype(np.float32) / 255.0
+                rgb = crop_bgr[:, :, :3].astype(np.float32)
+                white = np.ones_like(rgb) * 255.0
+                crop_bgr = (rgb * alpha + white * (1 - alpha)).astype(np.uint8)
             gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
             _, bw = cv2.threshold(gray, 0, 255,
                                   cv2.THRESH_BINARY + cv2.THRESH_OTSU)
@@ -1848,7 +1853,14 @@ class BalloonToneClassifier:
                                        cv2.CHAIN_APPROX_SIMPLE)
             if not cnts:
                 return "normal"
-            cnt = max(cnts, key=cv2.contourArea)
+            cnts_sorted = sorted(cnts, key=cv2.contourArea, reverse=True)
+            dash_like = [c for c in cnts_sorted
+                         if 50 < cv2.contourArea(c) < bw.size * 0.02]
+            if len(dash_like) >= 10:
+                largest_area = cv2.contourArea(cnts_sorted[0])
+                if largest_area < bw.size * 0.08:
+                    return "whisper"
+            cnt = cnts_sorted[0]
             area = cv2.contourArea(cnt)
             if area < 100:
                 return "normal"
@@ -1878,12 +1890,18 @@ class BalloonToneClassifier:
             mean_val = float(np.mean(gray))
             dark_ratio = float((gray < 80).mean())
             if dark_ratio > 0.55 and mean_val < 100:
+                if n_vertices >= 12:
+                    return "monster"
                 return "black"
             if rectangularity > 0.88 and n_vertices <= 6 and solidity > 0.92:
                 if defects >= 3:
                     return "square_thought"
                 return "narrator"
+            if 6 <= n_vertices <= 10 and solidity > 0.90 and rectangularity < 0.85:
+                return "system"
             if n_vertices >= 16:
+                if solidity > 0.88:
+                    return "comedy_shout"
                 return "shout"
             if n_vertices >= 12 and solidity < 0.85:
                 return "shout"
