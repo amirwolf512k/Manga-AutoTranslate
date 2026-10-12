@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.13.1"
+APP_VER = "1.14.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -340,10 +340,31 @@ def _local_file_ver(name: str) -> str:
         return "0"
 
 
+_GH_PROXIES = (
+    "https://gh-proxy.com/",
+    "https://ghfast.top/",
+    "https://ghproxy.net/",
+)
+
+
 def _http_get(url: str, timeout: float = 30.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:
-        return r.read()
+    """گرفتنِ URL — اگر مستقیم نشد (CDN گیت‌هاب روی بعضی شبکه‌ها بسته است)
+    از پراکسی‌های پشتیبان می‌گذرد."""
+    urls = [url]
+    if url.startswith(("https://github.com/",
+                       "https://raw.githubusercontent.com/",
+                       "https://objects.githubusercontent.com/")):
+        urls += [p + url for p in _GH_PROXIES]
+    last = None
+    for u in urls:
+        try:
+            req = urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return r.read()
+        except Exception as e:
+            last = e
+            continue
+    raise last if last is not None else RuntimeError("دانلود نشد")
 
 
 def check_updates(force: bool = False, log=print) -> dict:
@@ -2683,7 +2704,6 @@ def run_web():
                 use_lama = gr.State(False)  # اجبار حذف شد
                 force_cpu = gr.State(False)  # اجبار حذف شد
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
-                turbo = gr.Checkbox(label="حالت توربو (خیلی سریع: فقط OCR + OpenCV)", value=False)
             clean_method = gr.Radio(
                 choices=[("خودکار (بر اساس رم/GPU)", "auto"),
                          ("CTD (دقیق‌ترین — ماسک حرف‌به‌حرف)", "ctd"),
@@ -3604,7 +3624,7 @@ def run_web():
                             out_fmt_v, quality_v, font_up,
                             workers_v, bubbles_v, timeout_v,
                             batchw_v, maxre_v, reqdelay_v, temp_v, readord_v,
-                            use_lama_v, force_cpu_v, two_pass_v, turbo_v, clean_method_v,
+                            use_lama_v, force_cpu_v, two_pass_v, clean_method_v,
                             fake_test_v, clean_only_v, web_debug_v, instruction_text_v,
                             glossary_text_v, story_brief_v, api_base_v,
                             *tone_args):
@@ -3728,8 +3748,6 @@ def run_web():
                 cmd += ["--cpu"]
             if not two_pass_v:
                 cmd += ["--no-two-pass-ocr"]
-            if turbo_v:
-                cmd += ["--turbo"]
             if fake_test_v:
                 cmd += ["--fake-translate"]
             if clean_only_v:
@@ -3820,7 +3838,7 @@ def run_web():
                     out_fmt, quality, font_upload,
                     workers, bubbles, timeout,
                     batchw, maxre, reqdelay, temp, readord,
-                    use_lama, force_cpu, two_pass, turbo, clean_method,
+                    use_lama, force_cpu, two_pass, clean_method,
                     fake_test, clean_only, web_debug, instruction_text,
                     glossary_text, story_brief, api_base] + tone_uploads,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,

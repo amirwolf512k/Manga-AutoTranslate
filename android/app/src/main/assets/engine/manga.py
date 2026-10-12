@@ -1,5 +1,5 @@
 from __future__ import annotations
-APP_VER = "1.14.0"
+APP_VER = "1.15.0"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -1720,6 +1720,15 @@ _RAPIDOCR_FILES = {
 }
 
 
+# پراکسی‌های دانلود گیت‌هاب — برای وقتی که CDN گیت‌هاب روی شبکهٔ
+# کاربر (مخصوصاً موبایل ایران) باز نمی‌شود
+_GH_PROXIES = (
+    "https://gh-proxy.com/",
+    "https://ghfast.top/",
+    "https://ghproxy.net/",
+)
+
+
 def _fmt_mb(n: float) -> str:
     return f"{n / (1024 * 1024):.1f}MB"
 
@@ -1741,32 +1750,78 @@ def _dl_progress(name: str, done: int, total: int, _last: list = [0.0, 0]) -> No
         print(f"\r    دانلود {name}: {_fmt_mb(done)}", end="", flush=True)
 
 
-def _dl_to(url, dst, name: str = ""):
+def _gh_url_variants(url):
+    """همهٔ راه‌های رسیدن به یک فایل گیت‌هاب: مستقیم + پشتِ پراکسی‌ها.
+    روی شبکهٔ موبایل ایران، «release-assets.githubusercontent.com»
+    اغلب قطع/کند است؛ پراکسی‌ها همان فایل را از مسیر دیگری می‌دهند."""
+    urls = [url]
+    if url.startswith(("https://github.com/",
+                       "https://raw.githubusercontent.com/",
+                       "https://objects.githubusercontent.com/")):
+        for p in _GH_PROXIES:
+            urls.append(p + url)
+    return urls
+
+
+def _dl_to(url, dst, name: str = "", tries: int = 3):
+    """دانلود با ادامه‌یابی (resume) و تلاشِ مجدد — برای شبکه‌های ناپایدار.
+    اگر وسط راه قطع شود، دفعهٔ بعد از همان‌جایی که مانده ادامه می‌دهد."""
     import time as _t
     import urllib.request
     if not name:
         name = os.path.basename(dst)
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-    t0 = _t.time()
-    with urllib.request.urlopen(req, timeout=900) as r, \
-            open(dst + ".part", "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0)
-        done = 0
-        while True:
-            chunk = r.read(1 << 20)
-            if not chunk:
-                break
-            f.write(chunk)
-            done += len(chunk)
-            _dl_progress(name, done, total)
-    if total and done < total:
-        raise RuntimeError(f"ناقص: {done}/{total} بایت")
-    if os.path.getsize(dst + ".part") > 1000:
-        dt = _t.time() - t0
-        print(f"\r    [‎+] {name}: {_fmt_mb(done)} در {dt:.0f}s" + " " * 8)
-        os.replace(dst + ".part", dst)
-        return dst
-    raise RuntimeError("فایل ناقص")
+    part = dst + ".part"
+    last = None
+    for attempt in range(1, max(1, tries) + 1):
+        done0 = 0
+        if os.path.isfile(part):
+            try:
+                done0 = os.path.getsize(part)
+            except Exception:
+                done0 = 0
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if done0 > 0:
+            headers["Range"] = f"bytes={done0}-"
+        t0 = _t.time()
+        try:
+            req = urllib.request.Request(url, headers=headers)
+            with urllib.request.urlopen(req, timeout=900) as r:
+                code = int(getattr(r, "status", 0) or 200)
+                if done0 > 0 and code == 206:
+                    _cr = r.headers.get("Content-Range", "")
+                    total = int(_cr.rsplit("/", 1)[-1] or 0)
+                    mode, done = "ab", done0
+                else:
+                    total = int(r.headers.get("Content-Length") or 0)
+                    mode, done = "wb", 0
+                with open(part, mode) as f:
+                    while True:
+                        chunk = r.read(1 << 20)
+                        if not chunk:
+                            break
+                        f.write(chunk)
+                        done += len(chunk)
+                        _dl_progress(name, done, total or done)
+            if total and done < total:
+                raise RuntimeError(f"ناقص: {done}/{total} بایت")
+            if os.path.getsize(part) > 1000:
+                dt = _t.time() - t0
+                print(f"\r    [\u200e+] {name}: {_fmt_mb(done)} در {dt:.0f}s"
+                      + " " * 8)
+                os.replace(part, dst)
+                return dst
+            raise RuntimeError("فایل ناقص")
+        except Exception as e:
+            last = e
+            try:
+                _sz = os.path.getsize(part)
+            except Exception:
+                _sz = 0
+            print(f"    [!] تلاش {attempt}/{tries} برای {name} ناموفق "
+                  f"({_fmt_mb(_sz)} گرفته شده): {str(e)[:90]}")
+            if attempt < tries:
+                _t.sleep(2 * attempt)
+    raise last if last is not None else RuntimeError("دانلود ناموفق")
 
 
 def _model_cache_dir(sub):
@@ -1784,7 +1839,14 @@ def _mirror_model(fname):
         return loc
     try:
         print(f"    [mirror] {fname} ...")
-        _dl_to(_RAPIDOCR_MIRROR + fname, loc)
+        for u in _gh_url_variants(_RAPIDOCR_MIRROR + fname):
+            try:
+                _dl_to(u, loc, tries=2)
+                return loc
+            except Exception as e2:
+                print(f"    [!] {u.split('/')[2]} نشد: {str(e2)[:80]}")
+                continue
+        raise RuntimeError("همهٔ آینه‌ها ناموفق")
         return loc
     except Exception as e:
         print(f"    [!] mirror نشد: {e}")
@@ -2582,6 +2644,10 @@ class ComicTextDetectorDNN:
     @classmethod
     def _download_model(cls, cache_dir=None):
         from pathlib import Path
+        if not cache_dir and globals().get("_IS_ANDROID"):
+            # اندروید: Path.home() قابل‌نوشتن نیست → مثل بقیهٔ مدل‌ها از
+            # پوشهٔ فایل‌های اپ استفاده می‌شود
+            cache_dir = _model_cache_dir("ctd")
         cache_root = (Path(cache_dir) if cache_dir
                       else Path.home() / ".cache" / "manga_translator_models")
         cache_root.mkdir(parents=True, exist_ok=True)
@@ -2590,9 +2656,26 @@ class ComicTextDetectorDNN:
             print(f"[*] مدل CTD از کش: {dst}")
             return str(dst)
         print("[*] دانلود مدل تشخیص متن CTD (~۹۴MB، فقط بار اول) ...")
-        _dl_to(cls.URL, str(dst), name="comictextdetector.pt.onnx")
-        print(f"[+] مدل CTD ذخیره شد: {dst}")
-        return str(dst)
+        # اول آینهٔ خودمان (روی شبکهٔ ایران هم بسته نمی‌شود)، بعد منبع اصلی
+        last = None
+        urls = (_gh_url_variants(_RAPIDOCR_MIRROR
+                                 + "comictextdetector.pt.onnx")
+                + _gh_url_variants(cls.URL))
+        for url in urls:
+            try:
+                print(f"    دانلود از {url.split('/')[2]} ...")
+                _dl_to(url, str(dst), name="comictextdetector.pt.onnx")
+                print(f"[+] مدل CTD ذخیره شد: {dst}")
+                return str(dst)
+            except Exception as e:
+                last = e
+                print(f"    [!] دانلود از {url.split('/')[2]} نشد: {e}")
+                try:
+                    if os.path.isfile(str(dst) + ".part"):
+                        os.remove(str(dst) + ".part")
+                except Exception:
+                    pass
+        raise RuntimeError(f"دانلود مدل CTD ناموفق: {last}")
 
     @staticmethod
     def _tile_starts(total, tile, overlap):
@@ -3049,12 +3132,7 @@ class MangaTranslator:
         clean_method: str = "auto",
         force_aot: bool = False,
         no_aot: bool = False,
-        turbo: bool = False,
     ):
-        self.turbo = bool(turbo)
-        if self.turbo:
-            clean_method = "opencv"
-            two_pass_ocr = False
         self.clean_method = self._normalize_clean_method(clean_method)
         if self.clean_method in ("lama", "aot+lama"):
             force_lama = True
@@ -3370,21 +3448,18 @@ class MangaTranslator:
         self._ocr_main_lang = main_lang
 
         self.det = None
-        if getattr(self, "turbo", False):
-            print("[*] حالت توربو: تشخیص حباب (RT-DETR) غیرفعال → فقط OCR")
-        else:
-            try:
-                print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
-                self.det = RTDetrV2ONNXDetector(
-                    prefer_gpu=self.use_gpu,
-                    conf_thresh=self.det_confidence,
-                    iou_thresh=0.45,
-                    threads=max(1, int(self.max_workers or 2)),
-                    multi_scale=not _IS_ANDROID,
-                )
-            except Exception as e:
-                print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
-                self.det = None
+        try:
+            print("[*] بارگذاری RT-DETR-v2 ONNX (تشخیص حباب) ...")
+            self.det = RTDetrV2ONNXDetector(
+                prefer_gpu=self.use_gpu,
+                conf_thresh=self.det_confidence,
+                iou_thresh=0.45,
+                threads=max(1, int(self.max_workers or 2)),
+                multi_scale=not _IS_ANDROID,
+            )
+        except Exception as e:
+            print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
+            self.det = None
 
     def _release_extraction_models(self):
         """حالت Lite: آزادسازی موقت OCR/تشخیص‌دهنده قبل از فاز پاکسازی
@@ -4171,6 +4246,15 @@ class MangaTranslator:
             for r in regions:
                 if (r.det_class or "") in ("bubble", "text_bubble"):
                     continue
+                # متنِ بلندِ خوانا (پاراگرافِ سند/روایت) لوگو/تیتر/SFX نیست —
+                # فیلترِ قبلی پاراگرافِ سندِ چندخطی را «تیترِ بزرگ» می‌زد و
+                # پاکسازی از قلم می‌افتاد (متنِ شبح روی تصویر می‌ماند)
+                _ptxt = (r.source_text or "").strip()
+                if (len(_ptxt) >= 16
+                        and len(re.findall(
+                            r"[A-Za-z\u0600-\u06FF\uAC00-\uD7A3"
+                            r"\u3040-\u30FF\u4E00-\u9FFF]{2,}", _ptxt)) >= 2):
+                    continue
                 _ang0 = abs(float(getattr(r, "angle", 0.0) or 0.0))
                 _vert_region = (45.0 <= _ang0 <= 135.0)
                 polys = list(r.ocr_polys or []) or list(r.boxes or [])
@@ -4680,7 +4764,13 @@ class MangaTranslator:
                 return "promo"
             if _lab == "dialogue" and _cf >= 0.55:
                 return "dialogue"
-            if _lab == "sfx" and _cf >= (0.75 if in_bubble else 0.60):
+            # متنِ بلندِ خوانا (سند/روایت/دیالوگ چندکلمه‌ای) هیچ‌وقت SFX نیست —
+            # فیلترِ ML متنِ همه‌حروف‌بزرگِ سند را SFX می‌زد و پاکسازی
+            # از قلم می‌افتاد (متنِ شبح جامانده)
+            _long_real = (len(stripped) >= 16
+                          and len(re.findall(r"[A-Za-z]{2,}", stripped)) >= 2)
+            if _lab == "sfx" and _cf >= (0.75 if in_bubble else 0.60) \
+                    and not _long_real:
                 return "sfx"
             if _lab == "ads" and _cf >= (0.80 if in_bubble else 0.50):
                 return "promo"
@@ -5977,13 +6067,21 @@ class MangaTranslator:
                         ink = _ref
                         _msrc = "polyRefined"
                     else:
+                        # متنِ واقعیِ خوانا (چندکلمه‌ای) اگر رؤیتِ حرفِ تکی
+                        # شکست خورد، روی زمینهٔ بافت‌دار (حصار/درخت/عکس) هم
+                        # با ماسکِ چندضلعیِ خودِ خطوطِ OCR پاک می‌شود —
+                        # «skip» فقط برای خوانشِ بی‌پشتوانه است؛ وگرنه
+                        # نیمی از خط پاک می‌شود و نیمِ دیگر شبح می‌ماند
+                        _txt_ok = (sum(_c.isalnum() for _c in
+                                       (getattr(region, "source_text", "") or ""))
+                                   >= 8)
                         try:
                             _flat_z = self._zone_bg_is_flat(
                                 gray[y0:y1, x0:x1],
                                 _pm if int(np.count_nonzero(_pm)) else ink)
                         except Exception:
                             _flat_z = True
-                        if int(np.count_nonzero(_pm)) > 0 and _flat_z:
+                        if int(np.count_nonzero(_pm)) > 0 and (_flat_z or _txt_ok):
                             ink = cv2.erode(_pm, np.ones((3, 3), np.uint8))
                             _msrc = "polyShrunk"
                         else:
@@ -7117,10 +7215,38 @@ class MangaTranslator:
                 _ra = float(max(1, rw * rh))
                 _win = base[ya0:ya1, xa0:xa1]
                 _cov = float(np.count_nonzero(_win)) / _ra
-                if _cov >= 0.12:
-                    continue
                 _rm = np.zeros((H, W), np.uint8)
-                _rm[ya0:ya1, xa0:xa1] = 255
+                if _cov >= 0.12:
+                    # ناحیه در کل ماسک دارد، ولی شاید بعضی خطوطش (متنِ
+                    # سفیدِ outline‌دار روی زمینهٔ شلوغ که رؤیتِ حرفِ تکی
+                    # گیرش نمی‌آید) هیچ ماسکی نگرفته باشند — پنجرهٔ تیره
+                    # فقط روی همان خطوطِ بی‌ماسک ساخته می‌شود تا متنِ
+                    # سفیدِ نیمه‌پاک شبح نماند
+                    _bands = []
+                    for _p in (getattr(r, "ocr_polys", None) or []):
+                        try:
+                            _pa = np.asarray(_p, np.float32).reshape(-1, 2)
+                        except Exception:
+                            continue
+                        if _pa.size == 0:
+                            continue
+                        _bx0 = max(0, int(_pa[:, 0].min()) - 6)
+                        _by0 = max(0, int(_pa[:, 1].min()) - 6)
+                        _bx1 = min(W, int(_pa[:, 0].max()) + 6)
+                        _by1 = min(H, int(_pa[:, 1].max()) + 6)
+                        if _bx1 <= _bx0 or _by1 <= _by0:
+                            continue
+                        _ba = float(max(1, (_bx1 - _bx0) * (_by1 - _by0)))
+                        _bc = float(np.count_nonzero(
+                            base[_by0:_by1, _bx0:_bx1])) / _ba
+                        if _bc < 0.12:
+                            _bands.append((_bx0, _by0, _bx1, _by1))
+                    if not _bands:
+                        continue
+                    for (_bx0, _by0, _bx1, _by1) in _bands:
+                        _rm[_by0:_by1, _bx0:_bx1] = 255
+                else:
+                    _rm[ya0:ya1, xa0:xa1] = 255
                 _rm = cv2.erode(_rm, _kern_e, 1)
                 _allow_r = _rm
                 if fmap is not None and np.any(fmap):
@@ -10236,8 +10362,6 @@ class MangaTranslator:
             n, lab, st, _ = cv2.connectedComponentsWithStats(
                 (crop_msk > 0).astype(np.uint8), 8)
         except Exception:
-            if getattr(self, "turbo", False):
-                return self._opencv_inpaint_fast(crop_img, crop_msk)
             return self._opencv_inpaint_hq(crop_img, crop_msk)
         k9 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         wall_m = None if wall is None else (wall > 0)
@@ -10410,21 +10534,6 @@ class MangaTranslator:
         except Exception:
             return None
 
-    def _opencv_inpaint_fast(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
-        """OpenCV فوق‌سریع برای حالت توربو: inpaint مستقیم بدون تحلیل per-component.
-        ~۳ برابر سریع‌تر از HQ، کیفیت قابل قبول برای گوشی."""
-        if mask is None or not np.any(mask):
-            return image.copy()
-        m = (mask > 0).astype(np.uint8) * 255
-        if not np.any(m):
-            return image.copy()
-        m = cv2.dilate(m, np.ones((3, 3), np.uint8), iterations=1)
-        try:
-            lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
-            filled_lab = cv2.inpaint(lab, m, inpaintRadius=4, flags=cv2.INPAINT_TELEA)
-            return cv2.cvtColor(filled_lab, cv2.COLOR_LAB2BGR)
-        except Exception:
-            return cv2.inpaint(image, m, inpaintRadius=4, flags=cv2.INPAINT_TELEA)
 
     def _opencv_inpaint_hq(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         """OpenCV HQ: flat-local fill برای کاغذ/حباب سفید + TELEA/NS
@@ -16498,9 +16607,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--inpaint-radius", type=int, default=3)
     p.add_argument("--mag-ratio", type=float, default=1.35)
     p.add_argument("--no-two-pass-ocr", action="store_true")
-    p.add_argument("--turbo", action="store_true",
-                   help="حالت توربو (گوشی): بدون RT-DETR (فقط OCR) + OpenCV — "
-                        "خیلی سریع‌تر، کیفیت پاکسازی کمتر")
     p.add_argument("--fake-translate", action="store_true",
                    help="حالت تست: به‌جای API، متن فارسی الکی داخل حباب‌ها رندر می‌شود "
                         "(برای چک کردن استخراج/پاکسازی/رندر بدون کلید API)")
@@ -16622,7 +16728,6 @@ def main():
         inpaint_radius=args.inpaint_radius,
         mag_ratio=args.mag_ratio,
         two_pass_ocr=not args.no_two_pass_ocr,
-        turbo=args.turbo,
         translation_temperature=args.temperature,
         max_output_width=(args.max_width or None),
         stitch_max_height=args.stitch_max_height,
