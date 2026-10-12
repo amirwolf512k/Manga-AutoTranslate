@@ -679,7 +679,7 @@ class MainActivity : AppCompatActivity() {
                 fieldViews[id] = et
                 if (id.lowercase().contains("key")) {
                     val testBtn = Button(this).apply {
-                        text = "تست کلید"
+                        text = "تست کلیدها / لینک"
                         setTextColor(TXT); textSize = 13f
                         background = rounded(CARD2, 10, 1)
                         setPadding(dp(12), dp(8), dp(12), dp(8))
@@ -690,31 +690,35 @@ class MainActivity : AppCompatActivity() {
                         visibility = View.GONE
                     }
                     testBtn.setOnClickListener {
-                        testLbl.text = "⏳ در حال تست..."
+                        testLbl.text = "در حال تست…"
                         testLbl.setTextColor(MUT)
+                        testLbl.visibility = View.VISIBLE
+                        testBtn.isEnabled = false
                         Thread {
+                            var res: JSONObject? = null
+                            var err: String? = null
                             try {
-                                val prov = (fieldViews["provider"] as? android.widget.Button)?.tag?.toString()
-                                    ?: prefs.getString("provider", "gemini") ?: "gemini"
+                                val p = JSONObject()
+                                val prov = prefs.getString("provider", "gemini") ?: "gemini"
                                 val keyVal = (fieldViews[id] as? EditText)?.text?.toString() ?: ""
-                                val modelVal = (fieldViews["model"] as? EditText)?.text?.toString() ?: ""
                                 val baseVal = prefs.getString("api_base", "") ?: ""
-                                val res = JSONObject(bridge.callAttr("test_api_key", prov, keyVal, modelVal, baseVal).toString())
-                                val ok = res.optBoolean("ok", false)
-                                val msg = res.optString("msg", "")
-                                runOnUiThread {
-                                    testLbl.text = (if (ok) "✅ " else "❌ ") + msg
-                                    testLbl.setTextColor(if (ok) Color.parseColor("#2e7d32") else Color.parseColor("#c62828"))
-                                    testLbl.visibility = View.VISIBLE
-                                    testLbl.postDelayed({ testLbl.visibility = View.GONE }, 60000)
-                                }
+                                p.put("keys", keyVal)
+                                p.put("provider", prov)
+                                p.put("api_base", baseVal)
+                                res = JSONObject(bridge.callAttr("test_keys", p.toString()).toString())
                             } catch (e: Exception) {
-                                runOnUiThread {
-                                    testLbl.text = "❌ خطا: " + (e.message ?: e.toString())
-                                    testLbl.setTextColor(Color.parseColor("#c62828"))
-                                    testLbl.visibility = View.VISIBLE
-                                    testLbl.postDelayed({ testLbl.visibility = View.GONE }, 60000)
-                                }
+                                err = e.message ?: e.toString()
+                            }
+                            runOnUiThread {
+                                testBtn.isEnabled = true
+                                val okTxt = res?.optString("text")?.takeIf { it.isNotBlank() }
+                                val msg = okTxt
+                                    ?: ("خطا: " + (res?.optString("error")?.takeIf { it.isNotBlank() }
+                                        ?: (err ?: "خطا")))
+                                testLbl.text = msg
+                                testLbl.setTextColor(if (okTxt != null) TXT else Color.parseColor("#c62828"))
+                                testLbl.visibility = View.VISIBLE
+                                testLbl.postDelayed({ testLbl.visibility = View.GONE }, 30000)
                             }
                         }.start()
                     }

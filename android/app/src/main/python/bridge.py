@@ -733,13 +733,33 @@ def cancel():
     return json.dumps({"ok": True}, ensure_ascii=False)
 
 
-def test_api_key(provider, api_key, model="", api_base=""):
+def test_keys(params_json):
+    """تست کلیدهای API / لینک سفارشی برای دکمهٔ «تست کلید» اندروید.
+    params_json: {"keys": "...", "provider": "...", "api_base": "..."}"""
+    try:
+        p = json.loads(params_json or "{}")
+    except Exception:
+        p = {}
+    keys = str(p.get("keys") or "")
+    provider = str(p.get("provider") or "gemini")
+    api_base = str(p.get("api_base") or "")
     try:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-        from manga import MangaTranslator
-        ok, msg = MangaTranslator.test_api_key(
-            provider or "gemini", api_key or "", model or "", api_base or "")
-        return json.dumps({"ok": bool(ok), "msg": str(msg)}, ensure_ascii=False)
+        from manga import test_api_keys
+        res = test_api_keys(keys, provider, api_base)
+        lines = []
+        for i, r in enumerate(res, 1):
+            if r.get("ok") and r.get("error"):
+                state = "سالم (با هشدار)"
+            elif r.get("ok"):
+                state = "سالم است"
+            else:
+                state = "کار نمی‌کند"
+            err = (" — " + str(r.get("error"))) if r.get("error") else ""
+            lines.append("کلید %d (%s): %s%s  [%dms]" % (
+                i, r.get("key", ""), state,
+                err, int(r.get("ms") or 0)))
+        return json.dumps({"ok": True, "text": "\n".join(lines)}, ensure_ascii=False)
     except Exception as e:
-        return json.dumps({"ok": False, "msg": f"خطا: {e}"}, ensure_ascii=False)
+        return json.dumps({"error": str(e)}, ensure_ascii=False)

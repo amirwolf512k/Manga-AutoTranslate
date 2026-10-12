@@ -1753,6 +1753,86 @@ def normalize_api_base(url: str) -> str:
     return u
 
 
+def test_api_keys(keys_text: str, provider: str = "gemini",
+                  api_base: str = "", timeout: float = 15.0) -> list:
+    """تست سریع کلیدهای API (تکی/چندتایی) و لینک سفارشی — برای دکمهٔ
+    «تست کلید» در همهٔ پلتفرم‌ها (وب/پی‌سی/اندروید). هر کلید با یک
+    درخواست سبک (لیست مدل‌ها) بررسی می‌شود؛ نتیجهٔ هر کلید جدا
+    برمی‌گردد: [{'key': 'مخفی‌شده', 'ok': True/False, 'error': '...',
+    'ms': 123}, ...]"""
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    import time as _time
+
+    keys = [k.strip() for k in re.split(r"[\s,;\n]+", str(keys_text or ""))
+            if k.strip()]
+    if not keys:
+        return [{"key": "", "ok": False, "error": "کلیدی وارد نشده", "ms": 0}]
+
+    prov = str(provider or "gemini").strip().lower()
+    if prov not in PROVIDER_PRESETS:
+        prov = "gemini"
+    preset = PROVIDER_PRESETS[prov]
+    base = normalize_api_base(api_base) or (preset.get("base_url") or "")
+
+    def _mask(k: str) -> str:
+        if len(k) <= 12:
+            return "***"
+        return k[:7] + "…" + k[-4:]
+
+    results = []
+    for k in keys:
+        r = {"key": _mask(k), "ok": False, "error": "", "ms": 0}
+        t0 = _time.time()
+        try:
+            if preset["type"] == "gemini" and not api_base:
+                url = ("https://generativelanguage.googleapis.com/"
+                       "v1beta/models?key=" + urllib.parse.quote(k)
+                       + "&pageSize=1")
+                req = urllib.request.Request(
+                    url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    r["ok"] = (getattr(resp, "status", 200) == 200)
+                    r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+            else:
+                if not base:
+                    raise ValueError("لینک (Base URL) وارد نشده")
+                url = base.rstrip("/")
+                if not url.endswith("/v1"):
+                    url += "/v1"
+                url += "/models"
+                req = urllib.request.Request(
+                    url, headers={
+                        "User-Agent": "Mozilla/5.0",
+                        "Authorization": "Bearer " + k,
+                    })
+                with urllib.request.urlopen(req, timeout=timeout) as resp:
+                    r["ok"] = (getattr(resp, "status", 200) == 200)
+                    r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 403):
+                r["error"] = "کلید نامعتبر/رد شد (401/403)"
+            elif e.code == 429:
+                r["ok"] = True
+                r["error"] = "معتبر ولی Rate-limit (429)"
+            else:
+                r["error"] = f"HTTP {e.code}"
+                try:
+                    detail = (e.read() or b"")[:180].decode("utf-8", "ignore")
+                    if detail:
+                        r["error"] += " — " + " ".join(detail.split())[:120]
+                except Exception:
+                    pass
+        except urllib.error.URLError as e:
+            r["error"] = f"اتصال برقرار نشد: {getattr(e, 'reason', e)}"
+        except Exception as e:
+            r["error"] = str(e)[:160]
+        r["ms"] = int((_time.time() - t0) * 1000)
+        results.append(r)
+    return results
+
+
 def _ask(prompt: str) -> str:
     try:
         return input(prompt).strip()

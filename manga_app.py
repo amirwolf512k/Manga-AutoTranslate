@@ -1013,26 +1013,65 @@ def run_desktop():
     keys_var = tk.StringVar(value=cfg.get("api_keys") or default_keys())
     keys_entry = ttk.Entry(card_ai, textvariable=keys_var, show="•")
     keys_entry.pack(fill="x")
-    test_key_row = ttk.Frame(card_ai)
-    test_key_row.pack(fill="x", pady=(4, 0))
-    test_key_btn_tk = ttk.Button(test_key_row, text="تست کلید")
-    test_key_btn_tk.pack(side="right")
-    test_key_lbl = ttk.Label(test_key_row, text="", foreground=C_MUT)
-    # hidden by default, shown on test
+    # ---- دکمهٔ تست کلیدها (پی‌سی) ----
+    row_testk = ttk.Frame(card_ai); row_testk.pack(fill="x", pady=(6, 0))
+    testk_out = tk.StringVar(value="")
+    testk_lbl = None
+    testk_after = [None]
 
-    def _do_test_key_tk():
-        try:
-            from manga import MangaTranslator
-            ok, msg = MangaTranslator.test_api_key(
-                prov_var.get(), keys_var.get(), model_var.get(),
-                api_base_var.get() if "api_base_var" in dir() else "")
-            test_key_lbl.config(
-                text=("✅ " if ok else "❌ ") + msg,
-                foreground="#2e7d32" if ok else "#c62828")
-        except Exception as e:
-            test_key_lbl.config(text=f"❌ خطا: {e}", foreground="#c62828")
+    def _testk_hide():
+        testk_out.set("")
+        if testk_lbl is not None:
+            try:
+                testk_lbl.pack_forget()
+            except Exception:
+                pass
 
-    test_key_btn_tk.config(command=_do_test_key_tk)
+    def _testk_schedule_hide():
+        if testk_after[0] is not None:
+            try:
+                root.after_cancel(testk_after[0])
+            except Exception:
+                pass
+        testk_after[0] = root.after(30000, _testk_hide)
+
+    def _run_test_keys_pc():
+        testk_out.set("در حال تست کلیدها…")
+        def _worker():
+            try:
+                from manga import test_api_keys
+                res = test_api_keys(
+                    keys_var.get() or "", str(prov_var.get() or "gemini"),
+                    api_base_var.get() if "api_base_var" in dir() else "")
+                out = []
+                for i, r in enumerate(res, 1):
+                    if r.get("ok") and r.get("error"):
+                        state = "سالم (با هشدار)"
+                    elif r.get("ok"):
+                        state = "سالم است"
+                    else:
+                        state = "کار نمی‌کند"
+                    err = f" — {r['error']}" if r.get("error") else ""
+                    out.append(f"کلید {i} ({r.get('key', '')}): "
+                               + state
+                               + err + f"  [{r.get('ms', 0)}ms]")
+                msg = "\n".join(out) if out else "کلیدی وارد نشده"
+            except Exception as e:
+                msg = f"خطا در تست: {e}"
+            def _show():
+                global testk_lbl
+                testk_out.set(msg)
+                if testk_lbl is None:
+                    testk_lbl = ttk.Label(row_testk, textvariable=testk_out,
+                                          foreground=C_MUT, wraplength=520,
+                                          justify="right")
+                testk_lbl.pack(side="right", fill="x", expand=True)
+                _testk_schedule_hide()
+            root.after(0, _show)
+        import threading
+        threading.Thread(target=_worker, daemon=True).start()
+    ttk.Button(row_testk, text="تست کلیدها / لینک",
+               command=_run_test_keys_pc).pack(side="right", padx=(0, 6))
 
     def _toggle_custom_fields(*_a):
         if str(prov_var.get()).strip() == "custom":
@@ -2503,11 +2542,13 @@ def run_web():
                                    placeholder="gemini-3.8-flash", scale=2,
                                    elem_id="manga_model")
             with gr.Row():
-                test_key_btn = gr.Button("تست کلید", size="sm",
-                                         elem_id="manga_test_key")
-                test_key_out = gr.Textbox(label="نتیجه تست", interactive=False,
-                                          elem_id="manga_test_key_out",
-                                          visible=False, scale=4)
+                test_key_btn = gr.Button(
+                    "تست کلیدها / لینک (هر کلید جداگانه بررسی می‌شود)",
+                    scale=1, elem_id="manga_test_key")
+                test_key_out = gr.Textbox(
+                    label="نتیجهٔ تست", value="", interactive=False, scale=3,
+                    elem_id="manga_test_key_out", visible=False,
+                    placeholder="بعد از کلیک، وضعیت هر کلید اینجا نمایش داده می‌شود — بعد از ۳۰ ثانیه خودش بسته می‌شود")
             api_base = gr.Textbox(label="دامنهٔ API سفارشی (فقط برای provider «custom»)",
                                   value=str(cfg.get("api_base", "") or ""),
                                   placeholder="https://your-server.example.com/v1",
@@ -3493,13 +3534,25 @@ def run_web():
 
         def _do_test_key(provider_v, api_keys_v, model_v, api_base_v):
             try:
-                from manga import MangaTranslator
-                ok, msg = MangaTranslator.test_api_key(
-                    provider_v, api_keys_v, model_v, api_base_v)
-                return gr.update(value=("✅ " if ok else "❌ ") + msg,
-                                 visible=True)
+                from manga import test_api_keys
+                res = test_api_keys(api_keys_v or "", provider_v or "gemini",
+                                    api_base_v or "")
+                out_lines = []
+                for i, r in enumerate(res, 1):
+                    if r.get("ok") and r.get("error"):
+                        state = "سالم (با هشدار)"
+                    elif r.get("ok"):
+                        state = "سالم است"
+                    else:
+                        state = "کار نمی‌کند"
+                    err = f" — {r['error']}" if r.get("error") else ""
+                    out_lines.append(
+                        f"کلید {i} ({r.get('key', '')}): "
+                        + state + err + f"  [{r.get('ms', 0)}ms]")
+                txt = "\n".join(out_lines) if out_lines else "کلیدی وارد نشده"
+                return gr.update(value=txt, visible=True)
             except Exception as e:
-                return gr.update(value=f"❌ خطا: {e}", visible=True)
+                return gr.update(value=f"خطا در تست: {e}", visible=True)
 
         def run_translation(sid, sid_box_v, inp_path_v, upload, provider_v, api_keys_v, model_v,
                             ocr_lang_v,
@@ -3742,7 +3795,7 @@ def run_web():
                     if (el) {
                         el.style.display = 'none';
                     }
-                }, 60000);
+                }, 30000);
             }
             """
         try:
