@@ -4850,12 +4850,19 @@ class MangaTranslator:
             if lama is not None:
                 _qc_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
                 _img_h, _img_w = image.shape[:2]
+                # 🇰3 الگوی K3 (CleanSinglePatchInMemory): LaMa همیشه پچ‌به‌پچ
+                # روی برشِ هر خوشه در رزولوشن اصلی اجرا می‌شود — کیفیت خیلی
+                # بهتر از کل‌صفحهٔ downscale‌شده به ۵۱۲px و کاملاً قابل لغو.
+                # بازگشت به مسیر قدیمی کل‌صفحه: MANGA_LAMA_FULLPAGE=1
+                _extreme = os.environ.get("MANGA_LAMA_FULLPAGE", "0") != "1"
                 _long = float(max(_img_h, _img_w))
                 _short = float(max(1.0, min(_img_h, _img_w)))
-                _extreme = _short * 2.5 < _long
                 if _extreme:
-                    print(f"  [*] صفحهٔ کشیده ({_img_w}x{_img_h}) → LaMa "
-                          f"خوشه‌به‌خوشه ({len(pending)} خوشه)")
+                    _mode = "پچ‌به‌پچ (الگوی K3)"
+                    if _short * 2.5 < _long:
+                        _mode += " — صفحهٔ کشیده"
+                    print(f"  [*] LaMa {_mode}: {len(pending)} خوشه "
+                          f"روی صفحهٔ {_img_w}x{_img_h}")
                     t0 = time.time()
                     _pad = 32
                     for c in pending:
