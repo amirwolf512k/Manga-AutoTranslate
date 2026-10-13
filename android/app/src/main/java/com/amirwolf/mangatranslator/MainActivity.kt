@@ -1452,6 +1452,7 @@ class MainActivity : AppCompatActivity() {
                         }
                         finishJobUi()
                         showResults(s)
+                        autoSaveLog()  // v1.14.16: لاگ کامل ← Download/manga/manga.log
                     } else ui.postDelayed({ pollLoop() }, 800)
                 } catch (e: Exception) {
                     logBox.text = "❌ poll: " + (e.message ?: e.toString())
@@ -1515,6 +1516,7 @@ class MainActivity : AppCompatActivity() {
             }
             resultsBox.addView(tv)
         }
+        resultsBox.addView(resBtn("📋  ذخیره/ارسال لاگ کامل", false) { shareLog() })
         for (i in 0 until resultsBox.childCount) {
             val lp = resultsBox.getChildAt(i).layoutParams as LinearLayout.LayoutParams
             lp.topMargin = dp(7)
@@ -1717,6 +1719,108 @@ class MainActivity : AppCompatActivity() {
                 Toast.makeText(this,
                     if (n > 0) "✔ $n فایل ذخیره شد: Download/manga/$sub" else "❌ ذخیره نشد",
                     Toast.LENGTH_LONG).show()
+            }
+        }.start()
+    }
+
+    // v1.14.16: لاگ کامل — filesDir/manga.log (پایتون خام می‌نویسد، بدون برش)
+    private fun logFile(): File = File(filesDir, "manga.log")
+
+    private fun saveLogToDownloads(): String? {
+        val f = logFile()
+        if (!f.isFile) return null
+        return try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                // نسخهٔ قبلی manga.log در Download/manga حذف تا جایگزین شود
+                val proj = arrayOf(MediaStore.MediaColumns._ID)
+                val sel = "${MediaStore.MediaColumns.DISPLAY_NAME}=? AND " +
+                    MediaStore.MediaColumns.RELATIVE_PATH + "=?"
+                contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI, proj,
+                    sel, arrayOf("manga.log", "Download/manga/"), null)?.use { c ->
+                    val ids = ArrayList<Long>()
+                    while (c.moveToNext()) ids.add(c.getLong(0))
+                    for (id in ids) try {
+                        contentResolver.delete(
+                            android.content.ContentUris.withAppendedId(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, id),
+                            null, null)
+                    } catch (_: Exception) {
+                    }
+                }
+                val cv = ContentValues().apply {
+                    put(MediaStore.MediaColumns.DISPLAY_NAME, "manga.log")
+                    put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                    put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/manga/")
+                    put(MediaStore.MediaColumns.IS_PENDING, 1)
+                }
+                val uri = contentResolver.insert(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv) ?: return null
+                var okWrite = false
+                try {
+                    contentResolver.openOutputStream(uri)?.use { o ->
+                        f.inputStream().use { it.copyTo(o) }
+                        okWrite = true
+                    }
+                } finally {
+                    if (!okWrite) try {
+                        contentResolver.delete(uri, null, null)
+                    } catch (_: Exception) {
+                    }
+                }
+                if (!okWrite) return null
+                contentResolver.update(uri, ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }, null, null)
+                uri.toString()
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS), "manga")
+                dir.mkdirs()
+                f.copyTo(File(dir, "manga.log"), overwrite = true)
+                "file"
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MangaApp", "saveLogToDownloads", e)
+            null
+        }
+    }
+
+    private fun autoSaveLog() {
+        Thread {
+            val ok = saveLogToDownloads()
+            ui.post {
+                if (ok != null) Toast.makeText(this,
+                    "📋 لاگ کامل ذخیره شد: Download/manga/manga.log",
+                    Toast.LENGTH_SHORT).show()
+            }
+        }.start()
+    }
+
+    private fun shareLog() {
+        Thread {
+            val ok = saveLogToDownloads()
+            ui.post {
+                if (ok == null) {
+                    Toast.makeText(this,
+                        "❌ لاگی موجود نیست — اول یک ترجمه اجرا کن",
+                        Toast.LENGTH_LONG).show()
+                    return@post
+                }
+                Toast.makeText(this, "✔ ذخیره شد: Download/manga/manga.log",
+                    Toast.LENGTH_SHORT).show()
+                try {
+                    val uri = androidx.core.content.FileProvider.getUriForFile(
+                        this, "$packageName.files", logFile())
+                    val send = Intent(Intent.ACTION_SEND).apply {
+                        type = "text/plain"
+                        putExtra(Intent.EXTRA_SUBJECT, "Manga Translator Log")
+                        putExtra(Intent.EXTRA_STREAM, uri)
+                        addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    }
+                    startActivity(Intent.createChooser(send, "ارسال لاگ کامل"))
+                } catch (e: Exception) {
+                    android.util.Log.e("MangaApp", "shareLog", e)
+                }
             }
         }.start()
     }

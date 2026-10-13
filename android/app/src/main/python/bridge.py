@@ -421,6 +421,7 @@ def start_job(params_json, files_dir):
             "out_file": None, "images": [], "debug_images": [],
             "params": p, "out": out, "out_file_path": out_file,
             "cancel_requested": False, "cancelled": False,
+            "files_dir": files_dir,
         }
         STATE["job"] = job
     try:
@@ -435,9 +436,121 @@ def _log(job, msg):
     with STATE["lock"]:
         txt = str(job.get("log") or "")
         job["log"] = (txt + "\n" + str(msg))[-12000:]
+    _FULLLOG.write(str(msg) + "\n")  # v1.14.16: لاگ کامل
 
 
 _ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+class _FullLog:
+    """v1.14.16: لاگ کاملِ بدون برش → <files_dir>/manga.log
+    لاگِ باکسِ UI هر خط را تا ۳۰۰ نویسه و کل را تا ۱۲هزار نویسه برش می‌زند؛
+    این فایل همه‌چیز را خام نگه می‌دارد تا کاربر بتواند متن کامل را بفرستد."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._fh = None
+        self.path = None
+
+    def open(self, files_dir):
+        with self._lock:
+            self._close()
+            self.path = None
+            try:
+                d = str(files_dir or "").strip()
+                if not d:
+                    return
+                os.makedirs(d, exist_ok=True)
+                p = os.path.join(d, "manga.log")
+                # لاگ اجرای قبلی → manga.log.old (برای مقایسه/گزارش)
+                if os.path.isfile(p):
+                    try:
+                        if os.path.getsize(p) <= 8 * 1024 * 1024:
+                            try:
+                                os.remove(p + ".old")
+                            except Exception:
+                                pass
+                            os.replace(p, p + ".old")
+                        else:
+                            os.remove(p)
+                    except Exception:
+                        pass
+                with open(p, "w", encoding="utf-8") as f:
+                    f.write(_fulllog_header())
+                self._fh = open(p, "a", encoding="utf-8")
+                self.path = p
+            except Exception:
+                self._fh = None
+                self.path = None
+
+    def write(self, s):
+        if not s:
+            return
+        with self._lock:
+            if not self._fh:
+                return
+            try:
+                self._fh.write(str(s).replace("\r", "\n"))
+                self._fh.flush()
+            except Exception:
+                try:
+                    self._fh.close()
+                except Exception:
+                    pass
+                self._fh = None
+
+    def _close(self):
+        if self._fh:
+            try:
+                self._fh.close()
+            except Exception:
+                pass
+        self._fh = None
+
+    def close(self):
+        with self._lock:
+            self._close()
+
+
+_FULLLOG = _FullLog()
+
+
+def _fulllog_header():
+    try:
+        _ver = getattr(manga, "APP_VER", "?") if manga is not None else "?"
+    except Exception:
+        _ver = "?"
+    _cpu = "?"
+    try:
+        _cpu = str(os.cpu_count() or "?")
+    except Exception:
+        pass
+    _arch = ""
+    try:
+        _arch = os.uname().machine
+    except Exception:
+        pass
+    return ("=== Manga Translator v%s | %s | cpu=%s %s ===\n"
+            % (_ver, time.strftime("%Y-%m-%d %H:%M:%S"), _cpu, _arch))
+
+
+def _fulllog_params(job):
+    try:
+        p = job.get("params") or {}
+        keys = ("provider", "model", "api_base", "fmt", "debug", "fake",
+                "two_pass", "tones", "font", "ocr", "langs", "readord",
+                "force_cpu", "story_brief")
+        kvs = []
+        for k in keys:
+            v = p.get(k)
+            if v not in (None, "", [], {}):
+                s = str(v)
+                if len(s) > 60:
+                    s = s[:57] + "..."
+                kvs.append("%s=%s" % (k, s))
+        return "params: " + (", ".join(kvs) if kvs else "-")
+    except Exception:
+        return "params: ?"
 
 
 class _TeeStream:
@@ -471,6 +584,7 @@ class _TeeStream:
             self._len = 0
         if not chunk:
             return
+        _FULLLOG.write(chunk)  # v1.14.16: خام و بدون برش به فایل
         pieces = chunk.replace("\r", "\n").split("\n")
         for ln in pieces[:-1]:
             self._emit(ln)
@@ -555,6 +669,9 @@ def _detach_log_handlers(attached):
 
 def _run(job):
     p = job["params"]
+    job["_t0"] = time.time()
+    _FULLLOG.open(job.get("files_dir"))  # v1.14.16: لاگ کامل
+    _FULLLOG.write(_fulllog_params(job) + "\n")
     try:
         os.makedirs(job["out"], exist_ok=True)
         for old in os.listdir(job["out"]):
@@ -794,6 +911,13 @@ def _run(job):
         with STATE["lock"]:
             job["done"] = True
             job["error"] = True
+    finally:
+        # v1.14.16: جمع‌بندی و بستن لاگ کامل در همهٔ مسیرها (موفق/لغو/خطا)
+        _FULLLOG.write(
+            "=== END — done=%s cancelled=%s error=%s — %.1fs ===\n"
+            % (bool(job.get("done")), bool(job.get("cancelled")),
+               bool(job.get("error")), time.time() - job.get("_t0", time.time())))
+        _FULLLOG.close()
 
 
 def poll():
