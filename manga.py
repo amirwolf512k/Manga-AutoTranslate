@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.13"
+APP_VER = "1.14.14"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -6166,7 +6166,8 @@ class MangaTranslator:
                         if _long >= 2.5 * _short:
                             # نوار بلند وب‌تون: جعبه‌های روی‌هم‌چین ~۶۰-۱۵۰px فاصله
                             # دارند → gap بزرگ‌تر = پچ کمتر = سرعت بیشتر
-                            _gap = int(max(32, min(128, round(_short * 0.12))))
+                            # (v1.14.14: 0.12→0.16 — ادغام بیشتر، درز کمتر)
+                            _gap = int(max(32, min(144, round(_short * 0.16))))
                         elif _on_android():
                             _gap = int(max(24, min(96, round(_short * 0.04))))
                         groups = self._group_nearby_patches(pending, gap=_gap)
@@ -6351,8 +6352,31 @@ class MangaTranslator:
                     result = self._scrub_bright_residuals(result, crop_msk)
                 except Exception:
                     pass
-            mm = crop_msk > 0
-            cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
+            if method == "LaMa":
+                # v1.14.14: بلندِ فِدر — مرزِ سختِ پچ LaMa با زمینهٔ اطراف
+                # اختلافِ تهٔ رنگی جزئی می‌سازد (درزهای محو در آسمان/کاغذ).
+                # بلندِ گوسی فقط «داخلِ» ماسک: لبهٔ ماسک ۹px بیرون‌تر از متن
+                # است (dilate) → ناحیهٔ محو روی کاغذ است، هیچ پیکسلِ متنی
+                # برنمی‌گردد. اگر مشکلی پیش آمد → پِیستِ سخت مثل قبل.
+                try:
+                    _m8 = (crop_msk if crop_msk.dtype == np.uint8
+                           else (crop_msk > 0).astype(np.uint8) * 255)
+                    _core = cv2.erode(_m8, np.ones((3, 3), np.uint8)) > 0
+                    _alpha = cv2.GaussianBlur(_m8, (7, 7), 2.0)
+                    _alpha = np.minimum(_alpha, _m8)
+                    _alpha[_core] = 255
+                    _a3 = (_alpha.astype(np.float32) / 255.0)[..., None]
+                    _dst = cleaned[cy0:cy1, cx0:cx1].astype(np.float32)
+                    _res = (result if result.dtype == np.float32
+                            else result.astype(np.float32))
+                    _bl = _dst * (1.0 - _a3) + _res * _a3
+                    cleaned[cy0:cy1, cx0:cx1] = _bl.astype(np.uint8)
+                except Exception:
+                    mm = crop_msk > 0
+                    cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
+            else:
+                mm = crop_msk > 0
+                cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
             counts[method] += 1
 
         # 🩹 جاروی باقی‌مانده — تضمین «باید کامل پاک شه، متنی جا نمونه»
