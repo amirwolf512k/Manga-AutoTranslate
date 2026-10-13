@@ -16,6 +16,7 @@ IMG = "/home/z/manga-work/testimg/webtoon9.jpg"
 DET = "/home/z/manga-work/new-repo/det_models/detector-v4-s_int8.onnx"
 DYN = "/home/z/manga-work/lama-dyn/lama-manga-dyn.onnx"
 OUT = "/home/z/manga-work/new-repo/out_residue"
+os.makedirs(OUT, exist_ok=True)
 os.environ["MANGA_DET_MODEL"] = DET
 os.environ["MANGA_LAMA_WORKERS"] = "2"
 FONT = os.path.join(os.path.dirname(os.path.abspath(__file__)),

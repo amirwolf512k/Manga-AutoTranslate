@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.9"
+APP_VER = "1.14.10"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -4711,54 +4711,37 @@ class MangaTranslator:
             if pts_list:
                 # 🩹 متن عمودی ژاپنی (tategaki): ML Kit معمولاً همهٔ ستون‌ها را
                 # نمی‌بیند → بعد از رندر، ستون‌های جاافتاده می‌مانند (حرف/خط عمودی).
-                # اگر ناحیه ≥۲ ستون باریک‌بلند داشت، کل باکسِ اجتماع چندضلعی‌ها
-                # را ماسک می‌کنیم تا ستون‌های ندیده‌شده هم پاک شوند.
+                # اگر ناحیه ≥۲ ستون باریک‌بلند داشت، «بلوکِ متن» ماسک می‌شود.
+                # 🩹 v1.14.10: بلوک = باکسِ اجتماع چندضلعی‌ها + پدِ متن‌مقیاس —
+                # نه rect دیتکتور (هالهٔ اسپیدلاین داخلش بود → مستطیلِ سفیدِ
+                # بزرگ‌تر از متن؛ گزارش کاربر). ستونِ جاافتادهٔ بیرونِ بلوک را
+                # جاروی باقی‌مانده (معیار ۳) تمیز می‌کند.
                 if _tall >= 2 and len(_polys_raw) >= 2:
                     try:
-                        # 🩹 کلِ rect ناحیه ماسک شود (نه فقط باکسِ چندضلعی‌ها):
-                        # علائمِ نگارشی/فوریگانهٔ زیرِ آخرین ستون (مثل «:»)
-                        # بیرونِ باکس چندضلعی‌ها می‌مانند و متنِ جاافتاده می‌شد.
-                        # ناحیهٔ متراکم = حبابِ پرمتن → rect دیتکتور خودش جمع است.
-                        rx, ry, rw_, rh_ = [float(v) for v in region.rect]
-                        _all = np.concatenate(_polys_raw, axis=0)
-                        ux0 = max(rx, float(_all[:, 0].min()))
-                        uy0 = max(ry, float(_all[:, 1].min()))
-                        ux1 = min(rx + rw_, float(_all[:, 0].max()))
-                        uy1 = min(ry + rh_, float(_all[:, 1].max()))
-                        x0, y0 = int(np.floor(ux0)), int(np.floor(uy0))
-                        x1, y1 = int(np.ceil(ux1)), int(np.ceil(uy1))
-                        x0, y0 = max(0, x0), max(0, y0)
-                        x1, y1 = min(w, x1), min(h, y1)
-                        if x1 - x0 >= 6 and y1 - y0 >= 6:
-                            cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
-                            n_ok += 1
-                            continue
+                        _bb = MangaTranslator._text_block_box(
+                            _polys_raw, region.rect, vert=True)
+                        if _bb is not None:
+                            x0, y0 = max(0, _bb[0]), max(0, _bb[1])
+                            x1, y1 = min(w, _bb[0] + _bb[2]), min(h, _bb[1] + _bb[3])
+                            if x1 - x0 >= 6 and y1 - y0 >= 6:
+                                cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                                n_ok += 1
+                                continue
                     except Exception:
                         pass
                 # 🔥 ردیف‌های متراکم افقی (برش RapidOCR از متنِ عمودیِ وب‌تون/متن
                 # ساطور): گپِ بین ردیف‌ها نصفِ گلیف را بیرون ماسک می‌گذارد →
                 # باقی‌ماندهٔ متن (باگ گزارش‌شده). اگر چندضلعی‌ها بلوکِ متراکم
-                # باشند (پوشش ≥۳۴٪ باکس اجتماع)، کل باکس ماسک می‌شود.
-                if (_wide >= 2 and len(_polys_raw) >= 2 and _tall == 0):
+                # باشند (پوشش ≥۳۴٪ باکس اجتماع)، «بلوکِ متن» ماسک می‌شود.
+                # 🩹 v1.14.10: بلوک = باکسِ اجتماع + پد — نه rect دیتکتور
+                # (مستطیلِ سفیدِ بزرگ‌تر از متن — گزارش کاربر).
+                if MangaTranslator._polys_dense(_polys_raw):
                     try:
-                        _all = np.concatenate(_polys_raw, axis=0)
-                        _ux0, _uy0 = float(_all[:, 0].min()), float(_all[:, 1].min())
-                        _ux1, _uy1 = float(_all[:, 0].max()), float(_all[:, 1].max())
-                        _ua = max(1.0, (_ux1 - _ux0) * (_uy1 - _uy0))
-                        _sa = 0.0
-                        for _q in _polys_raw:
-                            _qa = 0.5 * abs(float(np.dot(
-                                _q[:, 0], np.roll(_q[:, 1], -1))
-                                - np.dot(_q[:, 1], np.roll(_q[:, 0], -1))))
-                            _sa += _qa
-                        if _sa / _ua >= 0.34:
-                            # 🩹 مثل tategaki: کلِ rect ناحیه — علائم زیرِ
-                            # آخرین ردیف («:»، «!») بیرون باکس چندضلعی‌ها می‌ماند
-                            rx, ry, rw_, rh_ = [float(v) for v in region.rect]
-                            x0 = max(0, int(np.floor(rx)))
-                            y0 = max(0, int(np.floor(ry)))
-                            x1 = min(w, int(np.ceil(rx + rw_)))
-                            y1 = min(h, int(np.ceil(ry + rh_)))
+                        _bb = MangaTranslator._text_block_box(
+                            _polys_raw, region.rect, vert=False)
+                        if _bb is not None:
+                            x0, y0 = max(0, _bb[0]), max(0, _bb[1])
+                            x1, y1 = min(w, _bb[0] + _bb[2]), min(h, _bb[1] + _bb[3])
                             if x1 - x0 >= 6 and y1 - y0 >= 6:
                                 cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
                                 n_ok += 1
@@ -5851,6 +5834,69 @@ class MangaTranslator:
                     resid = resid | _blob | (_dark_raw & _band)
             except Exception:
                 pass
+            # ── معیار ۳ (v1.14.10): متنِ «استخراج‌نشده» بیرونِ ماسک ولی داخلِ
+            # ناحیه — ستونِ جاافتادهٔ ML Kit («みなさん» بالای حباب سبز) یا
+            # نیمهٔ نخواندهٔ SFX («ブツブツ»). جوهرِ دست‌نخوردهٔ گلیف‌مانند در
+            # پیرامونِ بلوکِ متن → TELEA فقط به‌اندازهٔ همان گلیف‌ها (لبهٔ
+            # حباب/اسپیدلاین/هنر دست‌نخورده می‌ماند — فیلترهای مؤلفه).
+            if r.kind == "dialogue" and not getattr(r, "ocr_empty", False):
+                try:
+                    _sp = getattr(r, "ocr_polys", None) or []
+                    _spl = [np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                            for p in _sp if np.asarray(p).size >= 6]
+                    _spl = [p for p in _spl if p.shape[0] >= 3]
+                    if _spl:
+                        _spts = np.concatenate(_spl, axis=0)
+                        _sx0, _sx1 = float(_spts[:, 0].min()), float(_spts[:, 0].max())
+                        _sy0, _sy1 = float(_spts[:, 1].min()), float(_spts[:, 1].max())
+                        _sdims = [max(8.0, float(min(
+                            p[:, 0].max() - p[:, 0].min(),
+                            p[:, 1].max() - p[:, 1].min()))) for p in _spl]
+                        _gz = max(20.0, 2.0 * float(np.median(_sdims)))
+                        _ax0 = max(float(x0), _sx0 - _gz)
+                        _ay0 = max(float(y0), _sy0 - _gz)
+                        _ax1 = min(float(x1), _sx1 + _gz)
+                        _ay1 = min(float(y1), _sy1 + _gz)
+                        if _ax1 - _ax0 >= 20 and _ay1 - _ay0 >= 20:
+                            _lx0, _ly0 = int(_ax0 - x0), int(_ay0 - y0)
+                            _lx1, _ly1 = int(_ax1 - x0), int(_ay1 - y0)
+                            _zmed = float(np.median(g[_ly0:_ly1, _lx0:_lx1]))
+                            _zthr = _zmed - 45.0
+                            _zin = ((g[_ly0:_ly1, _lx0:_lx1] < _zthr)
+                                    & ~_mdil[_ly0:_ly1, _lx0:_lx1])
+                            if 0.002 <= float(_zin.mean()) <= 0.40:
+                                _nz, _lab, _st, _ce = cv2.connectedComponentsWithStats(
+                                    _zin.astype(np.uint8), 8)
+                                _zh, _zw = _zin.shape
+                                _keep = np.zeros((_zh, _zw), dtype=bool)
+                                for _ci in range(1, _nz):
+                                    _ca = int(_st[_ci, cv2.CC_STAT_AREA])
+                                    if _ca < 24 or _ca > 0.06 * _zw * _zh:
+                                        continue
+                                    _cx = int(_st[_ci, cv2.CC_STAT_LEFT])
+                                    _cy = int(_st[_ci, cv2.CC_STAT_TOP])
+                                    _cw = int(_st[_ci, cv2.CC_STAT_WIDTH])
+                                    _ch = int(_st[_ci, cv2.CC_STAT_HEIGHT])
+                                    if _ca / float(max(1, _cw * _ch)) < 0.30:
+                                        continue  # خطِ نازک اسپیدلاین/لبهٔ حباب
+                                    _touch = ((_cx <= 0) + (_cy <= 0)
+                                              + (_cx + _cw >= _zw)
+                                              + (_cy + _ch >= _zh))
+                                    if _touch >= 2:
+                                        continue
+                                    if _cw > 0.75 * _zw or _ch > 0.75 * _zh:
+                                        continue
+                                    _keep |= (_lab == _ci)
+                                _same3 = (same[_ly0:_ly1, _lx0:_lx1] & _keep)
+                                _n3 = int(np.count_nonzero(_same3))
+                                _ink3 = int(np.count_nonzero(
+                                    g[_ly0:_ly1, _lx0:_lx1] < _zthr))
+                                if 30 <= _n3 <= max(60, int(0.35 * max(1, _ink3))):
+                                    _res3 = np.zeros_like(resid)
+                                    _res3[_ly0:_ly1, _lx0:_lx1] = _same3
+                                    resid = resid | _res3
+                except Exception:
+                    pass
             n_res = int(np.count_nonzero(resid))
             if n_res < max(40, int(0.003 * _m_px)):
                 continue
@@ -6855,6 +6901,16 @@ class MangaTranslator:
 
         if getattr(self, "clean_only", False):
             print("    [*] حالت پاکسازی بدون ترجمه — درخواست API انجام نشد.")
+            return
+
+        # 🩹 v1.14.10: حباب‌های «OCR خوانده نشد» (ocr_empty) فقط پاک می‌شوند —
+        # متنِ خالی به AI نمی‌رود و متنِ ساختگی هم نمی‌گیرند.
+        _n_empty = sum(1 for _r in regions
+                       if not (_r.source_text or "").strip())
+        if _n_empty:
+            print(f"    [*] {_n_empty} ناحیه بدون متنِ OCR → فقط پاکسازی")
+            regions = [r for r in regions if (r.source_text or "").strip()]
+        if not regions:
             return
 
         if getattr(self, "fake_translate", False):
@@ -8644,6 +8700,92 @@ class MangaTranslator:
         return tall > wide
 
     @staticmethod
+    def _polys_dense(polys) -> bool:
+        # 🩹 v1.14.10: بلوکِ افقیِ متراکم (≥۲ ردیف پهن با پوششِ ≥۳۴٪ باکسِ
+        # اجتماع) — برشِ RapidOCR از متنِ ساطور/وب‌تون. بین _build_text_mask_fast
+        # و _render_one_region مشترک است تا ماسک و باکس رندر یکی باشند.
+        tall = wide = 0
+        _pl: List[np.ndarray] = []
+        for p in list(polys or []):
+            try:
+                pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+            except Exception:
+                continue
+            if pp.shape[0] < 3:
+                continue
+            _pl.append(pp)
+            pw_ = float(pp[:, 0].max() - pp[:, 0].min())
+            ph_ = float(pp[:, 1].max() - pp[:, 1].min())
+            if ph_ >= 1.3 * pw_ and ph_ >= 18.0:
+                tall += 1
+            elif pw_ >= 1.3 * ph_ and pw_ >= 18.0:
+                wide += 1
+        if tall > 0 or wide < 2 or len(_pl) < 2:
+            return False
+        try:
+            _all = np.concatenate(_pl, axis=0)
+            _ua = max(1.0, float(_all[:, 0].max() - _all[:, 0].min())
+                      * float(_all[:, 1].max() - _all[:, 1].min()))
+            _sa = 0.0
+            for _q in _pl:
+                _sa += 0.5 * abs(float(np.dot(
+                    _q[:, 0], np.roll(_q[:, 1], -1))
+                    - np.dot(_q[:, 1], np.roll(_q[:, 0], -1))))
+            return (_sa / _ua) >= 0.34
+        except Exception:
+            return False
+
+    @staticmethod
+    def _text_block_box(polys, rect, vert: bool):
+        # 🩹 v1.14.10: باکسِ «بلوکِ متن» از چندضلعی‌های OCR + پدِ متن‌مقیاس —
+        # جای rect دیتکتور که هالهٔ اسپیدلاین/حاشیهٔ حباب را هم می‌گرفت
+        # (مستطیلِ سفیدِ بزرگ‌تر از متن — گزارش کاربر). ماسک و باکسِ رندر
+        # هر دو از همین‌جا می‌گیرند تا متنِ فارسی دقیقاً «به اندازهٔ متن» باشد.
+        try:
+            _pl = []
+            for p in list(polys or []):
+                try:
+                    pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                if pp.shape[0] >= 3:
+                    _pl.append(pp)
+            if not _pl:
+                return None
+            _all = np.concatenate(_pl, axis=0)
+            ux0 = float(_all[:, 0].min())
+            ux1 = float(_all[:, 0].max())
+            uy0 = float(_all[:, 1].min())
+            uy1 = float(_all[:, 1].max())
+            _ws = [float(p[:, 0].max() - p[:, 0].min()) for p in _pl]
+            _hs = [float(p[:, 1].max() - p[:, 1].min()) for p in _pl]
+            if vert:
+                _mw = float(np.median(_ws)) if _ws else 30.0
+                pad_x = max(6.0, 0.55 * _mw)
+                pad_y = max(4.0, 0.30 * _mw)
+            else:
+                _mh = float(np.median(_hs)) if _hs else 20.0
+                pad_y = max(6.0, 0.55 * _mh)
+                pad_x = max(4.0, 0.35 * _mh)
+            ux0 -= pad_x
+            ux1 += pad_x
+            uy0 -= pad_y
+            uy1 += pad_y
+            if rect:
+                rx, ry, rw, rh = [float(v) for v in rect]
+                ux0 = max(ux0, rx)
+                uy0 = max(uy0, ry)
+                ux1 = min(ux1, rx + max(4.0, rw))
+                uy1 = min(uy1, ry + max(4.0, rh))
+            bx0, by0 = int(np.floor(ux0)), int(np.floor(uy0))
+            bx1, by1 = int(np.ceil(ux1)), int(np.ceil(uy1))
+            if bx1 - bx0 >= 8 and by1 - by0 >= 8:
+                return (bx0, by0, bx1 - bx0, by1 - by0)
+        except Exception:
+            return None
+        return None
+
+    @staticmethod
     def _estimate_angle_from_polys(polys) -> float:
         angs: List[float] = []
         for p in list(polys or []):
@@ -8742,6 +8884,39 @@ class MangaTranslator:
         for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs) in zip(
                 cand, ocr_results):
             if not text:
+                # 🩹 v1.14.10: حباب با OCRِ خالی («え» تک‌حرفی — باگ «پاک نمی‌شه»):
+                # قبلاً کل ناحیه حذف می‌شد → حباب با متنِ اصلی می‌ماند. اگر داخل
+                # حباب جوهرِ متن‌مانند هست، ناحیه نگه داشته می‌شود (ocr_empty):
+                # فقط پاک‌سازی (ماسکِ کل حباب)، بدون ترجمه/رندر. حبابِ واقعاً
+                # خالی/هنری → مثل قبل حذف.
+                _gink = 0.0
+                try:
+                    _gx1, _gy1 = max(0, int(x1)), max(0, int(y1))
+                    _gx2 = min(image.shape[1], int(x2))
+                    _gy2 = min(image.shape[0], int(y2))
+                    if _gx2 - _gx1 >= 12 and _gy2 - _gy1 >= 12:
+                        _gcrop = image[_gy1:_gy2, _gx1:_gx2]
+                        _gg = cv2.cvtColor(_gcrop, cv2.COLOR_BGR2GRAY)
+                        _gmed = float(np.median(_gg))
+                        _gink = float((_gg < max(60.0, _gmed - 45.0)).mean())
+                except Exception:
+                    _gink = 0.0
+                if 0.008 <= _gink <= 0.50:
+                    _epoly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
+                                      dtype=np.int32)
+                    regions.append(TextRegion(
+                        id=i,
+                        boxes=[_epoly],
+                        source_text="",
+                        rect=(x1, y1, bw, bh),
+                        angle=0.0,
+                        kind="dialogue",
+                        ocr_polys=[],
+                        det_class=b.get("class_name", "") or "",
+                    ))
+                    regions[-1].ocr_empty = True
+                    print(f"    [!] ناحیه [{i}] متنِ OCR نداشت ولی جوهرِ "
+                          f"متن‌مانند دارد → فقط پاکسازی می‌شود")
                 continue
 
             
@@ -8795,26 +8970,38 @@ class MangaTranslator:
             # 🩹 کجیِ واقعی که موتور/چندضلعی از دست داده‌اند (کارت کج «先生» —
             # باگ گزارش‌شده: متن کج صاف رندر می‌شد). هر وقت زاویهٔ نهایی <
             # ۵° است از خودِ جوهر بپرس؛ جوهر ≥۵° = کجی واقعی، نه نویز.
-            # متنِ عمودی (tategaki) استثناست — کجیِ جوهر برایش بی‌معناست.
-            if abs(ang_) < 5.0 and not self._polys_vertical(line_polys):
+            # 🩹 v1.14.10: متنِ عمودی (tategaki) دیگر استثنا نیست — کارتِ
+            # «先生» حروفِ روی‌هم‌چیدهٔ عمودی دارد و کجی‌اش فقط از «لبه‌های
+            # مستقیمِ کارت» خوانده می‌شود → برای عمودی، کراپِ rect ناحیه
+            # (شامل لبه‌ها) نه کراپِ چندضلعیِ متن. تست: کارت=+8.5°،
+            # سایر حباب‌های عمودیِ صاف=0.0 (حاشیهٔ ۱.۱۲× جوهر حفظ است).
+            _is_vert = self._polys_vertical(line_polys)
+            if abs(ang_) < 5.0:
                 try:
-                    _tx1 = _ty1 = None
-                    if line_polys:
-                        try:
-                            _pts_all = np.concatenate(
-                                [np.asarray(p).reshape(-1, 2) for p in line_polys])
-                            _tx1, _ty1 = float(_pts_all[:, 0].min()), float(_pts_all[:, 1].min())
-                            _tx2, _ty2 = float(_pts_all[:, 0].max()), float(_pts_all[:, 1].max())
-                        except Exception:
-                            _tx1 = _ty1 = None
-                    if _tx1 is None:
-                        _tx1, _ty1, _tx2, _ty2 = float(x1), float(y1), float(x2), float(y2)
+                    if _is_vert:
+                        _tx1, _ty1 = float(x1), float(y1)
+                        _tx2, _ty2 = float(x2), float(y2)
+                    else:
+                        _tx1 = _ty1 = None
+                        if line_polys:
+                            try:
+                                _pts_all = np.concatenate(
+                                    [np.asarray(p).reshape(-1, 2) for p in line_polys])
+                                _tx1, _ty1 = float(_pts_all[:, 0].min()), float(_pts_all[:, 1].min())
+                                _tx2, _ty2 = float(_pts_all[:, 0].max()), float(_pts_all[:, 1].max())
+                            except Exception:
+                                _tx1 = _ty1 = None
+                        if _tx1 is None:
+                            _tx1, _ty1, _tx2, _ty2 = float(x1), float(y1), float(x2), float(y2)
                     _iy1, _iy2 = max(0, int(_ty1)), min(image.shape[0], int(_ty2) + 1)
                     _ix1, _ix2 = max(0, int(_tx1)), min(image.shape[1], int(_tx2) + 1)
                     if _ix2 - _ix1 >= 40 and _iy2 - _iy1 >= 14:
                         a_ink2 = MangaTranslator._ink_slant_angle(
                             image[_iy1:_iy2, _ix1:_ix2])
-                        if abs(a_ink2) >= 5.0 and abs(a_ink2) > abs(ang_) + 1.0:
+                        # متن عمودی: آستانهٔ سخت‌گیرتر (۷°) — کجیِ کاذبِ حبابِ
+                        # عمودیِ صاف رد شود؛ کارتِ واقعی (~۹°) می‌گذرد
+                        _thr_ink = 7.0 if _is_vert else 5.0
+                        if abs(a_ink2) >= _thr_ink and abs(a_ink2) > abs(ang_) + 1.0:
                             ang_ = a_ink2
                             ang_src = "ink"
                 except Exception:
@@ -8862,13 +9049,13 @@ class MangaTranslator:
             if abs(ang) < 6.0:
                 # 🩹 تورِ ایمنی: اگر استخراج کجیِ ≥۶° را از دست داده بود
                 # (موتور زاویهٔ صفر داده)، جوهر دوباره پرسیده شود —
-                # به‌جز متن عمودی (tategaki) که کجیِ جوهر برایش بی‌معناست
-                if self._polys_vertical(getattr(r, "ocr_polys", None)):
-                    continue
+                # 🩹 v1.14.10: متن عمودی هم پرسیده می‌شود، ولی روی کراپِ
+                # rect ناحیه (لبه‌های مستقیمِ کارتِ کج — «先生»)، آستانهٔ ۷°
+                _is_vert = self._polys_vertical(getattr(r, "ocr_polys", None))
                 try:
                     _px = getattr(r, "ocr_polys", None) or []
                     _vx1 = _vy1 = None
-                    if _px:
+                    if _px and not _is_vert:
                         try:
                             _vp = np.concatenate(
                                 [np.asarray(p).reshape(-1, 2) for p in _px])
@@ -8887,7 +9074,7 @@ class MangaTranslator:
                     if _ux2 - _ux1 >= 40 and _uy2 - _uy1 >= 14:
                         _ai = MangaTranslator._ink_slant_angle(
                             image[_uy1:_uy2, _ux1:_ux2])
-                        if abs(_ai) >= 6.0:
+                        if abs(_ai) >= (7.0 if _is_vert else 6.0):
                             print(f"    [!] بازیابی کجی [{r.id}]: {ang:+.1f}° → "
                                   f"{_ai:+.1f}° (جوهر؛ موتور از دست داده بود)")
                             r.angle = _ai
@@ -9032,6 +9219,11 @@ class MangaTranslator:
             print("[فاز ۳ - ترجمه] دیالوگ معتبری نبود.")
 
         translated_regions = [r for r in dialogue_regions if r.translated_text]
+        # 🩹 v1.14.10: حباب‌های «OCR خوانده نشد» هم پاک شوند (ترجمه/رندر ندارند)
+        _ocr_empty_regions = [r for r in dialogue_regions
+                              if not r.translated_text
+                              and getattr(r, "ocr_empty", False)]
+        _clean_regions = translated_regions + _ocr_empty_regions
         print("--- پاسخ AI برای هر بالن ---")
         for r in dialogue_regions:
             st = (getattr(r, "bubble_style", None) or "").strip()
@@ -9043,9 +9235,12 @@ class MangaTranslator:
                 print(f"    OCR : {src_t}")
                 print(f"    AI  : {fa}")
             else:
-                print(f"  [بالن {r.id}] بدون ترجمه از AI")
+                _et = " (OCR خوانده نشد → فقط پاکسازی)" if getattr(r, "ocr_empty", False) else ""
+                print(f"  [بالن {r.id}] بدون ترجمه از AI{_et}")
                 print(f"    OCR : {src_t}")
-        missing_n = sum(1 for r in dialogue_regions if not r.translated_text)
+        missing_n = sum(1 for r in dialogue_regions
+                        if not r.translated_text
+                        and not getattr(r, "ocr_empty", False))
         if missing_n:
             print(f"  [!] {missing_n} بالن بدون پاسخ AI")
         if promo_regions:
@@ -9060,9 +9255,9 @@ class MangaTranslator:
             page_debug = self._draw_debug_regions(image, regions)
 
         print("[فاز ۴ - پاکسازی متن + رندر] ...")
-        if translated_regions:
+        if _clean_regions:
             cleaned_image = precleaned if precleaned is not None else self.clean_image(
-                image, translated_regions)
+                image, _clean_regions)
             final_image = self.render_translations(cleaned_image, translated_regions, raw_image_copy)
             print("  - پاکسازی متن + رندر فارسی تمام شد.")
         else:
@@ -10949,6 +11144,9 @@ html, body { background: #0a0a0b; }
             for r in regions:
                 if r.kind != "dialogue":
                     continue
+                # 🩹 v1.14.10: بدون متنِ OCR → فقط پاکسازی، صفِ ترجمه نه
+                if not (r.source_text or "").strip():
+                    continue
 
                 r.id = global_id
                 page_of_region[global_id] = page_i
@@ -11177,6 +11375,22 @@ html, body { background: #0a0a0b; }
         except Exception:
             pass
 
+        # 🩹 v1.14.10: باکسِ رندر برای متنِ عمودی/متراکم = «بلوکِ متن» (همان
+        # باکسِ ماسک) — نه کلِ rect دیتکتور. قبلاً فارسی در کل حباب پخش می‌شد
+        # و از کارتِ کج («先生») بیرون می‌زد و مستطیلِ سفیدِ بزرگ می‌ساخت.
+        try:
+            _rpolys = list(getattr(region, "ocr_polys", None) or [])
+            if _rpolys:
+                _rvert = self._polys_vertical(_rpolys)
+                _rdense = (not _rvert) and MangaTranslator._polys_dense(_rpolys)
+                if _rvert or _rdense:
+                    _rbb = MangaTranslator._text_block_box(
+                        _rpolys, region.rect, vert=_rvert)
+                    if _rbb is not None:
+                        x, y, w, h = (int(_rbb[0]), int(_rbb[1]),
+                                      int(_rbb[2]), int(_rbb[3]))
+        except Exception:
+            pass
 
         short = len((region.translated_text or "").split()) <= 2
         if short and (w < 90 or h < 50):
