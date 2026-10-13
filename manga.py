@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.5"
+APP_VER = "1.14.6"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -610,7 +610,8 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
     return sess
 
 
-def _cpu_thread_fallback(session, model_path: str, use_threads: int):
+def _cpu_thread_fallback(session, model_path: str, use_threads: int,
+                         allow_bump: bool = True):
 
 
     try:
@@ -618,7 +619,8 @@ def _cpu_thread_fallback(session, model_path: str, use_threads: int):
         # 📱 اندروید: هسته‌های LITTLE با ۸ نخ فقط رقابت می‌سازند → سقف ۴
         _cap = 4 if _on_android() else 8
         cpu_n = max(1, min(_cap, os.cpu_count() or 4))
-        if "CUDAExecutionProvider" not in provs and use_threads < cpu_n:
+        if (allow_bump and "CUDAExecutionProvider" not in provs
+                and use_threads < cpu_n):
             print(f"    [*] اینپینت روی CPU است → threads: {use_threads} → {cpu_n}")
             return _make_ort_session(model_path, prefer_gpu=False, threads=cpu_n), cpu_n
     except Exception:
@@ -641,11 +643,20 @@ class LamaONNX:
         
         
         if not prefer_gpu:
-            use_threads = max(1, min(8, os.cpu_count() or 4))
+            # 🩹 DFT/FFT در ORT با چندنخی سمی است (۱۴۴ گره DFT × سینک نخ =
+            # کندی ۲.۶×) — ۲ نخ به‌مراتب سریع‌تر؛ قبلاً ۸ نخ بود!
+            try:
+                use_threads = int(os.environ.get("MANGA_LAMA_THREADS", "0") or 0)
+            except Exception:
+                use_threads = 0
+            if use_threads <= 0:
+                use_threads = 2
+            use_threads = max(1, min(use_threads, os.cpu_count() or 4))
         else:
             use_threads = max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
-        self.session, use_threads = _cpu_thread_fallback(self.session, model_path, use_threads)
+        self.session, use_threads = _cpu_thread_fallback(
+            self.session, model_path, use_threads, allow_bump=False)
         print(
             f"[+] LaMa ONNX آماده | providers={self.session.get_providers()} | "
             f"threads={use_threads} | max_size={self.size}"
@@ -795,7 +806,8 @@ class LamaMangaONNX:
         else:
             use_threads = max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
-        self.session, use_threads = _cpu_thread_fallback(self.session, model_path, use_threads)
+        self.session, use_threads = _cpu_thread_fallback(
+            self.session, model_path, use_threads, allow_bump=False)
         names = [i.name for i in self.session.get_inputs()]
         self._in_image = names[0]
         self._in_mask = names[1] if len(names) > 1 else "mask"
@@ -2416,7 +2428,8 @@ class MangaTranslator:
                       "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
                 return False
             print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ (الگوی K3) — "
-                  "مدل داینامیک ~۲۰۶MB بار اول؛ پچ در اندازهٔ اصلی + ۲ نخ = سریع.")
+                  "مدل داینامیک ~۲۰۶MB بار اول؛ پچ در اندازهٔ اصلی، ۲ نخ «واقعی» "
+                  "(ORT 1.31 + شیم سریع) = سریع.")
             return True
 
         if force_gpu is True:
@@ -4915,6 +4928,45 @@ class MangaTranslator:
         except Exception:
             return None
 
+    @staticmethod
+    def _color_fill_cluster(crop_img: np.ndarray,
+                            crop_msk: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        # 🎨 حباب‌های رنگی (زرد/صورتی/آبی پاستلی...): LaMa روی مانگای سیاه‌وسفید
+        # آموزش دیده و روی پس‌زمینهٔ رنگیِ صاف لکهٔ سفید/خاکستری می‌گذارد.
+        # اگر حلقهٔ دور متن «اشباع رنگی بالا و صاف» بود → OpenCV TELEA رنگ
+        # محیط را درست پخش می‌کند (سریع و بدون لکه).
+        try:
+            m = crop_msk > 0
+            if not m.any():
+                return None
+            ring = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0) & (~m)
+            if int(np.count_nonzero(ring)) < 60:
+                return None
+            hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
+            sat = hsv[..., 1][ring].astype(np.float32)
+            if float(np.median(sat)) < 75.0:
+                return None  # پس‌زمینهٔ خنثی (سفید/خاکستری) → مسیر عادی
+            # صافی بافت: گرادیان کم روی حلقه = پس‌زمینهٔ صاف، نه اسکرین‌تون/خط
+            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+            grad = cv2.magnitude(gx, gy)[ring]
+            if float(np.median(grad)) > 24.0:
+                return None
+            try:
+                _thick = float(cv2.distanceTransform(
+                    m.astype(np.uint8), cv2.DIST_L2, 3).max())
+            except Exception:
+                _thick = 4.0
+            _kd = int(np.clip(2 * int(round(max(3.0, _thick * 0.75))) + 1, 9, 25))
+            kk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_kd, _kd))
+            dil = cv2.morphologyEx(cv2.dilate(crop_msk, kk, iterations=1),
+                                   cv2.MORPH_CLOSE, kk)
+            out = cv2.inpaint(crop_img, dil, 5, cv2.INPAINT_TELEA)
+            return dil, out
+        except Exception:
+            return None
+
     def _flat_fill_cluster(self, crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[np.ndarray]:
         m = crop_msk > 0
         if not m.any():
@@ -5170,7 +5222,7 @@ class MangaTranslator:
             pass
 
         cleaned = image.copy()
-        counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
+        counts = {"flat": 0, "رنگی": 0, "LaMa": 0, "OpenCV": 0}
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         # 🇰3 بهینه: Canny/وال‌لاین کل‌صفحه فقط وقتی OpenCV واقعاً لازم شد
         _wall_cache = {"tried": False, "val": None}
@@ -5195,9 +5247,15 @@ class MangaTranslator:
             crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
             # 🇰3 اول چک یکنواختی فوری (TurboClean)؛ اگر نشد مسیر گرادیانی
             result = self._flat_fill_uniform(crop_img, crop_msk)
+            method = "flat"
+            if result is None:
+                # 🎨 حباب رنگیِ صاف (زرد و...) → TELEA به‌جای LaMa
+                _cr = self._color_fill_cluster(crop_img, crop_msk)
+                if _cr is not None:
+                    crop_msk, result = _cr
+                    method = "رنگی"
             if result is None:
                 result = self._flat_fill_cluster(crop_img, crop_msk)
-            method = "flat"
             if (result is not None
                     and self._bg_is_textured(crop_img, crop_msk, strong=True)):
                 result = None
