@@ -1,6 +1,6 @@
 # مترجم خودکار مانگا / مانهوا (فارسی)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf5122/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf512k/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -185,14 +185,14 @@ python manga_translator.py -i "..." -o out.pdf --font Vazirmatn.ttf --debug
 
 ### ۱) Google Colab (پیشنهادی)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf5122/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf512k/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
 
 1. Runtime را روی **GPU (T4)** بگذار  
 2. همه سلول‌ها را با **Run all** اجرا کن
 
 ### ۲) GitHub Actions
 
-1. ریپو را [Fork](https://github.com/amirwolf5122/Manga-AutoTranslate/fork) کن  
+1. ریپو را [Fork](https://github.com/amirwolf512k/Manga-AutoTranslate/fork) کن  
 2. در Settings → Secrets کلید موردنظر را بگذار (`GEMINI` یا `OPENAI` و …)  
 3. از تب Actions ورک‌فلو را Run کن  
 4. خروجی را از Artifacts دانلود کن  
@@ -208,7 +208,7 @@ bash run.sh
 ### ۴) اجرای لوکال
 
 ```bash
-git clone https://github.com/amirwolf5122/Manga-AutoTranslate.git
+git clone https://github.com/amirwolf512k/Manga-AutoTranslate.git
 cd Manga-AutoTranslate
 python -m venv .venv
 source .venv/bin/activate   # ویندوز: .venv\Scripts\activate

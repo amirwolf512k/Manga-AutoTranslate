@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.11"
+APP_VER = "1.14.12"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -1437,7 +1437,7 @@ class RTDetrV2ONNXDetector:
         return MangaTranslator._drop_contained_boxes(cleaned, contain_thresh=0.68)
 
 
-_RAPIDOCR_MIRROR = ("https://github.com/amirwolf5122/Manga-AutoTranslate/"
+_RAPIDOCR_MIRROR = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
                     "releases/download/models/")
 _RAPIDOCR_MS = ("https://www.modelscope.cn/models/RapidAI/RapidOCR/"
                 "resolve/v3.9.2/onnx")
@@ -4674,12 +4674,299 @@ class MangaTranslator:
         keep = cv2.dilate(keep, np.ones((2, 2), np.uint8), iterations=1)
         return keep
 
+    def _bubble_domain_local(self, bgr_crop: np.ndarray,
+                             seed_mask: np.ndarray,
+                             rect_box: Optional[tuple] = None
+                             ) -> Optional[np.ndarray]:
+        # 🛡 v1.14.12 — دامنهٔ «داخل حباب» محلیِ ارزان، مبتنی بر HSV:
+        #   • آستانهٔ خاکستری نمی‌توانست «حبابِ زرد» را از «حلقهٔ سفیدِ»
+        #     اطرافش جدا کند (هر دو روشن → سیلاب از حلقهٔ سفید می‌گذشت و
+        #     کل حباب + حلقه پاک می‌شد). اشباع (S) زرد بالاست و حلقهٔ سفید
+        #     بی‌اشباع → جدایی تمیز.
+        #   • برای حباب سفید روی زمینهٔ روشن، خطِ دورِ تیره جدا می‌کند.
+        #   • نشتِ سیلاب (متن آزاد روی هنر/اسپیدلاین) → None.
+        try:
+            ch, cw = bgr_crop.shape[:2]
+            zm = seed_mask > 0
+            if ch < 16 or cw < 16 or not zm.any():
+                return None
+            hsv = cv2.cvtColor(bgr_crop, cv2.COLOR_BGR2HSV)
+            S = hsv[..., 1].astype(np.float32)
+            V = hsv[..., 2].astype(np.float32)
+            s_med = float(np.median(S[zm]))
+            v_med = float(np.median(V[zm]))
+            base = ((np.abs(S - s_med) <= 55.0)
+                    & (np.abs(V - v_med) <= 55.0)).astype(np.uint8)
+            base = cv2.morphologyEx(base, cv2.MORPH_CLOSE,
+                                    np.ones((3, 3), np.uint8))
+            n, lab = cv2.connectedComponents(base, connectivity=4)
+            seed_d = cv2.dilate(seed_mask,
+                                np.ones((3, 3), np.uint8), iterations=2)
+            labs = lab[seed_d > 0]
+            labs = labs[labs > 0]
+            if len(labs) == 0:
+                return None
+            vals, cnts = np.unique(labs, return_counts=True)
+            comp = (lab == vals[int(np.argmax(cnts))]).astype(np.uint8) * 255
+            if int(np.count_nonzero(comp)) < 0.10 * ch * cw:
+                return None
+            padc = cv2.copyMakeBorder(comp, 1, 1, 1, 1,
+                                      cv2.BORDER_CONSTANT, value=0)
+            ff = padc.copy()
+            ffm = np.zeros((padc.shape[0] + 2, padc.shape[1] + 2), np.uint8)
+            cv2.floodFill(ff, ffm, (0, 0), 255)
+            filled = cv2.bitwise_or(padc, cv2.bitwise_not(ff))[1:-1, 1:-1]
+            # نشت = سیلاب از حباب بیرون زده (متن روی هنر/اسپیدلاین) → رد
+            if float(np.count_nonzero(filled)) > 0.92 * ch * cw:
+                return None
+            # 🛡 محدودیتِ rect (v1.14.12b): اگر دامنه از rectِ ناحیه بیرون
+            # بزند (حبابِ «7» روی مو — مویِ هم‌رنگ وارد دامنه می‌شد)،
+            # یعنی دامنه به هنر نشت کرده → رد. حبابِ واقعی همیشه داخل
+            # باکسِ دیتکتور است.
+            if rect_box is not None:
+                try:
+                    _bx, _by, _bw, _bh = [int(v) for v in rect_box]
+                    _ys, _xs = np.where(filled > 0)
+                    if len(_ys):
+                        _m = 14
+                        if (_xs.min() < _bx - _m or _ys.min() < _by - _m
+                                or _xs.max() > _bx + _bw + _m
+                                or _ys.max() > _by + _bh + _m):
+                            return None
+                except Exception:
+                    pass
+            # 🔍 اعتبارِ حلقهٔ مرزی: لبهٔ دامنه باید «لبهٔ واقعی» باشد —
+            # پیکسل‌های چسبیده به مرز باید تیره‌تر/روشن‌تر/بی‌اشباع‌ترِ
+            # معنادار باشند (حبابِ «7» روی موی روشن مرزی شبیه خودش داشت)
+            try:
+                _ring = cv2.dilate(filled, np.ones((5, 5), np.uint8))
+                _ring = (_ring > 0) & (filled == 0)
+                if int(np.count_nonzero(_ring)) >= 30:
+                    _rs = S[_ring]
+                    _rv = V[_ring]
+                    _edge = ((np.abs(_rs - s_med) > 35.0)
+                             | (np.abs(_rv - v_med) > 35.0))
+                    if float(_edge.mean()) < 0.45:
+                        return None
+            except Exception:
+                pass
+            # ۶px فاصله از خطِ دور — جمعِ پدینگِ ماسک (۳px) + دیلیتِ پچِ
+            # LaMa (۹×۹ = ‎+4px‎) نباید خطِ دور را بخورد (حباب «7» قبلاً
+            # کامل محو می‌شد) → ‎+1px‎ باقی‌مانده داخلِ خطِ دورِ چندپیکسلی
+            filled = cv2.erode(filled, np.ones((3, 3), np.uint8), iterations=6)
+            if int(np.count_nonzero(filled)) < 0.08 * ch * cw:
+                return None
+            return filled
+        except Exception:
+            return None
+
+    def _fast_bubble_guard(self, image: np.ndarray, rm: np.ndarray,
+                           region: "TextRegion", has_polys: bool) -> bool:
+        # 🛡 v1.14.12 — محافظت از بدنهٔ حباب (خواستهٔ کاربر: «یک کاری کن حباب
+        # متن پاک نشه هرکاری می‌کنی» + «چشم طرف گرفته... متن رو چشمش نیست»):
+        #   ۱) دامنهٔ «داخل حباب» از سیلابِ پیکسل‌های روشن از مرکز ماسک
+        #      (_bubble_domain_local) پیدا می‌شود؛ ماسکِ ناحیه به داخلِ آن
+        #      کلیپ می‌شود → خطِ دور/دیوارهٔ حباب و کارت «هیچ‌وقت» در ماسک
+        #      نمی‌آید (گلِ ۱.۲x چندضلعی، بلوکِ متراکم و جذبِ مجاور دیگر
+        #      نمی‌تواند دیواره را بخورد — ضربه به هنر دور حباب هم منتفی).
+        #   ۲) گلیف‌های جاماندهٔ «کاملاً داخل» حباب (داکوتن، «…»، ستونِ
+        #      جاافتادهٔ ML Kit) به ماسک جذب می‌شوند → صفر باقی‌مانده در حباب.
+        #   ۳) اگر حبابِ بسته پیدا نشد (سیلاب نشت کرد = متنِ آزاد روی
+        #      هنر/اسپیدلاین): نواحیِ بدون چندضلعی OCR (ocr_empty) کلاً رد
+        #      می‌شوند → اسپیدلاین و هنر دور حباب دست‌نخورده می‌ماند.
+        try:
+            h, w = image.shape[:2]
+            x, y, rw, rh = [int(v) for v in region.rect]
+            M = 34
+            cx0, cy0 = max(0, x - M), max(0, y - M)
+            cx1, cy1 = min(w, x + rw + M), min(h, y + rh + M)
+            if cx1 - cx0 < 16 or cy1 - cy0 < 16:
+                return True
+            sub = rm[cy0:cy1, cx0:cx1]
+            if not np.any(sub):
+                return True
+            gray = cv2.cvtColor(image[cy0:cy1, cx0:cx1], cv2.COLOR_BGR2GRAY)
+            if not has_polys:
+                # 🛡 نواحیِ بدون چندضلعی OCR (حبابِ OCR-خالی مثل «7»/«え»):
+                # ① اول دامنهٔ حباب با اعتبارسنجیِ rect امتحان می‌شود —
+                #   حبابِ تمیز (え) → کلِ داخلِ حباب پاک می‌شود (صفر残余).
+                # ② اگر دامنه نشت کرد (حبابِ «7» روی موی روشن): فقط گلیف‌های
+                #   تیرهٔ فشردهٔ «کاملاً داخلِ rect» — حلقهٔ توخالیِ خطِ دور
+                #   و اسپیدلاین رد می‌شوند → حباب و هنر سالم می‌مانند.
+                try:
+                    _dom = self._bubble_domain_local(
+                        image[cy0:cy1, cx0:cx1], sub,
+                        rect_box=(x - cx0, y - cy0, rw, rh))
+                    if _dom is not None:
+                        _rectm = np.zeros_like(sub)
+                        _px0, _py0 = max(0, x - cx0 + 2), max(0, y - cy0 + 2)
+                        _px1 = min(sub.shape[1], x - cx0 + rw - 2)
+                        _py1 = min(sub.shape[0], y - cy0 + rh - 2)
+                        if _px1 - _px0 >= 10 and _py1 - _py0 >= 10:
+                            _rectm[_py0:_py1, _px0:_px1] = 255
+                            _inter = cv2.bitwise_and(_dom, _rectm)
+                            if cv2.countNonZero(_inter) >= 0.06 * rw * rh:
+                                rm[cy0:cy1, cx0:cx1] = _inter
+                                return True
+                except Exception:
+                    pass
+                try:
+                    _gm = np.zeros_like(sub)
+                    _rx0, _ry0 = x - cx0 + 2, y - cy0 + 2
+                    _rx1, _ry1 = x - cx0 + rw - 2, y - cy0 + rh - 2
+                    if _rx1 - _rx0 >= 10 and _ry1 - _ry0 >= 10:
+                        _rc = gray[_ry0:_ry1, _rx0:_rx1]
+                        _rmed = float(np.median(_rc))
+                        _dk = ((_rc < _rmed - 40.0).astype(np.uint8)) * 255
+                        _nzg, _labg, _stg, _ = cv2.connectedComponentsWithStats(
+                            _dk, 8)
+                        _gh2, _gw2 = _dk.shape
+                        _tot = 0
+                        for _ci in range(1, _nzg):
+                            _ca = int(_stg[_ci, cv2.CC_STAT_AREA])
+                            if _ca < 12 or _ca > 0.25 * _gh2 * _gw2:
+                                continue
+                            _cxg = int(_stg[_ci, cv2.CC_STAT_LEFT])
+                            _cyg = int(_stg[_ci, cv2.CC_STAT_TOP])
+                            _cwg = int(_stg[_ci, cv2.CC_STAT_WIDTH])
+                            _chg = int(_stg[_ci, cv2.CC_STAT_HEIGHT])
+                            if _cxg <= 0 or _cyg <= 0 \
+                                    or _cxg + _cwg >= _gw2 \
+                                    or _cyg + _chg >= _gh2:
+                                continue  # کامپوننتِ لبه‌چسب = هنرِ بیرون
+                            if max(_cwg, _chg) > 3.2 * max(1, min(_cwg, _chg)):
+                                continue  # اسپیدلاین/خطِ کشیده
+                            if _ca / float(max(1, _cwg * _chg)) < 0.25:
+                                continue  # حلقهٔ توخالیِ خطِ دور
+                            _gm[_ry0 + _cyg:_ry0 + _cyg + _chg,
+                                _rx0 + _cxg:_rx0 + _cxg + _cwg][
+                                _labg[_cyg:_cyg + _chg,
+                                      _cxg:_cxg + _cwg] == _ci] = 255
+                            _tot += _ca
+                        if _tot >= 30:
+                            rm[cy0:cy1, cx0:cx1] = _gm
+                            return True
+                except Exception:
+                    pass
+                return False  # نه حبابِ معتبر، نه گلیف → دست نزن
+            interior = self._bubble_domain_local(
+                image[cy0:cy1, cx0:cx1], sub,
+                rect_box=(x - cx0, y - cy0, rw, rh))
+            if interior is not None and cv2.countNonZero(interior) > 0:
+                n_sub = int(cv2.countNonZero(sub))
+                clipped = cv2.bitwise_and(sub, interior)
+                # 🛡 بیرونِ دامنه فقط «دیوارهٔ کانتینر» حذف می‌شود — نه متنِ
+                # روی هنر (وبتونِ لاتینِ متن‌روی‌صورت: کلیپِ خام متنِ روی
+                # صورت را می‌انداخت و «ARTICLE 5...» ناقص می‌ماند).
+                # کامپوننت‌های بیرونیِ چسبیده به مرزِ دامنه که بزرگ یا
+                # توخالی‌اند = حلقهٔ خطِ دور/حاشیه → حذف؛ گلیفِ فشردهٔ
+                # جدا از مرز یا ریزِ پر → می‌ماند (متنِ کامل پاک می‌شود).
+                try:
+                    _outside = ((sub > 0) & (interior == 0)).astype(np.uint8)
+                    if int(np.count_nonzero(_outside)) > 0:
+                        _dn = cv2.dilate(interior,
+                                         np.ones((7, 7), np.uint8)) > 0
+                        _onz, _olab, _ost, _ = cv2.connectedComponentsWithStats(
+                            _outside, 8)
+                        _oh, _ow = _outside.shape
+                        for _oi in range(1, _onz):
+                            _oa = int(_ost[_oi, cv2.CC_STAT_AREA])
+                            _ox = int(_ost[_oi, cv2.CC_STAT_LEFT])
+                            _oy = int(_ost[_oi, cv2.CC_STAT_TOP])
+                            _owd = int(_ost[_oi, cv2.CC_STAT_WIDTH])
+                            _oht = int(_ost[_oi, cv2.CC_STAT_HEIGHT])
+                            _comp = (_olab[_oy:_oy + _oht,
+                                           _ox:_ox + _owd] == _oi)
+                            if not bool(_dn[_oy:_oy + _oht,
+                                            _ox:_ox + _owd][_comp].any()):
+                                continue  # جدا از حباب = گلیف → بمان
+                            _big = (_owd >= 0.40 * _ow
+                                    or _oht >= 0.40 * _oh)
+                            _hollow = (_oa / float(max(1, _owd * _oht))) < 0.30
+                            if _big or _hollow:
+                                clipped[_oy:_oy + _oht,
+                                        _ox:_ox + _owd][_comp] = 0
+                except Exception:
+                    pass
+                # کلیپ فقط وقتی معتبر که ماسک را بیش از حد نمی‌خورد
+                # (متنِ چسبیده به دیواره → ۴۵٪ حداقل باید بماند)
+                if n_sub > 0 and cv2.countNonZero(clipped) >= 0.45 * n_sub:
+                    sub = clipped
+                # 🛑 v1.14.12b — جذبِ گلیفِ داخلِ دامنه اینجا «حذف» شد:
+                # روی حبابِ ترکیده روی کاراکتر (متن + اسپیدلاینِ هم‌رنگ)،
+                # جذبِ بی‌سقف ~۶۱هزار پیکسلِ هنر را به ماسک اضافه می‌کرد
+                # (چشم/بدن/اسپیدلاین). گلیفِ جامانده توسط جاروی معیار ۳/۴
+                # (بعد از پاکسازی، فقط روی پیکسلِ دست‌نخورده) جبران می‌شود.
+                rm[cy0:cy1, cx0:cx1] = sub
+                return True
+            # 🛡 v1.14.12b — داخلِ حبابِ بسته پیدا نشد = متنِ آزاد روی
+            # هنر/صورت (وبتونِ متن‌روی‌صورت). ماسکِ گسترش‌یافته (۱.۲x +
+            # بلوک + پد) تا چشم/ابرویِ چسبیده به متن می‌رسید و لاما
+            # می‌خوردش («چشم طرف گرفته پاکیدن» — گزارش کاربر). اینجا
+            # ماسک به «چندضلعیِ خامِ OCR» برمی‌گردد — تنگ، فقط روی خودِ
+            # حروف؛ چشم/ابرو/هنرِ اطراف خارجِ ماسک می‌ماند.
+            try:
+                _raw = []
+                _tall_n = 0
+                _wide_n = 0
+                _ws = []
+                for _p in (getattr(region, "ocr_polys", None) or []):
+                    _pp = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                    if _pp.shape[0] < 3:
+                        continue
+                    _raw.append(np.rint(_pp).astype(np.int32))
+                    _pw = float(_pp[:, 0].max() - _pp[:, 0].min())
+                    _ph = float(_pp[:, 1].max() - _pp[:, 1].min())
+                    _ws.append(max(8.0, _pw))
+                    if _ph >= 1.3 * _pw and _ph >= 18.0:
+                        _tall_n += 1
+                    if _pw >= 1.3 * _ph and _pw >= 18.0:
+                        _wide_n += 1
+                if _raw:
+                    _tight = np.zeros_like(sub)
+                    _off = np.array([cx0, cy0], dtype=np.int32)
+                    cv2.fillPoly(_tight, [p - _off for p in _raw], 255)
+                    _tight = cv2.dilate(_tight, np.ones((3, 3), np.uint8))
+                    if cv2.countNonZero(_tight) > 0 and \
+                            cv2.countNonZero(_tight) >= 0.25 * max(
+                                1, cv2.countNonZero(sub)):
+                        rm[cy0:cy1, cx0:cx1] = _tight
+                        # 🩹 tategaki روی هنر (متنِ ترکیدهٔ عمودی مثل حباب ۱۳):
+                        # SFX/گلیف‌های چسبیده به ستون‌ها («!!؟»، «…») با
+                        # زنجیرهٔ ۲سطحِ v1.14.11 جذب می‌شوند — روی ماسکِ
+                        # «تنگ» نه بلوک؛ پس نوارِ اسپیدلاینِ کنارِ متن داخل
+                        # باند نمی‌آید. برای متنِ افقیِ روی صورت (چشم/ابرو)
+                        # این مسیر عمداً غیرفعال است.
+                        if _tall_n >= 2 and _tall_n >= _wide_n:
+                            try:
+                                _tx0 = min(int(p[:, 0].min()) for p in _raw)
+                                _ty0 = min(int(p[:, 1].min()) for p in _raw)
+                                _tx1 = max(int(p[:, 0].max()) for p in _raw)
+                                _ty1 = max(int(p[:, 1].max()) for p in _raw)
+                                manga_cls = type(self)
+                                manga_cls._absorb_block_neighbors(
+                                    image, rm,
+                                    (_tx0 - 4, _ty0 - 4,
+                                     _tx1 - _tx0 + 8, _ty1 - _ty0 + 8),
+                                    levels=2, band=100)
+                            except Exception:
+                                pass
+                        return True
+            except Exception:
+                pass
+            return True
+        except Exception:
+            return True
+
     def _build_text_mask_fast(self, image: np.ndarray,
                               regions: List[TextRegion]) -> Optional[np.ndarray]:
         # 🇰3 TurboClean الگو — ماسکِ فوری از چندضلعی‌های OCR:
         # هر چندضلعی خط متن از مرکزش ۱.۲x گسترده و مستقیم پر می‌شود
         # (رقیب همین کار را می‌کند و همین جایی است که سرعتش می‌آید —
         # بدون مراحل سنگین جوهر/گلیف به‌ازای هر ناحیه)
+        # 🛡 v1.14.12: هر ماسکِ ناحیه از _fast_bubble_guard می‌گذرد —
+        # کلیپ به داخل حباب (دیوارهٔ سالم) + جذب گلیف جاماندهٔ داخل حباب
+        # + ردِ کامل نواحیِ OCR-خالی روی هنر (اسپیدلاین دیگر پاک نمی‌شود).
         try:
             h, w = image.shape[:2]
             m = np.zeros((h, w), dtype=np.uint8)
@@ -4687,6 +4974,7 @@ class MangaTranslator:
             return None
         padding = max(0, int(getattr(self, "mask_padding", 3)))
         n_ok = 0
+        n_skip = 0
         for region in regions:
             pts_list = []
             _tall = 0
@@ -4724,12 +5012,23 @@ class MangaTranslator:
                             x0, y0 = max(0, _bb[0]), max(0, _bb[1])
                             x1, y1 = min(w, _bb[0] + _bb[2]), min(h, _bb[1] + _bb[3])
                             if x1 - x0 >= 6 and y1 - y0 >= 6:
-                                cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                                # 🛡 v1.14.12: ماسکِ این بلوک جدا ساخته می‌شود،
+                                # از گاردِ حباب می‌گذرد و بعد به ماسک کل می‌رود
+                                _rm = np.zeros_like(m)
+                                cv2.rectangle(_rm, (x0, y0), (x1, y1), 255, -1)
                                 # 🩹 v1.14.11: جذبِ گلیف‌های چسبیده (SFX و...) —
                                 # وگرنه ماسک «نیمی» از گلیف را می‌گیرد و
                                 # نیمهٔ بیرون جا می‌ماند (گلیفِ نیمه‌خورده)
-                                self._absorb_block_neighbors(
-                                    image, m, (x0, y0, x1 - x0, y1 - y0))
+                                # 🛑 v1.14.12b — جذبِ بلوک خاموش شد: با
+                                # رفعِ باگِ اپراتوری، این جذب «فعال» می‌شد و
+                                # روی وب‌تونِ متن‌روی‌صورت، ابرو/لب را جذب
+                                # می‌کرد. رفتارِ مؤثرِ v1.14.11 (=جذبِ
+                                # مرده) + زنجیرهٔ SFXِ گارد برای tategaki.
+                                if not self._fast_bubble_guard(
+                                        image, _rm, region, True):
+                                    n_skip += 1
+                                    continue
+                                m = cv2.bitwise_or(m, _rm)
                                 n_ok += 1
                                 continue
                     except Exception:
@@ -4748,14 +5047,32 @@ class MangaTranslator:
                             x0, y0 = max(0, _bb[0]), max(0, _bb[1])
                             x1, y1 = min(w, _bb[0] + _bb[2]), min(h, _bb[1] + _bb[3])
                             if x1 - x0 >= 6 and y1 - y0 >= 6:
-                                cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
-                                self._absorb_block_neighbors(
-                                    image, m, (x0, y0, x1 - x0, y1 - y0))
+                                _rm = np.zeros_like(m)
+                                cv2.rectangle(_rm, (x0, y0), (x1, y1), 255, -1)
+                                # 🛑 v1.14.12b — جذبِ بلوک خاموش شد: با
+                                # رفعِ باگِ اپراتوری، این جذب «فعال» می‌شد و
+                                # روی وب‌تونِ متن‌روی‌صورت، ابرو/لب را جذب
+                                # می‌کرد. رفتارِ مؤثرِ v1.14.11 (=جذبِ
+                                # مرده) + زنجیرهٔ SFXِ گارد برای tategaki.
+                                if not self._fast_bubble_guard(
+                                        image, _rm, region, True):
+                                    n_skip += 1
+                                    continue
+                                m = cv2.bitwise_or(m, _rm)
                                 n_ok += 1
                                 continue
                     except Exception:
                         pass
-                cv2.fillPoly(m, pts_list, 255)
+                # 🛡 v1.14.12: محافظت حباب برای مسیرِ چندضلعیِ معمولی —
+                # ماسکِ این ناحیه جدا کلیپ می‌شود (دیواره/کارت خط‌دار سالم)
+                # ⚠️ m نباید از قبل با polyِ کامل پر شده باشد — وگرنه OR با
+                # نسخهٔ کلیپ‌شده بی‌اثر می‌شد و کلِ poly (با خطِ دور) می‌ماند
+                _rm = np.zeros_like(m)
+                cv2.fillPoly(_rm, pts_list, 255)
+                if not self._fast_bubble_guard(image, _rm, region, True):
+                    n_skip += 1
+                    continue
+                m = cv2.bitwise_or(m, _rm)
                 n_ok += 1
             else:
                 try:
@@ -4763,11 +5080,19 @@ class MangaTranslator:
                     x0, y0 = max(0, x + 2), max(0, y + 2)
                     x1, y1 = min(w, x + rw - 2), min(h, y + rh - 2)
                     if x1 - x0 >= 6 and y1 - y0 >= 4:
-                        cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                        # 🛡 v1.14.12: ناحیهٔ بدون چندضلعی OCR — فقط داخلِ حبابِ
+                        # بسته پاک می‌شود (گلیف‌ها؛ دیواره سالم). اگر حبابِ بسته
+                        # نبود (اسپیدلاین/هنر) → کلاً رد (هیچ‌چیز پاک نمی‌شود)
+                        _rm = np.zeros_like(m)
+                        cv2.rectangle(_rm, (x0, y0), (x1, y1), 255, -1)
+                        if not self._fast_bubble_guard(image, _rm, region, False):
+                            n_skip += 1
+                            continue
+                        m = cv2.bitwise_or(m, _rm)
                         n_ok += 1
                 except Exception:
                     continue
-        if n_ok <= 0 or not m.any():
+        if n_ok <= 0 and n_skip <= 0:
             return None
         if padding > 0:
             k = cv2.getStructuringElement(
@@ -4778,7 +5103,8 @@ class MangaTranslator:
     @staticmethod
     def _absorb_block_neighbors(image: np.ndarray, mask: np.ndarray,
                                 box: Tuple[int, int, int, int],
-                                levels: int = 2) -> None:
+                                levels: int = 2,
+                                band: int = 20) -> None:
         # 🩹 v1.14.11 — خواستهٔ کاربر: «یک کاری کن حباب متنِ پاک‌نشده نداشته
         # باشه، هر کاری می‌کنی». ماسکِ بلوکِ متراکم گاهی «نیمی» از یک
         # SFX/گلیفِ چسبیده را می‌گیرد («!» داخل بلوک، «؟» بیرون آن) →
@@ -4793,7 +5119,9 @@ class MangaTranslator:
             H, W = mask.shape[:2]
             # پنجرهٔ بزرگ کافی برای گلیف‌های بلند SFX؛ مؤلفه‌هایی که از
             # پنجره بیرون می‌زنند (هنرِ بزرگِ نامعلوم) جذب نمی‌شوند
-            _win = 140
+            # 🛡 v1.14.12b: پنجره و کرنلِ رشد با band مقیاس می‌شوند —
+            # باندِ بزرگ‌تر (متنِ ترکیده) بدون آن به SFX دور نمی‌رسید
+            _win = max(140, 2 * band + 50)
             ex0, ey0 = max(0, bx0 - _win), max(0, by0 - _win)
             ex1, ey1 = min(W, bx1 + _win), min(H, by1 + _win)
             if ex1 - ex0 < 24 or ey1 - ey0 < 24:
@@ -4808,15 +5136,20 @@ class MangaTranslator:
             block_area = float(max(1.0, float(bw * bh)))
             cap = 0.60 * block_area
             added_total = 0
-            k41 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (41, 41))
+            k41 = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE,
+                (2 * band + 1, 2 * band + 1))
             zh, zw = cand.shape
             for _lv in range(max(1, levels)):
                 # ناحیهٔ مجاز: باندِ ۲۰px اطراف بلوک + رشدِ ۲۰px از ماسکِ فعلی
                 zone = np.zeros(cand.shape, dtype=bool)
-                by0b = max(0, by0 - 20 - ey0)
-                by1b = min(zh, by1 + 20 - ey0)
-                bx0b = max(0, bx0 - 20 - ex0)
-                bx1b = min(zw, bx1 + 20 - ex0)
+                # 🛡 band پارامتری (v1.14.12b): برای متنِ ترکیدهٔ عمودی روی
+                # هنر، SFX تا ~۱۴۰px از ستون‌ها فاصله دارد؛ باندِ ۲۰px
+                # v1.14.11 به آن نمی‌رسید (حباب ۱۳).
+                by0b = max(0, by0 - band - ey0)
+                by1b = min(zh, by1 + band - ey0)
+                bx0b = max(0, bx0 - band - ex0)
+                bx1b = min(zw, bx1 + band - ex0)
                 zone[by0b:by1b, bx0b:bx1b] = True
                 grow = cv2.dilate(
                     (mask[ey0:ey1, ex0:ex1] > 0).astype(np.uint8),
@@ -4838,8 +5171,12 @@ class MangaTranslator:
                     # مؤلفهٔ بریده‌شده در لبهٔ پنجره = وسعتش معلوم نیست → رد
                     if _cx <= 0 or _cy <= 0 or _cx + _cw >= zw or _cy + _ch >= zh:
                         continue
-                    if not bool((_lab[_cy:_cy + _ch, _cx:_cx + _cw] == _ci)
-                                & touch[_cy:_cy + _ch, _cx:_cx + _cw]).any():
+                    # 🐛 v1.14.12b — باگِ اپراتوریِ v1.14.11:
+                    # bool(A & B).any() اول bool(آرایه) را می‌خواست →
+                    # ValueError → exceptِ خاموش کلِ جذب را no-op می‌کرد!
+                    if not bool(((_lab[_cy:_cy + _ch, _cx:_cx + _cw] == _ci)
+                                 & touch[_cy:_cy + _ch,
+                                         _cx:_cx + _cw]).any()):
                         continue
                     _cands.append((_ca, _ci, _cx, _cy, _cw, _ch))
                 _cands.sort(reverse=True)
@@ -6037,20 +6374,25 @@ class MangaTranslator:
                 continue
             gc = cv2.cvtColor(cc, cv2.COLOR_BGR2GRAY)
             same = (np.abs(gc.astype(np.int16) - g.astype(np.int16)) <= 14)
-            resid = ink & same & _mzone
+            # 🛡 v1.14.12: معیارهای ۱ و ۲ فقط «داخلِ ماسکِ خام» — نه باندِ
+            # ۱۵px اطراف آن. باندِ گسترده خطِ دورِ حباب/کارت را (که چند پیکسل
+            # بیرونِ ماسکِ بالک می‌ماند و هنوز تیره است) «جوهرِ پاک‌نشده»
+            # می‌پنداشت و تلئا می‌کرد → خطِ دورِ کارتِ «معلم» محو می‌شد.
+            _mcore = (mask[y0:y1, x0:x1] > 0)
+            resid = ink & same & _mcore
             # ── معیار ۲: لکهٔ تیرهٔ به‌جاماندهٔ TELEA/پرکردن (حباب زرد «わあ!»
             # — رگهٔ عمودی تیره در طول ستون متن). پیکسل تیرهٔ خروجی داخل
             # ماسک که در اصل هم جوهر بود، وقتی زمینهٔ بازسازی‌شده روشن است
             # = لکه/متنِ پاک‌نشده. اپنینگ ۵×۵ لکهٔ حجیم را نگه می‌دارد و
             # خط‌های نازک هنری بازسازی‌شده را حذف می‌کند (جلوگیری از اشتباه).
             try:
-                _zp = cc[_mzone].astype(np.float32)
+                _zp = cc[_mcore].astype(np.float32)
                 _zlum = (_zp[:, 0] * 0.114 + _zp[:, 1] * 0.587 + _zp[:, 2] * 0.299)
                 if _zlum.size >= 300 and float((_zlum >= 170.0).mean()) >= 0.30:
                     _bg_lum = float(np.median(_zlum[_zlum >= 170.0]))
-                    _gcl = (gc.astype(np.float32) * _mzone
-                            + np.where(_mzone, 0.0, _bg_lum))
-                    _dark_raw = (_gcl < _bg_lum - 45.0) & _mzone & ink
+                    _gcl = (gc.astype(np.float32) * _mcore
+                            + np.where(_mcore, 0.0, _bg_lum))
+                    _dark_raw = (_gcl < _bg_lum - 45.0) & _mcore & ink
                     _k5 = np.ones((5, 5), np.uint8)
                     # لکهٔ حجیم (اپنینگ نگه می‌دارد؛ خط نازک هنری حذف می‌شود)
                     _blob = cv2.morphologyEx(
@@ -6072,6 +6414,27 @@ class MangaTranslator:
             # پیرامونِ بلوکِ متن → TELEA فقط به‌اندازهٔ همان گلیف‌ها (لبهٔ
             # حباب/اسپیدلاین/هنر دست‌نخورده می‌ماند — فیلترهای مؤلفه).
             if r.kind == "dialogue" and not getattr(r, "ocr_empty", False):
+                # 🛡 v1.14.12b — گیتِ حباب: معیار ۳ فقط وقتی که ناحیه
+                # «حبابِ بسته» دارد (ستونِ جاافتادهٔ کنارِ متنِ حباب).
+                # روی متنِ آزادِ روی صورت/هنر (وبتون)، «گلیفِ جامانده» و
+                # ابرو/چشمِ چسبیده به متن تفکیک‌ناپذیرند — تلئای معیار ۳
+                # ابرو/چشم را می‌خورد (گزارش کاربر) → بدون حباب، جارو ممنوع.
+                try:
+                    _bx30, _by30 = max(0, x0 - 34), max(0, y0 - 34)
+                    _bx31 = min(w, x1 + 34)
+                    _by31 = min(h, y1 + 34)
+                    if _bx31 - _bx30 < 20 or _by31 - _by30 < 20:
+                        continue
+                    _dseed = ((_mdil[_by30:_by31, _bx30:_bx31] > 0)
+                              .astype(np.uint8) * 255)
+                    _ddom = self._bubble_domain_local(
+                        image[_by30:_by31, _bx30:_bx31], _dseed,
+                        rect_box=(x0 - _bx30, y0 - _by30,
+                                  x1 - x0, y1 - y0))
+                    if _ddom is None:
+                        continue
+                except Exception:
+                    continue
                 try:
                     _sp = getattr(r, "ocr_polys", None) or []
                     _spl = [np.asarray(p, dtype=np.float32).reshape(-1, 2)
@@ -6097,6 +6460,54 @@ class MangaTranslator:
                             _zin = ((g[_ly0:_ly1, _lx0:_lx1] < _zthr)
                                     & ~_mdil[_ly0:_ly1, _lx0:_lx1])
                             if 0.002 <= float(_zin.mean()) <= 0.40:
+                                # 🛡 v1.14.12: اعتبارِ مؤلفه روی «کراپِ پهن» —
+                                # حلقهٔ خطِ دورِ حباب/کارت داخلِ پنجرهٔ تنگ
+                                # «قطعه‌های کوچکِ گلیف‌مانند» دیده می‌شد و
+                                # تلئا می‌شد (حباب‌های زرد «あれ!»/«わあ!» و
+                                # کارت «先生» بی‌خطِ دور می‌ماندند). روی کراپِ
+                                # پهن حلقهٔ کامل = بزرگ/لبه‌چسب/توخالی → رد.
+                                try:
+                                    _wx0 = max(0, int(x0) - 120)
+                                    _wy0 = max(0, int(y0) - 120)
+                                    _wx1 = min(w, int(x1) + 120)
+                                    _wy1 = min(h, int(y1) + 120)
+                                    _wg = cv2.cvtColor(
+                                        image[_wy0:_wy1, _wx0:_wx1],
+                                        cv2.COLOR_BGR2GRAY)
+                                    _wdark = (_wg < _zthr).astype(np.uint8)
+                                    _wnz, _wlab, _wst, _ = \
+                                        cv2.connectedComponentsWithStats(
+                                            _wdark, 8)
+                                    _wh, _ww = _wdark.shape
+                                    _wgood = np.zeros((_wh, _ww), dtype=bool)
+                                    for _wi in range(1, _wnz):
+                                        _wa = int(_wst[_wi, cv2.CC_STAT_AREA])
+                                        if _wa < 24:
+                                            continue
+                                        _wxp = int(_wst[_wi, cv2.CC_STAT_LEFT])
+                                        _wyp = int(_wst[_wi, cv2.CC_STAT_TOP])
+                                        _wwd = int(_wst[_wi, cv2.CC_STAT_WIDTH])
+                                        _wht = int(_wst[_wi, cv2.CC_STAT_HEIGHT])
+                                        if _wxp <= 0 or _wyp <= 0 \
+                                                or _wxp + _wwd >= _ww \
+                                                or _wyp + _wht >= _wh:
+                                            continue  # لبه‌چسب = کادر/حلقه
+                                        if _wwd > 0.60 * _ww \
+                                                or _wht > 0.60 * _wh:
+                                            continue  # حلقهٔ کاملِ خطِ دور
+                                        if _wa / float(max(1, _wwd * _wht)) < 0.22:
+                                            continue  # کمانِ توخالیِ خطِ دور
+                                        _wgood[_wlab == _wi] = True
+                                    _gxo = int(x0) + _lx0 - _wx0
+                                    _gyo = int(y0) + _ly0 - _wy0
+                                    _subg = _wgood[
+                                        _gyo:_gyo + (_ly1 - _ly0),
+                                        _gxo:_gxo + (_lx1 - _lx0)]
+                                    if _subg.shape == (_ly1 - _ly0,
+                                                       _lx1 - _lx0):
+                                        _zin = _zin & _subg
+                                except Exception:
+                                    pass
                                 _nz, _lab, _st, _ce = cv2.connectedComponentsWithStats(
                                     _zin.astype(np.uint8), 8)
                                 _zh, _zw = _zin.shape
@@ -6129,6 +6540,69 @@ class MangaTranslator:
                                     resid = resid | _res3
                 except Exception:
                     pass
+            # ── معیار ۴ (v1.14.12): گلیفِ دست‌نخوردهٔ «کاملاً داخلِ حباب» —
+            # داکوتن («゛»)، «…»، ستونِ جاافتادهٔ ML Kit: بیرونِ چندضلعی‌ها
+            # ولی داخلِ حباب. تضمین کاربر: «نباید متنی بمونه». دامنهٔ حباب
+            # از _bubble_domain_local روی اصل؛ فقط مؤلفه‌های تیرهٔ فشردهٔ
+            # داخلِ آن که در خروجی تقریباً دست‌نخورده‌اند (گلیف = متن)،
+            # نه خطِ دور حباب و نه هنرِ بیرون حباب.
+            try:
+                _gx0, _gy0 = max(0, x0 - 34), max(0, y0 - 34)
+                _gx1, _gy1 = min(w, x1 + 34), min(h, y1 + 34)
+                if _gx1 - _gx0 >= 20 and _gy1 - _gy0 >= 20:
+                    _gseed = ((_mdil[_gy0:_gy1, _gx0:_gx1] > 0)
+                              .astype(np.uint8) * 255)
+                    _ggray = cv2.cvtColor(
+                        image[_gy0:_gy1, _gx0:_gx1], cv2.COLOR_BGR2GRAY)
+                    _dom = self._bubble_domain_local(
+                        image[_gy0:_gy1, _gx0:_gx1], _gseed)
+                    if _dom is not None and cv2.countNonZero(_dom) > 0:
+                        _cmed = float(np.median(_ggray[_dom > 0]))
+                        _ccc = cv2.cvtColor(
+                            cleaned[_gy0:_gy1, _gx0:_gx1], cv2.COLOR_BGR2GRAY)
+                        _csame4 = (np.abs(
+                            _ccc.astype(np.int16)
+                            - _ggray.astype(np.int16)) <= 14)
+                        _cin = ((_ggray < _cmed - 40.0)
+                                & (_dom > 0) & _csame4).astype(np.uint8)
+                        _nz4, _lab4, _st4, _ = cv2.connectedComponentsWithStats(
+                            _cin, 8)
+                        _res4m = np.zeros(_cin.shape, dtype=bool)
+                        _n4 = 0
+                        _dom_area = float(max(1.0, cv2.countNonZero(_dom)))
+                        # 🛡 v1.14.12b — همان سقفِ جذبِ گلیف: چشم/خوشهٔ هنری
+                        # داخلِ دامنه نباید «گلیفِ جامانده» پنداشته شود.
+                        _cap4 = max(500.0, 0.00025 * float(w * h))
+                        _cap4 = min(_cap4, 0.010 * _dom_area)
+                        _gnear = cv2.dilate(
+                            _gseed, np.ones((81, 81), np.uint8)) > 0
+                        for _ci in range(1, _nz4):
+                            _ca = int(_st4[_ci, cv2.CC_STAT_AREA])
+                            if _ca < 10 or _ca > _cap4:
+                                continue
+                            _cx4 = int(_st4[_ci, cv2.CC_STAT_LEFT])
+                            _cy4 = int(_st4[_ci, cv2.CC_STAT_TOP])
+                            _cw4 = int(_st4[_ci, cv2.CC_STAT_WIDTH])
+                            _ch4 = int(_st4[_ci, cv2.CC_STAT_HEIGHT])
+                            if max(_cw4, _ch4) > 56:
+                                continue  # چشم/خوشهٔ هنری — نه گلیف
+                            if max(_cw4, _ch4) > 3.5 * max(1, min(_cw4, _ch4)):
+                                continue
+                            if _ca / float(max(1, _cw4 * _ch4)) < 0.30:
+                                continue
+                            if not bool(_gnear[_cy4:_cy4 + _ch4,
+                                               _cx4:_cx4 + _cw4][
+                                _lab4[_cy4:_cy4 + _ch4,
+                                      _cx4:_cx4 + _cw4] == _ci].any()):
+                                continue  # دور از متن = هنر
+                            _res4m |= (_lab4 == _ci)
+                            _n4 += _ca
+                        if _n4 >= 10:
+                            _r4 = np.zeros_like(resid)
+                            _r4[_gy0:_gy1, _gx0:_gx1] = _res4m
+                            resid = resid | _r4
+            except Exception:
+                pass
             n_res = int(np.count_nonzero(resid))
             if n_res < max(40, int(0.003 * _m_px)):
                 continue
@@ -9011,6 +9485,26 @@ class MangaTranslator:
             uy1 += pad_y
             if rect:
                 rx, ry, rw, rh = [float(v) for v in rect]
+                # 🩹 v1.14.12: چندضلعی‌های RapidOCR گاهی باریک‌تر از متنِ
+                # واقعی‌اند (وبتون لاتینِ بولد: «NOT TO BE» بیرونِ چندضلعی
+                # می‌ماند → کلمه پاک نمی‌شد). اگر پد هم به rect نرسد و گپِ
+                # هر طرفِ معقول باشد (≤۱۸٪ عرض / ≤۳۰٪ ارتفاعِ rect)، بلوک
+                # تا لبهٔ rect گسترش می‌یابد — دیتکتور کلِ بلوک را دیده است.
+                # 🛡 v1.14.12b — فقط برای متنِ «افقی» (وبتون لاتین): روی
+                # tategaki/متنِ ترکیدهٔ عمودی (حباب ۱۳) این گسترش، نوارِ
+                # ۴۲px اسپیدلاینِ کنارِ متن را هم داخل بلوک می‌انداخت و
+                # لاما می‌خوردش → عمودی رفتارِ v1.14.11 (کلمپِ ساده).
+                if not vert:
+                    _capw = 0.18 * max(4.0, rw)
+                    _caph = 0.30 * max(4.0, rh)
+                    if 0.0 <= ux0 - rx <= _capw:
+                        ux0 = rx
+                    if 0.0 <= (rx + rw) - ux1 <= _capw:
+                        ux1 = rx + rw
+                    if 0.0 <= uy0 - ry <= _caph:
+                        uy0 = ry
+                    if 0.0 <= (ry + rh) - uy1 <= _caph:
+                        uy1 = ry + rh
                 ux0 = max(ux0, rx)
                 uy0 = max(uy0, ry)
                 ux1 = min(ux1, rx + max(4.0, rw))
@@ -11669,6 +12163,32 @@ html, body { background: #0a0a0b; }
         )
         text_rgb, stroke_rgb = self._pick_text_and_stroke(image, original_image, region)
 
+        # 🩹 v1.14.12 — پس‌زمینهٔ متن فقط وقتی که زمینهٔ پاک‌شدهٔ زیر متن
+        # «نامناسب» است (خواستهٔ کاربر: کارت/حباب باید تمیز و به‌اندازهٔ متن
+        # دیده شود — اسمیرِ LaMa روی کارتِ «معلم» متن عریان زشتی می‌ساخت).
+        # زمینهٔ یکدستِ روشن (حباب سفید/زردِ تمیز) → بدون باکس، ظاهر طبیعی.
+        _draw_bg = None
+        try:
+            _Wp, _Hp = pil_img.size
+            _bx0, _by0 = max(0, int(x)), max(0, int(y))
+            _bx1, _by1 = min(_Wp, int(x + w)), min(_Hp, int(y + h))
+            if _bx1 - _bx0 >= 12 and _by1 - _by0 >= 12:
+                _crop = image[_by0:_by1, _bx0:_bx1]
+                _gg = cv2.cvtColor(_crop, cv2.COLOR_BGR2GRAY)
+                _gmed = float(np.median(_gg))
+                _gstd = float(np.std(_gg))
+                _tlum = (0.299 * float(text_rgb[0])
+                         + 0.587 * float(text_rgb[1])
+                         + 0.114 * float(text_rgb[2]))
+                if _tlum < 130.0 and (_gstd > 20.0 or _gmed < 150.0):
+                    _bgr_med = np.median(
+                        _crop.reshape(-1, 3), axis=0)
+                    _draw_bg = tuple(int(min(255.0, max(0.0,
+                        255.0 - (255.0 - float(_c)) * 0.22)))
+                        for _c in (_bgr_med[2], _bgr_med[1], _bgr_med[0]))
+        except Exception:
+            _draw_bg = None
+
         try:
             angle = float(getattr(region, "angle", 0.0) or 0.0)
         except (TypeError, ValueError):
@@ -11745,6 +12265,24 @@ html, body { background: #0a0a0b; }
 
             bottom_limit = y + pad + box_h
 
+            # 🩹 v1.14.12: باکسِ روشنِ پشت متن (فقط زمینهٔ نامناسب) —
+            # به‌اندازهٔ بلوکِ متن، نه بزرگ‌تر
+            if _draw_bg is not None:
+                try:
+                    draw.rounded_rectangle(
+                        [x + pad - 3, y + pad - 3,
+                         x + pad + box_w + 3, y + pad + box_h + 3],
+                        radius=max(6, int(min(box_w, box_h) * 0.12)),
+                        fill=_draw_bg)
+                except Exception:
+                    try:
+                        draw.rectangle(
+                            [x + pad - 3, y + pad - 3,
+                             x + pad + box_w + 3, y + pad + box_h + 3],
+                            fill=_draw_bg)
+                    except Exception:
+                        pass
+
             for i, line in enumerate(lines):
                 shaped = self._shape_farsi(line)
                 line_w = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
@@ -11786,6 +12324,19 @@ html, body { background: #0a0a0b; }
 
             tmp = Image.new("RGBA", (tmp_w, tmp_h), (0, 0, 0, 0))
             tmp_draw = ImageDraw.Draw(tmp)
+
+            # 🩹 v1.14.12: پس‌زمینهٔ روشنِ کجِ هم‌راستا با متن — کارتِ «معلم»
+            # (باید مثل کارتِ اصلی دیده شود، نه متنِ عریان روی اسمیر)
+            if _draw_bg is not None:
+                try:
+                    tmp_draw.rounded_rectangle(
+                        [4, 4, tmp_w - 5, tmp_h - 5],
+                        radius=max(6, int(min(tmp_w, tmp_h) * 0.12)),
+                        fill=_draw_bg + (255,))
+                except Exception:
+                    tmp_draw.rectangle(
+                        [4, 4, tmp_w - 5, tmp_h - 5],
+                        fill=_draw_bg + (255,))
 
             for i, line in enumerate(lines):
                 shaped = self._shape_farsi(line)

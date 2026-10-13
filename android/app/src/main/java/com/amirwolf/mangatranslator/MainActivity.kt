@@ -537,7 +537,7 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), 0, dp(4), 0) })
         row.addView(pill("سورس", R.drawable.ic_github,
-                "https://github.com/amirwolf5122/Manga-AutoTranslate"),
+                "https://github.com/amirwolf512k/Manga-AutoTranslate"),
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), 0, dp(4), 0) })
         row.addView(pill("ریست", android.R.drawable.ic_menu_revert, "").apply {

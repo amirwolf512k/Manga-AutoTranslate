@@ -1,12 +1,12 @@
 # مترجم خودکار مانگا / مانهوا (فارسی)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf5122/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf512k/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
 [DEMO](https://demo--amrie194sm.replit.app/)
 
-![app](https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/refs/heads/main/examples/app.jpg)
+![app](https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/refs/heads/main/examples/app.jpg)
 
 ابزاری برای **ترجمه خودکار صفحات مانگا و مانهوا به فارسی**.
 
@@ -116,7 +116,7 @@ python manga_app.py -- -i input -o out.psd --font fonts/Vazirmatn-Bold.ttf --api
 
 نسخهٔ اندروید (Chaquopy — همان موتور `manga.py` روی گوشی) هم دارد:
 
-- دانلود APK از [Releases](https://github.com/amirwolf5122/Manga-AutoTranslate/releases/tag/android) — یا بیلد از سورس با Gradle / GitHub Actions
+- دانلود APK از [Releases](https://github.com/amirwolf512k/Manga-AutoTranslate/releases/tag/android) — یا بیلد از سورس با Gradle / GitHub Actions
 - راهنمای کامل نصب، بیلد و رفع مشکل: [`android/README.md`](android/README.md)
 - OCR روی گوشی با ML Kit (اگر نبود RapidOCR)؛ فونت‌ها و مدل‌ها بار اول خودکار دانلود می‌شوند
 
@@ -198,7 +198,7 @@ python manga_app.py -- -i input -o out.psd --font fonts/Vazirmatn-Bold.ttf --api
 
 ### ۱) Google Colab (پیشنهادی)
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf5122/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf512k/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
 
 ```bash
 !bash manga.sh
@@ -236,7 +236,7 @@ Runnerهای GitHub معمولاً GPU ندارند؛ اجرا روی CPU است
 ### ۴) اجرای لوکال
 
 ```bash
-git clone https://github.com/amirwolf5122/Manga-AutoTranslate.git
+git clone https://github.com/amirwolf512k/Manga-AutoTranslate.git
 cd Manga-AutoTranslate
 
 Manga.bat    # ویندوز — منو: App / Web / CLI
@@ -291,5 +291,5 @@ MIT — آزاد برای استفاده شخصی و غیرتجاری.
 
 حقوق مانگا/مانهوا متعلق به ناشر و خالق اثر است؛ این ابزار فقط برای مطالعه شخصی است.
 
-**توسعه‌دهنده:** [amirwolf5122](https://github.com/amirwolf5122)  
+**توسعه‌دهنده:** [amirwolf512k](https://github.com/amirwolf512k)  
 **تلگرام:** [@Amir_wolf512](https://t.me/Amir_wolf512)

@@ -10,7 +10,7 @@ import traceback
 LOGS = []
 
 _GITHUB_RAW = ("https://raw.githubusercontent.com/"
-               "amirwolf5122/Manga-AutoTranslate/main/")
+               "amirwolf512k/Manga-AutoTranslate/main/")
 _UPDATE_FILES = ("manga.py", "manga_app.py")
 
 
