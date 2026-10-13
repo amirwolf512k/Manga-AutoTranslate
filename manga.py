@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.10"
+APP_VER = "1.14.11"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -4725,6 +4725,11 @@ class MangaTranslator:
                             x1, y1 = min(w, _bb[0] + _bb[2]), min(h, _bb[1] + _bb[3])
                             if x1 - x0 >= 6 and y1 - y0 >= 6:
                                 cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                                # 🩹 v1.14.11: جذبِ گلیف‌های چسبیده (SFX و...) —
+                                # وگرنه ماسک «نیمی» از گلیف را می‌گیرد و
+                                # نیمهٔ بیرون جا می‌ماند (گلیفِ نیمه‌خورده)
+                                self._absorb_block_neighbors(
+                                    image, m, (x0, y0, x1 - x0, y1 - y0))
                                 n_ok += 1
                                 continue
                     except Exception:
@@ -4744,6 +4749,8 @@ class MangaTranslator:
                             x1, y1 = min(w, _bb[0] + _bb[2]), min(h, _bb[1] + _bb[3])
                             if x1 - x0 >= 6 and y1 - y0 >= 6:
                                 cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                                self._absorb_block_neighbors(
+                                    image, m, (x0, y0, x1 - x0, y1 - y0))
                                 n_ok += 1
                                 continue
                     except Exception:
@@ -4767,6 +4774,93 @@ class MangaTranslator:
                 cv2.MORPH_ELLIPSE, (2 * padding + 1, 2 * padding + 1))
             m = cv2.dilate(m, k)
         return m
+
+    @staticmethod
+    def _absorb_block_neighbors(image: np.ndarray, mask: np.ndarray,
+                                box: Tuple[int, int, int, int],
+                                levels: int = 2) -> None:
+        # 🩹 v1.14.11 — خواستهٔ کاربر: «یک کاری کن حباب متنِ پاک‌نشده نداشته
+        # باشه، هر کاری می‌کنی». ماسکِ بلوکِ متراکم گاهی «نیمی» از یک
+        # SFX/گلیفِ چسبیده را می‌گیرد («!» داخل بلوک، «؟» بیرون آن) →
+        # گلیفِ نیمه‌خورده + هالهٔ تلئا. کامپوننت‌های گلیف‌مانندِ چسبیده به
+        # بلوک (تا ۲ سطحِ ۲۰px) هم به ماسک اضافه می‌شوند تا «کلِ گروه»
+        # یک‌جا پاک شود و LaMa پس‌زمینه را سالم بازسازی کند.
+        # فیلترهای محافظ: گلیفِ چاق (نه خطِ نازک)، تیره یا اشباعِ رنگی،
+        # سقفِ مساحت (≤۶۰٪ بلوک) و سقفِ فاصله (باندِ ۲۰px از ماسکِ فعلی).
+        try:
+            bx0, by0, bw, bh = [int(v) for v in box]
+            bx1, by1 = bx0 + bw, by0 + bh
+            H, W = mask.shape[:2]
+            # پنجرهٔ بزرگ کافی برای گلیف‌های بلند SFX؛ مؤلفه‌هایی که از
+            # پنجره بیرون می‌زنند (هنرِ بزرگِ نامعلوم) جذب نمی‌شوند
+            _win = 140
+            ex0, ey0 = max(0, bx0 - _win), max(0, by0 - _win)
+            ex1, ey1 = min(W, bx1 + _win), min(H, by1 + _win)
+            if ex1 - ex0 < 24 or ey1 - ey0 < 24:
+                return
+            sub = image[ey0:ey1, ex0:ex1]
+            g = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
+            hsv = cv2.cvtColor(sub, cv2.COLOR_BGR2HSV)
+            zmed = float(np.median(g))
+            # گلیف: تیره‌تر از زمینه یا رنگِ اشباع (SFX رنگی مثل «؟» بنفش)
+            cand = ((g < zmed - 40.0) | (hsv[..., 1] >= 90))
+            cand &= (mask[ey0:ey1, ex0:ex1] == 0)
+            block_area = float(max(1.0, float(bw * bh)))
+            cap = 0.60 * block_area
+            added_total = 0
+            k41 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (41, 41))
+            zh, zw = cand.shape
+            for _lv in range(max(1, levels)):
+                # ناحیهٔ مجاز: باندِ ۲۰px اطراف بلوک + رشدِ ۲۰px از ماسکِ فعلی
+                zone = np.zeros(cand.shape, dtype=bool)
+                by0b = max(0, by0 - 20 - ey0)
+                by1b = min(zh, by1 + 20 - ey0)
+                bx0b = max(0, bx0 - 20 - ex0)
+                bx1b = min(zw, bx1 + 20 - ex0)
+                zone[by0b:by1b, bx0b:bx1b] = True
+                grow = cv2.dilate(
+                    (mask[ey0:ey1, ex0:ex1] > 0).astype(np.uint8),
+                    k41) > 0
+                touch = zone & grow
+                # مؤلفه‌های «کاملِ» گلیف‌مانند که به zone می‌چسبند
+                _nz, _lab, _st, _ = cv2.connectedComponentsWithStats(
+                    cand.astype(np.uint8), 8)
+                _added = 0
+                _cands = []
+                for _ci in range(1, _nz):
+                    _ca = int(_st[_ci, cv2.CC_STAT_AREA])
+                    if _ca < 40:
+                        continue
+                    _cx = int(_st[_ci, cv2.CC_STAT_LEFT])
+                    _cy = int(_st[_ci, cv2.CC_STAT_TOP])
+                    _cw = int(_st[_ci, cv2.CC_STAT_WIDTH])
+                    _ch = int(_st[_ci, cv2.CC_STAT_HEIGHT])
+                    # مؤلفهٔ بریده‌شده در لبهٔ پنجره = وسعتش معلوم نیست → رد
+                    if _cx <= 0 or _cy <= 0 or _cx + _cw >= zw or _cy + _ch >= zh:
+                        continue
+                    if not bool((_lab[_cy:_cy + _ch, _cx:_cx + _cw] == _ci)
+                                & touch[_cy:_cy + _ch, _cx:_cx + _cw]).any():
+                        continue
+                    _cands.append((_ca, _ci, _cx, _cy, _cw, _ch))
+                _cands.sort(reverse=True)
+                for _ca, _ci, _cx, _cy, _cw, _ch in _cands:
+                    if _ca > 0.35 * block_area:
+                        continue
+                    if added_total + _ca > cap:
+                        continue
+                    _mind = min(_cw, _ch)
+                    if _mind < 6 or (max(_cw, _ch)
+                                     / float(max(1, _mind))) > 7.0:
+                        continue  # اسپیدلاین/لبهٔ نازک
+                    if _ca / float(max(1, _cw * _ch)) < 0.20:
+                        continue
+                    mask[ey0:ey1, ex0:ex1][_lab == _ci] = 255
+                    _added += _ca
+                    added_total += _ca
+                if not _added:
+                    break
+        except Exception:
+            pass
 
     def _k3_line_instant_fill(self, image: np.ndarray, cleaned: np.ndarray,
                               regions: List[TextRegion],
@@ -4829,6 +4923,11 @@ class MangaTranslator:
                             fill_col = avg1
                             fill_exp = 1.05
                     if fill_col is None:
+                        # 🎚 سطح quality (پیش‌فرض): تیر-۲ (پرِ تختِ متنِ متراکم با
+                        # حلقهٔ ۷۵٪) ریسک «لکهٔ سفید» دارد → به LaMa واگذار می‌شود.
+                        # رفتار قدیمی: MANGA_CLEAN_LEVEL=fast
+                        if self._clean_level() != "fast":
+                            continue
                         r2 = _sample(1.10)
                         if r2.shape[0] >= 16:
                             avg2 = r2.mean(axis=0)
@@ -5448,6 +5547,92 @@ class MangaTranslator:
             c[5] = sub_bgr[cy0 - ey0:cy1 - ey0, cx0 - ex0:cx1 - ex0]
             c[6] = "LaMa"
 
+    def _clean_level(self) -> str:
+        # 🎚 سطح پاکسازی — خواستهٔ کاربر: «چرا همه‌چیز رو با flat پاکسازی کردی؟
+        # بعضی چیزهاش باید flat باشه، پاکسازی رو برگردون به LaMa، باید بیشتر
+        # با LaMa بپاکه».
+        #   quality (پیش‌فرض) = اولویت LaMa: فلت‌فیل فقط برای خوشهٔ کوچک با
+        #     حلقهٔ واقعاً یکدست + تیر-۱ پرِ فوری (۹۹٪ یکدست = نامرئی)؛
+        #     پرِ تختِ متنِ متراکم (تیر-۲)، پرِ کاغذیِ صفحهٔ عادی و مسیر
+        #     گرادیانی حذف → LaMa.
+        #   fast (MANGA_CLEAN_LEVEL=fast) = رفتار قدیمی پرِ فوری همه‌جا.
+        try:
+            lv = (os.environ.get("MANGA_CLEAN_LEVEL", "quality")
+                  or "quality").strip().lower()
+        except Exception:
+            lv = "quality"
+        return lv if lv in ("quality", "fast") else "quality"
+
+    def _lama_rescue_boxes(self, cleaned: np.ndarray,
+                           boxes: List[Tuple[int, int, int, int, np.ndarray]],
+                           page_kernel) -> int:
+        # 🩹 تضمین نهایی «هر کاری می‌کنی حباب متنِ پاک‌نشده نداشته باشه»:
+        # باقی‌مانده‌هایی که جاروی TELEA نتوانست پاک کند → پچ LaMa محلی.
+        # هر باکس = یک عضو؛ باکس‌های نزدیک در یک پچ ادغام می‌شوند (الگوی K3).
+        if not boxes:
+            return 0
+        try:
+            lama = self._get_lama()
+        except Exception:
+            lama = None
+        if lama is None:
+            return 0
+        h, w = cleaned.shape[:2]
+        members = []
+        for (x0, y0, x1, y1, mc) in boxes:
+            x1, y1 = min(int(x1), w), min(int(y1), h)
+            x0, y0 = max(0, int(x0)), max(0, int(y0))
+            if x1 - x0 < 8 or y1 - y0 < 8:
+                continue
+            msk = np.zeros((y1 - y0, x1 - x0), dtype=np.uint8)
+            mh, mw = min(mc.shape[0], y1 - y0), min(mc.shape[1], x1 - x0)
+            msk[:mh, :mw] = mc[:mh, :mw]
+            members.append([x0, y0, x1, y1, msk, None, ""])
+        if not members:
+            return 0
+        if len(members) > 1:
+            try:
+                groups = self._group_nearby_patches(members, gap=24)
+            except Exception:
+                groups = [[m] for m in members]
+        else:
+            groups = [members]
+        for grp in groups:
+            try:
+                self._lama_run_group(cleaned, grp, lama, page_kernel)
+            except Exception:
+                pass
+        n_ok = 0
+        for c in members:
+            if c[6] != "LaMa" or c[5] is None:
+                continue  # QC LaMa رد کرد → TELEA جایگزین می‌شود
+            cx0, cy0, cx1, cy1, dm = c[0], c[1], c[2], c[3], c[4]
+            mm = dm > 0
+            cleaned[cy0:cy1, cx0:cx1][mm] = c[5][mm]
+            n_ok += 1
+        return n_ok
+
+    @staticmethod
+    def _telea_fix_boxes(cleaned: np.ndarray,
+                         boxes: List[Tuple[int, int, int, int, np.ndarray]]) -> int:
+        n = 0
+        for (x0, y0, x1, y1, mc) in boxes:
+            try:
+                cc = cleaned[y0:y1, x0:x1]
+                if cc.shape[:2] != mc.shape[:2]:
+                    mh = min(cc.shape[0], mc.shape[0])
+                    mw = min(cc.shape[1], mc.shape[1])
+                    sub = cc[:mh, :mw]
+                    sub2 = cv2.inpaint(sub, mc[:mh, :mw], 6, cv2.INPAINT_TELEA)
+                    cleaned[y0:y0 + mh, x0:x0 + mw] = sub2
+                else:
+                    cleaned[y0:y1, x0:x1] = cv2.inpaint(
+                        cc, mc, 6, cv2.INPAINT_TELEA)
+                n += 1
+            except Exception:
+                continue
+        return n
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
@@ -5486,6 +5671,17 @@ class MangaTranslator:
 
         crops = []
         _raise_if_stop()  # ⏹ لغو فوری — شروع پاکسازی
+        # 🎚 سطح کیفیت (پیش‌فرض): LaMa-first — فلت‌فیل فقط برای خوشهٔ کوچک با
+        # حلقهٔ واقعاً یکدست؛ خوشهٔ بزرگ/متراکم مستقیم LaMa می‌رود (خواستهٔ
+        # کاربر: «باید بیشتر با lama بپاکه»). اگر LaMa غیرفعال باشد مسیرهای
+        # سریع مثل قبل می‌مانند (وگرنه فقط OpenCV باقی می‌ماند).
+        _q_lama = (bool(getattr(self, "use_lama", False))
+                   and self._clean_level() != "fast")
+        if _q_lama:
+            print("  [*] سطح پاکسازی: quality — اولویت LaMa (فلت فقط خوشهٔ کوچکِ یکدست)")
+        _pg_h, _pg_w = image.shape[:2]
+        _pg_area = float(max(1, _pg_h * _pg_w))
+        _webtoon = (min(_pg_h, _pg_w) * 2.5 < max(_pg_h, _pg_w))
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             cx0, cy0 = max(0, bx0 - 29), max(0, by0 - 29)
             cx1, cy1 = min(image.shape[1], bx1 + 29), min(image.shape[0], by1 + 29)
@@ -5494,22 +5690,35 @@ class MangaTranslator:
             ex1, ey1 = min(bx1, image.shape[1]), min(by1, image.shape[0])
             crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
             # 🇰3 اول چک یکنواختی فوری (TurboClean)؛ اگر نشد مسیر گرادیانی
-            result = self._flat_fill_uniform(crop_img, crop_msk)
+            # 🎚 quality: فلت‌فیلِ یکدست فقط برای خوشهٔ کوچک (≤۰٫۳۵٪ صفحه و
+            # ابعاد محدود) — پرِ تک‌رنگِ نامرئی؛ خوشهٔ بزرگ‌تر همیشه LaMa
+            _ok_flat = True
+            if _q_lama:
+                _cb_area = float(max(1, (bx1 - bx0) * (by1 - by0)))
+                _ok_flat = (_cb_area <= 0.0035 * _pg_area
+                            and (bx1 - bx0) <= 0.30 * _pg_w
+                            and (by1 - by0) <= 0.22 * _pg_h)
+            result = (self._flat_fill_uniform(crop_img, crop_msk)
+                      if _ok_flat else None)
             method = "flat"
             _pf_ok = False
             if result is None:
                 # 🎨 حباب رنگیِ صاف (زرد و...) → TELEA به‌جای LaMa
+                # (LaMa روی مانگای سیاه‌وسفید آموزش دیده — این مسیر بماند)
                 _cr = self._color_fill_cluster(crop_img, crop_msk)
                 if _cr is not None:
                     crop_msk, result = _cr
                     method = "رنگی"
             if result is None:
-                # 🇰3 پرکردن کاغذی: متن متراکم وب‌تون — حلقه «متن خط بعد» است
-                _pf = self._paper_fill_cluster(crop_img, crop_msk)
-                if _pf is not None:
-                    result = _pf
-                    _pf_ok = True
-            if result is None:
+                # 🇰3 پرکردن کاغذی: فقط نوار بلند وب‌تون (یا حالت fast) —
+                # صفحهٔ عادیِ مانگا در سطح quality → LaMa
+                if not _q_lama or _webtoon:
+                    _pf = self._paper_fill_cluster(crop_img, crop_msk)
+                    if _pf is not None:
+                        result = _pf
+                        _pf_ok = True
+            if result is None and not _q_lama:
+                # مسیر گرادیانی فقط در حالت fast — در quality کارِ LaMa است
                 result = self._flat_fill_cluster(crop_img, crop_msk)
             # 🩹 چک بافتِ حلقه‌ای فقط برای فلت‌فیل/گرادیان — پرکردن کاغذی خودش
             # فیلتر بافت داخلی دارد (میانهٔ گرادیانِ فقط پیکسل‌های روشن) و حلقهٔ
@@ -5734,18 +5943,39 @@ class MangaTranslator:
             counts[method] += 1
 
         # 🩹 جاروی باقی‌مانده — تضمین «باید کامل پاک شه، متنی جا نمونه»
-        # تکرار تا همگرایی (حداکثر ۳ دور): TELEA در هر دور بخشی را برطرف
-        # می‌کند و دورِ بعد نوک‌های به‌جامانده را می‌گیرد.
+        # دورِ اول TELEA (ارزان و محلی)؛ اگر بعد از دور اول هنوز چیزی ماند
+        # (تلئا نتوانسته) → پچ LaMa روی همان باکس‌ها (خواستهٔ کاربر:
+        # «یک کاری کن حباب متنِ پاک‌نشده نداشته باشه، هر کاری می‌کنی»)؛
+        # اگر LaMa هم رد کرد → TELEA جایگزین. تا همگرایی (حداکثر ۳ دور).
+        _lama_fix = 0
+        _kern_r = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         try:
             _n_res = 0
             for _pass in range(3):
-                _n = self._residue_sweep(image, cleaned, regions, mask)
+                _want_lama = (_pass >= 1
+                              and bool(getattr(self, "use_lama", False))
+                              and self._clean_level() != "fast")
+                _rboxes: List[Tuple[int, int, int, int, np.ndarray]] = []
+                _n = self._residue_sweep(
+                    image, cleaned, regions, mask,
+                    collect=(_rboxes if _want_lama else None))
+                if _want_lama and _rboxes:
+                    _n_l = self._lama_rescue_boxes(cleaned, _rboxes, _kern_r)
+                    _lama_fix += _n_l
+                    if _n_l < len(_rboxes):
+                        _n = _n_l + self._telea_fix_boxes(
+                            cleaned, _rboxes[_n_l:])
+                    else:
+                        _n = _n_l
                 _n_res += _n
                 if not _n:
                     break
             if _n_res:
+                _how = (f"{_lama_fix} با پچ LaMa + "
+                        f"{_n_res - _lama_fix} TELEA" if _lama_fix
+                        else "TELEA جبرانی")
                 print(f"  [🩹] جاروی باقی‌مانده: {_n_res} اصلاح در "
-                      f"{_pass + 1} دور → TELEA جبرانی")
+                      f"{_pass + 1} دور ({_how})")
         except Exception:
             import traceback as _tb
             print("  [!] جاروی باقی‌مانده خطا داد:")
@@ -5756,7 +5986,9 @@ class MangaTranslator:
 
     def _residue_sweep(self, image: np.ndarray, cleaned: np.ndarray,
                        regions: List[TextRegion],
-                       mask: Optional[np.ndarray] = None) -> int:
+                       mask: Optional[np.ndarray] = None,
+                       collect: Optional[List[Tuple[int, int, int, int,
+                                               np.ndarray]]] = None) -> int:
         # بعد از همهٔ مسیرهای پاکسازی، داخل rect هر ناحیه چک می‌شود:
         # پیکسلی که در «اصل» جوهرِ متن بود، داخل «ماسکِ پاکسازی» است و در
         # «خروجی» تقریباً دست‌نخورده ماند (Δ≤14) یعنی پاک نشده → ماسک و
@@ -5905,6 +6137,12 @@ class MangaTranslator:
             mc = (resid.astype(np.uint8)) * 255
             mc = cv2.dilate(mc, cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, (11, 11)))
+            if collect is not None:
+                # 🩹 حالت جمع‌آوری: به‌جای TELEA، باکس تحویل داده می‌شود تا
+                # پچ LaMa (تضمین کاربر) پاکش کند — TELEA فقط جایگزین.
+                collect.append((int(x0), int(y0), int(x1), int(y1), mc.copy()))
+                n_fix += 1
+                continue
             try:
                 patch = cv2.inpaint(cc, mc, 6, cv2.INPAINT_TELEA)
                 cleaned[y0:y1, x0:x1] = patch
