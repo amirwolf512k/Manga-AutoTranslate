@@ -743,12 +743,37 @@ def _run(job):
                     if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
                         (dbg if "debug" in f.lower() else imgs).append(lp)
         dl = job["out_file_path"] if os.path.isfile(job["out_file_path"]) else None
+        # 🔍 v1.14.13: دیباگ = «یک خروجی یکپارچه» مثل خروجی اصلی — نه تصاویر
+        # جدا جدا. اگر موتور خودش *_debug.pdf ساخته (خروجی PDF/HTML/ZIP) همون
+        # استفاده می‌شود؛ وگرنه از تصاویر دیباگ یک PDF واحد ساخته می‌شود.
+        dbg_out = None
+        try:
+            _root, _ext = os.path.splitext(job["out_file_path"])
+            _cand = _root + "_debug" + _ext
+            if os.path.isfile(_cand):
+                dbg_out = _cand
+            elif dbg:
+                _cand2 = _root + "_debug.pdf"
+                try:
+                    _tr = tr  # noqa: F821 — موتور اگر ساخته شده باشد در اسکوپ است
+                    _tr._save_as_pdf(dbg, _cand2)
+                except Exception:
+                    pass
+                if os.path.isfile(_cand2):
+                    dbg_out = _cand2
+        except Exception:
+            dbg_out = None
         with STATE["lock"]:
             job["images"] = imgs
             job["debug_images"] = dbg
             job["out_file"] = dl
+            job["debug_out_file"] = dbg_out
             job["done"] = True
         _log(job, "✅ تمام شد — %d صفحه، خروجی: %s" % (len(imgs), dl or "-"))
+        if dbg_out:
+            _log(job, "🔍 خروجی دیباگ (یکپارچه): %s" % os.path.basename(dbg_out))
+        elif bool(p.get("debug")) and dbg:
+            _log(job, "🔍 %d تصویر دیباگ ساخته شد — فایل یکپارچه‌ای ساخته نشد." % len(dbg))
         if bool(p.get("debug")) and not dbg:
             _log(job, "🔍 دیباگ روشن بود ولی تصویر دیباگی ساخته نشد — "
                       "تصویر دیباگ فقط برای صفحه‌هایی که متن/حباب دارند تولید می‌شود.")
@@ -786,6 +811,7 @@ def poll():
             "images": job.get("images", []),
             "debug_images": job.get("debug_images", []),
             "out_file": job.get("out_file"),
+            "debug_out_file": job.get("debug_out_file"),
             "debug_on": bool((job.get("params") or {}).get("debug")),
         }, ensure_ascii=False)
 

@@ -1306,6 +1306,10 @@ class MainActivity : AppCompatActivity() {
         st.optJSONArray("debug_images")?.let { a -> for (i in 0 until a.length()) debug.add(a.optString(i)) }
         val outFile = st.optString("out_file", "")
         val hasOutFile = outFile.isNotBlank() && File(outFile).isFile()
+        // 🔍 v1.14.13: دیباگ یک خروجیِ «یکپارچه» دارد (مثل خروجی اصلی) —
+        // یک فایل (PDF و...) به‌جای تصاویر جدا جدا
+        val dbgFile = st.optString("debug_out_file", "")
+        val hasDbgFile = dbgFile.isNotBlank() && File(dbgFile).isFile()
 
         if (images.isNotEmpty()) {
             resultsBox.addView(resBtn("📖  نمایش (${images.size} صفحه)", true) {
@@ -1317,9 +1321,15 @@ class MainActivity : AppCompatActivity() {
         }
         if (debug.isNotEmpty()) {
             resultsBox.addView(resBtn("🔍  نمایش دیباگ (${debug.size})", false) { viewer(debug) })
-            resultsBox.addView(resBtn("⬇  دانلود دیباگ (${debug.size})", false) {
-                saveManyToDownloads(debug, "debug")
-            })
+            if (hasDbgFile) {
+                resultsBox.addView(resBtn("⬇  دانلود دیباگ (یک فایل)", false) {
+                    saveToDownloads(dbgFile)
+                })
+            } else {
+                resultsBox.addView(resBtn("⬇  دانلود دیباگ (${debug.size})", false) {
+                    saveManyToDownloads(debug, "debug")
+                })
+            }
         }
         if (images.isEmpty() && debug.isEmpty() && !hasOutFile) {
             val tv = TextView(this).apply {

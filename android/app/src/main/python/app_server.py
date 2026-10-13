@@ -132,7 +132,8 @@ function poll(sid){
       if(j.images) for(const u of j.images) h+='<img src="'+u+'" style="width:100%%;margin:6px 0;border-radius:10px">';
       if(j.debug_images) h+='<div style="color:#97948c;margin-top:8px">🔍 دیباگ:</div>';
       if(j.debug_images) for(const u of j.debug_images) h+='<img src="'+u+'" style="width:100%%;margin:6px 0;border-radius:10px;outline:1px solid #1f1f24">';
-      if(j.download) h+='<a href="'+j.download+'" download style="color:#ff4a3d">⬇ دانلود خروجی</a>';
+      if(j.download) h+='<a href="'+j.download+'" download style="color:#ff4a3d;margin:8px;display:inline-block">⬇ دانلود خروجی</a>';
+      if(j.debug_out_file) h+='<a href="'+j.debug_out_file+'" download style="color:#ffb03d;margin:8px;display:inline-block">⬇ دانلود دیباگ (PDF یکپارچه)</a>';
       out.innerHTML=h;
     } else setTimeout(()=>poll(sid), 1500);
   }).catch(()=>setTimeout(()=>poll(sid),2000));
@@ -212,18 +213,22 @@ def _run_job(sid, cfg):
             tr.process()
         txt = buf.getvalue()
         log(txt[-8000:] if txt else "(بدون خروجی)")
-        imgs, dbg_imgs, dl = [], [], None
+        imgs, dbg_imgs, dl, dbg_dl = [], [], None, None
         for root, _dirs, files in os.walk(cfg["out"]):
             for f in sorted(files):
                 p = os.path.join(root, f)
                 if f.startswith("page") and f.lower().endswith((".jpg", ".png", ".webp")):
                     (dbg_imgs if "debug" in f.lower() else imgs).append("/file?sid=%s&p=%s" % (sid, p))
                 elif f.lower().endswith((".pdf", ".zip", ".html")):
-                    dl = "/file?sid=%s&p=%s" % (sid, p)
+                    if "_debug" in f.lower():
+                        dbg_dl = "/file?sid=%s&p=%s" % (sid, p)
+                    else:
+                        dl = "/file?sid=%s&p=%s" % (sid, p)
         with LOCK:
             job["images"] = imgs
             job["debug_images"] = dbg_imgs
             job["download"] = dl
+            job["download_debug"] = dbg_dl
             job["done"] = True
         log("✅ تمام شد")
     except Exception:
@@ -260,6 +265,7 @@ class Handler(BaseHTTPRequestHandler):
                     "images": job.get("images", []),
                     "debug_images": job.get("debug_images", []),
                     "download": job.get("download"),
+                    "debug_out_file": job.get("download_debug"),
                 }, ensure_ascii=False).encode())
         elif self.path.startswith("/file?"):
             q = dict(p.split("=", 1) for p in self.path.split("?")[1].split("&") if "=" in p)

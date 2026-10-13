@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.12"
+APP_VER = "1.14.13"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -533,15 +533,38 @@ def _ort_providers(prefer_gpu: bool = True):
     return order or ["CPUExecutionProvider"]
 
 
-def _ort_session_options(threads: int = 4):
+def _sys_avail_ram_gb():
+    # 📱 بدون psutil — مستقیم از /proc/meminfo (اندروید/PC هر دو دارند)
+    try:
+        with open("/proc/meminfo", encoding="ascii") as f:
+            for ln in f:
+                if ln.startswith("MemAvailable"):
+                    return float(ln.split()[1]) / (1024.0 * 1024.0)
+    except Exception:
+        pass
+    return None
+
+
+def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     so = ort.SessionOptions()
     so.log_severity_level = 3
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     so.intra_op_num_threads = max(1, int(threads))
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-    so.enable_cpu_mem_arena = True
-    so.enable_mem_pattern = True
+    # 🛡 v1.14.13: arena حافظهٔ CPU در ORT هرگز به OS برنمی‌گردد → روی رم کم
+    # (اندروید / دستگاه‌های <۳GB آزاد) RSS با هر پچ بالا می‌رود و OOM
+    # می‌کند. arena/pattern خاموش = حافظهٔ ثابت، ~۱۰٪ کندتر ولی امن.
+    if low_mem is None:
+        _av = _sys_avail_ram_gb()
+        low_mem = bool(_on_android() or (_av is not None and _av < 3.0))
+    so.enable_cpu_mem_arena = (not low_mem)
+    so.enable_mem_pattern = (not low_mem)
+    if low_mem:
+        try:
+            print("    [*] حالت کم‌مصرف ORT (بدون arena) — ضد OOM روی رم کم")
+        except Exception:
+            pass
     return so
 
 
@@ -2933,14 +2956,26 @@ class MangaTranslator:
                     self.use_lama = False
                     self._inpainter_name = "OpenCV"
                     return None
-            if _torch_available():
+            # 🎚 v1.14.13: MANGA_LAMA_BACKEND = auto | torch | onnx
+            # روی PC پیش‌فرض torch است؛ onnx = مدل داینامیک سبک‌تر (پچ در
+            # رزولوشن اصلی، حافظهٔ کمتر — مثل اندروید/K3). وقتی onnx خواسته
+            # شده، torch اصلاً import نمی‌شود (~۷۰۰MB رم آزاد می‌ماند).
+            _backend = (os.environ.get("MANGA_LAMA_BACKEND", "auto")
+                        or "auto").strip().lower()
+            if _backend == "onnx":
+                _want_torch = False
+            else:
+                _want_torch = _torch_available()
+                if _backend == "torch" and not _want_torch:
+                    print("    [!] MANGA_LAMA_BACKEND=torch ولی torch نصب نیست → ONNX")
+            if _want_torch:
                 try:
                     print("    [*] بارگذاری big-lama.pt (TorchScript) ...")
                     self._lama = LamaTorch(prefer_gpu=self.use_gpu)
                     self._inpainter_name = "big-LaMa"
                 except Exception as e:
                     print(f"    [!] big-LaMa ناموفق ({e}) → LaMa-Manga ONNX")
-            else:
+            elif self._lama is None:
                 print("    [*] torch در دسترس نیست → پاک‌سازی با LaMa ONNX")
             if self._lama is None and self.use_lama:
                 try:
@@ -5314,7 +5349,7 @@ class MangaTranslator:
                 and not getattr(self, "erase_bubble_interior", False)):
             _fm = self._build_text_mask_fast(image, regions)
             if _fm is not None:
-                print("  [*] ماسک سریع چندضلعی (الگوی K3) — بدون مراحل سنگین جوهر")
+                print("  [*] Fast polygon mask (K3 style) — no heavy ink stages")
                 return _fm
 
         h_img, w_img = image.shape[:2]
@@ -5847,14 +5882,51 @@ class MangaTranslator:
                 np.maximum(region, dm)
         if not sub_msk.any():
             return
-        out = lama(sub_img, sub_msk)
-        sub_bgr = out if isinstance(out, np.ndarray) else np.array(out)
-        if sub_bgr.ndim == 2:
-            sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_GRAY2BGR)
+        # 🛡 v1.14.13: سقف اندازهٔ پچ — پچ‌های خیلی بلند (صفحه‌های به‌هم‌دوختهٔ
+        # وب‌تون، مثلاً ۷۰۰×۳۸۰۰) حافظهٔ FFT/DFT داخل LaMa را منفجر می‌کنند
+        # (کرش/OOM روی رم کم). پچ به max_side کوچک می‌شود، LaMa اجرا و نتیجه
+        # به رزولوشن اصلی برمی‌گردد. روی زمینهٔ تختِ حباب تفاوت کیفی نامحسوس
+        # است و پاکسازی متن کاملاً یکسان می‌ماند. سقف: MANGA_LAMA_MAX_SIDE
+        # (پیش‌فرض ۲۰۴۸ PC / ۱۷۹۲ اندروید).
+        sub_bgr = None
+        try:
+            _max_side = int(os.environ.get("MANGA_LAMA_MAX_SIDE", "0") or 0)
+        except Exception:
+            _max_side = 0
+        if _max_side <= 0:
+            _max_side = 1792 if _on_android() else 2048
+        _pl, _ph = int(sub_img.shape[1]), int(sub_img.shape[0])
+        if max(_pl, _ph) > _max_side:
+            _sc = float(_max_side) / float(max(_pl, _ph))
+            _nw = max(64, (int(round(_pl * _sc)) // 8) * 8)
+            _nh = max(64, (int(round(_ph * _sc)) // 8) * 8)
+            try:
+                _si = cv2.resize(sub_img, (_nw, _nh),
+                                 interpolation=cv2.INTER_AREA)
+                _sm = cv2.resize(sub_msk, (_nw, _nh),
+                                 interpolation=cv2.INTER_NEAREST)
+                _out = lama(_si, _sm)
+                _ob = _out if isinstance(_out, np.ndarray) else np.array(_out)
+                if _ob.ndim == 2:
+                    _ob = cv2.cvtColor(_ob, cv2.COLOR_GRAY2BGR)
+                else:
+                    _ob = cv2.cvtColor(_ob, cv2.COLOR_RGB2BGR)
+                if _ob.shape[:2] == (_nh, _nw):
+                    sub_bgr = cv2.resize(_ob, (_pl, _ph),
+                                         interpolation=cv2.INTER_LANCZOS4)
+            except Exception:
+                sub_bgr = None
+            if sub_bgr is None:
+                return  # این خوشه بعداً مسیر OpenCV/TELEA را می‌گیرد
         else:
-            sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
-        if sub_bgr.shape[:2] != sub_img.shape[:2]:
-            return
+            out = lama(sub_img, sub_msk)
+            sub_bgr = out if isinstance(out, np.ndarray) else np.array(out)
+            if sub_bgr.ndim == 2:
+                sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_GRAY2BGR)
+            else:
+                sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
+            if sub_bgr.shape[:2] != sub_img.shape[:2]:
+                return
         # QC حلقه‌ای (ضد لکهٔ تیره) — یک بار برای کل پچ
         try:
             _qc = getattr(self, "_qc_kernel31", None)
@@ -5977,21 +6049,21 @@ class MangaTranslator:
 
         try:
             ratio = float((mask > 0).sum()) / float(mask.size)
-            print(f"  [*] ماسک متن: {ratio*100:.2f}% پیکسل")
+            print(f"  [*] Text mask: {ratio*100:.2f}% pixels")
         except Exception:
             pass
 
         cleaned = image.copy()
-        counts = {"flat": 0, "رنگی": 0, "LaMa": 0, "OpenCV": 0}
+        counts = {"flat": 0, "color": 0, "LaMa": 0, "OpenCV": 0}
         # 🇰3 مرحلهٔ صفر: پر کردن فوری خط‌های با حلقهٔ یکدست (سفید/رنگی تخت)
         try:
             _n_inst = self._k3_line_instant_fill(image, cleaned, regions, mask)
             if _n_inst:
-                print(f"  [⚡] {_n_inst} خط فوراً پر شد (حلقهٔ یکدست — الگوی K3) — بدون LaMa")
+                print(f"  [⚡] {_n_inst} lines instantly filled (uniform ring — K3 style) — no LaMa")
         except Exception:
             pass
         if not np.any(mask):
-            print("  [⚡] همه‌چیز با پر کردن فوری تمیز شد — پاکسازی تمام در چند میلی‌ثانیه")
+            print("  [⚡] Everything cleaned by instant fill — done in milliseconds")
             return cleaned
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         # 🇰3 بهینه: Canny/وال‌لاین کل‌صفحه فقط وقتی OpenCV واقعاً لازم شد
@@ -6015,9 +6087,11 @@ class MangaTranslator:
         _q_lama = (bool(getattr(self, "use_lama", False))
                    and self._clean_level() != "fast")
         if _q_lama:
-            print("  [*] سطح پاکسازی: quality — اولویت LaMa (فلت فقط خوشهٔ کوچکِ یکدست)")
+            print("  [*] Clean level: quality — LaMa first (flat only for small uniform clusters)")
         _pg_h, _pg_w = image.shape[:2]
         _pg_area = float(max(1, _pg_h * _pg_w))
+        # (v1.14.13) webtoon detection no longer routes to paper-fill;
+        # kept only for LaMa patch-gap heuristics below.
         _webtoon = (min(_pg_h, _pg_w) * 2.5 < max(_pg_h, _pg_w))
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             cx0, cy0 = max(0, bx0 - 29), max(0, by0 - 29)
@@ -6045,11 +6119,13 @@ class MangaTranslator:
                 _cr = self._color_fill_cluster(crop_img, crop_msk)
                 if _cr is not None:
                     crop_msk, result = _cr
-                    method = "رنگی"
+                    method = "color"
             if result is None:
-                # 🇰3 پرکردن کاغذی: فقط نوار بلند وب‌تون (یا حالت fast) —
-                # صفحهٔ عادیِ مانگا در سطح quality → LaMa
-                if not _q_lama or _webtoon:
+                # 🚫 v1.14.13: paper-fill ONLY in fast mode — quality level
+                # NEVER paints flat rectangles (user: "don't draw white
+                # rectangles, clean with LaMa"). Webtoon strips included:
+                # dense-text clusters go to LaMa, no flat paper patches.
+                if not _q_lama:
                     _pf = self._paper_fill_cluster(crop_img, crop_msk)
                     if _pf is not None:
                         result = _pf
@@ -6081,7 +6157,7 @@ class MangaTranslator:
                 _long = float(max(_img_h, _img_w))
                 _short = float(max(1.0, min(_img_h, _img_w)))
                 if _extreme:
-                    _mode = "پچ‌به‌پچ (الگوی K3)"
+                    _mode = "patch-wise (K3 style)"
                     groups = pending
                     if os.environ.get("MANGA_LAMA_GROUP", "1") != "0" and len(pending) > 1:
                         # 🔥 فاصلهٔ ادغام وابسته به اندازهٔ صفحه: صفحهٔ بزرگ →
@@ -6095,9 +6171,9 @@ class MangaTranslator:
                             _gap = int(max(24, min(96, round(_short * 0.04))))
                         groups = self._group_nearby_patches(pending, gap=_gap)
                     if _short * 2.5 < _long:
-                        _mode += " — صفحهٔ کشیده"
-                    print(f"  [*] LaMa {_mode}: {len(pending)} خوشه → "
-                          f"{len(groups)} پچ روی صفحهٔ {_img_w}x{_img_h}")
+                        _mode += " — long strip"
+                    print(f"  [*] LaMa {_mode}: {len(pending)} clusters → "
+                          f"{len(groups)} patches on {_img_w}x{_img_h}")
                     t0 = time.time()
                     # 🔥 فشار به گوشی (خواستهٔ کاربر): پچ‌ها «همزمان» اجرا می‌شوند
                     # (data-parallel). DFT/FFT با intra-op چندنخی سمی است → هر
@@ -6134,8 +6210,8 @@ class MangaTranslator:
                             _cores = self._cpu_core_count()
                         except Exception:
                             _cores = "?"
-                        print(f"  [🔥] {_workers} پچ همزمان × ۲ نخ (رم آزاد "
-                              f"{_av:.1f}GB، {_cores} هسته) → فشار کامل به CPU")
+                        print(f"  [🔥] {_workers} parallel patches × 2 threads "
+                              f"(free RAM {_av:.1f}GB, {_cores} cores) → full CPU")
                         _pex = ThreadPoolExecutor(max_workers=_workers)
                         _futs = []
                         try:
@@ -6148,7 +6224,7 @@ class MangaTranslator:
                                 try:
                                     _f.result(timeout=600)
                                 except FuturesTimeout:
-                                    print("    [!] پچ LaMa از ۶۰۰ ثانیه گذشت → رد شد")
+                                    print("    [!] LaMa patch exceeded 600s → skipped")
                                 except Exception:
                                     pass
                                 _raise_if_stop()
@@ -6168,8 +6244,8 @@ class MangaTranslator:
                     dt = time.time() - t0
                     _done = sum(1 for c in pending if c[6] == "LaMa")
                     if _done:
-                        print(f"  [*] LaMa خوشه‌ای: {dt:.1f}s "
-                              f"({_done}/{len(pending)} خوشه در {len(groups)} پچ)")
+                        print(f"  [*] LaMa clustered: {dt:.1f}s "
+                              f"({_done}/{len(pending)} clusters in {len(groups)} patches)")
                 else:
                     try:
                         page_mask = cv2.dilate(mask, page_kernel)
@@ -6192,8 +6268,8 @@ class MangaTranslator:
                             page_bgr = cv2.cvtColor(page_bgr, cv2.COLOR_RGB2BGR)
                         if page_bgr.shape[:2] != image.shape[:2]:
                             raise ValueError("LaMa returned an unexpected image shape")
-                        print(f"  [*] LaMa کل صفحه یک‌جا: {dt:.1f}s "
-                              f"({len(pending)} خوشه)")
+                        print(f"  [*] LaMa full-page: {dt:.1f}s "
+                              f"({len(pending)} clusters)")
                         for c in pending:
                             cx0, cy0, cx1, cy1, crop_msk = c[:5]
                             result = page_bgr[cy0:cy1, cx0:cx1]
@@ -6208,9 +6284,9 @@ class MangaTranslator:
                                         _bg_med = float(np.median(_bright))
                                         _fill_med = float(np.median(_g[_fm]))
                                         if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
-                                            print(f"  [!] خروجی LaMa لکهٔ تیره گذاشت "
-                                                  f"({_fill_med:.0f} در برابر کاغذ {_bg_med:.0f}) "
-                                                  f"→ پرکردنِ صاف/OpenCV برای این خوشه")
+                                            print(f"  [!] LaMa left a dark stain "
+                                                  f"({_fill_med:.0f} vs paper {_bg_med:.0f}) "
+                                                  f"→ flat/OpenCV fill for this cluster")
                                             result = None
                             except Exception:
                                 pass
@@ -6221,7 +6297,7 @@ class MangaTranslator:
                     except Exception as e:
                         print(f"  [!] LaMa failed ({e}); using OpenCV fallback.")
             else:
-                print("  [!] LaMa در دسترس نیست → OpenCV برای خوشه‌های باقی‌مانده")
+                print("  [!] LaMa unavailable → OpenCV for remaining clusters")
 
         for cx0, cy0, cx1, cy1, crop_msk, result, method in crops:
             if result is None:
@@ -6308,14 +6384,14 @@ class MangaTranslator:
                 if not _n:
                     break
             if _n_res:
-                _how = (f"{_lama_fix} با پچ LaMa + "
+                _how = (f"{_lama_fix} LaMa patch + "
                         f"{_n_res - _lama_fix} TELEA" if _lama_fix
-                        else "TELEA جبرانی")
-                print(f"  [🩹] جاروی باقی‌مانده: {_n_res} اصلاح در "
-                      f"{_pass + 1} دور ({_how})")
+                        else "TELEA rescue")
+                print(f"  [🩹] Residue sweep: {_n_res} fixes in "
+                      f"{_pass + 1} passes ({_how})")
         except Exception:
             import traceback as _tb
-            print("  [!] جاروی باقی‌مانده خطا داد:")
+            print("  [!] Residue sweep error:")
             _tb.print_exc()
 
         print(f"  - Cleanup: {counts}")
@@ -6431,7 +6507,25 @@ class MangaTranslator:
                         image[_by30:_by31, _bx30:_bx31], _dseed,
                         rect_box=(x0 - _bx30, y0 - _by30,
                                   x1 - x0, y1 - y0))
+                    # 📄 v1.14.13: fallback «کاغذ یکدستِ روشن» — متنِ سند/تیترِ
+                    # صفحه حبابِ بسته ندارد (دامنهٔ فلود = تقریباً کل کراپ →
+                    # «نشت» پنداشته می‌شد و gate رد می‌کرد → متنِ جاماندهٔ
+                    # «SED ORDINANCE» می‌ماند). اگر کراپ ≥۷۰٪ کاغذِ روشنِ
+                    # بی‌اشباع است، جاروی گلیف در «باندِ خطِ متن» امن است —
+                    # صورت/هنر روی کاغذِ یکدست این شرط را ندارد.
+                    _paper_mode = False
                     if _ddom is None:
+                        try:
+                            _hc = cv2.cvtColor(
+                                image[_by30:_by31, _bx30:_bx31],
+                                cv2.COLOR_BGR2HSV)
+                            _frac = float(((_hc[..., 2] >= 170.0)
+                                           & (_hc[..., 1] <= 60.0)).mean())
+                            if _frac >= 0.70:
+                                _paper_mode = True
+                        except Exception:
+                            _paper_mode = False
+                    if _ddom is None and not _paper_mode:
                         continue
                 except Exception:
                     continue
@@ -6448,9 +6542,11 @@ class MangaTranslator:
                             p[:, 0].max() - p[:, 0].min(),
                             p[:, 1].max() - p[:, 1].min()))) for p in _spl]
                         _gz = max(20.0, 2.0 * float(np.median(_sdims)))
-                        _ax0 = max(float(x0), _sx0 - _gz)
+                        # 📄 حالت کاغذ: ادامهٔ خطِ نیمه‌خوانده می‌تواند تا دورِ
+                        # دیگرِ ناحیه برود (تیترِ سند) → پهنای باند = کل rect
+                        _ax0 = float(x0) if _paper_mode else max(float(x0), _sx0 - _gz)
                         _ay0 = max(float(y0), _sy0 - _gz)
-                        _ax1 = min(float(x1), _sx1 + _gz)
+                        _ax1 = float(x1) if _paper_mode else min(float(x1), _sx1 + _gz)
                         _ay1 = min(float(y1), _sy1 + _gz)
                         if _ax1 - _ax0 >= 20 and _ay1 - _ay0 >= 20:
                             _lx0, _ly0 = int(_ax0 - x0), int(_ay0 - y0)
@@ -7612,7 +7708,7 @@ class MangaTranslator:
             return
 
         if getattr(self, "clean_only", False):
-            print("    [*] حالت پاکسازی بدون ترجمه — درخواست API انجام نشد.")
+            print("    [*] Clean-only mode — no API request.")
             return
 
         # 🩹 v1.14.10: حباب‌های «OCR خوانده نشد» (ocr_empty) فقط پاک می‌شوند —
@@ -9647,8 +9743,8 @@ class MangaTranslator:
                         det_class=b.get("class_name", "") or "",
                     ))
                     regions[-1].ocr_empty = True
-                    print(f"    [!] ناحیه [{i}] متنِ OCR نداشت ولی جوهرِ "
-                          f"متن‌مانند دارد → فقط پاکسازی می‌شود")
+                    print(f"    [!] Region [{i}] had no OCR text but has "
+                          f"text-like ink → cleaning only")
                 continue
 
             
@@ -9921,24 +10017,24 @@ class MangaTranslator:
         raw_image_copy = image.copy()
 
         if getattr(self, "clean_only", False):
-            print("[فاز ۳ - پاکسازی بدون ترجمه] API زده نمی‌شود.")
+            print("[Phase 3 - clean without translate] No API calls.")
             clean_targets = [r for r in regions if r.kind in ("dialogue", "promo", "sfx", "junk")]
             for r in dialogue_regions:
                 src_t = (r.source_text or "").replace("\n", " ").strip()
-                print(f"  [بالن {r.id}] OCR: {src_t}")
+                print(f"  [Bubble {r.id}] OCR: {src_t}")
             if promo_regions:
-                print(f"  [*] {len(promo_regions)} تبلیغ هم پاک می‌شود")
+                print(f"  [*] {len(promo_regions)} promo bubbles are also cleaned")
             if sfx_regions:
-                print(f"  [*] {len(sfx_regions)} SFX هم پاک می‌شود")
+                print(f"  [*] {len(sfx_regions)} SFX are also cleaned")
             if self.debug and regions:
                 page_debug = self._draw_debug_regions(image, regions)
-            print("[فاز ۴ - فقط پاکسازی متن] ...")
+            print("[Phase 4 - clean text only] ...")
             if clean_targets:
                 final_image = self.clean_image(image, clean_targets)
-                print(f"  - پاکسازی {len(clean_targets)} ناحیه تمام شد (بدون رندر ترجمه).")
+                print(f"  - Cleaned {len(clean_targets)} regions (no translation render).")
             else:
                 final_image = image.copy()
-                print("  - ناحیه‌ای برای پاکسازی نبود.")
+                print("  - Nothing to clean.")
             return final_image, page_debug
 
         if skip_translate:
@@ -9967,8 +10063,8 @@ class MangaTranslator:
                 print(f"    OCR : {src_t}")
                 print(f"    AI  : {fa}")
             else:
-                _et = " (OCR خوانده نشد → فقط پاکسازی)" if getattr(r, "ocr_empty", False) else ""
-                print(f"  [بالن {r.id}] بدون ترجمه از AI{_et}")
+                _et = " (OCR empty → cleaning only)" if getattr(r, "ocr_empty", False) else ""
+                print(f"  [Bubble {r.id}] no AI translation{_et}")
                 print(f"    OCR : {src_t}")
         missing_n = sum(1 for r in dialogue_regions
                         if not r.translated_text
@@ -9986,12 +10082,12 @@ class MangaTranslator:
         if self.debug and regions:
             page_debug = self._draw_debug_regions(image, regions)
 
-        print("[فاز ۴ - پاکسازی متن + رندر] ...")
+        print("[Phase 4 - clean text + render] ...")
         if _clean_regions:
             cleaned_image = precleaned if precleaned is not None else self.clean_image(
                 image, _clean_regions)
             final_image = self.render_translations(cleaned_image, translated_regions, raw_image_copy)
-            print("  - پاکسازی متن + رندر فارسی تمام شد.")
+            print("  - Text cleaning + Persian render finished.")
         else:
             final_image = precleaned.copy() if precleaned is not None else image.copy()
             print("  - ترجمه‌ای نبود؛ تصویر بدون تغییر.")
@@ -11900,7 +11996,7 @@ html, body { background: #0a0a0b; }
                 _translate_chunk_bg(chunk)
 
         if getattr(self, "clean_only", False):
-            print("[*] حالت پاکسازی بدون ترجمه — API فراخوانی نمی‌شود.")
+            print("[*] Clean-only mode — API is not called.")
             min_batch = 10**9
         else:
             print(
@@ -11964,9 +12060,9 @@ html, body { background: #0a0a0b; }
                         try:
                             _pc = self.clean_image(image, _dlg)
                             extracted_map[page_i] = (out_file, image, _pc, regions, dbg)
-                            print(f"    [*] پاکسازی زودهنگام صفحه #{page_i + 1} انجام شد (همزمان با ترجمهٔ پس‌زمینه).")
+                            print(f"    [*] Early cleaning of page #{page_i + 1} done (parallel with background translation).")
                         except Exception as e:
-                            print(f"    [!] پاکسازی زودهنگام صفحه #{page_i + 1} ناموفق: {e}")
+                            print(f"    [!] Early cleaning of page #{page_i + 1} failed: {e}")
 
                 if dialogue_buffer and len(dialogue_buffer) < min_batch:
                     print(
@@ -12163,31 +12259,10 @@ html, body { background: #0a0a0b; }
         )
         text_rgb, stroke_rgb = self._pick_text_and_stroke(image, original_image, region)
 
-        # 🩹 v1.14.12 — پس‌زمینهٔ متن فقط وقتی که زمینهٔ پاک‌شدهٔ زیر متن
-        # «نامناسب» است (خواستهٔ کاربر: کارت/حباب باید تمیز و به‌اندازهٔ متن
-        # دیده شود — اسمیرِ LaMa روی کارتِ «معلم» متن عریان زشتی می‌ساخت).
-        # زمینهٔ یکدستِ روشن (حباب سفید/زردِ تمیز) → بدون باکس، ظاهر طبیعی.
-        _draw_bg = None
-        try:
-            _Wp, _Hp = pil_img.size
-            _bx0, _by0 = max(0, int(x)), max(0, int(y))
-            _bx1, _by1 = min(_Wp, int(x + w)), min(_Hp, int(y + h))
-            if _bx1 - _bx0 >= 12 and _by1 - _by0 >= 12:
-                _crop = image[_by0:_by1, _bx0:_bx1]
-                _gg = cv2.cvtColor(_crop, cv2.COLOR_BGR2GRAY)
-                _gmed = float(np.median(_gg))
-                _gstd = float(np.std(_gg))
-                _tlum = (0.299 * float(text_rgb[0])
-                         + 0.587 * float(text_rgb[1])
-                         + 0.114 * float(text_rgb[2]))
-                if _tlum < 130.0 and (_gstd > 20.0 or _gmed < 150.0):
-                    _bgr_med = np.median(
-                        _crop.reshape(-1, 3), axis=0)
-                    _draw_bg = tuple(int(min(255.0, max(0.0,
-                        255.0 - (255.0 - float(_c)) * 0.22)))
-                        for _c in (_bgr_med[2], _bgr_med[1], _bgr_med[0]))
-        except Exception:
-            _draw_bg = None
+        # 🚫 v1.14.13 — باکسِ سفیدِ پشتِ متن «حذف شد» (خواستهٔ صریح کاربر:
+        # «فقط مستطیل سفید نکش»). زمینه زیر متن با LaMa پاک می‌شود؛ رنگِ
+        # متن/استروک هم تطبیقی است (تیره روی روشن، روشن روی تیره) — خوانایی
+        # بدون هیچ مستطیلی تأمین می‌شود.
 
         try:
             angle = float(getattr(region, "angle", 0.0) or 0.0)
@@ -12265,24 +12340,6 @@ html, body { background: #0a0a0b; }
 
             bottom_limit = y + pad + box_h
 
-            # 🩹 v1.14.12: باکسِ روشنِ پشت متن (فقط زمینهٔ نامناسب) —
-            # به‌اندازهٔ بلوکِ متن، نه بزرگ‌تر
-            if _draw_bg is not None:
-                try:
-                    draw.rounded_rectangle(
-                        [x + pad - 3, y + pad - 3,
-                         x + pad + box_w + 3, y + pad + box_h + 3],
-                        radius=max(6, int(min(box_w, box_h) * 0.12)),
-                        fill=_draw_bg)
-                except Exception:
-                    try:
-                        draw.rectangle(
-                            [x + pad - 3, y + pad - 3,
-                             x + pad + box_w + 3, y + pad + box_h + 3],
-                            fill=_draw_bg)
-                    except Exception:
-                        pass
-
             for i, line in enumerate(lines):
                 shaped = self._shape_farsi(line)
                 line_w = draw.textbbox((0, 0), shaped, font=font, stroke_width=sw)[2]
@@ -12324,19 +12381,6 @@ html, body { background: #0a0a0b; }
 
             tmp = Image.new("RGBA", (tmp_w, tmp_h), (0, 0, 0, 0))
             tmp_draw = ImageDraw.Draw(tmp)
-
-            # 🩹 v1.14.12: پس‌زمینهٔ روشنِ کجِ هم‌راستا با متن — کارتِ «معلم»
-            # (باید مثل کارتِ اصلی دیده شود، نه متنِ عریان روی اسمیر)
-            if _draw_bg is not None:
-                try:
-                    tmp_draw.rounded_rectangle(
-                        [4, 4, tmp_w - 5, tmp_h - 5],
-                        radius=max(6, int(min(tmp_w, tmp_h) * 0.12)),
-                        fill=_draw_bg + (255,))
-                except Exception:
-                    tmp_draw.rectangle(
-                        [4, 4, tmp_w - 5, tmp_h - 5],
-                        fill=_draw_bg + (255,))
 
             for i, line in enumerate(lines):
                 shaped = self._shape_farsi(line)
