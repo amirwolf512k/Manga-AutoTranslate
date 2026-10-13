@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.6"
+APP_VER = "1.14.7"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -2427,9 +2427,9 @@ class MangaTranslator:
                 print("[📱] اندروید: پاک‌سازی سریع OpenCV (MANGA_ANDROID_LAMA=0) — "
                       "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
                 return False
-            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ (الگوی K3) — "
-                  "مدل داینامیک ~۲۰۶MB بار اول؛ پچ در اندازهٔ اصلی، ۲ نخ «واقعی» "
-                  "(ORT 1.31 + شیم سریع) = سریع.")
+            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ «موازی» (الگوی K3+) — "
+                  "مدل داینامیک ~۲۰۶MB بار اول؛ چند پچ همزمان × ۲ نخ «واقعی» "
+                  "(ORT 1.31 + شیم سریع) = فشار کامل به CPU گوشی = سریع.")
             return True
 
         if force_gpu is True:
@@ -5280,18 +5280,78 @@ class MangaTranslator:
                     _mode = "پچ‌به‌پچ (الگوی K3)"
                     groups = pending
                     if os.environ.get("MANGA_LAMA_GROUP", "1") != "0" and len(pending) > 1:
-                        groups = self._group_nearby_patches(pending, gap=24)
+                        # 🔥 فاصلهٔ ادغام وابسته به اندازهٔ صفحه: صفحهٔ بزرگ →
+                        # حباب‌های نزدیک در «یک پچ» (فراخوانی کمتر = سرعت بیشتر)
+                        _gap = 24
+                        if _on_android():
+                            _gap = int(max(24, min(96, round(_short * 0.04))))
+                        groups = self._group_nearby_patches(pending, gap=_gap)
                     if _short * 2.5 < _long:
                         _mode += " — صفحهٔ کشیده"
                     print(f"  [*] LaMa {_mode}: {len(pending)} خوشه → "
                           f"{len(groups)} پچ روی صفحهٔ {_img_w}x{_img_h}")
                     t0 = time.time()
-                    for grp in groups:
-                        _raise_if_stop()  # ⏹ لغو فوری بین پچ‌های LaMa
+                    # 🔥 فشار به گوشی (خواستهٔ کاربر): پچ‌ها «همزمان» اجرا می‌شوند
+                    # (data-parallel). DFT/FFT با intra-op چندنخی سمی است → هر
+                    # اجرا فقط ۲ نخ؛ ولی ۲-۳ پچ مستقل همزمان = استفادهٔ واقعی
+                    # از ۸ هسته بدون کندی DFT. سقف workers با رم آزاد تنظیم
+                    # می‌شود (هر پچ ~۴۰۰MB حافظهٔ ORT).
+                    _workers = 1
+                    _av = 0.0
+                    try:
+                        _av = float(self._available_ram_gb())
+                    except Exception:
+                        _av = 0.0
+                    try:
+                        _wa = int(os.environ.get("MANGA_LAMA_WORKERS", "0") or 0)
+                        if _wa > 0:
+                            _workers = max(1, min(_wa, 4))
+                        elif _on_android():
+                            if _av >= 1.6:
+                                _workers = 3
+                            elif _av >= 0.9:
+                                _workers = 2
+                        elif _av >= 2.0:
+                            _workers = 2
+                    except Exception:
+                        _workers = 1
+                    _workers = max(1, min(_workers, len(groups)))
+                    if _workers > 1:
                         try:
-                            self._lama_run_group(image, grp, lama, page_kernel)
+                            _cores = self._cpu_core_count()
                         except Exception:
-                            continue
+                            _cores = "?"
+                        print(f"  [🔥] {_workers} پچ همزمان × ۲ نخ (رم آزاد "
+                              f"{_av:.1f}GB، {_cores} هسته) → فشار کامل به CPU")
+                        _pex = ThreadPoolExecutor(max_workers=_workers)
+                        _futs = []
+                        try:
+                            for grp in groups:
+                                _raise_if_stop()
+                                _futs.append(_pex.submit(
+                                    self._lama_run_group, image, grp,
+                                    lama, page_kernel))
+                            for _f in _futs:
+                                try:
+                                    _f.result(timeout=600)
+                                except FuturesTimeout:
+                                    print("    [!] پچ LaMa از ۶۰۰ ثانیه گذشت → رد شد")
+                                except Exception:
+                                    pass
+                                _raise_if_stop()
+                        except BaseException:
+                            for _f in _futs:
+                                _f.cancel()
+                            _pex.shutdown(wait=False)
+                            raise
+                        _pex.shutdown(wait=True)
+                    else:
+                        for grp in groups:
+                            _raise_if_stop()  # ⏹ لغو فوری بین پچ‌های LaMa
+                            try:
+                                self._lama_run_group(image, grp, lama, page_kernel)
+                            except Exception:
+                                continue
                     dt = time.time() - t0
                     _done = sum(1 for c in pending if c[6] == "LaMa")
                     if _done:
