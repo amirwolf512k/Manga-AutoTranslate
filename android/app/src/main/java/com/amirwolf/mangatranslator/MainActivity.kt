@@ -165,6 +165,20 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // ادامهٔ نصبِ آپدیت بعد از گرفتن اجازهٔ «منابع ناشناس»
+        val pending = try { prefs.getString("pending_apk", null) } catch (_: Exception) { null }
+        if (!pending.isNullOrEmpty()) {
+            val f = java.io.File(pending)
+            if (f.exists() && (Build.VERSION.SDK_INT < 26 ||
+                        packageManager.canRequestPackageInstalls())) {
+                prefs.edit().remove("pending_apk").apply()
+                launchInstall(f)
+            }
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         installCrashLogger()
@@ -293,6 +307,9 @@ class MainActivity : AppCompatActivity() {
 
         runBtn.setOnClickListener { onStartJob() }
 
+        // 🔄 آپدیت خودکار — پس‌زمینه، بدون مزاحمت برای موتور
+        Thread { checkAppUpdate() }.start()
+
         Thread {
             try {
                 try {
@@ -348,6 +365,164 @@ class MainActivity : AppCompatActivity() {
         }, 120_000)
     }
 
+
+
+    // ─── 🔄 آپدیت خودکار APK (v1.14.15) ───
+    // مشکل قبلی: فقط میرور raw.githubusercontent استفاده می‌شد که در ایران
+    // بلاک است. الان: jsDelivr/raw/gh-proxy برای چکِ نسخه + دانلود APK با
+    // فال‌بک gh-proxy. اگر نسخهٔ جدید باشد → دکمهٔ «نصب» بالای لاگ.
+    private val UPD_MIRRORS = listOf(
+        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
+        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/"
+    )
+    private var updRow: LinearLayout? = null
+
+    private fun fetchUrl(url: String, timeoutMs: Int = 15000): ByteArray {
+        val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        c.connectTimeout = timeoutMs
+        c.readTimeout = timeoutMs
+        c.instanceFollowRedirects = true
+        c.setRequestProperty("User-Agent", "Mozilla/5.0")
+        try {
+            if (c.responseCode / 100 != 2) throw RuntimeException("HTTP " + c.responseCode)
+            return c.inputStream.use { it.readBytes() }
+        } finally {
+            c.disconnect()
+        }
+    }
+
+    private fun fetchMirror(path: String): ByteArray {
+        var last: Exception? = null
+        for (m in UPD_MIRRORS) {
+            try {
+                return fetchUrl(m + path)
+            } catch (e: Exception) {
+                last = e
+            }
+        }
+        throw last ?: RuntimeException("همهٔ منابع ناموفق")
+    }
+
+    private fun installedVersionCode(): Int = try {
+        @Suppress("DEPRECATION")
+        packageManager.getPackageInfo(packageName, 0).versionCode
+    } catch (_: Exception) {
+        0
+    }
+
+    private fun checkAppUpdate() {
+        try {
+            val vc = installedVersionCode()
+            val verTxt = String(fetchMirror("VERSION")).trim()
+            var remote = 0
+            var rname = ""
+            var apk64 = ""
+            var apkUni = ""
+            for (ln in verTxt.lines()) {
+                val pp = ln.split("=", limit = 2)
+                if (pp.size != 2) continue
+                when (pp[0].trim()) {
+                    "versionCode" -> remote = pp[1].trim().toIntOrNull() ?: 0
+                    "versionName" -> rname = pp[1].trim()
+                    "apkArm64" -> apk64 = pp[1].trim()
+                    "apkUniversal" -> apkUni = pp[1].trim()
+                }
+            }
+            if (remote <= vc || remote <= 0) return
+            val abis = Build.SUPPORTED_ABIS ?: arrayOf<String>()
+            val base = if (abis.any { it.contains("arm64") } && apk64.isNotEmpty())
+                apk64 else apkUni.ifEmpty { apk64 }
+            if (base.isEmpty()) return
+            val dir = (getExternalFilesDir(null) ?: filesDir)
+            val dst = java.io.File(dir, "update_" + remote + ".apk")
+            if (dst.exists() && dst.length() > 1_000_000L) {
+                ui.post { showUpdateRow(rname, dst) }
+                return
+            }
+            var ok = false
+            var lastDl: Exception? = null
+            for (u in listOf(base, "https://gh-proxy.com/" + base)) {
+                try {
+                    val b = fetchUrl(u, 120000)
+                    if (b.size < 1_000_000L) throw RuntimeException("APK ناقص: " + b.size)
+                    java.io.FileOutputStream(dst).use { it.write(b) }
+                    ok = true
+                    break
+                } catch (e: Exception) {
+                    lastDl = e
+                }
+            }
+            if (!ok || !dst.exists()) return
+            ui.post { showUpdateRow(rname, dst) }
+        } catch (_: Exception) {
+            // آپدیت اختیاری است — بی‌صدا رد شو
+        }
+    }
+
+    private fun showUpdateRow(verName: String, apk: java.io.File) {
+        if (updRow != null) return
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = rounded(Color.parseColor("#1d2b1d"), 14, 1,
+                Color.parseColor("#3f7f3f"))
+            setPadding(dp(14), dp(8), dp(14), dp(8))
+        }
+        row.addView(TextView(this).apply {
+            text = "🔄 آپدیت جدید v" + verName + " — آمادهٔ نصب"
+            setTextColor(TXT); textSize = 14f
+        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        row.addView(Button(this).apply {
+            text = "نصب"
+            setTextColor(Color.WHITE); textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            background = gradBtn()
+            setPadding(dp(18), dp(6), dp(18), dp(6))
+            setOnClickListener { installUpdate(apk) }
+        })
+        (runBtn.parent as? ViewGroup)?.addView(
+            row,
+            LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
+        updRow = row
+    }
+
+    private fun installUpdate(apk: java.io.File) {
+        try {
+            if (Build.VERSION.SDK_INT >= 26 &&
+                !packageManager.canRequestPackageInstalls()) {
+                prefs.edit().putString("pending_apk", apk.absolutePath).apply()
+                startActivity(
+                    Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + packageName)))
+                Toast.makeText(this, "اجازهٔ «نصب از منابع ناشناس» را بده و برگرد",
+                    Toast.LENGTH_LONG).show()
+                return
+            }
+            launchInstall(apk)
+        } catch (e: Exception) {
+            Toast.makeText(this, "نصب ممکن نشد: " + e.message, Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun launchInstall(apk: java.io.File) {
+        val uri = androidx.core.content.FileProvider.getUriForFile(
+            this, packageName + ".files", apk)
+        val i = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/vnd.android.package-archive")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                    Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        try {
+            startActivity(i)
+        } catch (e: Exception) {
+            Toast.makeText(this, "نصب‌کننده پیدا نشد: " + e.message,
+                Toast.LENGTH_LONG).show()
+        }
+    }
 
     private fun copyBundledSources() {
         try {

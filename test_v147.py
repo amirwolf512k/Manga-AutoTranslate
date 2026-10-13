@@ -119,12 +119,22 @@ with redirect_stdout(buf):
     cleaned = mt.clean_image(page.copy(), regions)
 dt = time.time() - t0
 log = buf.getvalue()
+# 🩹 v1.14.15: حباب‌های یکنواختِ مصنوعی حالا با فلت‌فیلِ فوریِ K3 (خط/خوشه)
+# حل می‌شوند — این خودش بردِ سرعت است و مسیر موازی فقط برای خوشه‌های
+# LaMa-نیاز فعال می‌شود. درستیِ موازی بالا (بخش ۲) روی همان _lama_run_group
+# اثبات شد؛ اینجا فقط پایان‌به‌پایی + حل‌شدن همهٔ خوشه‌ها چک می‌شود.
+fast = ("instantly" in log) or ("[🔥]" in log) or ("[⚡]" in log) \
+    or "'flat':" in log
 check("پاکسازی پایان‌به‌پا تمام شد", cleaned.shape == page.shape, f"{dt:.1f}s")
-check("مسیر موازی فعال شد ([🔥] در لاگ)", "[🔥]" in log,
-      [ln for ln in log.splitlines() if "[🔥]" in ln][:1])
-m = re.search(r"خوشه → (\d+) پچ", log) if (re := __import__("re")) else None
-check("تعداد پچ منطقی", m is not None and int(m.group(1)) <= 4,
-      m.group(1) + " پچ" if m else "?")
+check("مسیر سریع فعال (فلت‌فیل فوری یا موازی [🔥])", fast,
+      [ln for ln in log.splitlines()
+       if ("instantly" in ln or "[🔥]" in ln or "[⚡]" in ln
+           or "Cleanup" in ln)][:2])
+m = re.search(r"clusters → (\d+) patches", log) if (re := __import__("re")) else None
+# 🩹 v1.14.15: اگر همهٔ خوشه‌ها فلت‌فیل شدند، هیچ پچ LaMa وجود ندارد — درست
+check("تعداد پچ منطقی", (m is None and "'LaMa': 0" in log)
+      or (m is not None and int(m.group(1)) <= 4),
+      (m.group(1) + " پچ") if m else "بدون پچ LaMa (همه فلت)")
 
 print()
 print("نتیجه: " + ("همهٔ تست‌ها پاس ✅" if ok else "شکست ❌"))

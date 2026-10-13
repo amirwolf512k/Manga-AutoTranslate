@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.14"
+APP_VER = "1.14.15"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5093,6 +5093,19 @@ class MangaTranslator:
                                         image, _rm, region, True):
                                     n_skip += 1
                                     continue
+                                # 🩹 v1.14.15: جذبِ جوهرِ بیرونِ بلوک (خطِ
+                                # جاافتادهٔ OCR / کلمهٔ آخر / متن سفید روی
+                                # رنگی) — هم‌رنگِ متنِ داخلِ polyها؛ بعدش
+                                # دوباره گارد → دیوارهٔ حباب قطعاً سالم.
+                                try:
+                                    _inkB = MangaTranslator._ink_absorb_mask(
+                                        image, _rm, _polys_raw, band=14,
+                                        box=tuple([int(v) for v in region.rect]),
+                                        levels=3)
+                                    if _inkB is not None and np.any(_inkB):
+                                        _rm = cv2.bitwise_or(_rm, _inkB)
+                                except Exception:
+                                    pass
                                 m = cv2.bitwise_or(m, _rm)
                                 n_ok += 1
                                 continue
@@ -5105,8 +5118,39 @@ class MangaTranslator:
                 _rm = np.zeros_like(m)
                 cv2.fillPoly(_rm, pts_list, 255)
                 if not self._fast_bubble_guard(image, _rm, region, True):
+                    # 🩹 v1.14.15: حبابِ بسته پیدا نشد (متن آزاد روی ستون/هنر —
+                    # مثل «MINISTRY OF EDUCATION» سفید روی ستون نارنجی) →
+                    # قبلاً کلاً رد می‌شد و «کل متن» می‌ماند (گزارش گوشی).
+                    # الان: ماسکِ «فقط گلیف» در محدودهٔ rect دیتکتور — اجزای
+                    # متصلِ جوهر (تیره یا روشن) با رشدِ ۲ سطحی از poly
+                    # (۲×۲۶=۵۲px — پرش بین خطوط). هیچ باکسی پر نمی‌شود.
+                    try:
+                        _ink = MangaTranslator._ink_absorb_mask(
+                            image, _rm, _polys_raw, band=26,
+                            box=tuple([int(v) for v in region.rect]), levels=2)
+                        if _ink is not None and np.any(_ink):
+                            m = cv2.bitwise_or(m, _ink)
+                            n_ok += 1
+                            continue
+                    except Exception:
+                        pass
                     n_skip += 1
                     continue
+                # 🩹 v1.14.15: جذبِ جوهرِ جامانده — کلمهٔ آخرِ خوانده‌نشده
+                # (NTICE/WITH)، متنِ سفید روی رنگی، حروفِ بیرونِ پوششِ ۱.۲x.
+                # پنجره = rect ناحیه؛ بعد از جذب، دوباره از گاردِ حباب رد
+                # می‌شود → دیواره/خط دور حباب قطعاً سالم می‌ماند.
+                try:
+                    _ink2 = MangaTranslator._ink_absorb_mask(
+                        image, _rm, _polys_raw, band=14,
+                        box=tuple([int(v) for v in region.rect]), levels=3)
+                    if _ink2 is not None and np.any(_ink2):
+                        # (بدون re-guard — فیلترِ لبه‌چسبِ داخلِ جذب، قاب/
+                        # دیواره را خودش رد می‌کند؛ re-guard خطِ جاماندهٔ
+                        # بیرونِ «دامنه» را حذف می‌کرد — باگِ متنِ جامانده)
+                        _rm = cv2.bitwise_or(_rm, _ink2)
+                except Exception:
+                    pass
                 m = cv2.bitwise_or(m, _rm)
                 n_ok += 1
             else:
@@ -5134,6 +5178,148 @@ class MangaTranslator:
                 cv2.MORPH_ELLIPSE, (2 * padding + 1, 2 * padding + 1))
             m = cv2.dilate(m, k)
         return m
+
+    @staticmethod
+    def _ink_absorb_mask(image: np.ndarray, seed_mask: np.ndarray,
+                         polys_raw: list, band: int = 14,
+                         box: Optional[Tuple[int, int, int, int]] = None,
+                         levels: int = 3) -> Optional[np.ndarray]:
+        # 🩹 v1.14.15 — جذبِ جوهرِ متنِ جامانده دورِ چندضلعی‌های OCR:
+        # OCR گاهی بخشی از متن را نمی‌بیند (کلمهٔ آخر، «کلِ خطِ» بعدی، متنِ
+        # سفید روی زمینهٔ رنگی). دو مکانیزم مکمل:
+        #  ① زنجیرهٔ تماس: اجزای جوهر که به بذر (polyها) در باند band
+        #     می‌چسبند — تا levels سطح (گلیف‌های چسبیده).
+        #  ② هم‌رنگیِ متن: اجزای جوهرِ «هم‌رنگِ متنِ چندضلعی‌ها» (±۵۵ درجه
+        #     خاکستری) در پنجره — خطِ جاافتادهٔ هم‌رنگ جذب می‌شود حتی اگر
+        #     هیچ تماسی نباشد. چون فقط «یک تنِ» متن جذب می‌شود، هنرِ چندرنگ
+        #     (صورت/چشم/مو) و دیوارهٔ حباب جذب نمی‌شود و هیچ مستطیلی پر
+        #     نمی‌شود.
+        try:
+            h, w = image.shape[:2]
+            if not polys_raw:
+                return None
+            _all = np.concatenate(polys_raw, axis=0)
+            px0, py0 = float(_all[:, 0].min()), float(_all[:, 1].min())
+            px1, py1 = float(_all[:, 0].max()), float(_all[:, 1].max())
+            if box is not None:
+                try:
+                    bx0, by0, bw0, bh0 = [int(v) for v in box]
+                    px0, py0 = min(px0, bx0), min(py0, by0)
+                    px1, py1 = max(px1, bx0 + bw0), max(py1, by0 + bh0)
+                except Exception:
+                    pass
+            mg = 12
+            wx0, wy0 = max(0, int(px0) - mg), max(0, int(py0) - mg)
+            wx1, wy1 = min(w, int(px1) + mg), min(h, int(py1) + mg)
+            if wx1 - wx0 < 12 or wy1 - wy0 < 12:
+                return None
+            g = cv2.cvtColor(image[wy0:wy1, wx0:wx1], cv2.COLOR_BGR2GRAY)
+            med = float(np.median(g))
+            dark = g < med - 55.0
+            bright = None
+            if med < 200.0:
+                _thr_b = min(232.0, med + 55.0)
+                _br = g > _thr_b
+                if float(_br.mean()) <= 0.40:
+                    bright = _br
+            seed = seed_mask[wy0:wy1, wx0:wx1] > 0
+            if not np.any(seed):
+                return None
+            # 🩹 v1.14.15d — انتخابِ «پلاریتیِ متن» از روی بذر: رویِ تابلوی
+            # «متنِ تیره روی ستونِ سفید»، اگر هر دو پلاریتی با هم ink
+            # می‌شدند، «زمینهٔ سفیدِ ستون» هم جوهر پنداشته می‌شد → لکهٔ
+            # سفیدِ بزرگ (دقیقاً چیزی که کاربر ممنوع کرده). قانون: پلاریتی‌ای
+            # که تنِ پیکسل‌های seed آن از میانهٔ پنجره «دورتر» است = متنِ
+            # واقعی (گلیف با کنتراستِ بیشتر). متنِ سفید-روی-رنگی هم درست
+            # انتخاب می‌شود (سفید از میانهٔ نارنجی دورتر است).
+            _cands = []
+            _dv = g[seed & dark]
+            if _dv.size >= 30:
+                _cands.append((abs(float(np.median(_dv)) - med), dark,
+                               float(np.median(_dv))))
+            if bright is not None:
+                _bv = g[seed & bright]
+                if _bv.size >= 30:
+                    _cands.append((abs(float(np.median(_bv)) - med), bright,
+                                   float(np.median(_bv))))
+            if not _cands:
+                return None
+            _cands.sort(key=lambda t: -t[0])
+            ink, _tone = _cands[0][1], _cands[0][2]
+            if float(ink.mean()) > 0.55:
+                return None
+            n, lab, st, _ = cv2.connectedComponentsWithStats(
+                ink.astype(np.uint8), connectivity=8)
+            out = np.zeros_like(g, dtype=np.uint8)
+
+            kb = cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (2 * band + 1, 2 * band + 1))
+            _cur_seed = seed.copy()
+            _n_kept = 0
+            # 🩹 v1.14.15d: سقفِ مساحتِ seed-محور — متنِ بولد/سایه‌دارِ چسبیده
+            # (مثل تابلوی MINISTRY OF EDUCATION) یک کامپوننتِ بزرگ می‌سازد
+            # که از سقفِ ۰.۳۵×پنجره رد می‌شد (→ نیمه‌گلیف). سقف = حداکثرِ
+            # ۰.۳۵×پنجره یا ۲.۵×مساحتِ بذر، با کفِ سقفِ مطلقِ ۰.۸×پنجره.
+            _acap = min(max(0.35 * ink.size, 2.5 * float(seed.sum())),
+                        0.8 * ink.size)
+            for _lvl in range(max(1, levels)):
+                seed_band = cv2.dilate(
+                    _cur_seed.astype(np.uint8), kb) > 0
+                _lvl_new = np.zeros_like(out, dtype=bool)
+                _wh, _ww = g.shape[:2]
+                for i in range(1, n):
+                    a = int(st[i, cv2.CC_STAT_AREA])
+                    if a < 12 or a > _acap:
+                        continue
+                    cy, cx = int(st[i, cv2.CC_STAT_TOP]), int(st[i, cv2.CC_STAT_LEFT])
+                    ch, cw = int(st[i, cv2.CC_STAT_HEIGHT]), int(st[i, cv2.CC_STAT_WIDTH])
+                    # 🛡 جزءِ لبه‌چسب = قاب/دیواره/خطِ کشیده → جذب نشود
+                    if (cx <= 1 or cy <= 1 or cx + cw >= _ww - 1
+                            or cy + ch >= _wh - 1):
+                        continue
+                    comp = (lab[cy:cy + ch, cx:cx + cw] == i)
+                    _sl3 = (slice(cy, cy + ch), slice(cx, cx + cw))
+                    # 🛡 v1.14.15d: خطِ باریکِ کشیده (قابِ ستون/جدول/خطِ
+                    # سرعت) — باریک اما لبه‌چسبِ پنجره نیست → با نسبتِ
+                    # پرشدگی و کشیدگی فیلتر شود. گلیفِ متن چاق است (fill
+                    # ≥۰.۲۵) و کشیدگیِ ≤۴× دارد.
+                    _elong = max(ch, cw) / max(1.0, float(min(ch, cw)))
+                    _fill = a / float(max(1, ch * cw))
+                    if _elong > 4.0 and _fill < 0.25:
+                        continue
+                    # ① تماس با زنجیره — برای اجزای درشت (>۲۰۰px) تماسِ
+                    # «معنادار» لازم است (≥۱۲٪ جزء داخل باند) تا لکهٔ هنری
+                    # که فقط دستش به متن می‌رسد جذب نشود
+                    _touch = seed_band[_sl3] & comp
+                    if not np.any(_touch):
+                        # ② هم‌رنگی با تنِ متن (خطِ جاافتاده)
+                        if _tone is None:
+                            continue
+                        _vals = g[_sl3][comp]
+                        if _vals.size < 12:
+                            continue
+                        if abs(float(np.median(_vals)) - _tone) > 55.0:
+                            continue
+                        if ch > 90 or cw > 0.85 * g.shape[1]:
+                            continue  # خیلی بلند/عریض = هنر یا قاب
+                    elif a > 200 and (float(np.count_nonzero(_touch)) / a) < 0.12:
+                        continue
+                    _sub = out[_sl3]
+                    _sub[comp] = 255
+                    _lvl_new[_sl3] |= comp
+                    _n_kept += 1
+                if not _lvl_new.any():
+                    break
+                _cur_seed = seed | (_lvl_new)
+            if not _n_kept:
+                return None
+            full = np.zeros((h, w), dtype=np.uint8)
+            full[wy0:wy1, wx0:wx1] = out
+            full = cv2.morphologyEx(full, cv2.MORPH_CLOSE,
+                                    np.ones((3, 3), np.uint8))
+            return full
+        except Exception:
+            return None
 
     @staticmethod
     def _absorb_block_neighbors(image: np.ndarray, mask: np.ndarray,
@@ -5894,8 +6080,42 @@ class MangaTranslator:
         except Exception:
             _max_side = 0
         if _max_side <= 0:
-            _max_side = 1792 if _on_android() else 2048
+            # ⚡ v1.14.15 — سقفِ اندروید ۱۷۹۲→۱۰۲۴: پچِ بزرگِ وب‌تون ~۳×
+            # سریع‌تر (DFT با مساحت رشد نمایی دارد) + رمِ کمتر. کیفیتِ پُر کردن
+            # روی کاغذ/آسمان یکسان می‌ماند (بازُپس‌کاکس Lanczos4 + بلندِ فِدر).
+            # PC کیفیت‌محور ماند (۲۰۴۸). فورس با MANGA_LAMA_MAX_SIDE.
+            _max_side = 1024 if _on_android() else 2048
         _pl, _ph = int(sub_img.shape[1]), int(sub_img.shape[0])
+
+        def _lama_try(si, sm, side):
+            # 🛡 v1.14.15: با خطای ORT (OOM و...) → یک بار دیگر با سقفِ
+            # کوچک‌تر (۶۴۰) تلاش می‌شود؛ اپنینگِ مجدد سشن هم حافظهٔ آزاد
+            # می‌کند. اگر باز نشد → None (خوشه مسیر OpenCV را می‌رود)
+            try:
+                return lama(si, sm)
+            except Exception:
+                pass
+            try:
+                _s2 = float(side) / float(max(1, max(si.shape[0], si.shape[1])))
+                if _s2 >= 0.98:
+                    return None
+                _nw2 = max(64, (int(round(si.shape[1] * _s2)) // 8) * 8)
+                _nh2 = max(64, (int(round(si.shape[0] * _s2)) // 8) * 8)
+                _si2 = cv2.resize(si, (_nw2, _nh2), interpolation=cv2.INTER_AREA)
+                _sm2 = cv2.resize(sm, (_nw2, _nh2), interpolation=cv2.INTER_NEAREST)
+                _o2 = lama(_si2, _sm2)
+                _ob2 = _o2 if isinstance(_o2, np.ndarray) else np.array(_o2)
+                if _ob2.ndim == 2:
+                    _ob2 = cv2.cvtColor(_ob2, cv2.COLOR_GRAY2BGR)
+                else:
+                    _ob2 = cv2.cvtColor(_ob2, cv2.COLOR_RGB2BGR)
+                if _ob2.shape[:2] != (_nh2, _nw2):
+                    return None
+                return cv2.resize(_ob2, (si.shape[1], si.shape[0]),
+                                  interpolation=cv2.INTER_LANCZOS4)
+            except Exception:
+                return None
+
         if max(_pl, _ph) > _max_side:
             _sc = float(_max_side) / float(max(_pl, _ph))
             _nw = max(64, (int(round(_pl * _sc)) // 8) * 8)
@@ -5905,21 +6125,24 @@ class MangaTranslator:
                                  interpolation=cv2.INTER_AREA)
                 _sm = cv2.resize(sub_msk, (_nw, _nh),
                                  interpolation=cv2.INTER_NEAREST)
-                _out = lama(_si, _sm)
-                _ob = _out if isinstance(_out, np.ndarray) else np.array(_out)
-                if _ob.ndim == 2:
-                    _ob = cv2.cvtColor(_ob, cv2.COLOR_GRAY2BGR)
-                else:
-                    _ob = cv2.cvtColor(_ob, cv2.COLOR_RGB2BGR)
-                if _ob.shape[:2] == (_nh, _nw):
-                    sub_bgr = cv2.resize(_ob, (_pl, _ph),
-                                         interpolation=cv2.INTER_LANCZOS4)
+                _out = _lama_try(_si, _sm, 640)
+                if _out is not None:
+                    _ob = _out if isinstance(_out, np.ndarray) else np.array(_out)
+                    if _ob.ndim == 2:
+                        _ob = cv2.cvtColor(_ob, cv2.COLOR_GRAY2BGR)
+                    else:
+                        _ob = cv2.cvtColor(_ob, cv2.COLOR_RGB2BGR)
+                    if _ob.shape[:2] == (_nh, _nw):
+                        sub_bgr = cv2.resize(_ob, (_pl, _ph),
+                                             interpolation=cv2.INTER_LANCZOS4)
             except Exception:
                 sub_bgr = None
             if sub_bgr is None:
                 return  # این خوشه بعداً مسیر OpenCV/TELEA را می‌گیرد
         else:
-            out = lama(sub_img, sub_msk)
+            out = _lama_try(sub_img, sub_msk, 640)
+            if out is None:
+                return
             sub_bgr = out if isinstance(out, np.ndarray) else np.array(out)
             if sub_bgr.ndim == 2:
                 sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_GRAY2BGR)
@@ -6192,10 +6415,23 @@ class MangaTranslator:
                         if _wa > 0:
                             _workers = max(1, min(_wa, 4))
                         elif _on_android():
-                            if _av >= 1.6:
+                            # ⚡ v1.14.15 — خواستهٔ کاربر (گزارش Poco F4 / SD870):
+                            # «بعد دو موازی اخه؟ سریع نمیشه». قبلاً رمِ آزادِ
+                            # لحظه‌ای (0.3GB) gate بود → ۱ worker → ۱۷۶s!
+                            # الان: CPU قوی = موازیِ واقعی؛ هر پچ threads=1 و
+                            # سقفِ پچِ کوچک‌تر → رمِ هر پچ ~نصف. zram/کشِ
+                            # اندروید جا باز می‌کند؛ OOM-retry هم پایین آمد.
+                            _cores_a = 0
+                            try:
+                                _cores_a = self._cpu_core_count()
+                            except Exception:
+                                _cores_a = 0
+                            if _cores_a >= 8:
                                 _workers = 3
-                            elif _av >= 0.9:
+                            elif _cores_a >= 6:
                                 _workers = 2
+                            else:
+                                _workers = 2 if _av >= 0.5 else 1
                         elif _av >= 1.5:
                             _workers = 2
                             try:
@@ -6359,6 +6595,52 @@ class MangaTranslator:
                 # است (dilate) → ناحیهٔ محو روی کاغذ است، هیچ پیکسلِ متنی
                 # برنمی‌گردد. اگر مشکلی پیش آمد → پِیستِ سخت مثل قبل.
                 try:
+                    # 🩹 v1.14.15: تُن‌سنجی — «لگه»ی خاکستریِ گزارشِ گوشی.
+                    # LaMa روی زمینهٔ تخت (آسمان/دیوار/کاغذ) گاهی چند درجه
+                    # تیره‌تر/روشن‌تر پر می‌کند → لکهٔ محو. حلقهٔ ۱۹-۴۱px
+                    # اطراف ماسک در «زمینهٔ پاک‌شده» با «خروجی LaMa» مقایسه
+                    # می‌شود؛ اگر حلقه تخت است (std≤26 = آسمان/کاغذ، نه
+                    # هنر/خطِ دور) → شیفتِ ملایمِ هر کانال (کلمپ ±16) داخل
+                    # هستهٔ ماسک با نرمیِ گوسی. هنرِ پرجزئیات دست‌نخورده.
+                    try:
+                        _ann_in = cv2.dilate(
+                            (crop_msk > 0).astype(np.uint8),
+                            np.ones((19, 19), np.uint8)) > 0
+                        _ann_out = cv2.dilate(
+                            (crop_msk > 0).astype(np.uint8),
+                            np.ones((41, 41), np.uint8)) > 0
+                        _ring = _ann_out & (~_ann_in)
+                        if int(_ring.sum()) >= 200:
+                            _dstc = cleaned[cy0:cy1, cx0:cx1]
+                            _ring_std = float(
+                                _dstc[_ring].astype(np.float32).std())
+                            if _ring_std <= 26.0:
+                                _deltas = []
+                                for _ch in range(3):
+                                    _m_r = float(np.median(
+                                        _dstc[..., _ch][_ring]
+                                        .astype(np.float32)))
+                                    _m_l = float(np.median(
+                                        result[..., _ch][_ring]
+                                        .astype(np.float32)))
+                                    _deltas.append(max(
+                                        -16.0, min(16.0, _m_r - _m_l)))
+                                if any(abs(_d) > 1.0 for _d in _deltas):
+                                    _core_t = cv2.erode(
+                                        (crop_msk > 0).astype(np.uint8),
+                                        np.ones((5, 5), np.uint8))
+                                    _soft = cv2.GaussianBlur(
+                                        _core_t.astype(np.float32),
+                                        (9, 9), 2.5)
+                                    _soft = np.clip(_soft, 0.0, 1.0)[..., None]
+                                    _res_f = result.astype(np.float32)
+                                    _res_f = _res_f + (
+                                        np.array(_deltas, dtype=np.float32)
+                                        [None, None, :] * _soft)
+                                    result = np.clip(
+                                        _res_f, 0, 255).astype(np.uint8)
+                    except Exception:
+                        pass
                     _m8 = (crop_msk if crop_msk.dtype == np.uint8
                            else (crop_msk > 0).astype(np.uint8) * 255)
                     _core = cv2.erode(_m8, np.ones((3, 3), np.uint8)) > 0
@@ -6465,6 +6747,15 @@ class MangaTranslator:
             med = float(np.median(g))
             thr = max(70.0, med - 60.0)
             ink = (g < thr)
+            # 🩹 v1.14.15: متنِ «روشن» روی زمینهٔ رنگی/تیره (MINISTRY OF
+            # EDUCATION سفید روی ستون نارنجی) — جاروی قبلی فقط جوهرِ تیره
+            # را می‌دید و متنِ سفیدِ پاک‌نشده جا می‌ماند. روی کاغذ سفید
+            # (med بالا) bright-ink بی‌معنی است → گیتِ med.
+            if med < 205.0:
+                _thr_b = min(232.0, med + 60.0)
+                _br = (g > _thr_b)
+                if float(_br.mean()) <= 0.35:
+                    ink = (ink | _br)
             _ir = float(ink.mean())
             if _ir < 0.005 or _ir > 0.50:
                 continue  # نه متن خوانا داخل ناحیه است
@@ -9962,6 +10253,223 @@ class MangaTranslator:
             except Exception:
                 continue
 
+    def _gap_ocr_regions(self, image: np.ndarray,
+                         existing: List[TextRegion]) -> List[TextRegion]:
+        # 🔍 v1.14.15 — OCR نوارهای «پوشش‌نشده» بین حباب‌ها: متن‌هایی که
+        # دیتکتور حباب نگرفته (کپشن/متن عمودی کنار پنل/زیرنویس). برای سرعت:
+        # فقط نوارهای با ارتفاع ≥۶۰px و سقف ۸ نوار؛ OCR تک‌گذر (بدون
+        # واریانت‌ها) و فقط نتایجِ مطمئن (متن ≥۳ نویسه، تودرتو نبودن با
+        # نواحی موجود، جوهر واقعی داخل باکس) اضافه می‌شوند.
+        try:
+            h, w = image.shape[:2]
+        except Exception:
+            return []
+        if not existing:
+            return []
+        cov = np.zeros((h, w), dtype=np.uint8)
+        for r in existing:
+            try:
+                x, y, rw, rh = [int(v) for v in r.rect]
+            except Exception:
+                continue
+            x0, y0 = max(0, x - 8), max(0, y - 8)
+            x1, y1 = min(w, x + rw + 8), min(h, y + rh + 8)
+            cv2.rectangle(cov, (x0, y0), (x1, y1), 255, -1)
+        cov = cv2.dilate(cov, np.ones((25, 25), np.uint8))
+        uncovered = (cov == 0)
+        row_px = uncovered.sum(axis=1)
+        # نوارها: ردیف‌هایی که ≥۴۰٪ عرضشان آزاد است
+        row_ok = row_px >= (0.40 * w)
+        bands: List[Tuple[int, int]] = []
+        y = 0
+        while y < h:
+            if not row_ok[y]:
+                y += 1
+                continue
+            y2 = y
+            gap = 0
+            while y2 < h and gap <= 40:
+                if row_ok[y2]:
+                    gap = 0
+                else:
+                    gap += 1
+                y2 += 1
+            y2 -= gap
+            if y2 - y >= 60:
+                bands.append((y, y2))
+            y = y2 + 1
+        if not bands:
+            return []
+        # پرتراکم‌ترین نوارها اول (سقف ۸)
+        bands.sort(key=lambda b: int(row_px[b[0]:b[1]].sum()), reverse=True)
+        bands = bands[:8]
+        bands.sort()
+        # 🔍 v1.14.15b: متن‌های «کناری/عمودی» باریک (کنارِ پنل) در نوارِ
+        # تمام‌عرض نمی‌افتند — کامپوننت‌های متصلِ پوشش‌نشده هم اسکن می‌شوند
+        _band_boxes = [(0, y0, w, y1 - y0) for (y0, y1) in bands]
+        try:
+            _ncc, _lab, _st, _ = cv2.connectedComponentsWithStats(
+                uncovered.astype(np.uint8), connectivity=8)
+            _comps = []
+            for i in range(1, _ncc):
+                _a = int(_st[i, cv2.CC_STAT_AREA])
+                # 🔍 v1.14.15c: ۱۵۰۰۰→۶۰۰۰ — تابلو/متنِ ریزِ کناری؛ + گارد
+                # ضد-پس‌زمینه: کامپوننتِ غول‌پیکر (بیش از ۳۵٪ صفحه) = خودِ
+                # زمینهٔ پوشش‌نشده است، نه بلوک متن → OCRِ کل‌صفحهٔ گران ممنوع
+                if _a < 6000 or _a > 0.35 * w * h:
+                    continue
+                _cx, _cy = int(_st[i, cv2.CC_STAT_LEFT]), int(_st[i, cv2.CC_STAT_TOP])
+                _cw, _ch = int(_st[i, cv2.CC_STAT_WIDTH]), int(_st[i, cv2.CC_STAT_HEIGHT])
+                if min(_cw, _ch) < 14:
+                    continue
+                # داخلِ یکی از نوارهای قبلی؟ → رد (تکراری)
+                _in_band = any(
+                    _cx >= bb[0] - 8 and _cy >= bb[1] - 8 and
+                    _cx + _cw <= bb[0] + bb[2] + 8 and
+                    _cy + _ch <= bb[1] + bb[3] + 8
+                    for bb in _band_boxes)
+                if _in_band:
+                    continue
+                _comps.append((_a, _cx, _cy, _cw, _ch))
+            _comps.sort(reverse=True)
+            for _, _cx, _cy, _cw, _ch in _comps[:8]:
+                _band_boxes.append((_cx, _cy, _cw, _ch))
+            if _comps:
+                print(f"    [*] Gap-OCR: +{min(len(_comps), 8)} ناحیهٔ کناری/عمودی")
+        except Exception:
+            pass
+        print(f"    [*] Gap-OCR: {len(bands)} نوار پوشش‌نشده → OCR سریع")
+        t0 = time.time()
+        extra: List[TextRegion] = []
+        _saved_tp = getattr(self, "two_pass_ocr", False)
+        try:
+            self.two_pass_ocr = False  # تک‌گذر — سرعت
+        except Exception:
+            pass
+        try:
+            for bi, (bx0, by0, bw_, bh_) in enumerate(_band_boxes):
+                _raise_if_stop()
+                if bx0 <= 2 and bw_ >= w - 4:
+                    # نوار تمام‌عرض
+                    # 🔍 v1.14.15c: متنِ ریزِ نوار (تابلو/زیرنویس ~۲۰px) در
+                    # مقیاس ۱× خوانده نمی‌شود (گزارش: «MINISTRY OF EDUCATION»
+                    # روی تابلوی ستون). نوار ≤۳۲۰px → ۲× بزرگ + OCR + مختصات
+                    # ÷۲. هزینه: فقط نوارهای کوچک — نه کل صفحه.
+                    if bh_ <= 320 and bh_ >= 40:
+                        _band = image[by0:by0 + bh_, 0:w]
+                        _big = cv2.resize(_band, (w * 2, bh_ * 2),
+                                          interpolation=cv2.INTER_CUBIC)
+                        try:
+                            got = self._process_chunk_worker(
+                                (1000 + bi, 0, bh_ * 2, _big))
+                        except Exception:
+                            continue
+                        for r in got:
+                            try:
+                                rx, ry, rw2, rh2 = [int(v) for v in r.rect]
+                                r.rect = (rx // 2, ry // 2 + by0,
+                                          max(6, rw2 // 2), max(6, rh2 // 2))
+                                _pol = getattr(r, "ocr_polys", None) or []
+                                if _pol:
+                                    _sc2 = np.array([0.5, 0.5],
+                                                    dtype=np.float32)
+                                    _off2 = np.array([0.0, float(by0)],
+                                                     dtype=np.float32)
+                                    r.ocr_polys = [
+                                        (np.asarray(p, dtype=np.float32)
+                                         .reshape(-1, 2) * _sc2 + _off2
+                                         ).tolist() for p in _pol]
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            got = self._process_chunk_worker(
+                                (1000 + bi, by0, by0 + bh_, image))
+                        except Exception:
+                            continue
+                else:
+                    # ناحیهٔ باریک/عمودی — برشِ با پد، OCR، برگرداندن مختصات
+                    _pad = 16
+                    _sx0, _sy0 = max(0, bx0 - _pad), max(0, by0 - _pad)
+                    _sx1, _sy1 = min(w, bx0 + bw_ + _pad), min(h, by0 + bh_ + _pad)
+                    if _sx1 - _sx0 < 24 or _sy1 - _sy0 < 24:
+                        continue
+                    _sub = image[_sy0:_sy1, _sx0:_sx1]
+                    try:
+                        got = self._process_chunk_worker(
+                            (1000 + bi, 0, _sy1 - _sy0, _sub))
+                    except Exception:
+                        continue
+                    for r in got:
+                        try:
+                            rx, ry, rw_, rh_ = [int(v) for v in r.rect]
+                            r.rect = (rx + _sx0, ry + _sy0, rw_, rh_)
+                            _pol = getattr(r, "ocr_polys", None) or []
+                            if _pol:
+                                _off = np.array([_sx0, _sy0], dtype=np.float32)
+                                r.ocr_polys = [
+                                    (np.asarray(p, dtype=np.float32)
+                                     .reshape(-1, 2) + _off).tolist()
+                                    for p in _pol]
+                        except Exception:
+                            pass
+                for r in got:
+                    if (r.kind or "") != "dialogue":
+                        continue
+                    txt = (r.source_text or "").strip()
+                    if len(txt) < 3:
+                        continue
+                    try:
+                        x, rw2, rh2 = int(r.rect[0]), int(r.rect[2]), int(r.rect[3])
+                        yy = int(r.rect[1])
+                    except Exception:
+                        continue
+                    if rw2 < 18 or rh2 < 10:
+                        continue
+                    # تودرتو/همپوشان با نواحی موجود؟ → رد
+                    _dup = False
+                    for e in existing:
+                        try:
+                            ex, ey, ew, eh = [int(v) for v in e.rect]
+                        except Exception:
+                            continue
+                        ix = max(0, min(ex + ew, x + rw2) - max(ex, x))
+                        iy = max(0, min(ey + eh, yy + rh2) - max(ey, yy))
+                        if ix * iy > 0.30 * float(max(1, rw2 * rh2)):
+                            _dup = True
+                            break
+                    if _dup:
+                        continue
+                    # جوهرِ واقعی داخل باکس؟ (ضد توهمِ OCR روی هنر)
+                    try:
+                        _c = image[max(0, yy):min(h, yy + rh2),
+                                   max(0, x):min(w, x + rw2)]
+                        if _c.size == 0:
+                            continue
+                        _g = cv2.cvtColor(_c, cv2.COLOR_BGR2GRAY)
+                        _med = float(np.median(_g))
+                        _ink = float(((_g < max(70.0, _med - 60.0)) |
+                                      ((_g > min(232.0, _med + 60.0))
+                                       if _med < 205.0 else False)).mean())
+                        if _ink < 0.02 or _ink > 0.5:
+                            continue
+                    except Exception:
+                        continue
+                    extra.append(r)
+                    if len(extra) >= 12:
+                        break
+                if len(extra) >= 12:
+                    break
+        finally:
+            try:
+                self.two_pass_ocr = _saved_tp
+            except Exception:
+                pass
+        if extra:
+            print(f"    [+] Gap-OCR: {len(extra)} ناحیهٔ اضافی "
+                  f"({time.time() - t0:.1f}s) → پاک/ترجمه می‌شوند")
+        return extra
+
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
         
         h, w = image.shape[:2]
@@ -9972,6 +10480,21 @@ class MangaTranslator:
             print("[فاز ۱ - تشخیص حباب + OCR] شروع...")
             unique_regions = self._extract_regions_from_bubbles(image)
         _raise_if_stop()  # ⏹ لغو فوری — بعد از تشخیص
+
+        # 🔍 v1.14.15 — Gap-OCR: متن‌های «بیرونِ حباب‌های دیتکت‌شده»
+        # (کپشن‌های بین پنل‌ها، متن‌های عمودی/کناری، زیرنویس) قبلاً هیچ‌وقت
+        # پاک/ترجمه نمی‌شدند چون دیتکتور حبابشان را نمی‌گرفت (گزارش کاربر:
+        # متن‌های عمودیِ کنار پنل و کپشن‌های جامانده). نوارهای پوشش‌نشده
+        # OCR می‌شوند و نتایج مطمئن به نواحی اضافه می‌شوند.
+        if unique_regions and os.environ.get("MANGA_GAP_OCR", "1") != "0":
+            _raise_if_stop()
+            try:
+                _extra = self._gap_ocr_regions(image, unique_regions)
+                if _extra:
+                    unique_regions.extend(_extra)
+            except Exception:
+                pass
+        _raise_if_stop()
 
         if not unique_regions:
             if self.det is not None:

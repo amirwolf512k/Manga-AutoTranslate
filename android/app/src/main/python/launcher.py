@@ -13,6 +13,22 @@ _GITHUB_RAW = ("https://raw.githubusercontent.com/"
                "amirwolf512k/Manga-AutoTranslate/main/")
 _UPDATE_FILES = ("manga.py", "manga_app.py")
 
+# 🩹 v1.14.15 — آپدیت خودکار در ایران کار نمی‌کرد: raw.githubusercontent.com
+# برای خیلی از ISPهای ایران بلاک/محدود است. زنجیرهٔ چندمنبعی (اولی که جواب
+# داد): raw گیت‌هاب → jsDelivr CDN (در ایران باز است) → gh-proxy آینهٔ مستقیم.
+_UPDATE_MIRRORS = (
+    "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
+    "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/",
+    "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
+)
+
+
+def _fetch_bytes(url, timeout=20):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return r.read()
+
 
 def _local_ver(files_dir, name):
 
@@ -113,16 +129,21 @@ def apply_updates(files_dir):
         sys.path.insert(0, upd_dir)
 
     def _download(name, dst):
-        import urllib.request
-        req = urllib.request.Request(
-            _GITHUB_RAW + name, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=15) as r:
-            data = r.read()
-        if len(data) < 10000:
-            raise RuntimeError("فایل ناقص (%d بایت)" % len(data))
-        with open(dst, "wb") as f:
-            f.write(data)
-        return data
+        # 🩹 v1.14.15: زنجیرهٔ میرور — تا وقتی یکی جواب ندهد ادامه بده
+        last_err = None
+        for base in _UPDATE_MIRRORS:
+            try:
+                data = _fetch_bytes(base + name, timeout=20)
+                if len(data) < 10000:
+                    raise RuntimeError("فایل ناقص (%d بایت)" % len(data))
+                with open(dst, "wb") as f:
+                    f.write(data)
+                return data
+            except Exception as e:
+                last_err = e
+                host = base.split("/")[2] if "/" in base else base
+                _log("منبع %s برای %s جواب نداد: %s" % (host, name, str(e)[:60]))
+        raise last_err if last_err else RuntimeError("همهٔ منابع ناموفق")
 
     for name in _UPDATE_FILES:
         new_p = os.path.join(upd_dir, name + ".new")
