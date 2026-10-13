@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.4"
+APP_VER = "1.14.5"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -769,7 +769,11 @@ class LamaONNX:
 class LamaMangaONNX:
     
     
-    URL = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
+    # 🇰3 مدل «داینامیک» (ورودی H/W آزاد) — پچ‌ها در رزولوشن اصلی اجرا می‌شوند
+    # مثل CleanSinglePatchInMemory رقیب؛ پچ کوچک = چند ثانیه، نه ۱۱ ثانیه.
+    URL = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
+           "releases/download/models/lama-manga-dyn.onnx")
+    FALLBACK_URL = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
     SIZE = 512
 
     def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
@@ -778,10 +782,16 @@ class LamaMangaONNX:
         if not model_path or not os.path.isfile(model_path):
             model_path = self._download_model(cache_dir=cache_dir)
         self.model_path = model_path
-        # 📱 اندروید: سقف ۴ نخ (هسته‌های LITTLE به‌درد نمی‌خورند)
+        # 📱 اندروید: FFT/DFT در ORT با چند‌نخی شدن سمی است (۱۴۴ گره DFT
+        # × سینک نخ = کندی ۲.۶×) — ۱ تا ۲ نخ به‌مراتب سریع‌تر.
         if not prefer_gpu:
-            _cap = 4 if _on_android() else 8
-            use_threads = max(1, min(_cap, os.cpu_count() or 4))
+            try:
+                use_threads = int(os.environ.get("MANGA_LAMA_THREADS", "0") or 0)
+            except Exception:
+                use_threads = 0
+            if use_threads <= 0:
+                _cap = 2 if _on_android() else 2
+                use_threads = max(1, min(_cap, os.cpu_count() or 4))
         else:
             use_threads = max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
@@ -815,14 +825,17 @@ class LamaMangaONNX:
         from pathlib import Path
         cache_root = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "manga_translator_models"
         cache_root.mkdir(parents=True, exist_ok=True)
-        dst = cache_root / "lama-manga.onnx"
+        # 🩹 اسم فایل کش عوض شد (lama-manga-dyn) تا نسخهٔ ثابت-۵۱۲ قدیمی
+        # دوباره دانلود شود — مدل داینامیک شرط سرعت الگوی K3 است.
+        dst = cache_root / "lama-manga-dyn.onnx"
         if dst.is_file() and dst.stat().st_size > 1_000_000:
-            print(f"[*] مدل LaMa-Manga از کش: {dst}")
+            print(f"[*] مدل LaMa-Manga (داینامیک) از کش: {dst}")
             return str(dst)
-        print("[*] دانلود مدل LaMa-Manga ONNX (~۱۹۸MB، فقط بار اول) ...")
+        print("[*] دانلود مدل LaMa-Manga ONNX داینامیک (~۲۰۶MB، فقط بار اول) ...")
         urls = (
-            _RAPIDOCR_MIRROR + "lama_fp32.onnx",
             cls.URL,
+            _RAPIDOCR_MIRROR + "lama_fp32.onnx",
+            cls.FALLBACK_URL,
         )
         last = None
         for url in urls:
@@ -867,8 +880,9 @@ class LamaMangaONNX:
         _mx = max(ow, oh)
 
         if not self._fixed_size and _mx <= s:
-            # 🩹 الگوی K3 (CleanSinglePatchInMemory): پچ کوچک/متوسط → اجرا در
-            # رزولوشن اصلی (فقط pad به مضرب ۳۲) — بدون بزرگ‌نمایی به ۵۱۲.
+            # 🇰3 الگوی K3 (CleanSinglePatchInMemory): پچ کوچک/متوسط → اجرا در
+            # رزولوشن اصلی (فقط pad به مضرب ۸ — دقیقاً مثل width/8*8 رقیب)
+            # بدون بزرگ‌نمایی به ۵۱۲.
             _tgt = max(_mx, 128)
             _sc = _tgt / _mx
             if abs(_sc - 1.0) < 1e-6:
@@ -880,7 +894,7 @@ class LamaMangaONNX:
                 img_np = cv2.resize(img_rgb, (rw, rh), interpolation=cv2.INTER_CUBIC)
                 msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
                                   interpolation=cv2.INTER_NEAREST_EXACT) > 0).astype(np.uint8)
-            _pw, _ph = (-rw) % 32, (-rh) % 32
+            _pw, _ph = (-rw) % 8, (-rh) % 8
             if _pw or _ph:
                 img_np = cv2.copyMakeBorder(img_np, 0, _ph, 0, _pw, cv2.BORDER_REFLECT)
                 msk = cv2.copyMakeBorder(msk, 0, _ph, 0, _pw,
@@ -2393,7 +2407,7 @@ class MangaTranslator:
 
         if _on_android() and not force_lama:
             # 🩹 الگوی K3 (CleanSinglePatchInMemory): پاک‌سازی LaMa پچ‌به‌پچ
-            # پیش‌فرض است — مثل K3 مدل ~۱۹۸MB بار اول دانلود می‌شود ولی چون
+            # پیش‌فرض است — مدل «داینامیک» ~۲۰۶MB بار اول دانلود می‌شود ولی چون
             # هر پچ فقط برشِ حباب/خوشهٔ متنی است (نه کل صفحه)، روی CPU هم
             # سریع تمام می‌شود. خاموش‌کردن: MANGA_ANDROID_LAMA=0 یا سوییچ
             # «پاک‌سازی LaMa» را در تنظیمات خاموش کن (جایگزین: OpenCV سریع).
@@ -2402,7 +2416,7 @@ class MangaTranslator:
                       "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
                 return False
             print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ (الگوی K3) — "
-                  "بار اول مدل ~۱۹۸MB دانلود می‌شود؛ پچ‌های کوچک = سرعت بالا.")
+                  "مدل داینامیک ~۲۰۶MB بار اول؛ پچ در اندازهٔ اصلی + ۲ نخ = سریع.")
             return True
 
         if force_gpu is True:
@@ -4600,6 +4614,8 @@ class MangaTranslator:
         n_ok = 0
         for region in regions:
             pts_list = []
+            _tall = 0
+            _polys_raw = []
             for p in (getattr(region, "ocr_polys", None) or []):
                 try:
                     pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
@@ -4607,9 +4623,36 @@ class MangaTranslator:
                     continue
                 if pp.shape[0] < 3:
                     continue
+                _polys_raw.append(pp)
                 c = pp.mean(axis=0)
                 pts_list.append(np.rint(c + (pp - c) * 1.2).astype(np.int32))
+                _pw_ = float(pp[:, 0].max() - pp[:, 0].min())
+                _ph_ = float(pp[:, 1].max() - pp[:, 1].min())
+                if _ph_ >= 1.3 * _pw_ and _ph_ >= 18.0:
+                    _tall += 1
             if pts_list:
+                # 🩹 متن عمودی ژاپنی (tategaki): ML Kit معمولاً همهٔ ستون‌ها را
+                # نمی‌بیند → بعد از رندر، ستون‌های جاافتاده می‌مانند (حرف/خط عمودی).
+                # اگر ناحیه ≥۲ ستون باریک‌بلند داشت، کل باکسِ اجتماع چندضلعی‌ها
+                # را ماسک می‌کنیم تا ستون‌های ندیده‌شده هم پاک شوند.
+                if _tall >= 2 and len(_polys_raw) >= 2:
+                    try:
+                        rx, ry, rw_, rh_ = [float(v) for v in region.rect]
+                        _all = np.concatenate(_polys_raw, axis=0)
+                        ux0 = max(rx, float(_all[:, 0].min()))
+                        uy0 = max(ry, float(_all[:, 1].min()))
+                        ux1 = min(rx + rw_, float(_all[:, 0].max()))
+                        uy1 = min(ry + rh_, float(_all[:, 1].max()))
+                        x0, y0 = int(np.floor(ux0)), int(np.floor(uy0))
+                        x1, y1 = int(np.ceil(ux1)), int(np.ceil(uy1))
+                        x0, y0 = max(0, x0), max(0, y0)
+                        x1, y1 = min(w, x1), min(h, y1)
+                        if x1 - x0 >= 6 and y1 - y0 >= 6:
+                            cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                            n_ok += 1
+                            continue
+                    except Exception:
+                        pass
                 cv2.fillPoly(m, pts_list, 255)
                 n_ok += 1
             else:
@@ -4849,19 +4892,20 @@ class MangaTranslator:
                            crop_msk: np.ndarray) -> Optional[np.ndarray]:
         # 🇰3 TurboClean الگو (ProcessAndCleanSimpleBlockIfValid): اگر حاشیهٔ
         # دور متن یکدست بود → پُرکردن تختِ فوری؛ تقریباً بدون هزینه.
-        # (فقط صفحات ساده را از lstsq/LaMa عبور می‌دهد — دقیقاً مثل رقیب)
+        # 🩹 باند نازک ۲px (مثل نمونه‌برداری ۱.۰۲۵× رقیب) — باند پهن حلقه را
+        # به لبهٔ حباب می‌رساند و فلت‌فیل را رد می‌کرد (فقط ۱/۱۴ قبول می‌شد!).
         try:
             m = crop_msk > 0
             if not m.any():
                 return None
-            ring = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0) & (~m)
+            ring = (cv2.dilate(crop_msk, np.ones((5, 5), np.uint8)) > 0) & (~m)
             n_ring = int(np.count_nonzero(ring))
-            if n_ring < 60:
+            if n_ring < 40:
                 return None
             rp = crop_img[ring].astype(np.int16)
             med = np.median(rp, axis=0)
             d = np.abs(rp - med[None, :]).max(axis=1)
-            if float((d <= 20).mean()) < 0.97:
+            if float((d <= 20).mean()) < 0.96:
                 return None
             sel = rp[d <= 22]
             fill = np.median(sel, axis=0) if sel.shape[0] >= 30 else med
@@ -4881,38 +4925,48 @@ class MangaTranslator:
             return None
         ring_px = crop_img[ring].astype(np.float32)
 
-        _W = np.array([0.114, 0.587, 0.299], dtype=np.float32)
-        _lum = ring_px @ _W
-        _paper = ring_px[_lum >= 200.0]
-        _paper_share = float(_paper.shape[0]) / float(max(1, ring_px.shape[0]))
-        if _paper_share >= 0.35:
-            _anchor = np.median(_paper, axis=0)
-            _sel = (np.abs(ring_px - _anchor[None, :]).max(axis=1) <= 20.0)
-            if int(_sel.sum()) < 60:
-                return None
-            ring_px = ring_px[_sel]
-            ring[ring] = _sel
-        h, w = m.shape
-        yy, xx = np.mgrid[-1:1:complex(h), -1:1:complex(w)]
-        basis = np.stack((np.ones_like(xx), xx, yy, xx * yy, xx * xx, yy * yy), axis=-1)
-        samples = basis[ring]
-        keep = np.ones(int(samples.shape[0]), dtype=bool)
-        for _ in range(4):
-            fit = np.linalg.lstsq(samples[keep], ring_px[keep], rcond=None)[0]
-            error = np.max(np.abs(samples @ fit - ring_px), axis=1)
-            keep = error <= max(5.0, float(np.median(error)) * 2.5)
-            if keep.sum() < max(60, 0.55 * len(samples)):
-                return None
-        if float(np.percentile(error[keep], 90)) > 6.0:
+        # 🩹 ضدهشدار NaN (هشدار matmul روی گوشی): روشنایی را دستی حساب می‌کنیم
+        # (بدون BLAS) و ورودی غیرمتناهی را رد می‌کنیم.
+        if not np.isfinite(ring_px).all():
             return None
-        fill = basis[m] @ fit
-        if _paper_share >= 0.35:
-            _fill_lum = float(np.median(fill @ _W))
-            _anchor_lum = float(np.median(_paper @ _W))
-            if _fill_lum < 170.0 or _fill_lum < _anchor_lum - 25.0:
+        _WB, _WG, _WR = 0.114, 0.587, 0.299
+        with np.errstate(invalid="ignore", over="ignore"):
+            _lum = ring_px[:, 0] * _WB + ring_px[:, 1] * _WG + ring_px[:, 2] * _WR
+            _paper = ring_px[_lum >= 200.0]
+            _paper_share = float(_paper.shape[0]) / float(max(1, ring_px.shape[0]))
+            if _paper_share >= 0.35:
+                _anchor = np.median(_paper, axis=0)
+                _sel = (np.abs(ring_px - _anchor[None, :]).max(axis=1) <= 20.0)
+                if int(_sel.sum()) < 60:
+                    return None
+                ring_px = ring_px[_sel]
+                ring[ring] = _sel
+            h, w = m.shape
+            yy, xx = np.mgrid[-1:1:complex(h), -1:1:complex(w)]
+            basis = np.stack((np.ones_like(xx), xx, yy, xx * yy, xx * xx, yy * yy), axis=-1)
+            samples = basis[ring]
+            keep = np.ones(int(samples.shape[0]), dtype=bool)
+            fit = None
+            for _ in range(4):
+                fit = np.linalg.lstsq(samples[keep], ring_px[keep], rcond=None)[0]
+                if not np.isfinite(fit).all():
+                    return None
+                error = np.max(np.abs(samples @ fit - ring_px), axis=1)
+                keep = error <= max(5.0, float(np.median(error)) * 2.5)
+                if keep.sum() < max(60, 0.55 * len(samples)):
+                    return None
+            if float(np.percentile(error[keep], 90)) > 6.0:
                 return None
-        if np.any(fill < ring_px[keep].min(axis=0) - 8) or np.any(fill > ring_px[keep].max(axis=0) + 8):
-            return None
+            fill = basis[m] @ fit
+            if not np.isfinite(fill).all():
+                return None
+            if _paper_share >= 0.35 and _paper.shape[0] > 0:
+                _fill_lum = float(np.median(fill[:, 0] * _WB + fill[:, 1] * _WG + fill[:, 2] * _WR))
+                _anchor_lum = float(np.median(_paper[:, 0] * _WB + _paper[:, 1] * _WG + _paper[:, 2] * _WR))
+                if _fill_lum < 170.0 or _fill_lum < _anchor_lum - 25.0:
+                    return None
+            if np.any(fill < ring_px[keep].min(axis=0) - 8) or np.any(fill > ring_px[keep].max(axis=0) + 8):
+                return None
         out = crop_img.copy()
         out[m] = np.clip(np.rint(fill), 0, 255).astype(np.uint8)
         return out
@@ -10489,12 +10543,17 @@ html, body { background: #0a0a0b; }
                 if _vx1 - _vx0 >= 40 and _vy1 - _vy0 >= 14:
                     _a_ink = MangaTranslator._ink_slant_angle(
                         original_image[_vy0:_vy1, _vx0:_vx1])
-                    if abs(_a_ink) >= 6.0 and (_a_ink > 0.0) != (angle > 0.0):
+                    if (abs(_a_ink) >= 6.0 and abs(_a_ink) <= 45.0
+                            and (_a_ink > 0.0) != (angle > 0.0)):
                         print(f"    [!] اصلاح جهتِ چرخش در رندر [{region.id}]: "
                               f"{angle:+.1f}° → {_a_ink:+.1f}°")
                         angle = _a_ink
         except Exception:
             pass
+        # 🩹 سنگر نهایی: هیچ زاویه‌ای بیرون ±۴۵ درجه حق رسیدن به چرخش را ندارد
+        # (متن عمودی ژاپنی ~±۹۰° → همیشه رندر افقی، نه چرخش ۹۰ درجه)
+        if abs(angle) > 45.0:
+            angle = 0.0
 
         if abs(angle) < 8:
             bb = font.getbbox("آیگچ", stroke_width=sw)
