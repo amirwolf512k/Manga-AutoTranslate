@@ -10,3 +10,4 @@ __pycache__/
 nohup.out
 *.log
 __pycache__/
+out_residue/

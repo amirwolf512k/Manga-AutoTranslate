@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.8"
+APP_VER = "1.14.9"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3632,6 +3632,18 @@ class MangaTranslator:
             or (has_han and (allow_ja or allow_zh))
         )
         if not allowed_any and (has_latin or has_hangul or has_kana or has_han):
+            # 🩹 لاتینِ شبیه‌کلمه هرگز به‌خاطرِ تنظیم زبان حذف نشود —
+            # وب‌تونِ انگلیسی با تنظیم «ja» قبلاً «کلاً» از دست می‌رفت
+            # (تشخیص صفر ناحیه → حباب‌ها اصلاً پاک/ترجمه نمی‌شدند؛ باگ
+            # گزارش‌شده). مانگای ژاپنی هم دیالوگ/SFX لاتین دارد.
+            # شرط ≥۳ حرف + مصوت = نویزِ OCR (مثل «7» یا «StJ») رد می‌شود.
+            if has_latin and not (has_hangul or has_kana or has_han):
+                try:
+                    latin = re.sub(r"[^A-Za-z]", "", str(text))
+                    if len(latin) >= 3 and any(c in "AEIOUaeiou" for c in latin):
+                        return False
+                except Exception:
+                    pass
             return True
         return False
 
@@ -4678,6 +4690,7 @@ class MangaTranslator:
         for region in regions:
             pts_list = []
             _tall = 0
+            _wide = 0
             _polys_raw = []
             for p in (getattr(region, "ocr_polys", None) or []):
                 try:
@@ -4693,6 +4706,8 @@ class MangaTranslator:
                 _ph_ = float(pp[:, 1].max() - pp[:, 1].min())
                 if _ph_ >= 1.3 * _pw_ and _ph_ >= 18.0:
                     _tall += 1
+                if _pw_ >= 1.3 * _ph_ and _pw_ >= 18.0:
+                    _wide += 1
             if pts_list:
                 # 🩹 متن عمودی ژاپنی (tategaki): ML Kit معمولاً همهٔ ستون‌ها را
                 # نمی‌بیند → بعد از رندر، ستون‌های جاافتاده می‌مانند (حرف/خط عمودی).
@@ -4700,6 +4715,10 @@ class MangaTranslator:
                 # را ماسک می‌کنیم تا ستون‌های ندیده‌شده هم پاک شوند.
                 if _tall >= 2 and len(_polys_raw) >= 2:
                     try:
+                        # 🩹 کلِ rect ناحیه ماسک شود (نه فقط باکسِ چندضلعی‌ها):
+                        # علائمِ نگارشی/فوریگانهٔ زیرِ آخرین ستون (مثل «:»)
+                        # بیرونِ باکس چندضلعی‌ها می‌مانند و متنِ جاافتاده می‌شد.
+                        # ناحیهٔ متراکم = حبابِ پرمتن → rect دیتکتور خودش جمع است.
                         rx, ry, rw_, rh_ = [float(v) for v in region.rect]
                         _all = np.concatenate(_polys_raw, axis=0)
                         ux0 = max(rx, float(_all[:, 0].min()))
@@ -4714,6 +4733,36 @@ class MangaTranslator:
                             cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
                             n_ok += 1
                             continue
+                    except Exception:
+                        pass
+                # 🔥 ردیف‌های متراکم افقی (برش RapidOCR از متنِ عمودیِ وب‌تون/متن
+                # ساطور): گپِ بین ردیف‌ها نصفِ گلیف را بیرون ماسک می‌گذارد →
+                # باقی‌ماندهٔ متن (باگ گزارش‌شده). اگر چندضلعی‌ها بلوکِ متراکم
+                # باشند (پوشش ≥۳۴٪ باکس اجتماع)، کل باکس ماسک می‌شود.
+                if (_wide >= 2 and len(_polys_raw) >= 2 and _tall == 0):
+                    try:
+                        _all = np.concatenate(_polys_raw, axis=0)
+                        _ux0, _uy0 = float(_all[:, 0].min()), float(_all[:, 1].min())
+                        _ux1, _uy1 = float(_all[:, 0].max()), float(_all[:, 1].max())
+                        _ua = max(1.0, (_ux1 - _ux0) * (_uy1 - _uy0))
+                        _sa = 0.0
+                        for _q in _polys_raw:
+                            _qa = 0.5 * abs(float(np.dot(
+                                _q[:, 0], np.roll(_q[:, 1], -1))
+                                - np.dot(_q[:, 1], np.roll(_q[:, 0], -1))))
+                            _sa += _qa
+                        if _sa / _ua >= 0.34:
+                            # 🩹 مثل tategaki: کلِ rect ناحیه — علائم زیرِ
+                            # آخرین ردیف («:»، «!») بیرون باکس چندضلعی‌ها می‌ماند
+                            rx, ry, rw_, rh_ = [float(v) for v in region.rect]
+                            x0 = max(0, int(np.floor(rx)))
+                            y0 = max(0, int(np.floor(ry)))
+                            x1 = min(w, int(np.ceil(rx + rw_)))
+                            y1 = min(h, int(np.ceil(ry + rh_)))
+                            if x1 - x0 >= 6 and y1 - y0 >= 6:
+                                cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                                n_ok += 1
+                                continue
                     except Exception:
                         pass
                 cv2.fillPoly(m, pts_list, 255)
@@ -4818,6 +4867,11 @@ class MangaTranslator:
                                 _s2 = _hsv[..., 1][_ys2, _xs2].astype(np.float32)[_close]
                                 if float(np.median(_s2)) > 60.0:
                                     continue  # محیط رنگی → TELEA
+                                # 🛡 پرِ سفید روی حبابِ سایه‌دار/اسپیدلاین ممنوع:
+                                # حلقه مخلوطِ سفید+رنگی است (میانهٔ sat پایین ولی
+                                # پخشِ بالا) → پرِ تک‌رنگ لکهٔ سفید می‌گذارد
+                                if float(_s2.std()) > 30.0:
+                                    continue
                                 fill_col = _cls_px.mean(axis=0)
                                 fill_exp = 1.10
                     if fill_col is None:
@@ -5696,8 +5750,122 @@ class MangaTranslator:
             cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
             counts[method] += 1
 
+        # 🩹 جاروی باقی‌مانده — تضمین «باید کامل پاک شه، متنی جا نمونه»
+        # تکرار تا همگرایی (حداکثر ۳ دور): TELEA در هر دور بخشی را برطرف
+        # می‌کند و دورِ بعد نوک‌های به‌جامانده را می‌گیرد.
+        try:
+            _n_res = 0
+            for _pass in range(3):
+                _n = self._residue_sweep(image, cleaned, regions, mask)
+                _n_res += _n
+                if not _n:
+                    break
+            if _n_res:
+                print(f"  [🩹] جاروی باقی‌مانده: {_n_res} اصلاح در "
+                      f"{_pass + 1} دور → TELEA جبرانی")
+        except Exception:
+            import traceback as _tb
+            print("  [!] جاروی باقی‌مانده خطا داد:")
+            _tb.print_exc()
+
         print(f"  - Cleanup: {counts}")
         return cleaned
+
+    def _residue_sweep(self, image: np.ndarray, cleaned: np.ndarray,
+                       regions: List[TextRegion],
+                       mask: Optional[np.ndarray] = None) -> int:
+        # بعد از همهٔ مسیرهای پاکسازی، داخل rect هر ناحیه چک می‌شود:
+        # پیکسلی که در «اصل» جوهرِ متن بود، داخل «ماسکِ پاکسازی» است و در
+        # «خروجی» تقریباً دست‌نخورده ماند (Δ≤14) یعنی پاک نشده → ماسک و
+        # TELEA جبرانی (محلی و ارزان). تقاطع با ماسک = اشتباه گرفتنِ
+        # خط‌وط هنری/کادرِ حبابِ بیرون از ناحیهٔ متن منتفی می‌شود.
+        n_fix = 0
+        try:
+            h, w = cleaned.shape[:2]
+        except Exception:
+            return 0
+        if mask is None or mask.shape != (h, w):
+            try:
+                mask = self._build_text_mask(image, regions)
+            except Exception:
+                return 0
+            if mask is None or mask.shape != (h, w):
+                return 0
+        try:
+            _mdil = (cv2.dilate(mask, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (15, 15))) > 0)
+        except Exception:
+            _mdil = (mask > 0)
+        for r in regions:
+            try:
+                x, y, rw, rh = [int(v) for v in r.rect]
+            except Exception:
+                continue
+            x0, y0 = max(0, x), max(0, y)
+            x1, y1 = min(w, x + rw), min(h, y + rh)
+            if x1 - x0 < 12 or y1 - y0 < 12:
+                continue
+            oc = image[y0:y1, x0:x1]
+            cc = cleaned[y0:y1, x0:x1]
+            if oc.size == 0 or cc.shape != oc.shape:
+                continue
+            g = cv2.cvtColor(oc, cv2.COLOR_BGR2GRAY)
+            med = float(np.median(g))
+            thr = max(70.0, med - 60.0)
+            ink = (g < thr)
+            _ir = float(ink.mean())
+            if _ir < 0.005 or _ir > 0.50:
+                continue  # نه متن خوانا داخل ناحیه است
+            _mzone = _mdil[y0:y1, x0:x1]
+            _m_px = int(np.count_nonzero(_mzone))
+            if _m_px < 80:
+                continue
+            gc = cv2.cvtColor(cc, cv2.COLOR_BGR2GRAY)
+            same = (np.abs(gc.astype(np.int16) - g.astype(np.int16)) <= 14)
+            resid = ink & same & _mzone
+            # ── معیار ۲: لکهٔ تیرهٔ به‌جاماندهٔ TELEA/پرکردن (حباب زرد «わあ!»
+            # — رگهٔ عمودی تیره در طول ستون متن). پیکسل تیرهٔ خروجی داخل
+            # ماسک که در اصل هم جوهر بود، وقتی زمینهٔ بازسازی‌شده روشن است
+            # = لکه/متنِ پاک‌نشده. اپنینگ ۵×۵ لکهٔ حجیم را نگه می‌دارد و
+            # خط‌های نازک هنری بازسازی‌شده را حذف می‌کند (جلوگیری از اشتباه).
+            try:
+                _zp = cc[_mzone].astype(np.float32)
+                _zlum = (_zp[:, 0] * 0.114 + _zp[:, 1] * 0.587 + _zp[:, 2] * 0.299)
+                if _zlum.size >= 300 and float((_zlum >= 170.0).mean()) >= 0.30:
+                    _bg_lum = float(np.median(_zlum[_zlum >= 170.0]))
+                    _gcl = (gc.astype(np.float32) * _mzone
+                            + np.where(_mzone, 0.0, _bg_lum))
+                    _dark_raw = (_gcl < _bg_lum - 45.0) & _mzone & ink
+                    _k5 = np.ones((5, 5), np.uint8)
+                    # لکهٔ حجیم (اپنینگ نگه می‌دارد؛ خط نازک هنری حذف می‌شود)
+                    _blob = cv2.morphologyEx(
+                        _dark_raw.astype(np.uint8), cv2.MORPH_OPEN, _k5) > 0
+                    # 🩹 کلِ ساختارِ تیرهٔ «متصل به لکه» هم داخل ماسک شود —
+                    # رگهٔ باریکِ ۲-۳px وسط لکهٔ تلئا با اپنینگ از دست می‌رفت؛
+                    # ولی فقط در باندِ ۱۵px اطراف لکهٔ تأییدشده (خط‌های هنریِ
+                    # دور از لکه دست‌نخورده می‌مانند)
+                    _band = cv2.dilate(
+                        _blob.astype(np.uint8),
+                        cv2.getStructuringElement(
+                            cv2.MORPH_ELLIPSE, (31, 31))) > 0
+                    resid = resid | _blob | (_dark_raw & _band)
+            except Exception:
+                pass
+            n_res = int(np.count_nonzero(resid))
+            if n_res < max(40, int(0.003 * _m_px)):
+                continue
+            if n_res > 0.45 * _m_px:
+                continue  # تقریباً همهٔ ناحیه شبیه اصل است → residue نیست
+            mc = (resid.astype(np.uint8)) * 255
+            mc = cv2.dilate(mc, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (11, 11)))
+            try:
+                patch = cv2.inpaint(cc, mc, 6, cv2.INPAINT_TELEA)
+                cleaned[y0:y1, x0:x1] = patch
+                n_fix += 1
+            except Exception:
+                continue
+        return n_fix
 
     def _opencv_fill_components(self, crop_img: np.ndarray, crop_msk: np.ndarray,
                                 wall: Optional[np.ndarray] = None) -> np.ndarray:
@@ -8434,8 +8602,18 @@ class MangaTranslator:
                 s_ = _score(float(td))
                 if s_ > best_s:
                     best_s, best_t = s_, float(td)
+            # 🩹 حاشیهٔ اطمینان: کجی باید «واقعاً» به‌چینش کمک کند (≥۱۲٪ بهتر
+            # از صاف). متنِ صاف/عمودی در زاویه‌های کم نویزِ ±۵-۹° امتیازِ
+            # تقریباً برابر می‌گیرد (حباب «わあ» −۵.۵° کاذب!) → رد
+            try:
+                if best_s < 1.12 * max(1.0, _score(0.0)):
+                    return 0.0
+            except Exception:
+                pass
             a = float(best_t)
-            if abs(a) < 6.0 or abs(a) > 45.0:
+            # 🩹 آستانهٔ ۵° — کارت‌های کج ~۸-۱۰° (مثل «先生») از دست نمی‌روند؛
+            # زیر ۵° نویز JPEG/اسکن است و اعتماد به‌اشتباه متن صاف را کج می‌کند
+            if abs(a) < 5.0 or abs(a) > 45.0:
                 return 0.0
             if len(comp_ang) >= 3:
                 _med = float(np.median(comp_ang))
@@ -8444,6 +8622,26 @@ class MangaTranslator:
             return a
         except Exception:
             return 0.0
+
+    @staticmethod
+    def _polys_vertical(polys) -> bool:
+        # 🩹 متن عمودی (tategaki): چندضلعی‌های ستونیِ باریک‌بلند غالب‌اند →
+        # تخمین کجی از جوهر معنا ندارد (ستون‌ها پروژهٔ افقی نمی‌سازند)
+        tall = wide = 0
+        for p in list(polys or []):
+            try:
+                pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+            except Exception:
+                continue
+            if pp.shape[0] < 3:
+                continue
+            pw_ = float(pp[:, 0].max() - pp[:, 0].min())
+            ph_ = float(pp[:, 1].max() - pp[:, 1].min())
+            if ph_ >= 1.3 * pw_ and ph_ >= 18.0:
+                tall += 1
+            elif pw_ >= 1.3 * ph_ and pw_ >= 18.0:
+                wide += 1
+        return tall > wide
 
     @staticmethod
     def _estimate_angle_from_polys(polys) -> float:
@@ -8594,28 +8792,33 @@ class MangaTranslator:
                 ang_src = "engine"
             else:
                 ang_ = poly_ang
-                if abs(ang_) < 3.0:
-                    try:
-                        _tx1 = _ty1 = None
-                        if line_polys:
-                            try:
-                                _pts_all = np.concatenate(
-                                    [np.asarray(p).reshape(-1, 2) for p in line_polys])
-                                _tx1, _ty1 = float(_pts_all[:, 0].min()), float(_pts_all[:, 1].min())
-                                _tx2, _ty2 = float(_pts_all[:, 0].max()), float(_pts_all[:, 1].max())
-                            except Exception:
-                                _tx1 = _ty1 = None
-                        if _tx1 is None:
-                            _tx1, _ty1, _tx2, _ty2 = float(x1), float(y1), float(x2), float(y2)
-                        _iy1, _iy2 = max(0, int(_ty1)), min(image.shape[0], int(_ty2) + 1)
-                        _ix1, _ix2 = max(0, int(_tx1)), min(image.shape[1], int(_tx2) + 1)
-                        if _ix2 - _ix1 >= 40 and _iy2 - _iy1 >= 14:
-                            a_ink2 = MangaTranslator._ink_slant_angle(
-                                image[_iy1:_iy2, _ix1:_ix2])
-                            if abs(a_ink2) >= 6.0:
-                                ang_ = a_ink2
-                    except Exception:
-                        pass
+            # 🩹 کجیِ واقعی که موتور/چندضلعی از دست داده‌اند (کارت کج «先生» —
+            # باگ گزارش‌شده: متن کج صاف رندر می‌شد). هر وقت زاویهٔ نهایی <
+            # ۵° است از خودِ جوهر بپرس؛ جوهر ≥۵° = کجی واقعی، نه نویز.
+            # متنِ عمودی (tategaki) استثناست — کجیِ جوهر برایش بی‌معناست.
+            if abs(ang_) < 5.0 and not self._polys_vertical(line_polys):
+                try:
+                    _tx1 = _ty1 = None
+                    if line_polys:
+                        try:
+                            _pts_all = np.concatenate(
+                                [np.asarray(p).reshape(-1, 2) for p in line_polys])
+                            _tx1, _ty1 = float(_pts_all[:, 0].min()), float(_pts_all[:, 1].min())
+                            _tx2, _ty2 = float(_pts_all[:, 0].max()), float(_pts_all[:, 1].max())
+                        except Exception:
+                            _tx1 = _ty1 = None
+                    if _tx1 is None:
+                        _tx1, _ty1, _tx2, _ty2 = float(x1), float(y1), float(x2), float(y2)
+                    _iy1, _iy2 = max(0, int(_ty1)), min(image.shape[0], int(_ty2) + 1)
+                    _ix1, _ix2 = max(0, int(_tx1)), min(image.shape[1], int(_tx2) + 1)
+                    if _ix2 - _ix1 >= 40 and _iy2 - _iy1 >= 14:
+                        a_ink2 = MangaTranslator._ink_slant_angle(
+                            image[_iy1:_iy2, _ix1:_ix2])
+                        if abs(a_ink2) >= 5.0 and abs(a_ink2) > abs(ang_) + 1.0:
+                            ang_ = a_ink2
+                            ang_src = "ink"
+                except Exception:
+                    pass
             rx1, ry1, rw_, rh_ = x1, y1, bw, bh
             if line_polys and abs(ang_) >= 8.0:
                 try:
@@ -8657,6 +8860,39 @@ class MangaTranslator:
                 r.angle = 0.0
                 continue
             if abs(ang) < 6.0:
+                # 🩹 تورِ ایمنی: اگر استخراج کجیِ ≥۶° را از دست داده بود
+                # (موتور زاویهٔ صفر داده)، جوهر دوباره پرسیده شود —
+                # به‌جز متن عمودی (tategaki) که کجیِ جوهر برایش بی‌معناست
+                if self._polys_vertical(getattr(r, "ocr_polys", None)):
+                    continue
+                try:
+                    _px = getattr(r, "ocr_polys", None) or []
+                    _vx1 = _vy1 = None
+                    if _px:
+                        try:
+                            _vp = np.concatenate(
+                                [np.asarray(p).reshape(-1, 2) for p in _px])
+                            _vx1, _vy1 = float(_vp[:, 0].min()), float(_vp[:, 1].min())
+                            _vx2, _vy2 = float(_vp[:, 0].max()), float(_vp[:, 1].max())
+                        except Exception:
+                            _vx1 = _vy1 = None
+                    if _vx1 is None:
+                        _vx, _vy, _vw, _vh = [int(v) for v in r.rect]
+                        _vx1, _vy1 = float(_vx), float(_vy)
+                        _vx2, _vy2 = float(_vx + _vw), float(_vy + _vh)
+                    _uy1 = max(0, int(_vy1))
+                    _ux1 = max(0, int(_vx1))
+                    _ux2 = min(int(image.shape[1]), int(_vx2) + 1)
+                    _uy2 = min(int(image.shape[0]), int(_vy2) + 1)
+                    if _ux2 - _ux1 >= 40 and _uy2 - _uy1 >= 14:
+                        _ai = MangaTranslator._ink_slant_angle(
+                            image[_uy1:_uy2, _ux1:_ux2])
+                        if abs(_ai) >= 6.0:
+                            print(f"    [!] بازیابی کجی [{r.id}]: {ang:+.1f}° → "
+                                  f"{_ai:+.1f}° (جوهر؛ موتور از دست داده بود)")
+                            r.angle = _ai
+                except Exception:
+                    pass
                 continue
             try:
                 x1 = y1 = None
@@ -11006,7 +11242,7 @@ html, body { background: #0a0a0b; }
             pass
 
         try:
-            if abs(angle) >= 8.0 and original_image is not None:
+            if abs(angle) >= 6.0 and original_image is not None:
                 _vpts = None
                 for _p in (getattr(region, "ocr_polys", None) or []):
                     try:
@@ -11038,7 +11274,9 @@ html, body { background: #0a0a0b; }
         if abs(angle) > 45.0:
             angle = 0.0
 
-        if abs(angle) < 8:
+        # 🩹 آستانهٔ ۵°: زاویه‌های ≥۵° واقعاً کج رندر شوند (قبلاً <۸ صاف
+        # می‌شد و کجی‌های خفیفِ تشخیص‌داده‌شده بی‌استفاده می‌ماند)
+        if abs(angle) < 5:
             bb = font.getbbox("آیگچ", stroke_width=sw)
             glyph_h = bb[3] - bb[1]
 
