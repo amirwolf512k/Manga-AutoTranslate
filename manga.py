@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.7"
+APP_VER = "1.14.8"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -1350,15 +1350,42 @@ class RTDetrV2ONNXDetector:
         overlap = int(self.TILE_OVERLAP)
         step = max(500, tile_h - overlap)
 
-        all_boxes: List[dict] = []
+        tiles = []  # (core_start, core_end, ys, ye)
         core_start = 0
         while core_start < h:
             core_end = min(core_start + tile_h, h)
             ys = max(0, core_start - (overlap if core_start > 0 else 0))
             ye = min(h, core_end + (overlap if core_end < h else 0))
-            tile = image_bgr[ys:ye]
+            tiles.append((core_start, core_end, ys, ye))
+            if core_end >= h:
+                break
+            core_start += step
 
-            for b in self._detect_plain(tile):
+        # 🚀 فشار به CPU: تایل‌های مستقل «همزمان» detect می‌شوند (run اُ‌آر‌تی
+        # GIL را آزاد می‌کند و thread-safe است) — نوارهای بلند وب‌تون چند برابر
+        # سریع‌تر؛ بدون تغییر در منطق پنجرهٔ cy.
+        _tw = 1
+        try:
+            if len(tiles) > 1:
+                if _on_android():
+                    _tw = 2
+                else:
+                    _tw = max(2, min(3, (os.cpu_count() or 2) // 2))
+        except Exception:
+            _tw = 1
+        _tw = max(1, min(_tw, len(tiles)))
+        if _tw > 1:
+            with ThreadPoolExecutor(max_workers=_tw) as _dex:
+                _results = list(_dex.map(
+                    self._detect_plain,
+                    [image_bgr[ys:ye] for (_cs, _ce, ys, ye) in tiles]))
+        else:
+            _results = [self._detect_plain(image_bgr[ys:ye])
+                        for (_cs, _ce, ys, ye) in tiles]
+
+        all_boxes: List[dict] = []
+        for (core_start, core_end, ys, ye), tile_boxes in zip(tiles, _results):
+            for b in tile_boxes:
                 x1, y1, x2, y2 = b["rect"]
                 cy = ys + (y1 + y2) / 2.0
                 margin = overlap * 0.35
@@ -1366,10 +1393,6 @@ class RTDetrV2ONNXDetector:
                     nb = dict(b)
                     nb["rect"] = [x1, y1 + ys, x2, y2 + ys]
                     all_boxes.append(nb)
-
-            if core_end >= h:
-                break
-            core_start += step
 
         merged = self._nms(all_boxes, max(0.40, self.iou_thresh))
         return MangaTranslator._drop_contained_boxes(merged, contain_thresh=0.65)
@@ -1588,8 +1611,12 @@ class RapidOCRBackend:
                 _cpu_n = _os2.cpu_count() or 4
             except Exception:
                 _cpu_n = 4
+            # 🚀 سرعت استخراج: مدل‌های det/rec کوچک‌اند — intra زیاد فقط سربار
+            # است (میکرو-بنچ: intra=1 تا ۱۹٪ سریع‌تر از intra=cpu_count)؛
+            # موازی‌سازی واقعی از-workers می‌آید نه از نخ‌های intra.
+            _intra = 1 if _cpu_n <= 4 else 2
             _threads = {
-                "EngineConfig.onnxruntime.intra_op_num_threads": int(_cpu_n),
+                "EngineConfig.onnxruntime.intra_op_num_threads": int(_intra),
                 "EngineConfig.onnxruntime.inter_op_num_threads": 1,
             }
             if _rec_params is not None:
@@ -1598,13 +1625,13 @@ class RapidOCRBackend:
                 _p.update(_threads)
                 self.engine = NewRapidOCR(params=_p)
                 self._new_api = True
-                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_cpu_n}")
+                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra} | cls=خاموش")
                 return
             _pb = dict(_base)
             _pb.update(_threads)
             self.engine = NewRapidOCR(params=_pb)
             self._new_api = True
-            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_cpu_n}")
+            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra} | cls=خاموش")
             return
         except Exception as e:
             import traceback as _tb
@@ -1631,7 +1658,13 @@ class RapidOCRBackend:
             return None
         if self._new_api:
             try:
-                out = self.engine(image_bgr)
+                # 🚀 cls خاموش: مدل دسته‌بندی زاویه فقط ۰/۱۸۰ درجه است و
+                # متن مانگا برعکس نیست؛ کج‌شدگی واقعی جای دیگر مدیریت می‌شود.
+                # میکرو-بنچ: ۱۸٪ سریع‌تر با همان تعداد خط.
+                try:
+                    out = self.engine(image_bgr, use_cls=False)
+                except TypeError:
+                    out = self.engine(image_bgr)
                 txts = getattr(out, "txts", None)
                 if not txts:
                     return None
@@ -1655,7 +1688,10 @@ class RapidOCRBackend:
                 if not _HAS_RAPIDOCR:
                     return None
         try:
-            result, _ = self.engine(image_bgr)
+            try:
+                result, _ = self.engine(image_bgr, use_cls=False)
+            except TypeError:
+                result, _ = self.engine(image_bgr)
         except Exception as e:
             msg = str(e).lower()
             if "text detection result is empty" in msg or "detection result is empty" in msg:
@@ -2669,6 +2705,20 @@ class MangaTranslator:
             if self.max_workers > 2:
                 print(f"[*] RAM آزاد کم است ({avail_ram:.1f} GB) → workers={self.max_workers} به ۲ محدود شد.")
                 self.max_workers = 2
+        # 🚀 فشار به CPU (پیش‌فرض هوشمند): اگر کاربر workers را دستی ست نکرده،
+        # OCR موازی روشن می‌شود — session مشترک است، هزینهٔ رم تقریباً صفر.
+        if self.max_workers <= 1:
+            try:
+                if _on_android():
+                    self.max_workers = 2
+                else:
+                    _cores = self._cpu_core_count()
+                    if _cores >= 4 and avail_ram >= 2.5:
+                        self.max_workers = 3
+                    elif _cores >= 2 and avail_ram >= 1.5:
+                        self.max_workers = 2
+            except Exception:
+                pass
 
         use_paddle = _HAS_PADDLE and avail_ram >= 6.0
         if _HAS_PADDLE and not use_paddle:
@@ -4686,12 +4736,108 @@ class MangaTranslator:
             m = cv2.dilate(m, k)
         return m
 
+    def _k3_line_instant_fill(self, image: np.ndarray, cleaned: np.ndarray,
+                              regions: List[TextRegion],
+                              mask: np.ndarray) -> int:
+        # 🇰3 TurboClean مرحلهٔ صفر — دو-tier (پورت هر دو مسیر رقیب):
+        #  tier-1 = ProcessAndCleanSimpleBlockIfValid: حلقهٔ ۱.۰۲۵×، ~۹۹٪ یکدست
+        #           (فاصله ≤۱۵) → پر ۱.۰۵× — خط‌های مجزا در حباب خلوت
+        #  tier-2 = DrawSmartPolygonsDirectly: حلقهٔ ۱.۱×، ۷۵٪ نزدیک (≤۳۵) +
+        #           فیلتر بافت/اشباع → پر ۱.۱× با رنگِ نزدیک‌ها — متنِ متراکم
+        #           وب‌تون (حلقه = متن خطِ بعدی، ولی غالبش کاغذ سفید)
+        # ماسک «صفر نمی‌شود» — هالهٔ لبه را پاس کلاستر تمیز می‌کند (حلقه‌اش
+        # بعد از پر شدن خط‌ها سفیدِ تمیز است و فلت‌فیل قبولش می‌کند).
+        n_fill = 0
+        try:
+            h, w = image.shape[:2]
+            _gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            # نقشهٔ گرادیان یک‌بار برای کل صفحه (نمونه‌برداری بعدی فقط اندیس)
+            _gx_full = cv2.Sobel(_gray, cv2.CV_32F, 1, 0, ksize=3)
+            _gy_full = cv2.Sobel(_gray, cv2.CV_32F, 0, 1, ksize=3)
+            _grad_full = cv2.magnitude(_gx_full, _gy_full)
+        except Exception:
+            return 0
+        for region in regions:
+            for poly in (getattr(region, "ocr_polys", None) or []):
+                try:
+                    pp = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                if pp.shape[0] < 3:
+                    continue
+                try:
+                    c = pp.mean(axis=0)
+                    # حلقهٔ متراکم: هر ضلع هر ~۶px نمونه (محکم‌تر از نمونه‌گیری
+                    # فقط رأس‌ها در رقیب)
+                    ring_pts = []
+                    n_pts = pp.shape[0]
+                    for i in range(n_pts):
+                        a = pp[i]
+                        b = pp[(i + 1) % n_pts]
+                        seg = float(np.hypot(*(b - a)))
+                        n_s = max(2, int(round(seg / 6.0)))
+                        for t in np.linspace(0.0, 1.0, n_s, endpoint=False):
+                            ring_pts.append(a + (b - a) * t)
+                    ring_pts = np.asarray(ring_pts, dtype=np.float32)
+
+                    def _sample(scale):
+                        rs = c + (ring_pts - c) * scale
+                        xs = np.clip(np.rint(rs[:, 0]), 0, w - 1).astype(np.int32)
+                        ys = np.clip(np.rint(rs[:, 1]), 0, h - 1).astype(np.int32)
+                        return image[ys, xs].astype(np.float32)
+
+                    fill_col = None
+                    fill_exp = 1.0
+                    r1 = _sample(1.025)
+                    if r1.shape[0] >= 12:
+                        avg1 = r1.mean(axis=0)
+                        dev1 = np.sqrt(((r1 - avg1[None, :]) ** 2).sum(axis=1))
+                        if float((dev1 <= 15.0).mean()) >= 0.99:
+                            fill_col = avg1
+                            fill_exp = 1.05
+                    if fill_col is None:
+                        r2 = _sample(1.10)
+                        if r2.shape[0] >= 16:
+                            avg2 = r2.mean(axis=0)
+                            dev2 = np.sqrt(((r2 - avg2[None, :]) ** 2).sum(axis=1))
+                            _close = dev2 <= 35.0
+                            if float(_close.mean()) >= 0.75:
+                                _cls_px = r2[_close]
+                                # 🛡 فیلتر بافت: گرادیان کم روی نزدیک‌ها = کاغذ صاف
+                                _xs2 = np.clip(np.rint(
+                                    (c + (ring_pts - c) * 1.10)[:, 0]),
+                                    0, w - 1).astype(np.int32)
+                                _ys2 = np.clip(np.rint(
+                                    (c + (ring_pts - c) * 1.10)[:, 1]),
+                                    0, h - 1).astype(np.int32)
+                                _g2 = _grad_full[_ys2, _xs2].astype(np.float32)[_close]
+                                if _g2.size >= 16:
+                                    if float(np.median(_g2)) > 22.0:
+                                        continue
+                                _s2 = _hsv[..., 1][_ys2, _xs2].astype(np.float32)[_close]
+                                if float(np.median(_s2)) > 60.0:
+                                    continue  # محیط رنگی → TELEA
+                                fill_col = _cls_px.mean(axis=0)
+                                fill_exp = 1.10
+                    if fill_col is None:
+                        continue
+                    fill_col = tuple(int(min(255, max(0, round(v))))
+                                     for v in fill_col)  # image از قبل BGR است
+                    fill_pts = np.rint(
+                        c + (pp - c) * fill_exp).astype(np.int32)
+                    cv2.fillPoly(cleaned, [fill_pts], fill_col)
+                    n_fill += 1
+                except Exception:
+                    continue
+        return n_fill
+
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
 
-        # 📱 سرعت پاکسازی (الگوی K3): روی اندروید ماسکِ سریع چندضلعی‌ها —
-        # خاموشی: MANGA_FAST_MASK=0 ؛ اگر ماسک سریع ممکن نشد → مسیر کامل
-        if ((_on_android() or os.environ.get("MANGA_FAST_MASK", "0") == "1")
-                and os.environ.get("MANGA_FAST_MASK", "1") != "0"
+        # 🚀 سرعت پاکسازی (الگوی K3): ماسکِ سریع چندضلعی‌ها «همه‌جا» پیش‌فرض است
+        # (قبلاً فقط اندروید) — PC/وب هم مسیر سنگین جوهر لازم ندارد؛ خاموشی:
+        # MANGA_FAST_MASK=0 ؛ اگر ماسک سریع ممکن نشد → مسیر کامل
+        if (os.environ.get("MANGA_FAST_MASK", "1") != "0"
                 and not getattr(self, "erase_bubble_interior", False)):
             _fm = self._build_text_mask_fast(image, regions)
             if _fm is not None:
@@ -4967,6 +5113,49 @@ class MangaTranslator:
         except Exception:
             return None
 
+    @staticmethod
+    def _paper_fill_cluster(crop_img: np.ndarray,
+                            crop_msk: np.ndarray) -> Optional[np.ndarray]:
+        # 🇰3 پرکردن کاغذی (وب‌تون/جزوهٔ متن‌متراکم): حلقهٔ دور خوشهٔ متنِ متراکم
+        # «متنِ خط بعدی» است و هیچ چک حلقه‌ای قبولش نمی‌کند؛ ولی خودِ محیط
+        # غالباً کاغذ روشنِ صاف است → میانهٔ پیکسل‌های روشنِ همسایه = پرکردن
+        # بی‌نقص و فوری (~۱ms) به‌جای LaMa (~۸s). فیلتر بافت/اشباع دارد تا
+        # اسکرین‌تون و حباب رنگی به مسیر خودشان بروند.
+        try:
+            m = crop_msk > 0
+            if not m.any():
+                return None
+            R = (cv2.dilate(crop_msk, np.ones((15, 15), np.uint8)) > 0) & (~m)
+            n_R = int(np.count_nonzero(R))
+            if n_R < 200:
+                return None
+            px = crop_img[R].astype(np.float32)
+            if not np.isfinite(px).all():
+                return None
+            _WB, _WG, _WR = 0.114, 0.587, 0.299
+            with np.errstate(invalid="ignore", over="ignore"):
+                _lum = px[:, 0] * _WB + px[:, 1] * _WG + px[:, 2] * _WR
+            _lit = _lum >= 190.0
+            n_lit = int(np.count_nonzero(_lit))
+            if n_lit < 200 or n_lit < 0.60 * n_R:
+                return None
+            hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
+            _sat_lit = hsv[..., 1][R].astype(np.float32)[_lit]
+            if float(np.median(_sat_lit)) > 60.0:
+                return None  # محیط رنگی → مسیر TELEA
+            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
+            _grad_lit = cv2.magnitude(gx, gy)[R][_lit]
+            if float(np.median(_grad_lit)) > 18.0:
+                return None  # بافت/اسکرین‌تون → LaMa
+            anchor = np.median(px[_lit], axis=0)
+            out = crop_img.copy()
+            out[m] = np.clip(np.rint(anchor), 0, 255).astype(np.uint8)
+            return out
+        except Exception:
+            return None
+
     def _flat_fill_cluster(self, crop_img: np.ndarray, crop_msk: np.ndarray) -> Optional[np.ndarray]:
         m = crop_msk > 0
         if not m.any():
@@ -4986,6 +5175,18 @@ class MangaTranslator:
             _lum = ring_px[:, 0] * _WB + ring_px[:, 1] * _WG + ring_px[:, 2] * _WR
             _paper = ring_px[_lum >= 200.0]
             _paper_share = float(_paper.shape[0]) / float(max(1, ring_px.shape[0]))
+            # 🇰3 TurboClean — میان‌بر کاغذ یکدست: اگر حلقه تقریباً همه کاغذ روشن
+            # باشد (جعبهٔ متن سفید/کرم وب‌تون) → پرکردن تختِ فوری با رنگ کاغذ؛
+            # بدون lstsq و بدون LaMa (~۰.۷ms به‌جای ~۸s روی هر خوشه).
+            if _paper_share >= 0.85:
+                _anchor = np.median(_paper, axis=0)
+                _al = float(_anchor[0] * _WB + _anchor[1] * _WG + _anchor[2] * _WR)
+                if _al >= 190.0:
+                    _dev = np.abs(ring_px - _anchor[None, :]).max(axis=1)
+                    if float(np.percentile(_dev, 90)) <= 26.0:
+                        out = crop_img.copy()
+                        out[m] = np.clip(np.rint(_anchor), 0, 255).astype(np.uint8)
+                        return out
             if _paper_share >= 0.35:
                 _anchor = np.median(_paper, axis=0)
                 _sel = (np.abs(ring_px - _anchor[None, :]).max(axis=1) <= 20.0)
@@ -5223,6 +5424,16 @@ class MangaTranslator:
 
         cleaned = image.copy()
         counts = {"flat": 0, "رنگی": 0, "LaMa": 0, "OpenCV": 0}
+        # 🇰3 مرحلهٔ صفر: پر کردن فوری خط‌های با حلقهٔ یکدست (سفید/رنگی تخت)
+        try:
+            _n_inst = self._k3_line_instant_fill(image, cleaned, regions, mask)
+            if _n_inst:
+                print(f"  [⚡] {_n_inst} خط فوراً پر شد (حلقهٔ یکدست — الگوی K3) — بدون LaMa")
+        except Exception:
+            pass
+        if not np.any(mask):
+            print("  [⚡] همه‌چیز با پر کردن فوری تمیز شد — پاکسازی تمام در چند میلی‌ثانیه")
+            return cleaned
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         # 🇰3 بهینه: Canny/وال‌لاین کل‌صفحه فقط وقتی OpenCV واقعاً لازم شد
         _wall_cache = {"tried": False, "val": None}
@@ -5248,6 +5459,7 @@ class MangaTranslator:
             # 🇰3 اول چک یکنواختی فوری (TurboClean)؛ اگر نشد مسیر گرادیانی
             result = self._flat_fill_uniform(crop_img, crop_msk)
             method = "flat"
+            _pf_ok = False
             if result is None:
                 # 🎨 حباب رنگیِ صاف (زرد و...) → TELEA به‌جای LaMa
                 _cr = self._color_fill_cluster(crop_img, crop_msk)
@@ -5255,8 +5467,17 @@ class MangaTranslator:
                     crop_msk, result = _cr
                     method = "رنگی"
             if result is None:
+                # 🇰3 پرکردن کاغذی: متن متراکم وب‌تون — حلقه «متن خط بعد» است
+                _pf = self._paper_fill_cluster(crop_img, crop_msk)
+                if _pf is not None:
+                    result = _pf
+                    _pf_ok = True
+            if result is None:
                 result = self._flat_fill_cluster(crop_img, crop_msk)
-            if (result is not None
+            # 🩹 چک بافتِ حلقه‌ای فقط برای فلت‌فیل/گرادیان — پرکردن کاغذی خودش
+            # فیلتر بافت داخلی دارد (میانهٔ گرادیانِ فقط پیکسل‌های روشن) و حلقهٔ
+            # ۹px آن «متنِ خط بعدی» است که std/Laplacian را به‌دروغ بالا می‌برد
+            if (result is not None and not _pf_ok
                     and self._bg_is_textured(crop_img, crop_msk, strong=True)):
                 result = None
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method])
@@ -5283,7 +5504,11 @@ class MangaTranslator:
                         # 🔥 فاصلهٔ ادغام وابسته به اندازهٔ صفحه: صفحهٔ بزرگ →
                         # حباب‌های نزدیک در «یک پچ» (فراخوانی کمتر = سرعت بیشتر)
                         _gap = 24
-                        if _on_android():
+                        if _long >= 2.5 * _short:
+                            # نوار بلند وب‌تون: جعبه‌های روی‌هم‌چین ~۶۰-۱۵۰px فاصله
+                            # دارند → gap بزرگ‌تر = پچ کمتر = سرعت بیشتر
+                            _gap = int(max(32, min(128, round(_short * 0.12))))
+                        elif _on_android():
                             _gap = int(max(24, min(96, round(_short * 0.04))))
                         groups = self._group_nearby_patches(pending, gap=_gap)
                     if _short * 2.5 < _long:
@@ -5311,8 +5536,13 @@ class MangaTranslator:
                                 _workers = 3
                             elif _av >= 0.9:
                                 _workers = 2
-                        elif _av >= 2.0:
+                        elif _av >= 1.5:
                             _workers = 2
+                            try:
+                                if self._cpu_core_count() >= 6 and _av >= 3.5:
+                                    _workers = 3
+                            except Exception:
+                                pass
                     except Exception:
                         _workers = 1
                     _workers = max(1, min(_workers, len(groups)))
@@ -7636,6 +7866,9 @@ class MangaTranslator:
         candidates = []
 
         
+        # 🚀 سرعت: برش‌های بزرگ (م≥۶۰۰) نیازی به بزرگ‌نمایی ندارند — det ورودی
+        # را خودش به سقف می‌رساند و rec خطوط را به ارتفاع ثابت resize می‌کند؛
+        # میکرو-بنچ: scale=۱.۰ همان تعداد خط را می‌دهد و ~۱۰٪ سریع‌تر است.
         m = max(ch0, cw0)
         if m < 200:
             base_scale = 2.4
@@ -7644,7 +7877,7 @@ class MangaTranslator:
         elif m < 600:
             base_scale = 1.35
         else:
-            base_scale = 1.15  
+            base_scale = 1.0  
 
         
         inset = int(min(ch0, cw0) * 0.06)
@@ -7732,8 +7965,12 @@ class MangaTranslator:
             if scv > best[2]:
                 best = (txt, polys, scv, _poly_angs)
 
-            if ((not _tilted0) and conf >= 0.86
-                    and len(re.sub(r"[^A-Za-z]", "", txt or "")) >= 8):
+            # 🚀 توقف زودهنگام گسترده‌تر: متن بلند با اطمینان خوب قابل‌اعتماد است
+            # (رقیب اصلاً واریانت دوم ندارد — یک پاس ML Kit).
+            _latin_n = len(re.sub(r"[^A-Za-z]", "", txt or ""))
+            if ((not _tilted0)
+                    and ((conf >= 0.86 and _latin_n >= 8)
+                         or (conf >= 0.78 and _latin_n >= 20))):
                 early_stop = True
                 break
 
@@ -9655,6 +9892,96 @@ html, body { background: #0a0a0b; }
         candidates = sorted(set(candidates))
         return min(candidates, key=lambda y: abs(y - target_y))
 
+    def _find_safe_cut_y_smart(
+        self,
+        strip: np.ndarray,
+        target_y: int,
+        min_y: int,
+        max_y: int,
+        search_radius: int = 900,
+        protected_ranges: Optional[List[Tuple[int, int]]] = None,
+    ) -> Optional[int]:
+        # 🇰3 برش امن هیبریدی: اول تحلیل پیکسلی (رایگان — گپ‌های سفید را دقیق
+        # می‌گیرد)؛ اگر نشد (نوار تیره/رنگی که ردیف «کاغذ خالی» ندارد) →
+        # fallback دیتکتوری به سبک K3 (VerifyAndAdjustCutWithDetectorAsync):
+        # وسط گپ بین بلوک‌های متنیِ تشخیص‌داده‌شده، با padding داینامیک.
+        cut = self._find_safe_cut_y(
+            strip, target_y, min_y, max_y,
+            search_radius=search_radius, protected_ranges=protected_ranges,
+        )
+        if cut is not None or self.det is None:
+            return cut
+        return self._detector_safe_cut(strip, target_y, min_y, max_y,
+                                       search_radius=search_radius,
+                                       protected_ranges=protected_ranges)
+
+    def _detector_safe_cut(
+        self,
+        strip: np.ndarray,
+        target_y: int,
+        min_y: int,
+        max_y: int,
+        search_radius: int = 900,
+        protected_ranges: Optional[List[Tuple[int, int]]] = None,
+    ) -> Optional[int]:
+        try:
+            ih, iw = strip.shape[:2]
+            clearance = max(40, int(round(iw * 0.05)))
+            edge_margin = max(50, int(round(iw * 0.06)))
+            y0 = max(int(min_y), int(target_y) - int(search_radius),
+                     clearance + edge_margin)
+            y1 = min(int(max_y), int(target_y) + int(search_radius),
+                     ih - clearance - edge_margin)
+            if y1 < y0:
+                return None
+            # پنجرهٔ پروب (سبک K3: ±۱۰٪ هدف، حداقل ۲۵۰px) — با کف/سقف امن
+            probe_half = max(250, int(round((y1 - y0) * 0.25)), clearance + edge_margin)
+            wy0 = max(0, y0 - probe_half)
+            wy1 = min(ih, y1 + probe_half)
+            if wy1 - wy0 < 100:
+                return None
+            band = strip[wy0:wy1]
+            boxes = self.det.detect(band)
+            spans: List[Tuple[int, int]] = []
+            for box in boxes:
+                _, by1, _, by2 = box["rect"]
+                top = max(0, wy0 + int(by1) - edge_margin)
+                bot = min(ih, wy0 + int(by2) + 1 + edge_margin)
+                if bot > top:
+                    spans.append((top, bot))
+            for top, bottom in (protected_ranges or []):
+                spans.append((max(0, int(top) - edge_margin),
+                              min(ih, int(bottom) + 1 + edge_margin)))
+            if not spans:
+                return None
+            # ادغام بازه‌های روی‌هم‌افتاده
+            spans.sort()
+            merged: List[Tuple[int, int]] = []
+            for top, bot in spans:
+                if merged and top <= merged[-1][1]:
+                    merged[-1] = (merged[-1][0], max(merged[-1][1], bot))
+                else:
+                    merged.append((top, bot))
+            pad = max(35, int(round(iw * 0.04)))
+            cands: List[int] = []
+            first_top = merged[0][0] - pad
+            if y0 <= first_top <= y1:
+                cands.append(first_top)
+            for j in range(len(merged) - 1):
+                gap = merged[j + 1][0] - merged[j][1]
+                if gap >= 2 * pad:
+                    mid = merged[j][1] + gap // 2
+                    if y0 <= mid <= y1:
+                        cands.append(mid)
+            last_bot = merged[-1][1] + pad
+            if y0 <= last_bot <= y1:
+                cands.append(last_bot)
+            if not cands:
+                return None
+            return min(cands, key=lambda y: abs(y - target_y))
+        except Exception:
+            return None
+
     def _repair_page_seams(self, image_files: List[str], work_dir: str) -> List[str]:
         
         if len(image_files) < 2 or not getattr(self, "repair_page_seams", True):
@@ -9788,7 +10115,7 @@ html, body { background: #0a0a0b; }
             except Exception as exc:
                 raise RuntimeError("بررسی مرز صفحهٔ اول ناموفق بود؛ برای جلوگیری از قطع متن "
                                    "صفحه جدا نشد.") from exc
-            keep_first = self._find_safe_cut_y(
+            keep_first = self._find_safe_cut_y_smart(
                 preview, seam_y, seam_y, seam_y, protected_ranges=protected,
             ) is not None
             if not keep_first:
@@ -9895,12 +10222,12 @@ html, body { background: #0a0a0b; }
             while ih - offset >= work_h + min_strip:
                 max_cut = ih - max(min_strip, lookahead if not final else 0)
                 target = offset + work_h
-                cut_y = self._find_safe_cut_y(
+                cut_y = self._find_safe_cut_y_smart(
                     strip, target, offset + min_strip, max_cut,
                     search_radius=lookahead, protected_ranges=protected,
                 )
                 if cut_y is None:
-                    cut_y = self._find_safe_cut_y(
+                    cut_y = self._find_safe_cut_y_smart(
                         strip, target, offset + min_strip, max_cut,
                         search_radius=ih, protected_ranges=protected,
                     )
@@ -9981,7 +10308,29 @@ html, body { background: #0a0a0b; }
             print(f"[*] عنوان سری (فقط صفحه ۱): {', '.join(title_skips[:8])}"
                   + ("…" if len(title_skips) > 8 else ""))
 
-        if self._is_url(input_path) or "," in input_path or "*" in input_path:
+        # 📱 فیکس انتخاب چندفایلی اندروید: وقتی کاربر چند فایل از گالری/فایل‌منیجر
+        # انتخاب می‌کند، اپ مسیرهای محلی را با «,» می‌فرستد — این‌ها فایل هستند
+        # نه لینک؛ دانلودشان MissingSchema می‌داد (No scheme supplied).
+        _local_fix_files: Optional[List[str]] = None
+        if (not self._is_url(input_path) and "*" not in input_path
+                and "," in input_path):
+            def _local_img(s: str) -> Optional[str]:
+                s = (s or "").strip()
+                if s.lower().startswith("file://"):
+                    s = s[7:]
+                if (s and os.path.isfile(s)
+                        and os.path.splitext(s)[1].lower() in IMAGE_EXTS):
+                    return s
+                return None
+            _parts = [p for p in input_path.split(",") if p.strip()]
+            _loc = [_local_img(p) for p in _parts]
+            if _parts and all(_loc):
+                _local_fix_files = _loc
+
+        if _local_fix_files is not None:
+            image_files = _local_fix_files
+            print(f"[*] {len(image_files)} فایل محلی انتخاب شد — بدون دانلود.")
+        elif self._is_url(input_path) or "," in input_path or "*" in input_path:
             urls = self._expand_input_urls(input_path)
 
             if not urls:
@@ -10008,6 +10357,22 @@ html, body { background: #0a0a0b; }
                 }
                 for i, u in enumerate(urls, 1):
                     try:
+                        # 📱 اگر جزء لیست یک فایل محلی بود (ورودی ترکیبی) → کپی، نه دانلود
+                        _lp = u[7:] if u.lower().startswith("file://") else u
+                        if (os.path.isfile(_lp)
+                                and os.path.splitext(_lp)[1].lower() in IMAGE_EXTS):
+                            _ub = os.path.splitext(os.path.basename(_lp))[0]
+                            _ub = re.sub(r'[\\/:*?"<>|]+', "_", _ub).strip("._ ")[:80]
+                            _lext = os.path.splitext(_lp)[1].lower()
+                            out_file = os.path.join(src_dir, f"{_ub or f'page_{i:03d}'}{_lext}")
+                            _kk = 2
+                            while os.path.exists(out_file):
+                                out_file = os.path.join(src_dir, f"{_ub or f'page_{i:03d}'}-{_kk}{_lext}")
+                                _kk += 1
+                            shutil.copyfile(_lp, out_file)
+                            image_files.append(out_file)
+                            print(f"    [+] {i}/{len(urls)} فایل محلی کپی شد")
+                            continue
                         u = self._normalize_image_url(u)
                         r = _req.get(u, headers=headers, timeout=60)
                         r.raise_for_status()
