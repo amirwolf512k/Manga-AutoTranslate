@@ -3441,9 +3441,20 @@ class MangaTranslator:
                 print("    [*] بارگذاری lama.onnx ...")
             if self._lama is None and self.use_lama:
                 try:
+                    # نخِ هر نشست LaMa را با تعداد پچ‌های موازی تنظیم کن تا
+                    # CPU اشباعِ درست شود (workers × threads ≈ هسته‌ها)
+                    try:
+                        _awa = int(self._lama_workers_auto())
+                    except Exception:
+                        _awa = 2
+                    try:
+                        _nc = int(self._cpu_core_count())
+                    except Exception:
+                        _nc = os.cpu_count() or 4
+                    _thr = max(1, min(3, _nc // max(1, min(_awa, 4))))
                     self._lama = LamaMangaONNX(
                         prefer_gpu=self.use_gpu,
-                        threads=max(1, int(getattr(self, "max_workers", 2) or 2)),
+                        threads=_thr,
                     )
                     self._inpainter_name = "LaMa-Manga"
                 except Exception as e2:
@@ -5490,6 +5501,7 @@ class MangaTranslator:
             k = cv2.getStructuringElement(
                 cv2.MORPH_ELLIPSE, (2 * padding + 1, 2 * padding + 1))
             m = cv2.dilate(m, k)
+        m = self._clip_mask_to_bubbles(image, m, regions)
         return m
 
     @staticmethod
@@ -5906,7 +5918,97 @@ class MangaTranslator:
                 ink = cv2.dilate(ink, kernel)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
 
+        text_mask = self._clip_mask_to_bubbles(image, text_mask, regions)
         return text_mask
+
+    def _clip_mask_to_bubbles(self, image: np.ndarray, mask: np.ndarray,
+                              regions: List["TextRegion"]) -> np.ndarray:
+        """پاکسازی نباید از حباب بیرون بزند.
+
+        بعد از ساخت ماسک (شامل پدینگ و جذب جوهر)، ماسکِ هر ناحیهٔ داخل حباب
+        به داخل حباب محدود می‌شود؛ دیوارِ حباب و بیرونش دست‌نخورده می‌ماند.
+        کلید: MANGA_BUBBLE_CLIP=0 برای خاموش‌کردن.
+        """
+        try:
+            if os.environ.get("MANGA_BUBBLE_CLIP", "1") != "1":
+                return mask
+        except Exception:
+            return mask
+        if bool(getattr(self, "erase_bubble_interior", False)):
+            # در حالت پاک‌کردن کامل داخل حباب، ماسک از قبل با
+            # _bubble_interior_mask به دیوار چسبیده؛ محدودسازی دوباره
+            # ممکن است ته‌ماندهٔ متن کنار دیوار بگذارد
+            return mask
+        try:
+            h, w = image.shape[:2]
+        except Exception:
+            return mask
+        n_clip = 0
+        for region in regions:
+            det_class = (getattr(region, "det_class", "") or "")
+            if det_class not in ("bubble", "text_bubble"):
+                continue
+            try:
+                x, y, rw, rh = [int(v) for v in region.rect]
+            except Exception:
+                continue
+            M = 28
+            cx0, cy0 = max(0, x - M), max(0, y - M)
+            cx1, cy1 = min(w, x + rw + M), min(h, y + rh + M)
+            if cx1 - cx0 < 24 or cy1 - cy0 < 24:
+                continue
+            sub = mask[cy0:cy1, cx0:cx1]
+            if not np.any(sub):
+                continue
+            # دانه = مستطیل متن (کمی کوچک‌تر) — مثل گارد حباب
+            seed = np.zeros_like(sub)
+            _px0, _py0 = max(0, x - cx0 + 2), max(0, y - cy0 + 2)
+            _px1 = min(sub.shape[1], x - cx0 + rw - 2)
+            _py1 = min(sub.shape[0], y - cy0 + rh - 2)
+            if _px1 - _px0 >= 10 and _py1 - _py0 >= 10:
+                seed[_py0:_py1, _px0:_px1] = 255
+            else:
+                seed = sub.copy()
+            # قاب تصویر با حاشیهٔ سیاه بسته می‌شود تا همیشه گوشهٔ پس‌زمینه
+            # وجود داشته باشد و flood-fillِ تشخیص دامنه گیر نکند
+            _P = 24
+            try:
+                _img_p = cv2.copyMakeBorder(
+                    image[cy0:cy1, cx0:cx1], _P, _P, _P, _P,
+                    cv2.BORDER_CONSTANT, value=(0, 0, 0))
+                _seed_p = cv2.copyMakeBorder(
+                    seed, _P, _P, _P, _P,
+                    cv2.BORDER_CONSTANT, value=0)
+                dom = self._bubble_domain_local(_img_p, _seed_p, rect_box=None)
+            except Exception:
+                continue
+            if dom is None or cv2.countNonZero(dom) == 0:
+                continue
+            dom = dom[_P:-_P, _P:-_P]
+            if dom.shape != sub.shape:
+                dom = cv2.resize(dom, (sub.shape[1], sub.shape[0]),
+                                 interpolation=cv2.INTER_NEAREST)
+            if cv2.countNonZero(dom) == 0:
+                continue
+            # ±۲ پیکسل رواداری برای لبه‌های ضدالیه
+            dom_d = cv2.dilate(dom, np.ones((3, 3), np.uint8), iterations=1)
+            before = int(cv2.countNonZero(sub))
+            outside = int(np.count_nonzero((sub > 0) & (dom_d == 0)))
+            if outside <= 0 or before <= 0:
+                continue
+            clipped = cv2.bitwise_and(sub, dom_d)
+            after = int(cv2.countNonZero(clipped))
+            if after <= 0 or after < 0.45 * before:
+                continue
+            mask[cy0:cy1, cx0:cx1] = clipped
+            n_clip += 1
+        if n_clip:
+            try:
+                print(f"  [🫧] ماسکِ {n_clip} ناحیه به داخل حباب محدود شد — "
+                      "بیرون حباب دست‌نخورده می‌ماند")
+            except Exception:
+                pass
+        return mask
 
     def _tilted_ink_mask(self, gray: np.ndarray, x0: int, y0: int, x1: int, y1: int,
                          poly_abs: np.ndarray, ang: float) -> Optional[np.ndarray]:
@@ -6557,8 +6659,21 @@ class MangaTranslator:
                 _ok_flat = (_cb_area <= 0.0035 * _pg_area
                             and (bx1 - bx0) <= 0.30 * _pg_w
                             and (by1 - by0) <= 0.22 * _pg_h)
-            result = (self._flat_fill_uniform(crop_img, crop_msk)
-                      if _ok_flat else None)
+            # flat برای همهٔ خوشه‌ها امتحان می‌شود (هزینه‌اش میلی‌ثانیه است)؛
+            # اگر حلقهٔ دور ماسک یکدست باشد → همان لحظه پر می‌شود و LaMa لازم نمی‌شود.
+            # فقط برای خوشه‌های بزرگ، پرکردگی باید روشن باشد (حباب/کاغذ)؛
+            # نواحی تیره/رنگی بزرگ راهی LaMa می‌شوند که بافت واقعی بسازد.
+            result = self._flat_fill_uniform(crop_img, crop_msk)
+            if result is not None and not _ok_flat:
+                try:
+                    _msel = crop_msk > 0
+                    _lv = result[_msel].astype(np.float32)
+                    _lum = float(np.median(
+                        _lv[:, 0] * 0.114 + _lv[:, 1] * 0.587 + _lv[:, 2] * 0.299))
+                    if _lum < 170.0:
+                        result = None
+                except Exception:
+                    result = None
             method = "flat"
             _pf_ok = False
             if result is None:
