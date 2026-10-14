@@ -11,6 +11,7 @@ import sys
 import threading
 import time
 import urllib.request
+import urllib.parse
 from datetime import datetime
 from typing import Optional
 
@@ -633,7 +634,7 @@ HELP_TEXT = f"""راهنما — {APP_NAME} v{APP_VER}
   در fonts/ جایگزین کنید و برنامه را دوباره باز کنید.
 
 ▶ CLI
-  python manga_app.py -- -i input -o out.pdf --font fonts/Vazirmatn-Bold.ttf --api-key KEY --cpu --lama
+  python manga_app.py -- -i input -o out.pdf --font fonts/Vazirmatn-Bold.ttf --api-key KEY --clean-method lama-manga
 
 ▶ نکات
   • کلید از aistudio.google.com / platform.openai.com / openrouter.ai — چند کلید = چرخش خودکار
@@ -765,7 +766,7 @@ def run_cli_interactive():
         cmd += ["--model", model]
     if provider == "custom" and api_base_v:
         cmd += ["--api-base", api_base_v]
-    cmd += ["--lama", "--cpu"]
+    cmd += ["--clean-method", str(cfg.get("clean_method") or "lama-manga")]
 
     print("\n▶ " + " ".join(cmd) + "\n")
     proc = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE,
@@ -1217,13 +1218,15 @@ def run_desktop():
     card_opt = ttk.LabelFrame(tab_body, text=" گزینه‌ها ", padding=12)
     card_opt.pack(fill="x", padx=10, pady=6)
     row4 = ttk.Frame(card_opt); row4.pack(fill="x")
-    lama_var = tk.BooleanVar(value=False)
-    cpu_var = tk.BooleanVar(value=bool(cfg.get("force_cpu", False)))
+    cleanm_var = tk.StringVar(value=str(cfg.get("clean_method") or "lama-manga"))
     twopass_var = tk.BooleanVar(value=True)
     debug_var = tk.BooleanVar(value=False)
-    ttk.Checkbutton(row4, text="اجبار LaMa-Manga (خالی = خودکار)",
-                    variable=lama_var).pack(side="right", padx=6)
-    ttk.Checkbutton(row4, text="اجبار CPU", variable=cpu_var).pack(side="right", padx=6)
+    ttk.Label(row4, text="روش پاکسازی:").pack(side="right", padx=6)
+    for _cm_v, _cm_l in (("lama-manga", "lama.onnx + flat (پیش‌فرض)"),
+                         ("lama-big", "lama-big + flat"),
+                         ("opencv", "opencv + flat")):
+        ttk.Radiobutton(row4, text=_cm_l, value=_cm_v,
+                        variable=cleanm_var).pack(side="right", padx=6)
     ttk.Checkbutton(row4, text="OCR دومرحله‌ای", variable=twopass_var).pack(side="right", padx=6)
     ttk.Checkbutton(row4, text="دیباگ", variable=debug_var).pack(side="right", padx=6)
     fake_var = tk.BooleanVar(value=bool(cfg.get("fake_test", False)))
@@ -1760,7 +1763,7 @@ def run_desktop():
                      "model": model_var.get(), "font": font_v,
                      "provider": prov_var.get(),
                      "workers": workers_var.get(), "bubbles": bubbles_var.get(),
-                     "timeout": timeout_var.get(), "force_cpu": cpu_var.get(),
+                     "timeout": timeout_var.get(), "clean_method": cleanm_var.get(),
                      "batch_workers": batchw_var.get(), "max_retries": maxre_var.get(),
                      "request_delay": reqdelay_var.get(), "temperature": temp_var.get(),
                      "reading_order": readord_var.get(),
@@ -1806,10 +1809,7 @@ def run_desktop():
             cmd += ["--model", model_var.get().strip()]
         if str(prov_var.get()).strip() == "custom" and apibase_var.get().strip():
             cmd += ["--api-base", apibase_var.get().strip()]
-        if lama_var.get():
-            cmd += ["--lama"]
-        if cpu_var.get():
-            cmd += ["--cpu"]
+        cmd += ["--clean-method", cleanm_var.get()]
         if not twopass_var.get():
             cmd += ["--no-two-pass-ocr"]
         if debug_var.get():
@@ -2026,6 +2026,22 @@ body, .gradio-container, footer, .gradio-container .prose {
   box-shadow: 0 4px 12px rgba(224,53,42,.35), inset 0 0 0 1.5px rgba(255,255,255,.2);
 }
 .hint { color: var(--ink-dim) !important; font-size: .83rem; margin-top: 8px; }
+
+.live-strip {
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: 70vh; overflow-y: auto; padding: 4px 6px;
+  scrollbar-width: thin; scrollbar-color: var(--ink-red-deep) transparent;
+}
+.live-strip::-webkit-scrollbar { width: 8px; }
+.live-strip::-webkit-scrollbar-thumb { background: var(--ink-red-deep); border-radius: 8px; }
+.live-strip .lvimg {
+  width: 100%; height: auto; display: block;
+  border: 1px solid var(--ink-line); border-radius: 12px;
+  background: var(--ink-surface2);
+  box-shadow: 0 8px 24px rgba(0,0,0,.4);
+  opacity: 0; transform: translateY(10px);
+  animation: rise .45s cubic-bezier(.2,.7,.2,1) forwards;
+}
 
 label, span, .prose, p, li { color: var(--ink-dim) !important; }
 span:not(.stepnum):not(.chip) {
@@ -2877,12 +2893,14 @@ def run_web():
                 readord = gr.Radio(["rtl", "ltr"], value=str(cfg.get("reading_order", "rtl")),
                                    label="ترتیب خواندن حباب‌ها")
             with gr.Row():
-                use_lama = gr.Checkbox(label="پاک‌سازی LaMa-Manga (پیش‌فرض روشن — خاموش = OpenCV سریع)",
-                                       value=True)
-                force_cpu = gr.Checkbox(label="اجبار CPU (خالی = GPU اگر بود)",
-                                        value=False)
-                two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
+                clean_method = gr.Radio(
+                    choices=[["lama-manga", "lama.onnx + flat — پیش‌فرض (همان روش گوشی، سبک و سریع)"],
+                             ["lama-big", "lama-big + flat — فقط PC/وب (تمیزتر، کندتر)"],
+                             ["opencv", "opencv + flat — سریع‌ترین حالت"]],
+                    value=cfg.get("clean_method", "lama-manga"),
+                    label="روش پاکسازی (سه حالت)")
             with gr.Row():
+                two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
                 fake_test = gr.Checkbox(label="حالت تست — متن فارسی الکی (بدون API)",
                                         value=bool(cfg.get("fake_test", False)))
                 clean_only = gr.Checkbox(
@@ -2924,6 +2942,8 @@ def run_web():
                     "returncode": None,
                     "buf": [],
                     "t0": None,
+                    "live_dir": None,
+                    "live_files": [],
                 }
             return live_jobs[sid]
 
@@ -3002,6 +3022,7 @@ def run_web():
                         "src": str(job.get("src") or "")[:500],
                         "reader_path": job.get("reader_path"),
                         "reader_debug_path": job.get("reader_debug_path"),
+                        "live_dir": job.get("live_dir"),
                         "html_debug": (job.get("html_debug") or "")[:500] and True,
                         "has_debug": bool(job.get("download_debug") or job.get("reader_debug_path")),
                         "want_debug": bool(job.get("want_debug")),
@@ -3045,6 +3066,8 @@ def run_web():
                         j["reader_path"] = meta.get("reader_path")
                     if meta.get("reader_debug_path"):
                         j["reader_debug_path"] = meta.get("reader_debug_path")
+                    if meta.get("live_dir"):
+                        j["live_dir"] = meta.get("live_dir")
                     if meta.get("download_debug"):
                         j["download_debug"] = meta.get("download_debug")
                     if meta.get("want_debug"):
@@ -3383,6 +3406,12 @@ def run_web():
                             elem_id="manga_live_log",
                             value="— لاگ بعد از شروع ترجمه اینجا می‌آید —")
 
+        live_group = gr.Group(visible=False, elem_classes=["stepcard"])
+        with live_group:
+            gr.HTML('<div class="steptitle"><span class="stepnum">🖼</span> '
+                    'نمایش زنده — هر صفحه همین‌جا می‌آید، بدون رفرش</div>')
+            live_gallery = gr.HTML(value="", elem_id="manga_live_gallery")
+
         html_state = gr.State("")
         html_debug_state = gr.State("")
         with gr.Group(elem_classes=["stepcard"], visible=False) as result_group:
@@ -3401,7 +3430,7 @@ def run_web():
         browser_form_json = gr.State("")
 
         save_form_js = f"""
-(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord, lama, cpu, twopass, fake, cleano) => {{
+(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord, cleanm, twopass, fake, cleano) => {{
   try {{
     const realSid = (sid || sidBox || "").toString().trim();
     const clean = (v) => {{
@@ -3424,8 +3453,7 @@ def run_web():
       reqdelay: reqdelay,
       temp: temp,
       readord: readord || "",
-      lama: !!lama,
-      cpu: !!cpu,
+      cleanm: clean(cleanm) || "lama-manga",
       twopass: twopass === null || twopass === undefined ? true : !!twopass,
       fake_test: !!fake,
       clean_only: !!cleano,
@@ -3795,7 +3823,7 @@ def run_web():
                             out_fmt_v, quality_v, font_up,
                             workers_v, bubbles_v, timeout_v,
                             batchw_v, maxre_v, reqdelay_v, temp_v, readord_v,
-                            use_lama_v, force_cpu_v, two_pass_v,
+                            clean_method_v, two_pass_v,
                             fake_test_v, clean_only_v, web_debug_v, instruction_text_v,
                             glossary_text_v, story_brief_v, api_base_v,
                             *tone_args):
@@ -3946,10 +3974,7 @@ def run_web():
                 cmd += ["--ocr-lang"] + [p for p in str(ocr_lang_v).split() if p]
             if model_v and str(model_v).strip():
                 cmd += ["--model", str(model_v).strip()]
-            if use_lama_v:
-                cmd += ["--lama"]
-            if force_cpu_v:
-                cmd += ["--cpu"]
+            cmd += ["--clean-method", str(clean_method_v or "lama-manga")]
             if not two_pass_v:
                 cmd += ["--no-two-pass-ocr"]
             if fake_test_v:
@@ -3992,9 +4017,17 @@ def run_web():
                 job["log"] = "⏱ 0:00\n\n▶ در حال شروع…"
                 job["ts"] = time.time()
 
+            live_dir = os.path.join(user_out_dir, "live")
+            shutil.rmtree(live_dir, ignore_errors=True)
+            os.makedirs(live_dir, exist_ok=True)
+            with job["lock"]:
+                job["live_dir"] = live_dir
+                job["live_files"] = []
+
             _env = os.environ.copy()
             _env["PYTHONUNBUFFERED"] = "1"
             _env["PYTHONIOENCODING"] = "utf-8"
+            _env["MANGA_LIVE_DIR"] = live_dir
             try:
                 proc = subprocess.Popen(
                     cmd, cwd=HERE, stdout=subprocess.PIPE,
@@ -4042,7 +4075,7 @@ def run_web():
                     out_fmt, quality, font_upload,
                     workers, bubbles, timeout,
                     batchw, maxre, reqdelay, temp, readord,
-                    use_lama, force_cpu, two_pass,
+                    clean_method, two_pass,
                     fake_test, clean_only, web_debug, instruction_text,
                     glossary_text, story_brief, api_base] + tone_uploads + tone_enables,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
@@ -4083,7 +4116,7 @@ def run_web():
         _save_inputs = [
             session_id, sid_box, inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord,
-            use_lama, force_cpu, two_pass, fake_test, clean_only,
+            clean_method, two_pass, fake_test, clean_only,
         ]
 
         try:
@@ -4114,7 +4147,7 @@ def run_web():
                 except Exception:
                     pass
         for _comp in (quality, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord,
-                      use_lama, force_cpu, two_pass, fake_test, clean_only):
+                      clean_method, two_pass, fake_test, clean_only):
             try:
                 _comp.change(fn=None, inputs=_save_inputs, outputs=[], js=save_form_js)
             except Exception:
@@ -4221,6 +4254,20 @@ def run_web():
                     return gr.update()
                 return gr.update(value=bool(v))
 
+            def u_cleanm():
+                if "cleanm" in data:
+                    v = str(data.get("cleanm") or "").strip()
+                    if v in ("lama-manga", "lama-big", "opencv"):
+                        return gr.update(value=v)
+                    if v:
+                        return gr.update(value="lama-manga")
+                    return gr.update()
+                if data.get("cpu"):
+                    return gr.update(value="opencv")
+                if data.get("lama"):
+                    return gr.update(value="lama-big")
+                return gr.update(value="lama-manga")
+
             return (
                 sid,
                 gr.update(value=sid),
@@ -4245,8 +4292,7 @@ def run_web():
                 u_num("reqdelay"),
                 u_num("temp"),
                 u_str("readord"),
-                u_bool("lama"),
-                u_bool("cpu"),
+                u_cleanm(),
                 u_bool("twopass"),
                 u_bool("fake_test"),
                 u_bool("clean_only"),
@@ -4256,7 +4302,7 @@ def run_web():
             session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
             inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, readord,
-            use_lama, force_cpu, two_pass, fake_test, clean_only,
+            clean_method, two_pass, fake_test, clean_only,
         ]
 
         # فرم از localStorage: جاوااسکریپت مقدار hidden ترباکس را روی load پر می‌کند،
@@ -4425,6 +4471,38 @@ def run_web():
 
         _poll_outputs = [session_id, sid_box, sid_holder, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
                          dl_btn_debug, btn_view_debug, debug_row, html_debug_state]
+
+        def _scan_live_dir(live_dir):
+            try:
+                fs = [f for f in os.listdir(live_dir)
+                      if f.lower().endswith(".jpg") and f.startswith("live_")]
+            except Exception:
+                return []
+            fs.sort()
+            return [os.path.join(live_dir, f) for f in fs]
+
+        def _poll_live_gallery(sid_v, sid_box_v):
+            pref = (sid_v or sid_box_v or "").strip()
+            job = live_jobs.get(pref)
+            if job is None:
+                return gr.update(), gr.update()
+            live_dir = job.get("live_dir")
+            files = _scan_live_dir(live_dir) if live_dir else []
+            with job["lock"]:
+                prev = list(job.get("live_files") or [])
+            if files == prev:
+                return gr.update(), gr.update()
+            with job["lock"]:
+                job["live_files"] = files
+                job["ts"] = time.time()
+            if not files:
+                return gr.update(value=""), gr.update(visible=False)
+            imgs = "".join(
+                '<img class="lvimg" src="/file=%s" alt="صفحهٔ %d" loading="lazy">'
+                % (urllib.parse.quote(p), i + 1)
+                for i, p in enumerate(files))
+            html = '<div class="live-strip">%s</div>' % imgs
+            return gr.update(value=html), gr.update(visible=bool(files))
         try:
             _timer = gr.Timer(1.0, active=True)
             _tick_evt = _timer.tick(
@@ -4450,6 +4528,18 @@ def run_web():
                 demo.load(_poll_job_status, inputs=[session_id, sid_box], outputs=_poll_outputs)
             except Exception:
                 pass
+
+        try:
+            _timer_g = gr.Timer(1.5, active=True)
+            _timer_g.tick(
+                _poll_live_gallery,
+                inputs=[sid_holder, sid_box],
+                outputs=[live_gallery, live_group],
+                queue=False,
+                concurrency_limit=1,
+            )
+        except Exception:
+            pass
 
         def _cleanup_old_jobs():
             while True:

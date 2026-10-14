@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.21"
+APP_VER = "1.14.22"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -2782,6 +2782,36 @@ def uncensor_swears(text: str) -> str:
     return result.strip()
 
 
+def _live_page_dump(out_file: str) -> None:
+    d = (os.environ.get("MANGA_LIVE_DIR") or "").strip()
+    if not d:
+        return
+    try:
+        img = cv2.imread(out_file)
+        if img is None:
+            return
+        os.makedirs(d, exist_ok=True)
+        _sent = os.path.join(d, ".count")
+        try:
+            with open(_sent, encoding="utf-8") as f:
+                n = int(f.read().strip() or "0")
+        except Exception:
+            n = 0
+        h, w = img.shape[:2]
+        tw = 900
+        if w > tw:
+            img = cv2.resize(img, (tw, max(1, round(h * tw / w))),
+                             interpolation=cv2.INTER_AREA)
+        n += 1
+        cv2.imwrite(os.path.join(d, f"live_{n:04d}.jpg"), img,
+                    [cv2.IMWRITE_JPEG_QUALITY, 86])
+        with open(_sent, "w", encoding="utf-8") as f:
+            f.write(str(n))
+        print(f"[🖼] صفحهٔ {n} آماده شد", flush=True)
+    except Exception:
+        pass
+
+
 class MangaTranslator:
     _LAMA_MIN_VRAM_GB = 3.5
     _ANDROID_LAMA_MIN_TOTAL_GB = 4.0
@@ -2855,13 +2885,28 @@ class MangaTranslator:
         return 8.0
 
     def _decide_lama(self, force_gpu: Optional[bool],
-                     force_lama: bool = False) -> bool:
+                     force_lama: bool = False,
+                     clean_method: str = "") -> bool:
 
         has_ort = ort is not None
         has_torch = _torch_available()
         has_cuda = self._detect_torch_cuda() or _ort_has_cuda()
         vram = self._cuda_vram_gb()
         name = self._cuda_device_name()
+
+        cm = (clean_method or "").strip().lower()
+        if cm == "opencv":
+            print("[*] روش پاکسازی: opencv + flat (سریع و سبک).")
+            return False
+        if cm == "lama-manga":
+            print("[*] روش پاکسازی: lama.onnx + flat (همان روش گوشی — پیش‌فرض).")
+            return True
+        if cm == "lama-big":
+            if not has_torch:
+                print("[*] lama-big این‌جا torch ندارد → lama.onnx + flat.")
+                return True
+            print("[*] روش پاکسازی: lama-big + flat (تمیزتر، کندتر).")
+            return True
 
         if force_gpu is False and not force_lama:
             print("[*] --cpu → پاک‌سازی OpenCV سریع.")
@@ -2923,6 +2968,7 @@ class MangaTranslator:
         reading_order: str = "rtl",
         gpu: Optional[bool] = None,
         force_lama: bool = False,
+        clean_method: Optional[str] = None,
         group_margin: int = 5,
         inpaint_radius: int = 3,
         mask_padding: int = 3,
@@ -3097,7 +3143,12 @@ class MangaTranslator:
 
         self.use_gpu = ocr_gpu
 
-        self.use_lama = self._decide_lama(force_gpu=gpu, force_lama=force_lama)
+        _cm = (clean_method or "").strip().lower()
+        if _cm not in ("lama-manga", "lama-big", "opencv"):
+            _cm = ""
+        self.clean_method = _cm
+        self.use_lama = self._decide_lama(force_gpu=gpu, force_lama=force_lama,
+                                          clean_method=self.clean_method)
         self._inpainter_name = "OpenCV"
 
         self.ocr_langs = ocr_langs or ["en"]
@@ -3365,12 +3416,15 @@ class MangaTranslator:
                     return None
             _backend = (os.environ.get("MANGA_LAMA_BACKEND", "auto")
                         or "auto").strip().lower()
+            if _backend == "auto":
+                _backend = {"lama-manga": "onnx", "lama-big": "torch"}.get(
+                    getattr(self, "clean_method", "") or "", "auto")
             if _backend == "onnx":
                 _want_torch = False
             else:
                 _want_torch = _torch_available()
                 if _backend == "torch" and not _want_torch:
-                    print("    [!] MANGA_LAMA_BACKEND=torch ولی torch نصب نیست → ONNX")
+                    print("    [!] torch نصب نیست → lama.onnx")
             if _want_torch:
                 try:
                     print("    [*] بارگذاری big-lama.pt (TorchScript) ...")
@@ -3379,7 +3433,7 @@ class MangaTranslator:
                 except Exception as e:
                     print(f"    [!] big-LaMa ناموفق ({e}) → LaMa-Manga ONNX")
             elif self._lama is None:
-                print("    [*] torch در دسترس نیست → پاک‌سازی با LaMa ONNX")
+                print("    [*] بارگذاری lama.onnx ...")
             if self._lama is None and self.use_lama:
                 try:
                     self._lama = LamaMangaONNX(
@@ -12361,6 +12415,7 @@ html, body { background: #0a0a0b; }
                 try:
                     self._write_image(result, out_file)
                     results_by_i[page_i] = (out_file, True, dbg_out)
+                    _live_page_dump(out_file)
                 except Exception as _werr:
                     print(f"  [!] ذخیرهٔ تصویر #{page_i + 1} ناموفق: {_werr}")
                     results_by_i[page_i] = (out_file, None, dbg_out)
@@ -12533,6 +12588,7 @@ html, body { background: #0a0a0b; }
                 processed_files.append(out_file)
             else:
                 self._write_image(result, out_file)
+                _live_page_dump(out_file)
                 processed_files.append(out_file)
             results_by_i[page_i] = (out_file, None, None)
             if self.debug and dbg is not None:
@@ -12887,6 +12943,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="اجبار به CPU (OpenCV inpaint)")
     p.add_argument("--lama", action="store_true", default=False,
                    help="حتی روی CPU هم پاک‌سازی big-lama.pt را فعال کن (کندتر، تمیزتر)")
+    p.add_argument("--clean-method", dest="clean_method",
+                   choices=["lama-manga", "lama-big", "opencv"], default=None,
+                   help="روش پاکسازی: lama-manga (پیش‌فرض — مدل گوشی) | lama-big | opencv")
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--keep-old", action="store_true")
     p.add_argument("--request-delay", type=float, default=0.0)
@@ -13049,6 +13108,9 @@ def main():
         reading_order=args.reading_order,
         gpu=args.gpu,
         force_lama=bool(getattr(args, "lama", False)),
+        clean_method=(getattr(args, "clean_method", None)
+                      or ("lama-big" if getattr(args, "lama", False)
+                          else ("opencv" if args.gpu is False else "lama-manga"))),
         max_retries=args.max_retries,
         det_confidence=getattr(args, "det_confidence", 0.28),
         request_delay=args.request_delay,

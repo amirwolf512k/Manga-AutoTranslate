@@ -319,6 +319,17 @@ def manifest():
                     if val.upper() != "PSD":
                         kept.append(c)
                 f["choices"] = kept
+            # --- گوشی: lama-big قابل اجرا نیست → فقط دو حالت دیگر می‌آید ---
+            if f.get("id") == "clean_method" and _android():
+                ch = f.get("choices") or []
+                kept = []
+                for c in ch:
+                    val = str(c[1] if isinstance(c, (list, tuple)) and len(c) > 1 else c)
+                    if val != "lama-big":
+                        kept.append(c)
+                f["choices"] = kept
+                if f.get("default") == "lama-big":
+                    f["default"] = "lama-manga"
     try:
         _defaults(mf)
     except Exception:
@@ -381,6 +392,19 @@ def _resolve_tones(job, mf):
         else:
             _log(job, "⚠ فونت لحن «%s» پیدا نشد — با فونت اصلی رندر می‌شود" % lbl)
     return font_by_style, active
+
+
+def _clean_method_of(p):
+    cm = str(p.get("clean_method") or "").strip().lower()
+    if cm in ("lama-manga", "lama-big", "opencv"):
+        if cm == "lama-big" and _android():
+            return "lama-manga"
+        return cm
+    if "use_lama" in p:
+        return "lama-manga" if bool(p.get("use_lama")) else "opencv"
+    if bool(p.get("force_cpu")):
+        return "opencv"
+    return "lama-manga"
 
 
 def _out_stem_from_src(src: str) -> str:
@@ -540,7 +564,7 @@ def _fulllog_params(job):
         p = job.get("params") or {}
         keys = ("provider", "model", "api_base", "fmt", "debug", "fake",
                 "two_pass", "tones", "font", "ocr", "langs", "readord",
-                "force_cpu", "story_brief")
+                "clean_method", "story_brief")
         kvs = []
         for k in keys:
             v = p.get(k)
@@ -770,7 +794,8 @@ def _run(job):
                     ocr_langs=langs,
                     font_path=fp,
                     reading_order=str(p.get("readord") or "rtl"),
-                    gpu=False if p.get("force_cpu") else None,
+                    gpu=False if (p.get("force_cpu") and not p.get("clean_method")) else None,
+                    clean_method=_clean_method_of(p),
                     two_pass_ocr=bool(p.get("two_pass", True)),
                     debug=bool(p.get("debug")),
                     glossary_path=glossary_path,
@@ -796,15 +821,15 @@ def _run(job):
                     tr.stitch_max_height = 4000
                 tr.batch_workers = _i("batchw", 3)
 
-                if "use_lama" in p:
-                    if bool(p.get("use_lama")):
-                        tr.use_lama = True
-                        _log(job, "🩹 پاک‌سازی LaMa-Manga فعال (تنظیمات) — بار اول "
-                                  "مدل ~۱۹۸MB دانلود می‌شود؛ پچ‌به‌پچ مثل K3 سریع "
-                                  "تمام می‌شود. رم کم → خودکار OpenCV.")
-                    else:
-                        tr.use_lama = False
-                        _log(job, "⚡ پاک‌سازی سریع OpenCV (LaMa از تنظیمات خاموش شد)")
+                _cm_log = str(getattr(tr, "clean_method", "") or "")
+                if _cm_log == "opencv":
+                    _log(job, "⚡ پاک‌سازی: opencv + flat (سریع)")
+                elif _cm_log == "lama-big":
+                    _log(job, "🦾 پاک‌سازی: lama-big + flat — بار اول مدل ~۲۰۰MB "
+                              "دانلود می‌شود؛ رم کم → خودکار روش سبک‌تر.")
+                else:
+                    _log(job, "🩹 پاک‌سازی: lama.onnx + flat (همان روش گوشی) — "
+                              "رم خیلی کم → خودکار OpenCV.")
                 if font_by_style:
                     tr.font_by_style = font_by_style
                     tr.style_fonts = True
