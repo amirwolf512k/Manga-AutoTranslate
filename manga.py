@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.18"
+APP_VER = "1.14.19"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -596,11 +596,23 @@ def _prepare_ort_cuda_dlls() -> None:
         pass
 
 
+def _is_auto_ep() -> bool:
+    """⚖️ v1.14.19 — آیا کاربر EP را اجباری نکرده؟ (auto/خالی = پروب A/B مجاز)"""
+    try:
+        v = (os.environ.get("MANGA_ORT_EP", "auto") or "auto").strip().lower()
+    except Exception:
+        return True
+    return v in ("", "auto")
+
+
 def _resolve_lama_ep():
-    """🎮 v1.14.18 — انتخاب موتور شتاب LaMa از رقیب K3 (دیکد APK):
-    ORT اندروید ۴ EP دارد: CPU + XNNPACK + NNAPI (+ WebGPU). کوشش
-    پیش‌فرض = XNNPACK (کرنل‌های ARM بهینه — بدون خطر درایور GPU).
-    MANGA_ORT_EP = auto (پیش‌فرض) | xnnpack | nnapi | webgpu | cpu"""
+    """🎮 v1.14.18/19 — انتخاب موتور شتاب LaMa از رقیب K3 (دیکد APK):
+    ORT اندروید ۴ EP دارد: CPU + XNNPACK + NNAPI (+ WebGPU).
+    ⚖️ v1.14.19 — لاگ گوشی: XNNPACK روی LaMa ۲.۴-۲.۸× کندتر از CPU بود!
+    (LaMa = FFT/DFT؛ XNNPACK شتابش نمی‌دهد و فقط کپیِ layout اضافه می‌سازد)
+    → auto دیگر XNNPACK را کورکورانه انتخاب نمی‌کند؛ پروب A/B واقعی روی خود
+    مدل می‌سنجد (XNNPACK در برابر CPU) و سریع‌تر را نگه می‌دارد.
+    MANGA_ORT_EP = auto (پیش‌فرض، A/B) | xnnpack | nnapi | webgpu | cpu (اجباری)"""
     try:
         v = (os.environ.get("MANGA_ORT_EP", "auto") or "auto").strip().lower()
     except Exception:
@@ -617,6 +629,67 @@ def _resolve_lama_ep():
     if v == "auto" and _on_android():
         return "XnnpackExecutionProvider"
     return None
+
+
+def _lama_ep_cache_path(model_path: str) -> str:
+    return str(model_path) + ".epab"
+
+
+def _lama_ep_cached(model_path: str):
+    """⚖️ v1.14.19 — نتیجهٔ کش‌شدهٔ پروب A/B («cpu» یا نام EP) یا None.
+    پروب دو بار لود ۲۰۶MB است (~۱۰s) → فقط بار اول؛ دفعات بعد کش.
+    اجبار به پروب دوباره: MANGA_ORT_EP_REPROBE=1 یا پاک‌کردن فایل .epab"""
+    try:
+        if os.environ.get("MANGA_ORT_EP_REPROBE", "0") == "1":
+            return None
+        p = _lama_ep_cache_path(model_path)
+        if os.path.isfile(p):
+            with open(p, "r", encoding="utf-8") as f:
+                v = (f.read() or "").strip().lower()
+            if v in ("cpu", "xnnpack", "nnapi", "webgpu"):
+                return v
+    except Exception:
+        pass
+    return None
+
+
+def _lama_ep_store(model_path: str, v: str):
+    """⚖️ v1.14.19 — ذخیرهٔ برندهٔ A/B کنار مدل"""
+    try:
+        v = (v or "").strip().lower()
+        if v in ("cpuexecutionprovider", ""):
+            v = "cpu"
+        with open(_lama_ep_cache_path(model_path), "w", encoding="utf-8") as f:
+            f.write(v)
+    except Exception:
+        pass
+
+
+def _ep_ab_time(sess) -> float:
+    """⚖️ v1.14.19 — زمانِ واقعی یک ران با ورودی ۲۵۶×۲۵۶ (۱ warmup + ۲ ران،
+    کمینه) — مبنای مقایسهٔ A/B بین EP و CPU روی خودِ مدل LaMa."""
+    try:
+        names = [i.name for i in sess.get_inputs()]
+        if not names:
+            return float("inf")
+        side = 256
+        img = np.zeros((1, 3, side, side), dtype=np.float32)
+        msk = np.zeros((1, 1, side, side), dtype=np.float32)
+        msk[:, :, side // 4:side // 2, side // 4:side // 2] = 1.0
+        feed = {names[0]: img}
+        if len(names) >= 2:
+            feed[names[1]] = msk
+        outs = [o.name for o in sess.get_outputs()][:1]
+        best = float("inf")
+        for i in range(3):
+            t0 = time.time()
+            sess.run(outs, feed)
+            dt = time.time() - t0
+            if i > 0 and dt < best:
+                best = dt
+        return best
+    except Exception:
+        return float("inf")
 
 
 def _ort_probe_ok(sess, threads: int) -> bool:
@@ -682,7 +755,7 @@ def _ort_probe_ok(sess, threads: int) -> bool:
 
 
 def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4,
-                      ep: Optional[str] = None):
+                      ep: Optional[str] = None, ep_ab: bool = False):
     global _ORT_CUDA_OK
     if ort is None:
         raise RuntimeError("onnxruntime نصب نیست")
@@ -693,6 +766,22 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
         _prepare_ort_cuda_dlls()
 
     # 🎮 v1.14.18: EP سخت‌افزاری (الگوی رقیب K3 — XNNPACK/NNAPI در AAR)
+    # ⚖️ v1.14.19: کش انتخاب A/B — پروب گران (~۱۰s، دو لود مدل) فقط بار اول؛
+    # دفعات بعد نتیجهٔ قبلی اعمال می‌شود (MANGA_ORT_EP_REPROBE=1 = پروب دوباره)
+    if ep and ep_ab:
+        _cached = _lama_ep_cached(model_path)
+        if _cached == "cpu":
+            try:
+                print("    [*] EP کش‌شده: CPU (پروب قبلی سریع‌تر بود) — پروب رد شد")
+            except Exception:
+                pass
+            ep, ep_ab = None, False
+        elif _cached:
+            try:
+                print(f"    [*] EP کش‌شده: {_cached} (پروب قبلی برنده بود) — بدون A/B")
+            except Exception:
+                pass
+            ep_ab = False
     if ep:
         try:
             avail = list(ort.get_available_providers())
@@ -711,12 +800,66 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
                 s_ep = ort.InferenceSession(model_path, sess_options=so_ep,
                                             providers=[ep, "CPUExecutionProvider"])
                 if _ort_probe_ok(s_ep, threads if threads > 0 else 0):
-                    try:
-                        print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
-                              f"(الگوی رقیب K3)")
-                    except Exception:
-                        pass
-                    return s_ep
+                    # ⚖️ v1.14.19 — لاگ گوشی v1.14.18: XNNPACK روی LaMa
+                    # ۲.۴-۲.۸× کندتر شد (FFT شتاب نمی‌گیرد). پس در حالت auto
+                    # پروب A/B واقعی: EP در برابر CPU روی خودِ مدل — هرکدام
+                    # سریع‌تر بود برنده است (هر دو از کش لود می‌شوند ~۲-۴s).
+                    if ep_ab:
+                        t_ep = _ep_ab_time(s_ep)
+                        s_cpu = None
+                        cpu_fast = ("CUDAExecutionProvider"
+                                    not in ort.get_available_providers())
+                        if cpu_fast:
+                            try:
+                                s_cpu = ort.InferenceSession(
+                                    model_path,
+                                    sess_options=_ort_session_options(threads),
+                                    providers=["CPUExecutionProvider"])
+                            except Exception:
+                                s_cpu = None
+                        t_cpu = _ep_ab_time(s_cpu) if s_cpu is not None \
+                            else float("inf")
+                        win = "EP" if t_ep < t_cpu else "CPU"
+                        try:
+                            _ep_short = ep.replace("ExecutionProvider", "")
+                            print(f"[⚖] پروب A/B LaMa: {_ep_short} "
+                                  f"{t_ep:.2f}s در برابر CPU {t_cpu:.2f}s "
+                                  f"→ {win}")
+                        except Exception:
+                            pass
+                        if t_ep < t_cpu:
+                            _lama_ep_store(model_path,
+                                           ep.replace("ExecutionProvider", "").lower())
+                            try:
+                                if s_cpu is not None:
+                                    del s_cpu
+                                import gc as _gcab
+                                _gcab.collect()
+                            except Exception:
+                                pass
+                            try:
+                                print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
+                                      f"(پروب A/B — سریع‌تر از CPU)")
+                            except Exception:
+                                pass
+                            return s_ep
+                        # CPU برد → EP را دور بریز و سشن CPU آماده را بده
+                        _lama_ep_store(model_path, "cpu")
+                        try:
+                            del s_ep
+                            import gc as _gcab2
+                            _gcab2.collect()
+                        except Exception:
+                            pass
+                        if s_cpu is not None:
+                            return s_cpu
+                    else:
+                        try:
+                            print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
+                                  f"(الگوی رقیب K3)")
+                        except Exception:
+                            pass
+                        return s_ep
                 try:
                     s_ep = None
                 except Exception:
@@ -810,7 +953,8 @@ class LamaONNX:
             use_threads = max(1, int(threads))
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu,
                                          threads=use_threads,
-                                         ep=_resolve_lama_ep())
+                                         ep=_resolve_lama_ep(),
+                                         ep_ab=_is_auto_ep())
         self.session, use_threads = _cpu_thread_fallback(
             self.session, model_path, use_threads, allow_bump=False)
         print(
@@ -972,8 +1116,11 @@ class LamaMangaONNX:
             self.ep_used = _resolve_lama_ep()
         except Exception:
             self.ep_used = None
+        # ⚖️ v1.14.19: در حالت auto پروب A/B واقعی (XNNPACK در برابر CPU) —
+        # لاگ گوشی: XNNPACK برای LaMa (FFT) ۲.۴-۲.۸× کندتر بود → خودکار CPU
         self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu,
-                                         threads=use_threads, ep=self.ep_used)
+                                         threads=use_threads, ep=self.ep_used,
+                                         ep_ab=_is_auto_ep())
         self.session, use_threads = _cpu_thread_fallback(
             self.session, model_path, use_threads, allow_bump=False)
         names = [i.name for i in self.session.get_inputs()]
@@ -2658,10 +2805,10 @@ class MangaTranslator:
                 print("[📱] اندروید: پاک‌سازی سریع OpenCV (MANGA_ANDROID_LAMA=0) — "
                       "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
                 return False
-            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ «موازی» + شتاب سخت‌افزاری "
-                  "(الگوی رقیب K3 v4.0.0 — دیکد شد): ۶ پچِ همزمان × ۱ نخ + "
-                  "XNNPACK/سخت‌افزارِ گوشی + پیش‌بارگذاری مدل در پس‌زمینه = "
-                  "سریع‌ترین پاکسازی ممکن.")
+            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ «موازی»: ۶ پچِ همزمان × "
+                  "۱ نخ + پیش‌بارگذاری مدل در پس‌زمینه. EP (XNNPACK/سخت‌افزار) "
+                  "فقط اگر پروب A/B روی خود گوشی ثابت کند سریع‌تر از CPU است "
+                  "فعال می‌شود.")
             return True
 
         if force_gpu is True:

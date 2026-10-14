@@ -903,12 +903,13 @@ class MainActivity : AppCompatActivity() {
                 infoView()?.let { row.addView(it) }
                 fieldViews[id] = et
                 if (id.lowercase().contains("key")) {
-                    // دکمهٔ قرمز یکدست «تست کلیدها / لینک» — مثل وب و پی‌سی (مشکل ۵)
+                    // v1.14.19: دکمهٔ تست سیاه شد (بود قرمز — خواستهٔ کاربر)
                     val testBtn = Button(this).apply {
                         text = "تست کلیدها / لینک"
                         setTextColor(Color.WHITE); textSize = 13.5f
                         typeface = Typeface.DEFAULT_BOLD
-                        background = gradBtn()
+                        background = rounded(Color.parseColor("#101014"), 14, 1,
+                                             Color.parseColor("#3a3a45"))
                         setPadding(dp(12), dp(11), dp(12), dp(11))
                         stateListAnimator = null
                     }
@@ -1146,7 +1147,7 @@ class MainActivity : AppCompatActivity() {
                     setTextColor(MUT); textSize = 11f; setPadding(dp(12), dp(2), dp(12), dp(2))
                 }
                 val clearBtn = Button(this).apply {
-                    text = "✕  لغو انتخاب"
+                    text = "✕  لغو"
                     setTextColor(Color.WHITE); textSize = 12f
                     background = rounded(Color.parseColor("#3a1210"), 10, 1, ACC)
                     setPadding(dp(10), dp(11), dp(10), dp(11))
@@ -1516,7 +1517,8 @@ class MainActivity : AppCompatActivity() {
             }
             resultsBox.addView(tv)
         }
-        resultsBox.addView(resBtn("📋  لاگ کامل → Download/manga", false) { autoSaveLog(true) })
+        // v1.14.19: دکمهٔ «لاگ کامل → Download/manga» حذف شد (خواستهٔ کاربر) —
+        // لاگ خودکار بعد از هر اجرا در Download/manga ذخیره می‌شود.
         for (i in 0 until resultsBox.childCount) {
             val lp = resultsBox.getChildAt(i).layoutParams as LinearLayout.LayoutParams
             lp.topMargin = dp(7)
@@ -1729,37 +1731,60 @@ class MainActivity : AppCompatActivity() {
     private fun logOldFile(): File = File(filesDir, "manga_old.log")
 
     /**
-     * v1.14.17: فقط دو فایل manga.log و manga_old.log در Download/manga —
-     * نه manga (1).log و نه هیچ تکراری دیگر.
-     * Upsert: اگر مدخل همنام بود → همان با openOutputStream بازنویسی می‌شود؛
-     * تکراری‌های قدیمی «name (N).log» از نسخه‌های قبل پاک می‌شوند.
+     * v1.14.19: فقط دو فایل manga.log و manga_old.log در Download/manga —
+     * هر واریانت دیگری («manga.log (1)»، «manga (2).log»، «manga_old.log (3)»…)
+     * حذف می‌شود؛ اگر «manga.log» نبود ولی نسخهٔ شماره‌دارش بود، همان تغییرنام
+     * می‌شود تا هیچ‌وقت فایل تکراری ساخته نشود. (باگ قبلی: کوئری LIKE
+     * "manga%.log" واریانت‌های "manga.log (N)" را نمی‌دید → هر بار insert جدید)
      */
     private fun upsertLogInDownloads(name: String, src: File): Boolean {
         if (!src.isFile) return false
         return try {
             if (Build.VERSION.SDK_INT >= 29) {
                 val proj = arrayOf(MediaStore.MediaColumns._ID,
-                    MediaStore.MediaColumns.DISPLAY_NAME)
-                val sel = MediaStore.MediaColumns.RELATIVE_PATH + "=? AND " +
-                    MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?"
+                    MediaStore.MediaColumns.DISPLAY_NAME,
+                    MediaStore.MediaColumns.RELATIVE_PATH)
                 var target: Uri? = null
                 val dupes = ArrayList<Uri>()
-                // الگوی گسترده: manga.log / manga (1).log / manga_old.log … —
-                // فیلتر دقیق پایین‌تر انجام می‌شود
+                // v1.14.19: الگوهای ما — manga.log، manga_old.log و واریانت‌های
+                // شماره‌دار (ناشی از insert تکراری یا نسخه‌های قبل)
+                val ours = Regex("^manga(_old)?\\.log( \\(_?\\d+\\))?$")
+                val legacy = Regex("^manga( \\(_?\\d+\\))?\\.log$")
                 contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    proj, sel, arrayOf("Download/manga/", "manga%.log"), null)?.use { c ->
+                    proj, MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
+                    arrayOf("manga%"), null)?.use { c ->
                         while (c.moveToNext()) {
                             val dn = c.getString(1) ?: continue
+                            val rp = try {
+                                c.getString(2) ?: ""
+                            } catch (_: Exception) { "" }
+                            if (rp != "Download/manga/") continue
                             val u = android.content.ContentUris.withAppendedId(
                                 MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0))
-                            if (dn == name && target == null) target = u
-                            else if (dn.startsWith("$name (")) dupes.add(u) // manga (1).log …
+                            if (dn == name) {
+                                if (target == null) target = u else dupes.add(u)
+                            } else if (ours.matches(dn) || legacy.matches(dn)) {
+                                dupes.add(u)
+                            }
                         }
                     }
+                // v1.14.19: اگر فایل اصلی نبود ولی نسخهٔ شماره‌دارش بود →
+                // تغییرنام به نام اصلی (بدون ساخت فایل جدید)
+                if (target == null && dupes.isNotEmpty()) {
+                    val cand = dupes.removeAt(0)
+                    try {
+                        contentResolver.update(cand, ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        }, null, null)
+                        target = cand
+                    } catch (_: Exception) {
+                    }
+                }
                 for (u in dupes) try {
                     contentResolver.delete(u, null, null)
                 } catch (_: Exception) {
                 }
+                val isNew = (target == null)
                 val uri = target ?: contentResolver.insert(
                     MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                     ContentValues().apply {
@@ -1781,10 +1806,14 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 if (!okWrite) return false
-                if ((target == null)) contentResolver.update(uri,
-                    ContentValues().apply {
+                // v1.14.19: همیشه pending=0 — اگر مدخل قبلی از کرش pending مانده
+                // بود هم آزاد می‌شود و در فایل‌منیجر دیده می‌شود
+                try {
+                    contentResolver.update(uri, ContentValues().apply {
                         put(MediaStore.MediaColumns.IS_PENDING, 0)
                     }, null, null)
+                } catch (_: Exception) {
+                }
                 true
             } else {
                 val dir = File(Environment.getExternalStoragePublicDirectory(
