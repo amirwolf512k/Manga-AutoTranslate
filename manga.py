@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.22"
+APP_VER = "1.14.26"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -595,6 +595,11 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     so.intra_op_num_threads = max(1, int(threads))
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    # پچ‌های موازی LaMa + OCR هم‌زمان اجرا می‌شوند؛ spin-wait هسته‌ها را می‌سوزاند
+    try:
+        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
+    except Exception:
+        pass
     if low_mem is None:
         _av = _sys_avail_ram_gb()
         low_mem = bool(_on_android() or (_av is not None and _av < 3.0))
@@ -6283,7 +6288,13 @@ class MangaTranslator:
         except Exception:
             _max_side = 0
         if _max_side <= 0:
-            _max_side = 1024 if _on_android() else 2048
+            # سقف واقعی ورودیِ مدل — تا فقط یک بار resize شود، نه دو بار
+            _cap = 0
+            try:
+                _cap = int(getattr(lama, "_input_cap", 0) or 0)
+            except Exception:
+                _cap = 0
+            _max_side = _cap if _cap > 0 else (1024 if _on_android() else 2048)
         _pl, _ph = int(sub_img.shape[1]), int(sub_img.shape[0])
 
         def _lama_try(si, sm, side):
@@ -6589,6 +6600,18 @@ class MangaTranslator:
                             _gap = int(max(32, min(144, round(_short * 0.16))))
                         elif _on_android():
                             _gap = int(max(24, min(96, round(_short * 0.04))))
+                        else:
+                            # دسکتاپ: خوشه‌های نزدیک‌تر را هم در یک پچ بگذار —
+                            # هزینهٔ هر پچ تقریباً ثابت است (سقف 512) پس پچِ کمتر = پاکسازی سریع‌تر
+                            try:
+                                _gap_env = int(os.environ.get(
+                                    "MANGA_LAMA_GROUP_GAP", "0") or 0)
+                            except Exception:
+                                _gap_env = 0
+                            if _gap_env > 0:
+                                _gap = _gap_env
+                            else:
+                                _gap = int(max(28, min(64, round(_short * 0.045))))
                         groups = self._group_nearby_patches(pending, gap=_gap)
                     if _short * 2.5 < _long:
                         _mode += " — long strip"

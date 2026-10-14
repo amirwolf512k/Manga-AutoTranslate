@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.0"
+APP_VER = "1.14.26"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -37,13 +37,13 @@ PROVIDERS = ["gemini", "openai", "deepseek", "groq",
 DEFAULT_GEMINI_KEYS = []#",".join(["123:])
 
 
-C_BG = "#060607"
-C_BG2 = "#101014"
-C_CARD = "#0d0d10"
-C_LINE = "#1f1f24"
-C_TXT = "#e8e6e1"
-C_MUT = "#97948c"
-C_ACC = "#ff4a3d"
+C_BG = "#0a0a0c"      # پس‌زمینهٔ اصلی — هم‌خانوادهٔ تم وب
+C_BG2 = "#121216"     # هدر/نوارها
+C_CARD = "#141419"    # کارت‌ها
+C_LINE = "#2a2a31"    # خطوط
+C_TXT = "#eceae5"
+C_MUT = "#9b978f"
+C_ACC = "#e63b2e"     # قرمز جوهری مثل وب
 ACCENT = C_ACC
 C_OK = "#38c98a"
 C_ERR = "#ff6a5e"
@@ -810,44 +810,64 @@ def run_desktop():
 
     root = tk.Tk()
     root.title(f"{APP_NAME} v{APP_VER}")
-    root.geometry("1080x780")
-    root.minsize(940, 660)
+    root.geometry("1160x800")
+    root.minsize(980, 660)
     root.configure(bg=C_BG)
+    try:
+        root.option_add("*Font", ("Segoe UI", 10))
+    except Exception:
+        pass
 
     style = ttk.Style(root)
     try:
         style.theme_use("clam")
     except Exception:
         pass
+    # --- تم جوهری هم‌خانوادهٔ وب: کارت‌های تخت، قرمز سرخ، متن روشن ---
     dark = {
         "TFrame": {"background": C_BG},
+        "Card.TLabelframe": {"background": C_CARD, "bordercolor": C_LINE,
+                             "lightcolor": C_CARD, "darkcolor": C_CARD,
+                             "relief": "solid", "borderwidth": 1},
+        "Card.TLabelframe.Label": {"background": C_CARD, "foreground": C_ACC},
         "TLabelframe": {"background": C_CARD, "bordercolor": C_LINE,
                         "lightcolor": C_LINE, "darkcolor": C_LINE},
         "TLabelframe.Label": {"background": C_CARD, "foreground": C_ACC},
         "TLabel": {"background": C_CARD, "foreground": C_TXT},
-        "TButton": {"background": C_BG2, "foreground": C_TXT, "padding": (10, 6),
-                    "bordercolor": C_LINE, "lightcolor": C_BG2, "darkcolor": C_BG2},
-        "TEntry": {"fieldbackground": C_BG2, "foreground": C_TXT,
+        "TButton": {"background": "#1c1c22", "foreground": C_TXT, "padding": (12, 7),
+                    "bordercolor": C_LINE, "lightcolor": "#1c1c22", "darkcolor": "#1c1c22",
+                    "focuscolor": C_ACC},
+        "TEntry": {"fieldbackground": "#0f0f13", "foreground": C_TXT,
                    "insertcolor": C_TXT, "bordercolor": C_LINE,
-                   "lightcolor": C_BG2, "darkcolor": C_BG2,
-                   "borderwidth": 0, "relief": "flat"},
-        "TCombobox": {"fieldbackground": C_BG2, "foreground": C_TXT,
-                      "background": C_LINE, "arrowcolor": C_ACC,
-                      "bordercolor": C_LINE, "lightcolor": C_LINE,
-                      "darkcolor": C_LINE},
-        "TSpinbox": {"fieldbackground": C_BG2, "foreground": C_TXT,
+                   "lightcolor": "#0f0f13", "darkcolor": "#0f0f13",
+                   "padding": (8, 5), "borderwidth": 0, "relief": "flat"},
+        "TCombobox": {"fieldbackground": "#0f0f13", "foreground": C_TXT,
+                      "background": "#1c1c22", "arrowcolor": C_ACC,
+                      "bordercolor": C_LINE, "lightcolor": "#1c1c22",
+                      "darkcolor": "#1c1c22", "padding": (6, 4)},
+        "TSpinbox": {"fieldbackground": "#0f0f13", "foreground": C_TXT,
                      "insertcolor": C_TXT, "arrowcolor": C_ACC,
-                     "bordercolor": C_LINE, "lightcolor": C_BG2, "darkcolor": C_BG2},
+                     "bordercolor": C_LINE, "lightcolor": "#0f0f13",
+                     "darkcolor": "#0f0f13", "padding": (4, 4)},
         "TCheckbutton": {"background": C_CARD, "foreground": C_TXT,
-                         "indicatorbackground": C_BG2, "indicatorforeground": C_ACC},
+                         "indicatorbackground": "#0f0f13",
+                         "indicatorforeground": C_ACC,
+                         "focuscolor": C_CARD},
         "TRadiobutton": {"background": C_CARD, "foreground": C_TXT,
-                         "indicatorbackground": C_BG2, "indicatorforeground": C_ACC},
-        "TNotebook": {"background": C_BG, "bordercolor": C_BG},
-        "TNotebook.Tab": {"background": C_BG2, "foreground": C_MUT,
-                          "padding": (18, 8)},
-        "TProgressbar": {"background": C_ACC, "troughcolor": C_BG2},
-        "TScrollbar": {"background": C_BG2, "troughcolor": C_BG,
-                       "bordercolor": C_BG, "arrowcolor": C_MUT},
+                         "indicatorbackground": "#0f0f13",
+                         "indicatorforeground": C_ACC,
+                         "focuscolor": C_CARD},
+        "TNotebook": {"background": C_BG, "bordercolor": C_BG,
+                      "lightcolor": C_BG, "darkcolor": C_BG},
+        "TNotebook.Tab": {"background": "#17171b", "foreground": C_MUT,
+                          "padding": (20, 9), "bordercolor": "#17171b",
+                          "lightcolor": "#17171b", "darkcolor": "#17171b"},
+        "TProgressbar": {"background": C_ACC, "troughcolor": "#0f0f13",
+                         "bordercolor": "#0f0f13", "lightcolor": C_ACC,
+                         "darkcolor": C_ACC},
+        "TScrollbar": {"background": "#17171b", "troughcolor": C_BG,
+                       "bordercolor": C_BG, "arrowcolor": C_MUT,
+                       "lightcolor": "#17171b", "darkcolor": "#17171b"},
     }
     for name, kw in dark.items():
         try:
@@ -855,43 +875,55 @@ def run_desktop():
         except tk.TclError:
             pass
     style.map("TButton",
-              background=[("active", "#1c1c22"), ("pressed", "#23232a")],
+              background=[("active", "#26262e"), ("pressed", "#2e2e38")],
               bordercolor=[("active", C_ACC)])
     style.map("TSpinbox", bordercolor=[("focus", C_ACC)])
     style.map("TEntry", bordercolor=[("focus", C_ACC)])
 
     style.map("TCombobox",
-              fieldbackground=[("readonly", C_BG2), ("active", C_BG2),
-                               ("focus", C_BG2)],
+              fieldbackground=[("readonly", "#0f0f13"), ("active", "#0f0f13"),
+                               ("focus", "#0f0f13")],
               foreground=[("readonly", C_TXT), ("active", C_TXT)],
-              selectbackground=[("readonly", C_BG2), ("active", C_BG2)],
+              selectbackground=[("readonly", "#0f0f13"), ("active", "#0f0f13")],
               selectforeground=[("readonly", C_TXT), ("active", C_TXT)])
 
-    root.option_add("*TCombobox*Listbox.background", C_BG2)
+    root.option_add("*TCombobox*Listbox.background", "#17171b")
     root.option_add("*TCombobox*Listbox.foreground", C_TXT)
     root.option_add("*TCombobox*Listbox.selectBackground", C_ACC)
     root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
     root.option_add("*TCombobox*Listbox.font", (None, 10))
-    style.map("TNotebook.Tab", background=[("selected", C_ACC)],
-              foreground=[("selected", "white")])
-    style.map("TCheckbutton", background=[("active", C_CARD)])
-    style.map("TRadiobutton", background=[("active", C_CARD)])
+    style.map("TNotebook.Tab", background=[("selected", C_ACC), ("active", "#222228")],
+              foreground=[("selected", "white"), ("active", C_TXT)])
+    style.map("TCheckbutton", background=[("active", C_CARD)],
+              indicatorforeground=[("selected", C_ACC)])
+    style.map("TRadiobutton", background=[("active", C_CARD)],
+              indicatorforeground=[("selected", C_ACC)])
     style.configure("Accent.TButton", font=(None, 11, "bold"), foreground="white",
-                    background=ACCENT, padding=(16, 8))
+                    background=C_ACC, padding=(18, 9), bordercolor=C_ACC,
+                    lightcolor=C_ACC, darkcolor=C_ACC, focuscolor="white")
     style.map("Accent.TButton",
-              background=[("active", "#ff6a5e"), ("disabled", "#6e2019")],
+              background=[("active", "#ff5a4c"), ("pressed", "#c93325"),
+                          ("disabled", "#5c2019")],
               foreground=[("disabled", "#f0b8b2")])
-    style.configure("TNotebook.Tab", font=(None, 10))
+    style.configure("TNotebook.Tab", font=(None, 10, "bold"))
+    style.configure("Card.TLabelframe.Label", font=(None, 10, "bold"))
     style.configure("TLabelframe.Label", font=(None, 10, "bold"))
+    style.configure("Field.TLabel", font=(None, 9))
 
     
     head = tk.Frame(root, bg=C_BG2, highlightthickness=0, bd=0)
     head.pack(fill="x")
-    stamp = tk.Label(head, text="漫", font=(None, 15, "bold"),
-                     bg=ACCENT, fg="white", width=3, pady=2)
-    stamp.pack(side="right", padx=(16, 10), pady=8)
-    tk.Label(head, text=APP_NAME, font=(None, 14, "bold"),
-             bg=C_BG2, fg=C_TXT).pack(side="right", pady=9)
+    head_line = tk.Frame(root, bg=C_ACC, highlightthickness=0, bd=0, height=2)
+    head_line.pack(fill="x")
+    stamp = tk.Label(head, text="漫", font=(None, 16, "bold"),
+                     bg=C_ACC, fg="white", width=3, pady=3)
+    stamp.pack(side="right", padx=(16, 10), pady=10)
+    _ttl_box = tk.Frame(head, bg=C_BG2)
+    _ttl_box.pack(side="right")
+    tk.Label(_ttl_box, text=APP_NAME, font=(None, 14, "bold"),
+             bg=C_BG2, fg=C_TXT).pack(anchor="e")
+    tk.Label(_ttl_box, text="PRO · RT-DETR + Gemini/OpenAI + LaMa · اجرا روی CPU",
+             font=(None, 8), bg=C_BG2, fg=C_MUT).pack(anchor="e")
     tk.Label(head, text=f"v{APP_VER}", font=("IBM Plex Mono", 9),
              bg=C_BG2, fg=C_MUT).pack(side="left", padx=10)
     upd_lbl = tk.Label(head, text="", font=(None, 9), bg=C_BG2, fg=C_MUT)
@@ -964,11 +996,13 @@ def run_desktop():
 
     def field(parent, label):
         
-        ttk.Label(parent, text=label, foreground=C_MUT).pack(fill="x", pady=(6, 2))
+        ttk.Label(parent, text=label, style="Field.TLabel",
+                  foreground=C_MUT).pack(fill="x", pady=(7, 3))
 
     
-    card_io = ttk.LabelFrame(tab_body, text=" ورودی / خروجی ", padding=12)
-    card_io.pack(fill="x", padx=10, pady=(10, 6))
+    card_io = ttk.Labelframe(tab_body, text=" 📥  ورودی / خروجی ",
+                             style="Card.TLabelframe", padding=14)
+    card_io.pack(fill="x", padx=12, pady=(12, 6))
     field(card_io, "فایل / پوشه / URL ورودی")
     row_in = ttk.Frame(card_io); row_in.pack(fill="x")
     inp_var = tk.StringVar(value=cfg.get("last_input", ""))
@@ -1014,8 +1048,9 @@ def run_desktop():
     ttk.Spinbox(row_out, from_=60, to=100, textvariable=quality_var, width=5).pack(side="left")
 
     
-    card_ai = ttk.LabelFrame(tab_body, text=" حساب و مدل ", padding=12)
-    card_ai.pack(fill="x", padx=10, pady=6)
+    card_ai = ttk.Labelframe(tab_body, text=" 🧠  حساب و مدل ",
+                             style="Card.TLabelframe", padding=14)
+    card_ai.pack(fill="x", padx=12, pady=6)
     row_ai1 = ttk.Frame(card_ai); row_ai1.pack(fill="x")
     prov_var = tk.StringVar(value=cfg.get("provider", "gemini"))
     ttk.Label(row_ai1, text="ارائه‌دهنده:").pack(side="right", padx=(0, 4))
@@ -1140,8 +1175,9 @@ def run_desktop():
     ocr_lang_var.trace_add("write", _schedule_api_save)
 
     
-    card_font = ttk.LabelFrame(tab_body, text=" فونت‌های لحن ", padding=10)
-    card_font.pack(fill="x", padx=10, pady=6)
+    card_font = ttk.Labelframe(tab_body, text=" 🎙  فونت‌های لحن ",
+                               style="Card.TLabelframe", padding=14)
+    card_font.pack(fill="x", padx=12, pady=6)
     font_vars = {"main": tk.StringVar(value=cfg.get("font") or find_font())}
     row_fm = ttk.Frame(card_font); row_fm.pack(fill="x")
     ttk.Label(row_fm, text="اصلی (پیش‌فرض):", foreground=C_MUT).pack(side="right", padx=(0, 4))
@@ -1215,8 +1251,9 @@ def run_desktop():
                command=open_font_editor).pack(side="left", padx=6)
 
     
-    card_opt = ttk.LabelFrame(tab_body, text=" گزینه‌ها ", padding=12)
-    card_opt.pack(fill="x", padx=10, pady=6)
+    card_opt = ttk.Labelframe(tab_body, text=" ⚙️  گزینه‌ها ",
+                              style="Card.TLabelframe", padding=14)
+    card_opt.pack(fill="x", padx=12, pady=6)
     row4 = ttk.Frame(card_opt); row4.pack(fill="x")
     _cm_t = str(cfg.get("clean_method") or "lama-manga").strip()
     if _cm_t not in ("lama-manga", "lama-big", "opencv"):
@@ -1291,7 +1328,7 @@ def run_desktop():
     instr_txt.insert("1.0", str(cfg.get("instruction_text") or default_system_instruction()))
 
     
-    row6 = ttk.Frame(tab_body); row6.pack(fill="x", padx=10, pady=(4, 2))
+    row6 = ttk.Frame(tab_body); row6.pack(fill="x", padx=12, pady=(6, 2))
     run_btn = ttk.Button(row6, text="🚀  شروع ترجمه", style="Accent.TButton")
     run_btn.pack(side="right")
     stop_btn = ttk.Button(row6, text="⏹ توقف", state="disabled")
@@ -1341,10 +1378,10 @@ def run_desktop():
     tab_log = ttk.Frame(nb)
     row_log = ttk.Frame(tab_log); row_log.pack(fill="x", padx=10, pady=(8, 4))
     copy_btn = ttk.Button(row_log, text="📋 کپی لاگ")
-    log_box = scrolledtext.ScrolledText(tab_log, height=26, font=("Consolas", 9),
-                                        bg="#0a0f1c", fg="#cbd5e1",
-                                        insertbackground="#e2e8f0", wrap="none",
-                                        relief="flat")
+    log_box = scrolledtext.ScrolledText(tab_log, height=26, font=("Consolas", 10),
+                                        bg="#0e0e12", fg=C_TXT,
+                                        insertbackground=C_TXT, wrap="none",
+                                        relief="flat", padx=10, pady=8)
     log_box.pack(fill="both", expand=True, padx=10, pady=(2, 8))
     log_newest_top = tk.BooleanVar(value=False)
     _log_count = {"n": 0}
@@ -1408,7 +1445,7 @@ def run_desktop():
         win = tk.Toplevel(root)
         win.title("🔍 خواندن دیباگ" if debug else "📖 حالت خواندن")
         win.geometry("920x860")
-        win.configure(bg="#0a0f1c")
+        win.configure(bg=C_BG)
 
         from PIL import Image as PILImage, ImageTk
 
@@ -1417,9 +1454,9 @@ def run_desktop():
         zlbl = tk.Label(bar, text="۱۰۰٪", font=(None, 10, "bold"),
                         bg="#10131c", fg="#e8e6e1", width=7)
 
-        cv = tk.Canvas(win, bg="#0a0f1c", highlightthickness=0)
+        cv = tk.Canvas(win, bg=C_BG, highlightthickness=0)
         sb = ttk.Scrollbar(win, orient="vertical", command=cv.yview)
-        inner = tk.Frame(cv, bg="#0a0f1c")
+        inner = tk.Frame(cv, bg=C_BG)
         inner.bind("<Configure>",
                    lambda e: cv.configure(scrollregion=cv.bbox("all")))
         win_id = cv.create_window((0, 0), window=inner, anchor="nw")
@@ -1507,7 +1544,7 @@ def run_desktop():
                 w = 860
                 h = max(1, int(img0.height * w / img0.width))
                 ph = ImageTk.PhotoImage(img0.resize((w, h), PILImage.LANCZOS))
-                lb = tk.Label(inner, image=ph, bg="#0a0f1c", cursor="fleur")
+                lb = tk.Label(inner, image=ph, bg=C_BG, cursor="fleur")
                 lb.image = ph
                 lb.pack(fill="x", pady=(0, 6))
                 state["imgs"].append((img0, lb))
