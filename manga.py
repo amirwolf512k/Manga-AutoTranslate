@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.17"
+APP_VER = "1.14.18"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -596,7 +596,93 @@ def _prepare_ort_cuda_dlls() -> None:
         pass
 
 
-def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4):
+def _resolve_lama_ep():
+    """🎮 v1.14.18 — انتخاب موتور شتاب LaMa از رقیب K3 (دیکد APK):
+    ORT اندروید ۴ EP دارد: CPU + XNNPACK + NNAPI (+ WebGPU). کوشش
+    پیش‌فرض = XNNPACK (کرنل‌های ARM بهینه — بدون خطر درایور GPU).
+    MANGA_ORT_EP = auto (پیش‌فرض) | xnnpack | nnapi | webgpu | cpu"""
+    try:
+        v = (os.environ.get("MANGA_ORT_EP", "auto") or "auto").strip().lower()
+    except Exception:
+        v = "auto"
+    if v in ("", "off", "none", "0", "cpu"):
+        return None
+    if v in ("nnapi", "NnapiExecutionProvider"):
+        return "NnapiExecutionProvider"
+    if v in ("webgpu", "WebGpuExecutionProvider"):
+        return "WebGpuExecutionProvider"
+    if v in ("xnnpack", "XnnpackExecutionProvider"):
+        return "XnnpackExecutionProvider"
+    # auto → فقط روی اندروید XNNPACK (EPهای GPU opt-in هستند)
+    if v == "auto" and _on_android():
+        return "XnnpackExecutionProvider"
+    return None
+
+
+def _ort_probe_ok(sess, threads: int) -> bool:
+    """🎮 v1.14.18 — پروبِ سلامت + ضد-سریالی‌شدن XNNPACK:
+    ۱) یک ران کوچک (۶۴×۶۴) — اگر خطا داد EP مردود است.
+    ۲) دو رانِ همزمان در برابر دو رانِ پشت‌سرهم — اگر EP رانِ همزمان را
+       سریال کند (محدودیت شناخته‌شدهٔ XNNPACK در نسخه‌های قدیمی)،
+       موازی‌سازیِ ۴-۶ کارگر ما بی‌اثر می‌شود → EP مردود."""
+    try:
+        names = [i.name for i in sess.get_inputs()]
+        if not names:
+            return False
+        side = 64
+        img = np.zeros((1, 3, side, side), dtype=np.float32)
+        msk = np.zeros((1, 1, side, side), dtype=np.float32)
+        msk[:, :, side // 4:side // 2, side // 4:side // 2] = 1.0
+        feed = {}
+        if len(names) >= 2:
+            feed = {names[0]: img, names[1]: msk}
+        else:
+            feed = {names[0]: img}
+        outs = [o.name for o in sess.get_outputs()][:1]
+        try:
+            sess.run(outs, feed)
+        except Exception:
+            try:
+                sess.run(None, feed)
+            except Exception:
+                return False
+        if threads <= 0:
+            return True
+        t0 = time.time()
+        try:
+            sess.run(outs, feed)
+            sess.run(outs, feed)
+            t_ser = time.time() - t0
+        except Exception:
+            return False
+        if t_ser <= 0.02:
+            return True  # خیلی کوچک است برای مقایسه — قبول
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        try:
+            with _TPE(max_workers=2) as ex:
+                t1 = time.time()
+                f1 = ex.submit(sess.run, outs, feed)
+                f2 = ex.submit(sess.run, outs, feed)
+                f1.result(timeout=60)
+                f2.result(timeout=60)
+                t_con = time.time() - t1
+        except Exception:
+            return False
+        # اگر سریال شده باشد: t_con ≈ ۲×t_ser → رد (آستانهٔ ۱.۶)
+        if t_con > t_ser * 1.6:
+            try:
+                print(f"    [!] EP رانِ همزمان را سریال می‌کند "
+                      f"({t_con:.2f}s در برابر ۲×{t_ser:.2f}s) → CPU موازی")
+            except Exception:
+                pass
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4,
+                      ep: Optional[str] = None):
     global _ORT_CUDA_OK
     if ort is None:
         raise RuntimeError("onnxruntime نصب نیست")
@@ -605,6 +691,51 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
 
     if want:
         _prepare_ort_cuda_dlls()
+
+    # 🎮 v1.14.18: EP سخت‌افزاری (الگوی رقیب K3 — XNNPACK/NNAPI در AAR)
+    if ep:
+        try:
+            avail = list(ort.get_available_providers())
+        except Exception:
+            avail = []
+        if ep in avail:
+            so_ep = _ort_session_options(threads)
+            try:
+                so_ep.append_execution_provider(ep)
+            except Exception:
+                try:
+                    so_ep._eps = [(ep, {})]
+                except Exception:
+                    pass
+            try:
+                s_ep = ort.InferenceSession(model_path, sess_options=so_ep,
+                                            providers=[ep, "CPUExecutionProvider"])
+                if _ort_probe_ok(s_ep, threads if threads > 0 else 0):
+                    try:
+                        print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
+                              f"(الگوی رقیب K3)")
+                    except Exception:
+                        pass
+                    return s_ep
+                try:
+                    s_ep = None
+                except Exception:
+                    pass
+            except Exception as e:
+                try:
+                    print(f"    [!] ساخت سشن {ep} ناموفق ({str(e)[:120]}) → CPU")
+                except Exception:
+                    pass
+            import gc as _gcp
+            try:
+                _gcp.collect()
+            except Exception:
+                pass
+        else:
+            try:
+                print(f"    [!] {ep} در این ORT نیست (available={avail}) → CPU")
+            except Exception:
+                pass
 
     if want and "CUDAExecutionProvider" in ort.get_available_providers():
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
@@ -677,7 +808,9 @@ class LamaONNX:
             use_threads = max(1, min(use_threads, os.cpu_count() or 4))
         else:
             use_threads = max(1, int(threads))
-        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
+        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu,
+                                         threads=use_threads,
+                                         ep=_resolve_lama_ep())
         self.session, use_threads = _cpu_thread_fallback(
             self.session, model_path, use_threads, allow_bump=False)
         print(
@@ -832,7 +965,15 @@ class LamaMangaONNX:
                 use_threads = max(1, min(_cap, os.cpu_count() or 4))
         else:
             use_threads = max(1, int(threads))
-        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=use_threads)
+        # 🎮 v1.14.18 — EP سخت‌افزاری (الگوی رقیب K3): XNNPACK با پروبِ
+        # سلامت + چک ضد-سریالی‌شدن؛ شکست → CPU موازی (مسیر قبلی)
+        self.ep_used = None
+        try:
+            self.ep_used = _resolve_lama_ep()
+        except Exception:
+            self.ep_used = None
+        self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu,
+                                         threads=use_threads, ep=self.ep_used)
         self.session, use_threads = _cpu_thread_fallback(
             self.session, model_path, use_threads, allow_bump=False)
         names = [i.name for i in self.session.get_inputs()]
@@ -2517,9 +2658,10 @@ class MangaTranslator:
                 print("[📱] اندروید: پاک‌سازی سریع OpenCV (MANGA_ANDROID_LAMA=0) — "
                       "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
                 return False
-            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ «موازی» (الگوی K3+) — "
-                  "مدل داینامیک ~۲۰۶MB بار اول؛ چند پچ همزمان × ۲ نخ «واقعی» "
-                  "(ORT 1.31 + شیم سریع) = فشار کامل به CPU گوشی = سریع.")
+            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ «موازی» + شتاب سخت‌افزاری "
+                  "(الگوی رقیب K3 v4.0.0 — دیکد شد): ۶ پچِ همزمان × ۱ نخ + "
+                  "XNNPACK/سخت‌افزارِ گوشی + پیش‌بارگذاری مدل در پس‌زمینه = "
+                  "سریع‌ترین پاکسازی ممکن.")
             return True
 
         if force_gpu is True:
@@ -2708,6 +2850,11 @@ class MangaTranslator:
         if glossary_path and os.path.isfile(glossary_path):
             self._load_glossary_file(glossary_path)
         self._lama = None
+        # 🎮 v1.14.18: قفل ساخت سشن LaMa + پیش‌بارگذاری پس‌زمینه — الگوی
+        # «هنگِ کوتاه و انفجار سرعت» رقیب K3: مدل هنگام پاکسازی لود نشود؛
+        # همان موقع که تشخیص/OCR مشغول است، LaMa در پس‌زمینه گرم می‌شود.
+        self._lama_lock = threading.Lock()
+        self._lama_preload_started = False
         self._title_skip_patterns: List[str] = []
         MangaTranslator._title_skip_patterns = []
         self.client = None
@@ -2938,9 +3085,43 @@ class MangaTranslator:
             pass
         return 0.0
 
+    def preload_lama_async(self):
+        """🎮 v1.14.18 — گرم‌کردن پس‌زمینهٔ LaMa (الگوی رقیب K3): مدل ~۲۰۶MB
+        همان موقع که تشخیص/OCR کار می‌کند در نخِ پس‌زمینه لود می‌شود →
+        فاز پاکسازی بدون توقفِ بارگذاری شروع می‌شود (هیچ «هنگِ» لود مدل
+        در شروع پاکسازی — همان الگوی هنگ→انفجارِ سرعت که کاربر در K3 دید).
+        فراخوانی: بلافاصله بعد از آماده‌شدن موتور استخراج."""
+        if getattr(self, "_lama_preload_started", False) or not self.use_lama:
+            return
+        self._lama_preload_started = True
+
+        def _warm():
+            try:
+                _l = self._get_lama()
+                if _l is not None:
+                    try:
+                        print("[🔥] LaMa پیش‌بارگذاری شد (پس‌زمینه) → "
+                              "پاکسازی بدون انتظارِ لود مدل شروع می‌شود")
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+        try:
+            threading.Thread(target=_warm, daemon=True,
+                             name="lama-preload").start()
+        except Exception:
+            self._lama_preload_started = False
+
     def _get_lama(self):
-        
-        
+        # 🎮 v1.14.18: ساخت سشن فقط یک‌بار حتی با پیش‌بارگذاری پس‌زمینه +
+        # تماسِ همزمان از پاکسازی (thread-safe)
+        with self._lama_lock:
+            return self._get_lama_locked()
+
+    def _get_lama_locked(self):
+
+
         if self._lama is None and self.use_lama:
             if _on_android():
                 total = self._total_ram_gb()
@@ -4087,7 +4268,10 @@ class MangaTranslator:
           t1, t2 = t2, t1
 
         vgap, hgap, avg_h, avg_w, cx_dist, h_max, h_min, w_min, w_max = pair_metrics(r1, r2)
-        if self.debug:
+        # 🔇 v1.14.18: اسپمِ VGAP فقط با MANGA_VGAP_DEBUG=1 — روی صفحهٔ رنگی
+        # ~۱۳۰۰ خط لاگ (O(n²) جفت) هر بار فرمت/نوشته می‌شد؛ حالا پیش‌فرض خاموش
+        # (لاگِ گوشی ~۸۵٪ کوچک‌تر و خواناتر؛ سرعت استخراج کمی بهتر)
+        if self.debug and os.environ.get("MANGA_VGAP_DEBUG") == "1":
           short1 = (t1 or "")[:25]
           short2 = (t2 or "")[:25]
           print(f"  [VGAP DEBUG] \"{short1}\" <-> \"{short2}\"")
@@ -6226,6 +6410,38 @@ class MangaTranslator:
             lv = "quality"
         return lv if lv in ("quality", "fast") else "quality"
 
+    def _lama_workers_auto(self) -> int:
+        """🎮 v1.14.18 — تعداد پچِ همزمان (همان منطق clean_image؛ برای
+        جاروی باقی‌ماندهٔ موازی هم استفاده می‌شود)."""
+        try:
+            _wa = int(os.environ.get("MANGA_LAMA_WORKERS", "0") or 0)
+            if _wa > 0:
+                return max(1, min(_wa, 6))
+            try:
+                _av = float(self._available_ram_gb())
+            except Exception:
+                _av = 0.0
+            if _on_android():
+                try:
+                    _cores = self._cpu_core_count()
+                except Exception:
+                    _cores = 0
+                if _cores >= 8:
+                    return 6 if _av >= 0.25 else 4
+                if _cores >= 6:
+                    return 4 if _av >= 0.25 else 3
+                return 2 if _av >= 0.5 else 1
+            if _av >= 1.5:
+                try:
+                    if self._cpu_core_count() >= 6 and _av >= 3.5:
+                        return 3
+                except Exception:
+                    pass
+                return 2
+            return 1
+        except Exception:
+            return 1
+
     def _lama_rescue_boxes(self, cleaned: np.ndarray,
                            boxes: List[Tuple[int, int, int, int, np.ndarray]],
                            page_kernel) -> int:
@@ -6260,11 +6476,39 @@ class MangaTranslator:
                 groups = [[m] for m in members]
         else:
             groups = [members]
-        for grp in groups:
+        # ⚡ v1.14.18: جاروی باقی‌مانده هم «موازی» شد (قبلاً سریالی بود —
+        # روی صفحهٔ رنگیِ تست ۶ پچِ LaMa پشت‌سرهم ≈ ۲۵s؛ حالا همزمان).
+        try:
+            _rw = min(int(self._lama_workers_auto()), len(groups))
+        except Exception:
+            _rw = 1
+        if _rw > 1:
             try:
-                self._lama_run_group(cleaned, grp, lama, page_kernel)
+                print(f"  [🩹] {_rw} parallel rescue patches")
             except Exception:
                 pass
+            _rex = ThreadPoolExecutor(max_workers=_rw)
+            _rfuts = []
+            try:
+                for grp in groups:
+                    _rfuts.append(_rex.submit(self._lama_run_group,
+                                              cleaned, grp, lama, page_kernel))
+                for _rf in _rfuts:
+                    try:
+                        _rf.result(timeout=600)
+                    except Exception:
+                        pass
+            finally:
+                try:
+                    _rex.shutdown(wait=True)
+                except Exception:
+                    pass
+        else:
+            for grp in groups:
+                try:
+                    self._lama_run_group(cleaned, grp, lama, page_kernel)
+                except Exception:
+                    pass
         n_ok = 0
         for c in members:
             if c[6] != "LaMa" or c[5] is None:
@@ -6432,9 +6676,10 @@ class MangaTranslator:
                     t0 = time.time()
                     # 🔥 فشار به گوشی (خواستهٔ کاربر): پچ‌ها «همزمان» اجرا می‌شوند
                     # (data-parallel). ⚡ v1.14.17: هر اجرا فقط ۱ نخ (سینکِ DFT
-                    # با چند‌نخی سمی است) → موازی‌سازیِ واقعی = workersِ بیشتر:
-                    # ۸ هسته → ۴ پچ همزمان روی هسته‌های بزرگ. سشن مشترک است
-                    # (رمِ مدل تک‌نسخه) و run() ترد-سیف است.
+                    # با چند‌نخی سمی است) → موازی‌سازیِ واقعی = workersِ بیشتر.
+                    # ⚡ v1.14.18: ۸ هسته → ۶ پچ همزمان (۴ بزرگ + ۲ متوسط؛
+                    # XNNPACK/پچِ ۳۸۴ → هر استریم سبک‌تر شده) + گاردِ رم.
+                    # سشن مشترک است (رمِ مدل تک‌نسخه) و run() ترد-سیف است.
                     _workers = 1
                     _av = 0.0
                     try:
@@ -6444,20 +6689,20 @@ class MangaTranslator:
                     try:
                         _wa = int(os.environ.get("MANGA_LAMA_WORKERS", "0") or 0)
                         if _wa > 0:
-                            _workers = max(1, min(_wa, 4))
+                            _workers = max(1, min(_wa, 6))
                         elif _on_android():
-                            # ⚡ v1.14.15/17 — خواستهٔ کاربر (گزارش Poco F4 / SD870):
+                            # ⚡ v1.14.15/17/18 — خواستهٔ کاربر (گزارش Poco F4 / SD870):
                             # «بعد دو موازی اخه؟ سریع نمیشه». با threads=1 برای هر
-                            # پچ، ۸ هسته → ۴ پچِ همزمان (هسته‌های بزرگ پر می‌شوند).
+                            # پچ، ۸ هسته → ۶ پچِ همزمان.
                             _cores_a = 0
                             try:
                                 _cores_a = self._cpu_core_count()
                             except Exception:
                                 _cores_a = 0
                             if _cores_a >= 8:
-                                _workers = 4
+                                _workers = 6 if _av >= 0.25 else 4
                             elif _cores_a >= 6:
-                                _workers = 3
+                                _workers = 4 if _av >= 0.25 else 3
                             else:
                                 _workers = 2 if _av >= 0.5 else 1
                         elif _av >= 1.5:
@@ -12413,6 +12658,14 @@ html, body { background: #0a0a0b; }
 
         if skipped:
             print(f"[*] {skipped} صفحه از کش (resume).")
+
+        # 🎮 v1.14.18 — پیش‌بارگذاری پس‌زمینهٔ LaMa (الگوی رقیب K3): مدل
+        # ~۲۰۶MB همان موقع که تشخیص/OCR صفحات اول کار می‌کنند گرم می‌شود
+        # → پاکسازی هیچ‌وقت منتظر لود مدل نمی‌ماند (بدون «هنگ» شروع پاکسازی)
+        try:
+            self.preload_lama_async()
+        except Exception:
+            pass
 
         def _extract_one(item):
             page_i, f, out_file = item

@@ -6,10 +6,17 @@
 #     می‌شد → DFT/FFT با ۸ نخ = ۲.۶× کندتر!
 #   • تبدیل سریع تانسور ورودی (buffer-protocol → jarray؛ کپی خام به‌جای
 #     لیست‌سازی عنصربه‌عنصر) و خروجی (getFloatBuffer → numpy).
+# v3 — 1.14.18 (الگوی رقیب K3 v4.0.0):
+#   • پشتیبانی از موتورهای شتاب سخت‌افزاری ORT: XNNPACK (کرنل‌های ARM
+#     بهینه‌شده) + NNAPI (GPU/DSP/NPU اندروید) + WebGPU. APK رقیب K3
+#     دیکد شد — libonnxruntime.so آن (ORT 1.28) دقیقاً همین EPها را
+#     دارد (NnapiExecutionProvider + WebGpuExecutionProvider +
+#     XnnpackExecutionProvider). ORT-android خود ما (1.31) هم دارد.
+#   • SessionOptions._eps = [("XnnpackExecutionProvider", {opts}), ...]
 
 import numpy as np
 
-__version__ = "1.31.0-android-shim"
+__version__ = "1.31.0-android-shim-v3"
 
 
 def preload_dlls(*a, **k):
@@ -113,6 +120,15 @@ class SessionOptions:
         self.inter_op_num_threads = 1
         self.optimized_model_filepath = ""
         self.graph_optimization_level = GraphOptimizationLevel.ORT_ENABLE_ALL
+        # 🎮 v3: درخواست EP سخت‌افزاری — لیستی از (نام, opts_dict).
+        # در _build_java_session_options به متدهای جاوا ترجمه می‌شود.
+        self._eps = []
+
+    def append_execution_provider(self, name, opts=None):
+        try:
+            self._eps.append((str(name), dict(opts or {})))
+        except Exception:
+            self._eps.append((str(name), {}))
 
     def __setattr__(self, k, v):
         self.__dict__[k] = v
@@ -122,7 +138,10 @@ class SessionOptions:
 
 
 def get_available_providers():
-    return ["CPUExecutionProvider"]
+    # 🎮 v3: EPهای سخت‌افزاری ORT-android (داخل AAR از قبل کامپایل شده‌اند؛
+    # همان‌هایی که APK رقیب K3 هم دارد). CPU همیشه هست.
+    return ["CPUExecutionProvider", "XnnpackExecutionProvider",
+            "NnapiExecutionProvider"]
 
 
 def get_device():
@@ -370,6 +389,49 @@ def _node_info(info):
     return shape, dtype
 
 
+def _apply_java_eps(jopt, sess_options):
+    """🎮 v3: اعمال EPهای درخواستی روی SessionOptions جاوا.
+    XNNPACK: کرنل‌های ARM بهینه (dotprod) — مثل رقیب K3.
+    NNAPI: شتاب GPU/DSP/NPU اندروید. WebGPU: آزمایشی."""
+    try:
+        eps = list(getattr(sess_options, "_eps", []) or [])
+    except Exception:
+        eps = []
+    used = []
+    for name, popts in eps:
+        try:
+            if name == "XnnpackExecutionProvider":
+                mp = _HashMap()
+                try:
+                    for k, v in dict(popts or {}).items():
+                        mp.put(str(k), str(v))
+                except Exception:
+                    pass
+                jopt.addXnnpack(mp)
+                used.append(name)
+            elif name == "NnapiExecutionProvider":
+                try:
+                    jopt.addNnapi()
+                except Exception:
+                    try:
+                        _HS = jclass("java.util.HashSet")
+                        jopt.addNnapi(_HS())
+                    except Exception:
+                        continue
+                used.append(name)
+            elif name == "WebGpuExecutionProvider":
+                if not hasattr(jopt, "addWebGPU"):
+                    continue
+                try:
+                    jopt.addWebGPU()
+                    used.append(name)
+                except Exception:
+                    continue
+        except Exception:
+            continue
+    return used
+
+
 def _build_java_session_options(sess_options):
     """SessionOptions پایتون → ai.onnxruntime.OrtSession$SessionOptions جاوا."""
     if sess_options is None:
@@ -432,6 +494,10 @@ def _build_java_session_options(sess_options):
             jopt.setOptimizedModelFilePath(p)
     except Exception:
         pass
+    try:
+        _apply_java_eps(jopt, sess_options)
+    except Exception:
+        pass
     return jopt
 
 
@@ -439,6 +505,17 @@ class InferenceSession:
     def __init__(self, path_or_bytes, sess_options=None, providers=None, **kw):
         if not _OK:
             raise ImportError("شیم ORT اندروید لود نشد: %s" % (_IMPORT_ERR,))
+        # 🎮 v3: EP درخواست‌شده را یادداشت کن (جاوا API گیرندهٔ providers نیست؛
+        # EP از طریق SessionOptions._eps اعمال می‌شود)
+        try:
+            if providers:
+                for _p in providers:
+                    _pn = str(_p)
+                    if _pn != "CPUExecutionProvider" and not any(
+                            e[0] == _pn for e in getattr(sess_options, "_eps", [])):
+                        sess_options.append_execution_provider(_pn)
+        except Exception:
+            pass
         jopt = _build_java_session_options(sess_options)
         if isinstance(path_or_bytes, (bytes, bytearray)):
             import os
@@ -463,6 +540,12 @@ class InferenceSession:
                 self._sess = _ENV.createSession(str(path_or_bytes))
         self._in_names = _jset_to_list(self._sess.getInputNames())
         self._out_names = _jset_to_list(self._sess.getOutputNames())
+        # 🎮 v3: providers واقعی برای لاگ — CPU + EPهای اعمال‌شده
+        try:
+            self._prov = ["CPUExecutionProvider"] + [
+                e[0] for e in list(getattr(sess_options, "_eps", []) or [])]
+        except Exception:
+            self._prov = ["CPUExecutionProvider"]
 
     def get_inputs(self):
         infos = None
@@ -506,10 +589,16 @@ class InferenceSession:
         return _ModelMeta(self._sess)
 
     def get_providers(self):
-        return ["CPUExecutionProvider"]
+        try:
+            return list(self._prov)
+        except Exception:
+            return ["CPUExecutionProvider"]
 
     def get_provider_options(self):
-        return {"CPUExecutionProvider": {}}
+        try:
+            return {p: {} for p in self._prov}
+        except Exception:
+            return {"CPUExecutionProvider": {}}
 
     def run(self, output_names, input_feed, run_options=None, **kw):
         feed = _HashMap()
