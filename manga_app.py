@@ -2030,21 +2030,7 @@ body, .gradio-container, footer, .gradio-container .prose {
 }
 .hint { color: var(--ink-dim) !important; font-size: .83rem; margin-top: 8px; }
 
-.live-strip {
-  display: flex; flex-direction: column; gap: 12px;
-  max-height: 70vh; overflow-y: auto; padding: 4px 6px;
-  scrollbar-width: thin; scrollbar-color: var(--ink-red-deep) transparent;
-}
-.live-strip::-webkit-scrollbar { width: 8px; }
-.live-strip::-webkit-scrollbar-thumb { background: var(--ink-red-deep); border-radius: 8px; }
-.live-strip .lvimg {
-  width: 100%; height: auto; display: block;
-  border: 1px solid var(--ink-line); border-radius: 12px;
-  background: var(--ink-surface2);
-  box-shadow: 0 8px 24px rgba(0,0,0,.4);
-  opacity: 0; transform: translateY(10px);
-  animation: rise .45s cubic-bezier(.2,.7,.2,1) forwards;
-}
+.livehint { color: var(--ink-dim) !important; font-size: .8rem; margin-top: 8px; text-align: center; }
 
 label, span, .prose, p, li { color: var(--ink-dim) !important; }
 span:not(.stepnum):not(.chip) {
@@ -2494,6 +2480,57 @@ def run_web():
         return "⬇ دانلود"
 
 
+
+    # صفحهٔ خواندن زندهٔ وب — داخل پوشهٔ live نوشته می‌شود و صفحه‌های جدید خودکار به آن اضافه می‌شوند
+    _LIVE_READER_TMPL = """<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>نمایش زنده</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
+.bar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:9px 12px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;direction:rtl;backdrop-filter:blur(8px)}
+.dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
+@keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
+.t{flex:1;color:#97948c;font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.n{color:#fff;background:#ff4a3d;border-radius:999px;padding:3px 11px;font-size:.8rem;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.c{max-width:min(100%,900px);margin:0 auto;width:100%}
+.c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none}
+.hint{padding:16px;text-align:center;color:#6b6963;font-size:.85rem}
+</style></head><body>
+<div class="bar"><span class="dot"></span><div class="t">نمایش زنده — صفحه‌های جدید خودشان اضافه می‌شوند</div><div class="n" id="n">0</div></div>
+<main class="c" id="c"><div class="hint" id="h">هنوز صفحه‌ای آماده نشده…</div></main>
+<script>
+(function(){
+  var P = "__PREFIX__", D = "__DIR__", STAMP = Date.now();
+  var n = 0, busy = false;
+  var c = document.getElementById('c'), h = document.getElementById('h'), b = document.getElementById('n');
+  function pad(i){ return ('000' + i).slice(-4); }
+  function nearBottom(){ return (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - 260); }
+  function step(){
+    if (busy) return;
+    busy = true;
+    var im = new Image();
+    im.onload = function(){
+      busy = false;
+      if (h && h.parentNode === c) { c.removeChild(h); h = null; }
+      var stick = nearBottom();
+      var el = document.createElement('img');
+      el.src = P + D + 'live_' + pad(n + 1) + '.jpg?r=' + STAMP;
+      el.alt = 'صفحهٔ ' + (n + 1);
+      el.loading = 'lazy'; el.decoding = 'async';
+      c.appendChild(el);
+      n++; b.textContent = n;
+      if (stick) window.scrollTo(0, document.body.offsetHeight);
+      step();
+    };
+    im.onerror = function(){ busy = false; };
+    im.src = P + D + 'live_' + pad(n + 1) + '.jpg?r=' + STAMP;
+  }
+  step();
+  setInterval(step, 1800);
+})();
+</script>
+</body></html>"""
 
     def build_reader_html(files, standalone: bool = True):
         
@@ -3391,9 +3428,11 @@ def run_web():
 
         live_group = gr.Group(visible=False, elem_classes=["stepcard"])
         with live_group:
-            gr.HTML('<div class="steptitle"><span class="stepnum">🖼</span> '
-                    'نمایش زنده — هر صفحه همین‌جا می‌آید، بدون رفرش</div>')
-            live_gallery = gr.HTML(value="", elem_id="manga_live_gallery")
+            gr.HTML('<div class="steptitle"><span class="stepnum">📖</span> '
+                    'نمایش زنده — صفحه‌های آماده‌شده</div>')
+            live_btn = _safe(gr.Button, "📖 نمایش زنده", visible=False, elem_id="manga_live_btn")
+            gr.HTML('<div class="livehint">بزن تا صفحه‌های آماده‌شده را ببینی؛ '
+                    'هر صفحهٔ جدید خودش داخل نمایشگر اضافه می‌شود — بدون رفرش</div>')
 
         html_state = gr.State("")
         html_debug_state = gr.State("")
@@ -4006,6 +4045,10 @@ def run_web():
             live_dir = os.path.join(user_out_dir, "live")
             shutil.rmtree(live_dir, ignore_errors=True)
             os.makedirs(live_dir, exist_ok=True)
+            try:
+                _write_live_reader(live_dir)
+            except Exception as _e:
+                print(f"[!] نوشتن live_reader.html ناموفق: {_e}")
             with job["lock"]:
                 job["live_dir"] = live_dir
                 job["live_files"] = []
@@ -4467,6 +4510,26 @@ def run_web():
             fs.sort()
             return [os.path.join(live_dir, f) for f in fs]
 
+        def _write_live_reader(live_dir: str) -> str:
+            """خوانندهٔ زندهٔ وب را داخل پوشهٔ live می‌نویسد — صفحه‌های جدید بدون رفرش اضافه می‌شوند."""
+            import gradio as _gr
+            gv = getattr(_gr, "__version__", "4")
+            try:
+                major = int(str(gv).split(".")[0] or 4)
+            except Exception:
+                major = 4
+            prefix = "/gradio_api/file=" if major >= 5 else "/file="
+            d = str(live_dir).replace(os.sep, "/")
+            if not d.endswith("/"):
+                d += "/"
+            html = (_LIVE_READER_TMPL
+                    .replace("__PREFIX__", prefix)
+                    .replace("__DIR__", urllib.parse.quote(d, safe="/")))
+            path = os.path.join(live_dir, "live_reader.html")
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(html)
+            return path
+
         def _poll_live_gallery(sid_v, sid_box_v):
             pref = (sid_v or sid_box_v or "").strip()
             job = live_jobs.get(pref)
@@ -4482,13 +4545,9 @@ def run_web():
                 job["live_files"] = files
                 job["ts"] = time.time()
             if not files:
-                return gr.update(value=""), gr.update(visible=False)
-            imgs = "".join(
-                '<img class="lvimg" src="/file=%s" alt="صفحهٔ %d" loading="lazy">'
-                % (urllib.parse.quote(p), i + 1)
-                for i, p in enumerate(files))
-            html = '<div class="live-strip">%s</div>' % imgs
-            return gr.update(value=html), gr.update(visible=bool(files))
+                return gr.update(value="📖 نمایش زنده", visible=False), gr.update(visible=False)
+            label = "📖 نمایش زنده (%d صفحه)" % len(files) if len(files) > 1 else "📖 نمایش زنده (۱ صفحه)"
+            return gr.update(value=label, visible=True), gr.update(visible=True)
         try:
             _timer = gr.Timer(1.0, active=True)
             _tick_evt = _timer.tick(
@@ -4520,7 +4579,7 @@ def run_web():
             _timer_g.tick(
                 _poll_live_gallery,
                 inputs=[sid_holder, sid_box],
-                outputs=[live_gallery, live_group],
+                outputs=[live_btn, live_group],
                 queue=False,
                 concurrency_limit=1,
             )
@@ -4790,6 +4849,53 @@ def run_web():
   return [];
 }
 """
+
+        open_live_js = """
+(url) => {
+  const u = (url || "").toString().trim();
+  if (!u) {
+    alert("هنوز صفحه‌ای آماده نشده — چند لحظه بعد دوباره بزن.");
+    return [];
+  }
+  const w = window.open(u, "_blank");
+  if (!w) {
+    window.location.href = u;
+  }
+  return [];
+}
+"""
+
+        def _open_live_viewer(sid, sid_box_v):
+            preferred = (sid or sid_box_v or "").strip()
+            sid2 = _find_active_sid(preferred) or preferred
+            job = _get_job(sid2) if sid2 else None
+            url = ""
+            if job:
+                with job["lock"]:
+                    d = job.get("live_dir")
+                if d and os.path.isdir(d):
+                    try:
+                        path = os.path.join(d, "live_reader.html")
+                        if not os.path.isfile(path):
+                            _write_live_reader(d)
+                        url = _reader_file_url(path)
+                    except Exception:
+                        url = ""
+            return url
+
+        try:
+            live_btn.click(
+                fn=_open_live_viewer,
+                inputs=[session_id, sid_box],
+                outputs=[reader_url_box],
+            ).then(
+                fn=None,
+                inputs=[reader_url_box],
+                outputs=[],
+                js=open_live_js,
+            )
+        except Exception:
+            pass
 
         try:
             btn_view.click(
