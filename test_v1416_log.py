@@ -37,7 +37,7 @@ p = os.path.join(td, "manga.log")
 log = open(p, encoding="utf-8").read()
 
 assert log.startswith("=== Manga Translator v"), log[:120]
-assert "v1.14.19" in log, "APP_VER missing"
+assert "v1.14.20" in log, "APP_VER missing"
 assert "params: provider=gemini" in log
 assert long_line.strip() in log, "long line was truncated in file!"
 assert "PROG 42%|" in log, "progress line lost"

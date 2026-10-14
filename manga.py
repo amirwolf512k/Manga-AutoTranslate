@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.19"
+APP_VER = "1.14.20"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -665,20 +665,71 @@ def _lama_ep_store(model_path: str, v: str):
         pass
 
 
+def _ep_ab_feed(sess, side: int = 256) -> dict:
+    """⚖️ v1.14.20 — فیدِ عمومی برای هر مدل ONNX (LaMa دو-ورودی، RT-DETR
+    تصویر+سایز، و…) بر اساس type/shape واقعی ورودی‌ها — برای پروب EP."""
+    feed = {}
+    for inp in sess.get_inputs():
+        try:
+            dt = getattr(inp, "type", "") or ""
+        except Exception:
+            dt = ""
+        if "int64" in dt:
+            np_dt = np.int64
+        elif "int32" in dt:
+            np_dt = np.int32
+        elif "float16" in dt:
+            np_dt = np.float16
+        elif "double" in dt:
+            np_dt = np.float64
+        elif "bool" in dt:
+            np_dt = np.bool_
+        else:
+            np_dt = np.float32
+        shp = []
+        try:
+            for d in (inp.shape or []):
+                shp.append(d if isinstance(d, int) and d > 0 else None)
+        except Exception:
+            shp = []
+        nm = (getattr(inp, "name", "") or "").lower()
+        is_mask = ("mask" in nm or "msk" in nm)
+        if np_dt in (np.int64, np.int32) and len(shp) <= 2:
+            dims = [d if d is not None else (2 if len(shp) >= 2 else 1)
+                    for d in (shp or [1, 2])]
+            arr = np.full(dims, side, dtype=np_dt)
+            feed[inp.name] = arr
+            continue
+        if len(shp) == 4:
+            b = shp[0] or 1
+            c = shp[1] if shp[1] else (1 if is_mask else 3)
+            h = shp[2] or side
+            w = shp[3] or side
+            arr = np.zeros((b, c, h, w), dtype=np_dt)
+            if np_dt == np.float32 and is_mask:
+                h2, w2 = arr.shape[2], arr.shape[3]
+                arr[:, :, h2 // 4:h2 // 2, w2 // 4:w2 // 2] = 1.0
+            feed[inp.name] = arr
+            continue
+        if len(shp) == 3:
+            dims = [shp[0] or 1, shp[1] or side, shp[2] or side]
+            feed[inp.name] = np.zeros(dims, dtype=np_dt)
+            continue
+        if len(shp) in (0, 1):
+            feed[inp.name] = np.zeros([d or 1 for d in shp] or [1], dtype=np_dt)
+            continue
+        dims = [d if d is not None else 1 for d in shp] or [1]
+        feed[inp.name] = np.zeros(dims, dtype=np_dt)
+    return feed
+
+
 def _ep_ab_time(sess) -> float:
-    """⚖️ v1.14.19 — زمانِ واقعی یک ران با ورودی ۲۵۶×۲۵۶ (۱ warmup + ۲ ران،
-    کمینه) — مبنای مقایسهٔ A/B بین EP و CPU روی خودِ مدل LaMa."""
+    """⚖️ v1.14.19/20 — زمانِ واقعی یک ران (۱ warmup + ۲ ران، کمینه) —
+    مبنای مقایسهٔ A/B بین EP و CPU روی خودِ مدل (هر مدلی — فید عمومی)."""
     try:
-        names = [i.name for i in sess.get_inputs()]
-        if not names:
+        feed = _ep_ab_feed(sess, side=256)
+        if not feed:
             return float("inf")
-        side = 256
-        img = np.zeros((1, 3, side, side), dtype=np.float32)
-        msk = np.zeros((1, 1, side, side), dtype=np.float32)
-        msk[:, :, side // 4:side // 2, side // 4:side // 2] = 1.0
-        feed = {names[0]: img}
-        if len(names) >= 2:
-            feed[names[1]] = msk
         outs = [o.name for o in sess.get_outputs()][:1]
         best = float("inf")
         for i in range(3):
@@ -693,24 +744,14 @@ def _ep_ab_time(sess) -> float:
 
 
 def _ort_probe_ok(sess, threads: int) -> bool:
-    """🎮 v1.14.18 — پروبِ سلامت + ضد-سریالی‌شدن XNNPACK:
+    """🎮 v1.14.18/20 — پروبِ سلامت + ضد-سریالی‌شدن EP (فید عمومی — هر مدل):
     ۱) یک ران کوچک (۶۴×۶۴) — اگر خطا داد EP مردود است.
     ۲) دو رانِ همزمان در برابر دو رانِ پشت‌سرهم — اگر EP رانِ همزمان را
-       سریال کند (محدودیت شناخته‌شدهٔ XNNPACK در نسخه‌های قدیمی)،
-       موازی‌سازیِ ۴-۶ کارگر ما بی‌اثر می‌شود → EP مردود."""
+       سریال کند، موازی‌سازیِ ۴-۶ کارگر ما بی‌اثر می‌شود → EP مردود."""
     try:
-        names = [i.name for i in sess.get_inputs()]
-        if not names:
+        feed = _ep_ab_feed(sess, side=64)
+        if not feed:
             return False
-        side = 64
-        img = np.zeros((1, 3, side, side), dtype=np.float32)
-        msk = np.zeros((1, 1, side, side), dtype=np.float32)
-        msk[:, :, side // 4:side // 2, side // 4:side // 2] = 1.0
-        feed = {}
-        if len(names) >= 2:
-            feed = {names[0]: img, names[1]: msk}
-        else:
-            feed = {names[0]: img}
         outs = [o.name for o in sess.get_outputs()][:1]
         try:
             sess.run(outs, feed)
@@ -754,6 +795,105 @@ def _ort_probe_ok(sess, threads: int) -> bool:
         return False
 
 
+_AB_EPS = ["XnnpackExecutionProvider", "NnapiExecutionProvider",
+           "WebGpuExecutionProvider"]
+
+
+def _ep_tournament(model_path: str, threads: int):
+    """⚖️ v1.14.20 — تورنمنت EP (درخواست کاربر: «چرا مثل K3 از XNNPACK + NNAPI
+    + WebGPU استفاده نمی‌کنی؟») — جواب: استفاده می‌کنیم، ولی هوشمند:
+    هر سه + CPU روی خودِ مدلِ همین دستگاه محک زده می‌شوند؛ هرکدام واقعاً
+    سریع‌تر بود برنده است (LaMa=FFT → معمولاً CPU؛ RT-DETR=کانولوشن →
+    احتمالاً XNNPACK/NNAPI). برنده در .epab کش می‌شود (پروب فقط بار اول؛
+    MANGA_ORT_EP_REPROBE=1 = دوباره). بودجهٔ زمانی: MANGA_AB_BUDGET (پیش‌فرض 45s)
+    — کامپایل NNAPI برای مدل‌های بزرگ می‌تواند سنگین باشد (همان «هنگِ» K3)."""
+    t_all0 = time.time()
+    try:
+        budget = float(os.environ.get("MANGA_AB_BUDGET", "45") or 45)
+    except Exception:
+        budget = 45.0
+    try:
+        avail = list(ort.get_available_providers())
+    except Exception:
+        avail = []
+    rows = []  # (t, short, sess)
+    for cand in _AB_EPS:
+        short = cand.replace("ExecutionProvider", "").lower()
+        if cand not in avail:
+            continue
+        if (time.time() - t_all0) > budget:
+            try:
+                print(f"    [⚖] {short}: رد شد (اتمام بودجهٔ {budget:.0f}s پروب)")
+            except Exception:
+                pass
+            continue
+        s_c = None
+        try:
+            so_c = _ort_session_options(threads)
+            try:
+                so_c.append_execution_provider(cand)
+            except Exception:
+                try:
+                    so_c._eps = [(cand, {})]
+                except Exception:
+                    pass
+            t0 = time.time()
+            s_c = ort.InferenceSession(model_path, sess_options=so_c,
+                                       providers=[cand, "CPUExecutionProvider"])
+            t_make = time.time() - t0
+            if not _ort_probe_ok(s_c, threads if threads > 0 else 0):
+                try:
+                    print(f"    [⚖] {short}: مردود (پروب سلامت/سریالی)")
+                except Exception:
+                    pass
+                s_c = None
+                continue
+            t_c = _ep_ab_time(s_c)
+            try:
+                print(f"    [⚖] پروب {short}: {t_c:.2f}s (ساخت {t_make:.1f}s)")
+            except Exception:
+                pass
+            rows.append((t_c, short, s_c))
+        except Exception as e:
+            try:
+                print(f"    [⚖] {short}: ناموفق ({str(e)[:90]})")
+            except Exception:
+                pass
+            s_c = None
+            continue
+    s_cpu, t_cpu = None, float("inf")
+    try:
+        s_cpu = ort.InferenceSession(model_path,
+                                     sess_options=_ort_session_options(threads),
+                                     providers=["CPUExecutionProvider"])
+        t_cpu = _ep_ab_time(s_cpu)
+        try:
+            print(f"    [⚖] پروب CPU: {t_cpu:.2f}s")
+        except Exception:
+            pass
+    except Exception:
+        pass
+    rows.sort(key=lambda r: r[0])
+    winner = rows[0] if (rows and rows[0][0] < t_cpu) else None
+    try:
+        summary = " | ".join(f"{r[1]} {r[0]:.2f}s" for r in rows) or "—"
+        print(f"[⚖] پروب EP ({os.path.basename(model_path)}): "
+              f"{summary} | CPU {t_cpu:.2f}s → برنده: "
+              f"{winner[1] if winner else 'CPU'}")
+    except Exception:
+        pass
+    if winner is not None:
+        _lama_ep_store(model_path, winner[1])
+        try:
+            print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {winner[1]} "
+                  f"(پروب A/B — سریع‌تر از CPU)")
+        except Exception:
+            pass
+        return winner[2]
+    _lama_ep_store(model_path, "cpu")
+    return s_cpu
+
+
 def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4,
                       ep: Optional[str] = None, ep_ab: bool = False):
     global _ORT_CUDA_OK
@@ -766,28 +906,47 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
         _prepare_ort_cuda_dlls()
 
     # 🎮 v1.14.18: EP سخت‌افزاری (الگوی رقیب K3 — XNNPACK/NNAPI در AAR)
-    # ⚖️ v1.14.19: کش انتخاب A/B — پروب گران (~۱۰s، دو لود مدل) فقط بار اول؛
-    # دفعات بعد نتیجهٔ قبلی اعمال می‌شود (MANGA_ORT_EP_REPROBE=1 = پروب دوباره)
+    # ⚖️ v1.14.20 (درخواست کاربر): مثل K3 همهٔ EPها امتحان می‌شوند — تورنمنت
+    # XNNPACK + NNAPI + WebGPU + CPU روی خودِ مدل؛ سریع‌ترین برنده است.
+    # نتیجه در .epab کنار مدل کش می‌شود (پروب فقط بار اول؛
+    # MANGA_ORT_EP_REPROBE=1 = پروب دوباره)
+    _EP_SHORT2FULL = {"xnnpack": "XnnpackExecutionProvider",
+                      "nnapi": "NnapiExecutionProvider",
+                      "webgpu": "WebGpuExecutionProvider"}
     if ep and ep_ab:
         _cached = _lama_ep_cached(model_path)
         if _cached == "cpu":
             try:
-                print("    [*] EP کش‌شده: CPU (پروب قبلی سریع‌تر بود) — پروب رد شد")
+                print("    [*] EP کش‌شده: CPU (پروب قبلی) — پروب رد شد")
             except Exception:
                 pass
             ep, ep_ab = None, False
-        elif _cached:
+        elif _cached in _EP_SHORT2FULL:
             try:
-                print(f"    [*] EP کش‌شده: {_cached} (پروب قبلی برنده بود) — بدون A/B")
+                print(f"    [*] EP کش‌شده: {_cached} (پروب قبلی برنده بود) — بدون پروب")
             except Exception:
                 pass
-            ep_ab = False
+            ep, ep_ab = _EP_SHORT2FULL[_cached], False
+
     if ep:
         try:
             avail = list(ort.get_available_providers())
         except Exception:
             avail = []
-        if ep in avail:
+        _any_hw = ep in avail or any(c in avail for c in _AB_EPS)
+        if _any_hw and ep_ab:
+            # ⚖️ v1.14.20 — تورنمنت کامل: همهٔ EPها در برابر CPU روی خودِ مدل
+            s_win = _ep_tournament(model_path, threads)
+            if s_win is not None:
+                return s_win
+            # CPU برد یا تورنمنت ناموفق → مسیر عادی CPU پایین
+            import gc as _gcp
+            try:
+                _gcp.collect()
+            except Exception:
+                pass
+        elif ep in avail:
+            # EP اجباری (MANGA_ORT_EP=xnnpack/nnapi/webgpu) — فقط پروب سلامت
             so_ep = _ort_session_options(threads)
             try:
                 so_ep.append_execution_provider(ep)
@@ -800,66 +959,12 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
                 s_ep = ort.InferenceSession(model_path, sess_options=so_ep,
                                             providers=[ep, "CPUExecutionProvider"])
                 if _ort_probe_ok(s_ep, threads if threads > 0 else 0):
-                    # ⚖️ v1.14.19 — لاگ گوشی v1.14.18: XNNPACK روی LaMa
-                    # ۲.۴-۲.۸× کندتر شد (FFT شتاب نمی‌گیرد). پس در حالت auto
-                    # پروب A/B واقعی: EP در برابر CPU روی خودِ مدل — هرکدام
-                    # سریع‌تر بود برنده است (هر دو از کش لود می‌شوند ~۲-۴s).
-                    if ep_ab:
-                        t_ep = _ep_ab_time(s_ep)
-                        s_cpu = None
-                        cpu_fast = ("CUDAExecutionProvider"
-                                    not in ort.get_available_providers())
-                        if cpu_fast:
-                            try:
-                                s_cpu = ort.InferenceSession(
-                                    model_path,
-                                    sess_options=_ort_session_options(threads),
-                                    providers=["CPUExecutionProvider"])
-                            except Exception:
-                                s_cpu = None
-                        t_cpu = _ep_ab_time(s_cpu) if s_cpu is not None \
-                            else float("inf")
-                        win = "EP" if t_ep < t_cpu else "CPU"
-                        try:
-                            _ep_short = ep.replace("ExecutionProvider", "")
-                            print(f"[⚖] پروب A/B LaMa: {_ep_short} "
-                                  f"{t_ep:.2f}s در برابر CPU {t_cpu:.2f}s "
-                                  f"→ {win}")
-                        except Exception:
-                            pass
-                        if t_ep < t_cpu:
-                            _lama_ep_store(model_path,
-                                           ep.replace("ExecutionProvider", "").lower())
-                            try:
-                                if s_cpu is not None:
-                                    del s_cpu
-                                import gc as _gcab
-                                _gcab.collect()
-                            except Exception:
-                                pass
-                            try:
-                                print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
-                                      f"(پروب A/B — سریع‌تر از CPU)")
-                            except Exception:
-                                pass
-                            return s_ep
-                        # CPU برد → EP را دور بریز و سشن CPU آماده را بده
-                        _lama_ep_store(model_path, "cpu")
-                        try:
-                            del s_ep
-                            import gc as _gcab2
-                            _gcab2.collect()
-                        except Exception:
-                            pass
-                        if s_cpu is not None:
-                            return s_cpu
-                    else:
-                        try:
-                            print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
-                                  f"(الگوی رقیب K3)")
-                        except Exception:
-                            pass
-                        return s_ep
+                    try:
+                        print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
+                              f"(MANGA_ORT_EP — اجباری)")
+                    except Exception:
+                        pass
+                    return s_ep
                 try:
                     s_ep = None
                 except Exception:
@@ -1529,8 +1634,13 @@ class RTDetrV2ONNXDetector:
                     if not cand:
                         continue
                     # 🔧 ساخت سشن داخل حلقه: فایل خراب/ناسازگار → فایل بعدی
+                    # ⚖️ v1.14.20: تشخیص حباب هم مثل K3 شتاب سخت‌افزاری می‌گیرد —
+                    # RT-DETR کانولوشنی است (تخصص XNNPACK/NNAPI) — تورنمنت خودش
+                    # بهترین را روی همین دستگاه انتخاب می‌کند (کش .epab جدا)
                     try:
-                        _sess = _make_ort_session(cand, prefer_gpu=prefer_gpu, threads=threads)
+                        _sess = _make_ort_session(
+                            cand, prefer_gpu=prefer_gpu, threads=threads,
+                            ep=_resolve_lama_ep(), ep_ab=_is_auto_ep())
                     except Exception as _se:
                         print(f"    [!] {fname} سشن ONNX نساخت ({_se}) → فایل بعدی")
                         try:
@@ -1549,7 +1659,10 @@ class RTDetrV2ONNXDetector:
                     f"نتوانست مدل RT-DETR را از {self.DET_REPO} دانلود کند: {last_err}"
                 )
         else:
-            self.session = _make_ort_session(model_path, prefer_gpu=prefer_gpu, threads=threads)
+            # ⚖️ v1.14.20: تورنمنت EP برای تشخیص حباب هم (کانولوشن — شتاب‌پذیر)
+            self.session = _make_ort_session(
+                model_path, prefer_gpu=prefer_gpu, threads=threads,
+                ep=_resolve_lama_ep(), ep_ab=_is_auto_ep())
 
         self.model_path = model_path
         try:
@@ -2806,9 +2919,9 @@ class MangaTranslator:
                       "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
                 return False
             print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ «موازی»: ۶ پچِ همزمان × "
-                  "۱ نخ + پیش‌بارگذاری مدل در پس‌زمینه. EP (XNNPACK/سخت‌افزار) "
-                  "فقط اگر پروب A/B روی خود گوشی ثابت کند سریع‌تر از CPU است "
-                  "فعال می‌شود.")
+                  "۱ نخ + پیش‌بارگذاری مدل در پس‌زمینه. مثل K3 همهٔ EPها "
+                  "(XNNPACK+NNAPI+WebGPU) برای پاکسازی و تشخیص محک زده می‌شوند "
+                  "و سریع‌ترین روی همین گوشی خودکار انتخاب می‌شود.")
             return True
 
         if force_gpu is True:
