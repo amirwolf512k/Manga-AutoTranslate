@@ -64,6 +64,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var liveBox: LinearLayout
     private lateinit var runBtn: Button
     private val liveImages = mutableListOf<String>()
+    private val liveDbgImages = mutableListOf<String>()
     private var liveBtn: Button? = null
     private var livePush: ((Int) -> Unit)? = null
     private var jobRunning = false
@@ -1370,6 +1371,7 @@ class MainActivity : AppCompatActivity() {
             liveBox.removeAllViews()
             liveBtn = null
             liveImages.clear()
+            liveDbgImages.clear()
             livePush = null
             Thread {
                 var res: JSONObject? = null
@@ -1445,7 +1447,11 @@ class MainActivity : AppCompatActivity() {
                     s.optJSONArray("live_images")?.let { a ->
                         val live = mutableListOf<String>()
                         for (i in 0 until a.length()) live.add(a.optString(i))
-                        updateLiveResults(live)
+                        val liveDbg = mutableListOf<String>()
+                        s.optJSONArray("live_debug_images")?.let { b ->
+                            for (i in 0 until b.length()) liveDbg.add(b.optString(i))
+                        }
+                        updateLiveResults(live, liveDbg)
                     }
                     if (s.optBoolean("cancel_requested") && !s.optBoolean("done") &&
                         !cancelPending) {
@@ -1460,7 +1466,6 @@ class MainActivity : AppCompatActivity() {
                         finishJobUi()
                         liveBox.removeAllViews()
                         liveBtn = null
-                        livePush = null
                         showResults(s)
                         autoSaveLog()
 
@@ -1542,32 +1547,38 @@ class MainActivity : AppCompatActivity() {
         autoSaveOutputs(images, outFile)
     }
 
-    private fun updateLiveResults(live: List<String>) {
-        if (live.size == liveImages.size) return
-        liveImages.clear()
-        liveImages.addAll(live)
-        if (liveImages.isEmpty()) {
-            liveBox.removeAllViews()
-            liveBtn = null
-            return
+    /** نمایشِ زنده = همان نمایشِ اصلی — در همان جعبهٔ نتیجه، با همان دکمه‌ها.
+     *  تا وقتی کار در جریان است، «نمایش (N صفحه)» و «نمایش دیباگ» به‌صورت
+     *  زنده به‌روز می‌شوند و بعد از پایان، showResults جای آن‌ها را با
+     *  نتیجهٔ نهایی می‌گیرد — دیگر دو نمایشِ جدا نیستند. */
+    private fun updateLiveResults(live: List<String>, liveDbg: List<String>) {
+        if (live.size == liveImages.size && liveDbg.size == liveDbgImages.size) return
+        synchronized(liveImages) {
+            liveImages.clear()
+            liveImages.addAll(live)
         }
-        if (liveBtn == null) {
-            val nb = Button(this).apply {
-                setTextColor(Color.WHITE)
-                textSize = 13.5f
-                typeface = Typeface.DEFAULT_BOLD
-                background = gradBtn()
-                setPadding(0, dp(11), 0, dp(11))
-                stateListAnimator = null
-            }
-            liveBtn = nb
-            liveBox.addView(nb, LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(7) })
+        synchronized(liveDbgImages) {
+            liveDbgImages.clear()
+            liveDbgImages.addAll(liveDbg)
         }
-        liveBtn?.text = "📖  نمایش زنده (${liveImages.size} صفحه)"
-        liveBtn?.setOnClickListener { viewer(liveImages, live = true) }
-        livePush?.invoke(liveImages.size)
+        if (liveImages.isEmpty() && liveDbgImages.isEmpty()) return
+        resultsBox.removeAllViews()
+        if (liveImages.isNotEmpty()) {
+            resultsBox.addView(resBtn("📖  نمایش (${liveImages.size} صفحه)", true) {
+                viewer(liveImages, live = true)
+            })
+        }
+        if (liveDbgImages.isNotEmpty()) {
+            resultsBox.addView(resBtn(
+                "🔍  نمایش دیباگ (${liveDbgImages.size} صفحه)", false) {
+                viewer(liveDbgImages, live = true, dbg = true)
+            })
+        }
+        for (i in 0 until resultsBox.childCount) {
+            val lp = resultsBox.getChildAt(i).layoutParams as LinearLayout.LayoutParams
+            lp.topMargin = dp(7)
+        }
+        livePush?.invoke(0)
     }
 
     private fun rescueOutputs() {
@@ -1615,9 +1626,14 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
-    private fun viewer(pathsRaw: List<String>, live: Boolean = false) {
+    private fun viewer(pathsRaw: List<String>, live: Boolean = false,
+                       dbg: Boolean = false) {
         if (pathsRaw.isEmpty()) return
-        val paths: List<String> = if (live) liveImages else pathsRaw
+        // نسخهٔ پایدار از لیست — اگر لیستِ زنده وسط رندر پاک/پُر شود،
+        // تصویرها ۴۰۴ می‌شوند و نمایشگر سیاه می‌ماند (باگ «هیچی نشون نداد»)
+        val src: List<String> = pathsRaw
+        val paths: MutableList<String> = java.util.Collections.synchronizedList(
+            mutableListOf<String>().apply { addAll(src) })
         if (paths.isEmpty()) return
 
         val imgRx = Regex("/i/(\\d+)/?$")
@@ -1638,7 +1654,13 @@ class MainActivity : AppCompatActivity() {
 
         val title = try {
             val base = File(paths[0]).parentFile?.name?.takeIf { it.isNotBlank() } ?: "مانهوا"
-            if (live) "زنده · $base" else base
+            val pfx = when {
+                dbg && live -> "🔍 زنده · "
+                dbg -> "🔍 "
+                live -> "زنده · "
+                else -> ""
+            }
+            "$pfx$base"
         } catch (_: Exception) { "مانهوا" }
 
         val assetHtml = try {
@@ -1707,13 +1729,19 @@ class MainActivity : AppCompatActivity() {
         }
         dlg.show()
         if (live) {
-            livePush = { n ->
+            livePush = { _ ->
                 try {
+                    // صفحه‌های تازهٔ لیستِ زنده را به نسخهٔ پایدارِ نمایشگر اضافه کن
+                    if (paths.size < src.size) {
+                        synchronized(paths) {
+                            for (i in paths.size until src.size) paths.add(src[i])
+                        }
+                    }
                     wv.evaluateJavascript(
-                        "window.__mangaLive && window.__mangaLive($n)", null)
+                        "window.__mangaLive && window.__mangaLive(${paths.size})", null)
                 } catch (_: Exception) {}
             }
-            livePush?.invoke(paths.size)
+            livePush?.invoke(0)
         }
         if (!prefs.getBoolean("viewer_hint_v3", false)) {
             prefs.edit().putBoolean("viewer_hint_v3", true).apply()

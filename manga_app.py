@@ -3463,24 +3463,24 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                             elem_id="manga_live_log",
                             value="— لاگ بعد از شروع ترجمه اینجا می‌آید —")
 
-        live_group = gr.Group(visible=False, elem_classes=["stepcard"])
-        with live_group:
-            gr.HTML('<div class="steptitle"><span class="stepnum">📖</span> '
-                    'نمایش زنده — صفحه‌های آماده‌شده</div>')
-            live_btn = _safe(gr.Button, "📖 نمایش زنده", visible=False, elem_id="manga_live_btn")
-            gr.HTML('<div class="livehint">بزن تا صفحه‌های آماده‌شده را ببینی؛ '
-                    'هر صفحهٔ جدید خودش داخل نمایشگر اضافه می‌شود — بدون رفرش</div>')
-
         html_state = gr.State("")
         html_debug_state = gr.State("")
+        # نمایش زنده و نتیجهٔ نهایی حالا یک کارت مشترک‌اند — یک «نمایش»،
+        # نه دو نمایشِ جدا (خواستهٔ کاربر)
         with gr.Group(elem_classes=["stepcard"], visible=False) as result_group:
-            gr.HTML('<div class="steptitle"><span class="stepnum">✓</span> نتیجه — نمایش یا دانلود</div>')
+            gr.HTML('<div class="steptitle"><span class="stepnum">📖</span> '
+                    'نمایش — زنده و نتیجه</div>')
+            live_btn = _safe(gr.Button, "📖 نمایش", visible=False, elem_id="manga_live_btn")
+            gr.HTML('<div class="livehint" id="manga_live_hint" style="display:none">'
+                    'تا کار در جریان است، هر صفحهٔ جدید خودش داخل نمایشگر اضافه می‌شود — بدون رفرش</div>')
             with gr.Row():
-                btn_view = _safe(gr.Button, "👁 نمایش", visible=False)
+                btn_view = _safe(gr.Button, "👁 نمایش", visible=False,
+                                 elem_id="manga_view_btn")
                 dl_btn = _safe(gr.DownloadButton, label="⬇ دانلود", visible=False)
             debug_row = gr.Row(visible=False)
             with debug_row:
-                btn_view_debug = _safe(gr.Button, "🔍 نمایش دیباگ", visible=False)
+                btn_view_debug = _safe(gr.Button, "🔍 نمایش دیباگ", visible=False,
+                                       elem_id="manga_view_debug_btn")
                 dl_btn_debug = _safe(gr.DownloadButton, label="⬇ دانلود دیباگ", visible=False)
             viewer_html = gr.HTML(visible=False, elem_id="reader_wrap")
 
@@ -4082,18 +4082,23 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             live_dir = os.path.join(user_out_dir, "live")
             shutil.rmtree(live_dir, ignore_errors=True)
             os.makedirs(live_dir, exist_ok=True)
+            live_dbg_dir = os.path.join(user_out_dir, "live_debug")
+            shutil.rmtree(live_dbg_dir, ignore_errors=True)
+            os.makedirs(live_dbg_dir, exist_ok=True)
             try:
                 _write_live_reader(live_dir)
             except Exception as _e:
                 print(f"[!] نوشتن live_reader.html ناموفق: {_e}")
             with job["lock"]:
                 job["live_dir"] = live_dir
+                job["live_dbg_dir"] = live_dbg_dir
                 job["live_files"] = []
 
             _env = os.environ.copy()
             _env["PYTHONUNBUFFERED"] = "1"
             _env["PYTHONIOENCODING"] = "utf-8"
             _env["MANGA_LIVE_DIR"] = live_dir
+            _env["MANGA_LIVE_DEBUG_DIR"] = live_dbg_dir
             try:
                 proc = subprocess.Popen(
                     cmd, cwd=HERE, stdout=subprocess.PIPE,
@@ -4500,6 +4505,15 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 if log_changed:
                     job["_last_poll_log"] = log
                 vis = bool(job.get("result_visible"))
+                live_cnt = 0
+                try:
+                    _ld = job.get("live_dir")
+                    if _ld and os.path.isdir(_ld):
+                        live_cnt = sum(
+                            1 for f in os.listdir(_ld)
+                            if f.lower().endswith(".jpg") and f.startswith("live_"))
+                except Exception:
+                    pass
                 dl = job.get("download_path")
                 dl_dbg = job.get("download_debug")
                 has_dbg = bool(dl_dbg or job.get("reader_debug_path") or meta.get("has_debug"))
@@ -4517,6 +4531,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             html_dbg = ""
             with job["lock"]:
                 html_dbg = job.get("html_debug") or ""
+            show_card = bool(vis or (running and live_cnt > 0))
             return (
                 sid,
                 gr.update(value=sid),
@@ -4525,7 +4540,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 gr.update(value=log) if (log and log_changed) else gr.update(),
                 gr.update(value=dl, label=_dl_label(dl), visible=vis) if vis else gr.update(),
                 gr.update(visible=vis),
-                gr.update(visible=vis),
+                gr.update(visible=show_card),
                 gr.update(),
                 gr.update(),
                 gr.update(value=dl_dbg, visible=show_dbg and has_dbg) if (show_dbg and has_dbg) else gr.update(visible=show_dbg),
@@ -4571,20 +4586,39 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             pref = (sid_v or sid_box_v or "").strip()
             job = live_jobs.get(pref)
             if job is None:
-                return gr.update(), gr.update()
+                return gr.update(), gr.update(), gr.update()
             live_dir = job.get("live_dir")
             files = _scan_live_dir(live_dir) if live_dir else []
+            dbg_dir = job.get("live_dbg_dir")
+            dbg_files = _scan_live_dir(dbg_dir) if dbg_dir else []
             with job["lock"]:
                 prev = list(job.get("live_files") or [])
-            if files == prev:
-                return gr.update(), gr.update()
+                prev_dbg = list(job.get("live_dbg_files") or [])
+                running = bool(job.get("running")) and (
+                    job.get("proc") is None or job["proc"].poll() is None)
+            if files == prev and dbg_files == prev_dbg:
+                # هیچ تغییر — ولی وضعیتِ در حال اجرا/پایان باید دیده شود
+                was_running = bool(job.get("_live_was_running"))
+                if running == was_running:
+                    return gr.update(), gr.update(), gr.update()
             with job["lock"]:
                 job["live_files"] = files
+                job["live_dbg_files"] = dbg_files
+                job["_live_was_running"] = running
                 job["ts"] = time.time()
-            if not files:
-                return gr.update(value="📖 نمایش زنده", visible=False), gr.update(visible=False)
-            label = "📖 نمایش زنده (%d صفحه)" % len(files) if len(files) > 1 else "📖 نمایش زنده (۱ صفحه)"
-            return gr.update(value=label, visible=True), gr.update(visible=True)
+            if not running:
+                # بعد از پایان، «نمایش» نهایی جای دکمهٔ زنده را می‌گیرد
+                return (gr.update(visible=False), gr.update(),
+                        gr.update())
+            if not files and not dbg_files:
+                return (gr.update(visible=False), gr.update(visible=False),
+                        gr.update())
+            label = "📖 نمایش (%d صفحه)" % len(files) if len(files) > 1 else "📖 نمایش (۱ صفحه)"
+            dbg_lbl = ("🔍 نمایش دیباگ (%d صفحه)" % len(dbg_files)
+                       if len(dbg_files) > 1 else "🔍 نمایش دیباگ (۱ صفحه)")
+            return (gr.update(value=label, visible=True),
+                    gr.update(visible=True),
+                    gr.update(value=dbg_lbl) if dbg_files else gr.update())
         try:
             _timer = gr.Timer(1.0, active=True)
             _tick_evt = _timer.tick(
@@ -4616,7 +4650,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             _timer_g.tick(
                 _poll_live_gallery,
                 inputs=[sid_holder, sid_box],
-                outputs=[live_btn, live_group],
+                outputs=[live_btn, result_group, btn_view_debug],
                 queue=False,
                 concurrency_limit=1,
             )
@@ -4840,6 +4874,20 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                     except Exception:
                         path = ""
             url = _reader_file_url(path)
+            if not url:
+                # نتیجهٔ نهایی هنوز نیست → نمایشِ زندهٔ همان صفحه‌های آماده را باز کن
+                try:
+                    _jb = _get_job(sid) if sid else None
+                    if _jb:
+                        with _jb["lock"]:
+                            _d = _jb.get("live_dir")
+                        if _d and os.path.isdir(_d):
+                            _lp = os.path.join(_d, "live_reader.html")
+                            if not os.path.isfile(_lp):
+                                _write_live_reader(_d)
+                            url = _reader_file_url(_lp)
+                except Exception:
+                    pass
             return gr.update(visible=False), (st if st is not None else gr.update()), url
 
         def _open_viewer_debug(sid, sid_box_v, st_dbg):
@@ -4868,6 +4916,20 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                     except Exception:
                         path = ""
             url = _reader_file_url(path)
+            if not url:
+                # دیباگ زنده — مثل نمایش اصلی، تا نتیجهٔ نهایی آماده شود
+                try:
+                    _jb = _get_job(sid) if sid else None
+                    if _jb:
+                        with _jb["lock"]:
+                            _d = _jb.get("live_dbg_dir")
+                        if _d and os.path.isdir(_d):
+                            _lp = os.path.join(_d, "live_reader.html")
+                            if not os.path.isfile(_lp):
+                                _write_live_reader(_d)
+                            url = _reader_file_url(_lp)
+                except Exception:
+                    pass
             return gr.update(visible=False), (st_dbg if st_dbg is not None else gr.update()), url
 
         reader_url_box = gr.Textbox(value="", visible=False, elem_id="manga_reader_url")
@@ -4876,13 +4938,18 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 (sid, sidBox, htmlSt, url) => {
   const u = (url || "").toString().trim();
   if (!u) {
+    try { if (window.__mangaPopup) { window.__mangaPopup.close(); } } catch (e) {}
+    window.__mangaPopup = null;
     alert("صفحهٔ خواندن هنوز آماده نیست.");
     return [];
   }
-  const w = window.open(u, "_blank");
-  if (!w) {
-    window.location.href = u;
-  }
+  let w = window.__mangaPopup;
+  if (w && !w.closed) {
+    try { w.location.href = u; } catch (err) { w = null; }
+  } else { w = null; }
+  window.__mangaPopup = null;
+  if (!w) { w = window.open(u, "_blank"); }
+  if (!w) { window.location.href = u; }
   return [];
 }
 """
@@ -4891,13 +4958,18 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 (url) => {
   const u = (url || "").toString().trim();
   if (!u) {
+    try { if (window.__mangaPopup) { window.__mangaPopup.close(); } } catch (e) {}
+    window.__mangaPopup = null;
     alert("هنوز صفحه‌ای آماده نشده — چند لحظه بعد دوباره بزن.");
     return [];
   }
-  const w = window.open(u, "_blank");
-  if (!w) {
-    window.location.href = u;
-  }
+  let w = window.__mangaPopup;
+  if (w && !w.closed) {
+    try { w.location.href = u; } catch (err) { w = null; }
+  } else { w = null; }
+  window.__mangaPopup = null;
+  if (!w) { w = window.open(u, "_blank"); }
+  if (!w) { window.location.href = u; }
   return [];
 }
 """
@@ -4981,6 +5053,38 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
         except Exception:
             try:
                 demo.load(js=_dark_js_src())
+            except Exception:
+                pass
+
+        # گارد پاپ‌آپ: با کلیک روی دکمه‌های نمایش، یک پنجرهٔ خالی «همزمان با
+        # کلیک» باز می‌شود تا مرورگر آن را مسدود نکند (رفعِ «هیچی نشون نداد»)
+        _popup_guard_js = """
+() => {
+  try {
+    if (window.__mangaPopupGuard) return [];
+    window.__mangaPopupGuard = true;
+    document.addEventListener('click', function (e) {
+      try {
+        const t = e.target && e.target.closest ? e.target.closest('button') : null;
+        if (!t) return;
+        const tid = (t.id || '').toString();
+        if (tid.indexOf('manga_live_btn') === -1 &&
+            tid.indexOf('manga_view_btn') === -1 &&
+            tid.indexOf('manga_view_debug_btn') === -1) return;
+        if (!window.__mangaPopup || window.__mangaPopup.closed) {
+          window.__mangaPopup = window.open('', '_blank');
+        }
+      } catch (err) {}
+    }, true);
+  } catch (err) {}
+  return [];
+}
+"""
+        try:
+            demo.load(None, None, None, js=_popup_guard_js)
+        except Exception:
+            try:
+                demo.load(js=_popup_guard_js)
             except Exception:
                 pass
 

@@ -2787,12 +2787,23 @@ def uncensor_swears(text: str) -> str:
     return result.strip()
 
 
-def _live_page_dump(out_file: str) -> None:
-    d = (os.environ.get("MANGA_LIVE_DIR") or "").strip()
+def _live_dump(src, dbg: bool = False) -> None:
+    """یک صفحهٔ تازه‌تمام‌شده را برای «نمایش زنده» می‌نویسد.
+
+    src یا مسیر فایل است یا آرایهٔ تصویر (مثل دیباگ). برای دیباگ پوشهٔ
+    جداگانه از MANGA_LIVE_DEBUG_DIR خوانده می‌شود تا نمایش دیباگ هم
+    بتواند زنده باشد."""
+    d = (os.environ.get("MANGA_LIVE_DEBUG_DIR" if dbg else "MANGA_LIVE_DIR")
+         or "").strip()
     if not d:
         return
     try:
-        img = cv2.imread(out_file)
+        if isinstance(src, str):
+            img = cv2.imread(src)
+        elif isinstance(src, np.ndarray):
+            img = src
+        else:
+            img = None
         if img is None:
             return
         os.makedirs(d, exist_ok=True)
@@ -2812,9 +2823,14 @@ def _live_page_dump(out_file: str) -> None:
                     [cv2.IMWRITE_JPEG_QUALITY, 86])
         with open(_sent, "w", encoding="utf-8") as f:
             f.write(str(n))
-        print(f"[🖼] صفحهٔ {n} آماده شد", flush=True)
+        if not dbg:
+            print(f"[🖼] صفحهٔ {n} آماده شد", flush=True)
     except Exception:
         pass
+
+
+def _live_page_dump(out_file: str) -> None:
+    _live_dump(out_file, dbg=False)
 
 
 class MangaTranslator:
@@ -5376,6 +5392,85 @@ class MangaTranslator:
         except Exception:
             return True
 
+    def _shrink_rect_to_glyphs(self, image: np.ndarray, rm: np.ndarray,
+                               region: "TextRegion",
+                               x0: int, y0: int, x1: int, y1: int) -> np.ndarray:
+        """مستطیلِ کاملِ بلوک متن → فقط جوهرِ متنِ داخل آن.
+
+        وقتی بلوکِ متن ناحیهٔ بزرگی را می‌پوشاند (حبابِ پرمتن یا متنی که
+        دور و بر چهره است)، پُرکردن کل مستطیل یعنی چهرهٔ داخل حباب هم پاک
+        می‌شود و کل حباب سفید می‌شود. این متد ماسک را به جوهر واقعی متن
+        محدود می‌کند؛ قطعه‌های خیلی بزرگ‌تر از گلیف‌های متن (خط چهره،
+        سایه) حذف می‌شوند. اگر استخراج گلیف قابل‌اعتماد نبود، مستطیلِ
+        قبلی دست‌نخورده برمی‌گردد."""
+        try:
+            ch, cw = y1 - y0, x1 - x0
+            crop = image[y0:y1, x0:x1]
+            if crop.size == 0 or ch < 12 or cw < 12:
+                return rm
+            # فقط برای حباب‌ها — جعبه‌های کپشن/توضیح مثل قبل با مستطیل کامل
+            # پر می‌شوند (پرکردن یکدستِ جعبهٔ کپشن ظاهر بهتری می‌دهد)
+            det_class = (getattr(region, "det_class", "") or "")
+            if det_class not in ("bubble", "text_bubble"):
+                return rm
+            zone = rm[y0:y1, x0:x1]
+            n_z = int(np.count_nonzero(zone))
+            if n_z < 200:
+                return rm
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            g = MangaTranslator._glyph_mask_in_zone(gray, zone)
+            if g is None:
+                return rm
+            # حذف قطعه‌های بزرگ‌تر از متن (خط چهره/سایهٔ داخل حباب)
+            if det_class in ("bubble", "text_bubble"):
+                n2, lab2, st2, _ = cv2.connectedComponentsWithStats(
+                    (g > 0).astype(np.uint8), 8)
+                if n2 > 1:
+                    hs = np.array(
+                        [st2[i, cv2.CC_STAT_HEIGHT] for i in range(1, n2)],
+                        dtype=np.float32)
+                    med_h = float(np.median(hs)) if hs.size else 0.0
+                    keep = np.zeros_like(g)
+                    n_keep = 0
+                    for i in range(1, n2):
+                        h_i = float(st2[i, cv2.CC_STAT_HEIGHT])
+                        w_i = float(st2[i, cv2.CC_STAT_WIDTH])
+                        if h_i < 4.0 and w_i < 4.0:
+                            continue
+                        # قطعهٔ بسیار بلندتر از متن → خط چهره است نه حرف
+                        if h_i > max(2.8 * med_h, med_h + 22.0):
+                            continue
+                        if max(w_i, h_i) > 0.60 * max(ch, cw):
+                            continue
+                        keep[lab2 == i] = 255
+                        n_keep += 1
+                    if n_keep >= 3 and int(np.count_nonzero(keep)) >= 120:
+                        g = keep
+            n_g = int(np.count_nonzero(g))
+            # فقط وقتی واقعاً ماسک را کوچک‌تر می‌کند و متنِ کافی می‌ماند بپذیر
+            if n_g < 60 or n_g > 0.88 * n_z:
+                return rm
+            g_full = np.zeros_like(rm)
+            g_full[y0:y1, x0:x1] = cv2.dilate(
+                g, np.ones((3, 3), np.uint8), iterations=1)
+            # پلی‌گون‌های اصلی OCR همیشه داخل ماسک بمانند (متنِ قطعی)
+            _pts = []
+            for p in (getattr(region, "ocr_polys", None) or []):
+                try:
+                    pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                    if pp.shape[0] >= 3:
+                        _pts.append(np.rint(pp).astype(np.int32))
+                except Exception:
+                    pass
+            if _pts:
+                try:
+                    cv2.fillPoly(g_full, _pts, 255)
+                except Exception:
+                    pass
+            return cv2.bitwise_and(rm, g_full)
+        except Exception:
+            return rm
+
     def _build_text_mask_fast(self, image: np.ndarray,
                               regions: List[TextRegion]) -> Optional[np.ndarray]:
         try:
@@ -5422,6 +5517,8 @@ class MangaTranslator:
                                         image, _rm, region, True):
                                     n_skip += 1
                                     continue
+                                _rm = self._shrink_rect_to_glyphs(
+                                    image, _rm, region, x0, y0, x1, y1)
                                 m = cv2.bitwise_or(m, _rm)
                                 n_ok += 1
                                 continue
@@ -5441,6 +5538,8 @@ class MangaTranslator:
                                         image, _rm, region, True):
                                     n_skip += 1
                                     continue
+                                _rm = self._shrink_rect_to_glyphs(
+                                    image, _rm, region, x0, y0, x1, y1)
                                 try:
                                     _inkB = MangaTranslator._ink_absorb_mask(
                                         image, _rm, _polys_raw, band=14,
@@ -12554,6 +12653,8 @@ html, body { background: #0a0a0b; }
                     self._write_image(result, out_file)
                     results_by_i[page_i] = (out_file, True, dbg_out)
                     _live_page_dump(out_file)
+                    if self.debug and dbg_out is not None:
+                        _live_dump(dbg_out, dbg=True)
                 except Exception as _werr:
                     print(f"  [!] ذخیرهٔ تصویر #{page_i + 1} ناموفق: {_werr}")
                     results_by_i[page_i] = (out_file, None, dbg_out)
@@ -12729,6 +12830,11 @@ html, body { background: #0a0a0b; }
                 _live_page_dump(out_file)
                 processed_files.append(out_file)
             results_by_i[page_i] = (out_file, None, None)
+            if self.debug and dbg is not None:
+                try:
+                    _live_dump(dbg, dbg=True)
+                except Exception:
+                    pass
             if self.debug and dbg is not None:
                 debug_dir = os.path.join(cache_dir, "debug" + cache_tag)
                 os.makedirs(debug_dir, exist_ok=True)

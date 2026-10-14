@@ -719,6 +719,9 @@ def _run(job):
         job["live"] = os.path.join(job["out"], "live")
         shutil.rmtree(job["live"], ignore_errors=True)
         os.environ["MANGA_LIVE_DIR"] = job["live"]
+        job["live_dbg"] = os.path.join(job["out"], "live_debug")
+        shutil.rmtree(job["live_dbg"], ignore_errors=True)
+        os.environ["MANGA_LIVE_DEBUG_DIR"] = job["live_dbg"]
         langs = [x for x in str(p.get("ocr_lang") or "en").split() if x.strip()]
         _src0 = str(p.get("src") or "")
         # --- چند فایل انتخاب‌شده (اندروید: با کاما جدا شده) → پوشهٔ دسته‌ای ---
@@ -964,9 +967,10 @@ def _run(job):
         _FULLLOG.close()
 
 
-def _live_pages(job):
-    """صفحه‌های تمام‌شدهٔ لحظه‌ای از پوشهٔ live — برای نمایش زنده بدون رفرش."""
-    d = job.get("live")
+def _live_pages(job, dbg: bool = False):
+    """صفحه‌های تمام‌شدهٔ لحظه‌ای از پوشهٔ live — برای نمایش زنده بدون رفرش.
+    dbg=True → پوشهٔ live_debug (صفحه‌های دیباگ زنده)."""
+    d = job.get("live_dbg" if dbg else "live")
     if not d or not os.path.isdir(d):
         return []
     try:
@@ -998,6 +1002,7 @@ def poll():
             "debug_out_file": job.get("debug_out_file"),
             "debug_on": bool((job.get("params") or {}).get("debug")),
             "live_images": _live_pages(job),
+            "live_debug_images": _live_pages(job, dbg=True),
         }, ensure_ascii=False)
 
 
