@@ -276,6 +276,23 @@ def _android() -> bool:
         return False
 
 
+def _drop_choice(choices, token):
+    """حذف یک گزینه از لیست انتخاب — مقدار می‌شود c[0] نه برچسب c[1]."""
+    bad = str(token or "").strip().lower()
+    if not bad:
+        return choices
+    kept = []
+    for c in choices or []:
+        if isinstance(c, (list, tuple)) and len(c) > 1:
+            val, lab = str(c[0]), str(c[1])
+        else:
+            val, lab = str(c), str(c)
+        if bad in val.lower() or bad in lab.lower():
+            continue
+        kept.append(c)
+    return kept
+
+
 def manifest():
 
     files_dir = os.environ.get("MANGA_FILES_DIR") or os.getcwd()
@@ -312,22 +329,10 @@ def manifest():
                 f["label"] = "دامنهٔ API سفارشی (فقط برای custom — مثال: https://api.example.com/v1)"
             # --- گوشی: گزینهٔ PSD از قالب خروجی حذف می‌شود (درخواست کاربر) ---
             if f.get("id") in ("out_fmt", "manga_out_fmt", "fmt") and _android():
-                ch = f.get("choices") or []
-                kept = []
-                for c in ch:
-                    val = str(c[1] if isinstance(c, (list, tuple)) and len(c) > 1 else c)
-                    if val.upper() != "PSD":
-                        kept.append(c)
-                f["choices"] = kept
+                f["choices"] = _drop_choice(f.get("choices") or [], "psd")
             # --- گوشی: lama-big قابل اجرا نیست → فقط دو حالت دیگر می‌آید ---
             if f.get("id") == "clean_method" and _android():
-                ch = f.get("choices") or []
-                kept = []
-                for c in ch:
-                    val = str(c[1] if isinstance(c, (list, tuple)) and len(c) > 1 else c)
-                    if val != "lama-big":
-                        kept.append(c)
-                f["choices"] = kept
+                f["choices"] = _drop_choice(f.get("choices") or [], "lama-big")
                 if f.get("default") == "lama-big":
                     f["default"] = "lama-manga"
     try:
@@ -701,9 +706,16 @@ def _run(job):
         os.makedirs(job["out"], exist_ok=True)
         for old in os.listdir(job["out"]):
             try:
-                os.remove(os.path.join(job["out"], old))
+                _p = os.path.join(job["out"], old)
+                if os.path.isdir(_p):
+                    shutil.rmtree(_p, ignore_errors=True)
+                else:
+                    os.remove(_p)
             except Exception:
                 pass
+        job["live"] = os.path.join(job["out"], "live")
+        shutil.rmtree(job["live"], ignore_errors=True)
+        os.environ["MANGA_LIVE_DIR"] = job["live"]
         langs = [x for x in str(p.get("ocr_lang") or "en").split() if x.strip()]
         _src0 = str(p.get("src") or "")
         # --- چند فایل انتخاب‌شده (اندروید: با کاما جدا شده) → پوشهٔ دسته‌ای ---
@@ -838,6 +850,7 @@ def _run(job):
                 tr.run(str(p.get("src")), job["out_file_path"], resume=False)
         finally:
             _detach_log_handlers(handlers)
+            os.environ.pop("MANGA_LIVE_DIR", None)
 
         _ORIG_DIRS = ("src", "normalized", "stitched")
         imgs, dbg = [], []
@@ -885,6 +898,8 @@ def _run(job):
                     lp = os.path.join(root, f)
                     if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
                         (dbg if "debug" in f.lower() else imgs).append(lp)
+        if not imgs:
+            imgs = _live_pages(job)
         dl = job["out_file_path"] if os.path.isfile(job["out_file_path"]) else None
         # 🔍 v1.14.13: دیباگ = «یک خروجی یکپارچه» مثل خروجی اصلی — نه تصاویر
         # جدا جدا. اگر موتور خودش *_debug.pdf ساخته (خروجی PDF/HTML/ZIP) همون
@@ -946,6 +961,22 @@ def _run(job):
         _FULLLOG.close()
 
 
+def _live_pages(job):
+    """صفحه‌های تمام‌شدهٔ لحظه‌ای از پوشهٔ live — برای نمایش زنده بدون رفرش."""
+    d = job.get("live")
+    if not d or not os.path.isdir(d):
+        return []
+    try:
+        import re as _re
+        files = [os.path.join(d, f) for f in os.listdir(d)
+                 if f.lower().endswith((".jpg", ".jpeg", ".png", ".webp"))]
+        files.sort(key=lambda s: [int(t) if t.isdigit() else t
+                                  for t in _re.split(r"(\d+)", s)])
+        return files
+    except Exception:
+        return []
+
+
 def poll():
     with STATE["lock"]:
         job = STATE["job"]
@@ -963,6 +994,7 @@ def poll():
             "out_file": job.get("out_file"),
             "debug_out_file": job.get("debug_out_file"),
             "debug_on": bool((job.get("params") or {}).get("debug")),
+            "live_images": _live_pages(job),
         }, ensure_ascii=False)
 
 

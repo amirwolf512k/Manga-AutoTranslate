@@ -55,12 +55,17 @@ class MainActivity : AppCompatActivity() {
     private val MUT = Color.parseColor("#97948c")
     private val ACC = Color.parseColor("#ff4a3d")
     private val ACC2 = Color.parseColor("#c9271c")
+    private val IMG_EXT = setOf("jpg", "jpeg", "png", "webp")
 
     private lateinit var bridge: com.chaquo.python.PyObject
     private lateinit var formBox: LinearLayout
     private lateinit var logBox: TextView
     private lateinit var resultsBox: LinearLayout
+    private lateinit var liveBox: LinearLayout
     private lateinit var runBtn: Button
+    private val liveImages = mutableListOf<String>()
+    private var liveBtn: Button? = null
+    private var livePush: ((Int) -> Unit)? = null
     private var jobRunning = false
     private var cancelPending = false
     private lateinit var loadingRow: LinearLayout
@@ -278,6 +283,8 @@ class MainActivity : AppCompatActivity() {
         }
         logContent.addView(logBox, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(230)).apply { topMargin = dp(4) })
+        liveBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        logContent.addView(liveBox)
         resultsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         logContent.addView(resultsBox)
         logCard.addView(logContent)
@@ -1360,6 +1367,10 @@ class MainActivity : AppCompatActivity() {
             runBtn.background = rounded(Color.parseColor("#3a1210"), 14, 2, ACC)
             acquireKeepAwake()
             resultsBox.removeAllViews()
+            liveBox.removeAllViews()
+            liveBtn = null
+            liveImages.clear()
+            livePush = null
             Thread {
                 var res: JSONObject? = null
                 var err: String? = null
@@ -1422,6 +1433,7 @@ class MainActivity : AppCompatActivity() {
                     val s = st
                     if (s == null) {
                         logBox.text = "❌ poll: $err"
+                        rescueOutputs()
                         finishJobUi()
                         return@post
                     }
@@ -1429,6 +1441,11 @@ class MainActivity : AppCompatActivity() {
                     if (lg != lastLogTxt) {
                         lastLogTxt = lg
                         setLog(lg)
+                    }
+                    s.optJSONArray("live_images")?.let { a ->
+                        val live = mutableListOf<String>()
+                        for (i in 0 until a.length()) live.add(a.optString(i))
+                        updateLiveResults(live)
                     }
                     if (s.optBoolean("cancel_requested") && !s.optBoolean("done") &&
                         !cancelPending) {
@@ -1441,12 +1458,16 @@ class MainActivity : AppCompatActivity() {
                             setLog(lg + "\n\n⏹ ترجمه لغو شد.")
                         }
                         finishJobUi()
+                        liveBox.removeAllViews()
+                        liveBtn = null
+                        livePush = null
                         showResults(s)
                         autoSaveLog()
 
                     } else ui.postDelayed({ pollLoop() }, 800)
                 } catch (e: Exception) {
                     logBox.text = "❌ poll: " + (e.message ?: e.toString())
+                    rescueOutputs()
                     finishJobUi()
                 }
             }
@@ -1471,6 +1492,13 @@ class MainActivity : AppCompatActivity() {
         val debug = mutableListOf<String>()
         st.optJSONArray("images")?.let { a -> for (i in 0 until a.length()) images.add(a.optString(i)) }
         st.optJSONArray("debug_images")?.let { a -> for (i in 0 until a.length()) debug.add(a.optString(i)) }
+        if (images.isEmpty()) {
+            File(filesDir, "work/out/live").listFiles()?.let { fs ->
+                for (f in fs) if (f.isFile && IMG_EXT.contains(f.extension.lowercase())) {
+                    images.add(f.absolutePath)
+                }
+            }
+        }
         val outFile = st.optString("out_file", "")
         val hasOutFile = outFile.isNotBlank() && File(outFile).isFile()
 
@@ -1514,7 +1542,82 @@ class MainActivity : AppCompatActivity() {
         autoSaveOutputs(images, outFile)
     }
 
-    private fun viewer(paths: List<String>) {
+    private fun updateLiveResults(live: List<String>) {
+        if (live.size == liveImages.size) return
+        liveImages.clear()
+        liveImages.addAll(live)
+        if (liveImages.isEmpty()) {
+            liveBox.removeAllViews()
+            liveBtn = null
+            return
+        }
+        if (liveBtn == null) {
+            val nb = Button(this).apply {
+                setTextColor(Color.WHITE)
+                textSize = 13.5f
+                typeface = Typeface.DEFAULT_BOLD
+                background = gradBtn()
+                setPadding(0, dp(11), 0, dp(11))
+                stateListAnimator = null
+            }
+            liveBtn = nb
+            liveBox.addView(nb, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(7) })
+        }
+        liveBtn?.text = "📖  نمایش زنده (${liveImages.size} صفحه)"
+        liveBtn?.setOnClickListener { viewer(liveImages, live = true) }
+        livePush?.invoke(liveImages.size)
+    }
+
+    private fun rescueOutputs() {
+        try {
+            val outRoot = File(filesDir, "work/out")
+            if (!outRoot.isDirectory) return
+            val found = mutableListOf<String>()
+            File(outRoot, "live").listFiles()?.let { fs ->
+                for (f in fs) if (f.isFile && IMG_EXT.contains(f.extension.lowercase())) {
+                    found.add(f.absolutePath)
+                }
+            }
+            if (found.isEmpty()) {
+                val skipDirs = setOf("src", "normalized", "stitched")
+                outRoot.walkTopDown().forEach { f ->
+                    if (!f.isFile) return@forEach
+                    if (f.extension.lowercase() !in IMG_EXT) return@forEach
+                    if (f.name.contains("debug", ignoreCase = true)) return@forEach
+                    val top = f.relativeTo(outRoot).path.replace('\\', '/')
+                        .substringBefore('/')
+                    if (top in skipDirs) return@forEach
+                    found.add(f.absolutePath)
+                }
+                found.sortWith(compareBy({ it.length }, { it }))
+            }
+            if (found.isEmpty()) return
+            resultsBox.removeAllViews()
+            resultsBox.addView(resBtn("📖  نمایش (${found.size} صفحه)", true) {
+                viewer(found)
+            })
+            outRoot.listFiles()?.firstOrNull {
+                it.isFile && it.extension.lowercase() == "pdf"
+            }?.let {
+                resultsBox.addView(resBtn("⬇  دانلود خروجی", false) {
+                    saveToDownloads(it.absolutePath)
+                })
+            }
+            val tv = TextView(this).apply {
+                text = "پاسخ موتور قطع شد — این صفحه‌ها از پوشهٔ خروجی بازیابی شدند."
+                setTextColor(MUT); textSize = 12f
+                gravity = Gravity.CENTER
+                setPadding(dp(6), dp(4), dp(6), dp(4))
+            }
+            resultsBox.addView(tv)
+        } catch (_: Exception) {}
+    }
+
+    private fun viewer(pathsRaw: List<String>, live: Boolean = false) {
+        if (pathsRaw.isEmpty()) return
+        val paths: List<String> = if (live) liveImages else pathsRaw
         if (paths.isEmpty()) return
 
         val imgRx = Regex("/i/(\\d+)/?$")
@@ -1534,7 +1637,8 @@ class MainActivity : AppCompatActivity() {
         wv.settings.mediaPlaybackRequiresUserGesture = true
 
         val title = try {
-            File(paths[0]).parentFile?.name?.takeIf { it.isNotBlank() } ?: "مانهوا"
+            val base = File(paths[0]).parentFile?.name?.takeIf { it.isNotBlank() } ?: "مانهوا"
+            if (live) "زنده · $base" else base
         } catch (_: Exception) { "مانهوا" }
 
         val assetHtml = try {
@@ -1599,8 +1703,18 @@ class MainActivity : AppCompatActivity() {
             wv.stopLoading()
             (wv.parent as? ViewGroup)?.removeView(wv)
             wv.destroy()
+            if (live) livePush = null
         }
         dlg.show()
+        if (live) {
+            livePush = { n ->
+                try {
+                    wv.evaluateJavascript(
+                        "window.__mangaLive && window.__mangaLive($n)", null)
+                } catch (_: Exception) {}
+            }
+            livePush?.invoke(paths.size)
+        }
         if (!prefs.getBoolean("viewer_hint_v3", false)) {
             prefs.edit().putBoolean("viewer_hint_v3", true).apply()
             Toast.makeText(this,

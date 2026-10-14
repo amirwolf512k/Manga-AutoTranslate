@@ -148,6 +148,20 @@
       if (btn) btn.click();
     }
   });
+  window.__mangaLive = function(n) {
+    try {
+      const have = c.querySelectorAll('img').length;
+      for (let i = have; i < n; i++) {
+        const im = document.createElement('img');
+        im.src = 'i/' + i;
+        im.loading = 'lazy';
+        im.decoding = 'async';
+        im.alt = '';
+        im.draggable = false;
+        c.appendChild(im);
+      }
+    } catch (err) {}
+  };
   setZoom(1);
 })();
 
