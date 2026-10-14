@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>__TITLE__</title>
-<style>*{box-sizing:border-box;margin:0;padding:0}html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}.rdr{position:fixed;inset:0;z-index:1;background:#000;display:flex;flex-direction:column;direction:ltr}.rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;flex:none;backdrop-filter:blur(8px);z-index:2}.rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}.rdr-btn:active{background:#2a2a30}.rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}.rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}.rdrS{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;position:relative;background:#000}.rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}.rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;-webkit-user-drag:none;pointer-events:none}.rdr-progress{position:relative;height:3px;background:#1a1a1c;flex:none}.rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}.zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}@media (max-width:480px){.rdr-bar{gap:4px;padding:6px 8px}.rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}.rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}}</style>
+<style>*{box-sizing:border-box;margin:0;padding:0}html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}.rdr{position:fixed;inset:0;z-index:1;background:#000;display:flex;flex-direction:column;direction:ltr}.rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;flex:none;backdrop-filter:blur(8px);z-index:2}.rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}.rdr-btn:active{background:#2a2a30}.rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}.rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}.rdrS{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;touch-action:pan-y;position:relative;background:#000}.rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}.rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;-webkit-user-drag:none;pointer-events:none}.rdr-progress{position:relative;height:3px;background:#1a1a1c;flex:none}.rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}.zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}@media (max-width:480px){.rdr-bar{gap:4px;padding:6px 8px}.rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}.rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}}.ph{width:100%;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:shph 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}@keyframes shph{0%{background-position:120% 0}100%{background-position:-80% 0}}.sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spinph 1s linear infinite}@keyframes spinph{to{transform:rotate(360deg)}}</style>
 </head>
 <body>
 <div class="rdr" id="manga_rdr" data-zoom="1">
@@ -17,6 +17,7 @@
     <button type="button" class="rdr-btn" data-act="zoom-in" title="نزدیک">+</button>
     <button type="button" class="rdr-btn" data-act="zoom-fit" title="پهنای صفحه">پهنا</button>
     <button type="button" class="rdr-btn fs" data-act="fs" title="فول‌اسکرین">⛶</button>
+    <button type="button" class="rdr-btn" data-act="dbg" hidden title="سوئیچ دیباگ زنده">🔍 دیباگ</button>
   </div>
   <div class="rdrS"><div class="rdrC">__IMGS__</div></div>
   <div class="rdr-progress"><div class="rdrB"></div></div>
@@ -67,7 +68,14 @@
       try { if (history.length > 1) history.back(); } catch (err) {}
       return;
     }
-    if (act === 'zoom-in') zoomBy(1.25);
+    if (act === 'dbg') {
+      dbgMode = !dbgMode;
+      btn.textContent = dbgMode ? '\ud83d\udcd6 نهایی' : '🔍 دیباگ';
+      btn.classList.toggle('fs', dbgMode);
+      rebuild();
+      return;
+    }
+    else if (act === 'zoom-in') zoomBy(1.25);
     else if (act === 'zoom-out') zoomBy(0.8);
     else if (act === 'zoom-fit') setZoom(1);
     else if (act === 'fs') {
@@ -148,20 +156,53 @@
       if (btn) btn.click();
     }
   });
-  window.__mangaLive = function(n) {
+  // ——— نمایش زنده با اسلات لودینگ (v1.14.29) ———
+  // arrived = تعداد صفحهٔ آماده؛ total = تعداد کل (اسلات‌ها از اول ساخته می‌شوند).
+  // اسلات‌ها سر جایشان پر می‌شوند؛ هیچ اسکرول خودکاری انجام نمی‌شود.
+  let dbgMode = false, arrived = c.querySelectorAll('img').length, total = 0, ndbg = 0;
+  const mkPh = () => {
+    const d = document.createElement('div');
+    d.className = 'ph';
+    d.innerHTML = '<span class="sp"></span>در حال ترجمه…';
+    return d;
+  };
+  const mkImg = (i) => {
+    const im = document.createElement('img');
+    im.src = (dbgMode ? 'd/' : 'i/') + i;
+    im.loading = 'lazy';
+    im.decoding = 'async';
+    im.alt = '';
+    im.draggable = false;
+    return im;
+  };
+  function rebuild() {
+    const a = dbgMode ? ndbg : arrived;
+    const w = Math.max(total, a);
+    c.innerHTML = '';
+    for (let i = 0; i < w; i++) c.appendChild(i < a ? mkImg(i) : mkPh());
+  }
+  function renderLive() {
+    const a = dbgMode ? ndbg : arrived;
+    const w = Math.max(total, a);
+    while (c.children.length < w) c.appendChild(mkPh());
+    for (let i = 0; i < w; i++) {
+      const el = c.children[i];
+      if (i < a && el && el.tagName !== 'IMG') c.replaceChild(mkImg(i), el);
+    }
+  }
+  window.__mangaLive = function(n, tot, nd) {
     try {
-      const have = c.querySelectorAll('img').length;
-      for (let i = have; i < n; i++) {
-        const im = document.createElement('img');
-        im.src = 'i/' + i;
-        im.loading = 'lazy';
-        im.decoding = 'async';
-        im.alt = '';
-        im.draggable = false;
-        c.appendChild(im);
+      if (typeof tot === 'number' && tot > 0) total = tot;
+      if (typeof nd === 'number' && nd > 0) {
+        ndbg = nd;
+        const tb = root.querySelector('[data-act="dbg"]');
+        if (tb) tb.hidden = false;
       }
+      if (!dbgMode) arrived = Math.max(arrived, n | 0);
+      renderLive();
     } catch (err) {}
   };
+  if (arrived > 0) renderLive();
   setZoom(1);
 })();
 

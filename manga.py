@@ -181,6 +181,48 @@ def _torch_available() -> bool:
         return True
     except Exception:
         return False
+
+
+def _ensure_rapidocr_pkg() -> bool:
+    """موتور OCR سبک ONNX (rapidocr) را فقط اگر واقعاً لازم باشد نصب می‌کند.
+    v1.14.29: دیگر در شروع برنامه نصب نمی‌شود — فقط وقتی موتور ONNX لود می‌شود."""
+    if _can_import("rapidocr") or _can_import("rapidocr_onnxruntime"):
+        return True
+    if _IS_ANDROID:
+        return False
+    print("[*] نصب rapidocr (موتور OCR سبک ONNX) — فقط بار اول ...")
+    if _pip_install("rapidocr"):
+        return True
+    if _can_import("rapidocr_onnxruntime"):
+        return True
+    return _pip_install("rapidocr-onnxruntime")
+
+
+def _ensure_torch_cpu() -> bool:
+    """torch را فقط برای روش پاکسازی lama-big نصب می‌کند (بار اول، ~۲۰۰MB).
+    v1.14.29: نصب torch از شروع برنامه به همین نقطه منتقل شد."""
+    if _torch_available():
+        return True
+    if _IS_ANDROID:
+        return False
+    print("[*] نصب torch CPU برای big-lama.pt — فقط بار اول (~۲۰۰MB) ...")
+    try:
+        r = subprocess.run(
+            [sys.executable, "-m", "pip", "install", "-q", "--prefer-binary",
+             "torch", "--index-url", "https://download.pytorch.org/whl/cpu"],
+            capture_output=True, text=True, timeout=1800)
+        ok = (r.returncode == 0)
+    except Exception as e:
+        print(f"    [!] {e}")
+        ok = False
+    if not ok:
+        print("    [!] torch CPU ناموفق → pip معمولی ...")
+        ok = _pip_install("torch")
+    if ok:
+        print("[+] torch نصب شد → پاک‌سازی big-lama.pt فعال می‌شود.")
+    else:
+        print("[!] torch نصب نشد → پاک‌سازی با lama.onnx ادامه می‌دهد.")
+    return ok
 try:
     import java
     _IS_ANDROID = True
@@ -250,39 +292,16 @@ def _ensure_all_dependencies() -> None:
         _pip_install(*misc)
 
 
-    if not _can_import("rapidocr"):
-        if not _pip_install("rapidocr"):
-            if not _can_import("rapidocr_onnxruntime"):
-                _pip_install("rapidocr-onnxruntime")
+    # v1.14.29: rapidocr / paddleocr / torch دیگر در شروع نصب نمی‌شوند.
+    #   paddleocr هیچ‌وقت خودکار نصب نمی‌شود (سنگین است؛ OCR سبک ONNX داریم)
+    #   rapidocr فقط وقتی نصب می‌شود که موتور OCR ONNX واقعاً لود شود
+    #   torch فقط وقتی نصب می‌شود که روش پاکسازی lama-big انتخاب شده باشد
     if not _IS_ANDROID:
         if not _can_import("google.genai") and not _can_import("google.generativeai"):
             _pip_install("google-genai")
-        if not _can_import("paddleocr"):
-            print("[*] تلاش برای نصب PaddleOCR (اختیاری، دقت بالاتر) ...")
-            _pip_install("paddleocr")
 
-
-    if not _can_import("openai"):
-        _pip_install("openai")
-
-    if not _IS_ANDROID and not _torch_available():
-        print("[*] نصب torch CPU برای big-lama.pt — فقط بار اول (~۲۰۰MB) ...")
-        try:
-            r = subprocess.run(
-                [sys.executable, "-m", "pip", "install", "-q", "--prefer-binary",
-                 "torch", "--index-url", "https://download.pytorch.org/whl/cpu"],
-                capture_output=True, text=True, timeout=1800)
-            _torch_ok = (r.returncode == 0)
-        except Exception as _e:
-            print(f"    [!] {_e}")
-            _torch_ok = False
-        if not _torch_ok:
-            print("    [!] torch CPU ناموفق → pip معمولی ...")
-            _torch_ok = _pip_install("torch")
-        if _torch_ok:
-            print("[+] torch نصب شد → پاک‌سازی big-lama.pt فعال می‌شود.")
-        else:
-            print("[!] torch نصب نشد → پاک‌سازی با OpenCV/LaMa-ONNX ادامه می‌دهد.")
+        if not _can_import("openai"):
+            _pip_install("openai")
 
 
     import platform as _platform
@@ -1998,6 +2017,9 @@ class RapidOCRBackend:
         self.lang = lang
         self._new_api = False
         try:
+            # v1.14.29: rapidocr فقط همین‌جا (وقتی موتور ONNX واقعاً لازم است) نصب می‌شود
+            if not _ensure_rapidocr_pkg():
+                raise ImportError("rapidocr نصب نیست و نصب خودکار ناموفق بود")
             from rapidocr import RapidOCR as NewRapidOCR
             _low = str(lang).lower()
             _rec_params = None
@@ -2036,7 +2058,16 @@ class RapidOCRBackend:
             _base = {"Global.model_root_dir": _mdir} if _mdir else {}
             if _mdir:
                 try:
-                    _ensure_rapidocr_models(_mdir)
+                    # v1.14.29: فقط مدل‌های همین زبان دانلود می‌شود — نه همهٔ زبان‌ها
+                    # (det مشترک است؛ rec مخصوص زبان؛ cls دیگر استفاده نمی‌شود)
+                    _files = ["PP-OCRv6_det_small.onnx"]
+                    if _low in ("korean", "ko"):
+                        _files.append("korean_PP-OCRv5_rec_mobile.onnx")
+                    elif _low in ("japan", "ja", "japanese"):
+                        _files.append("japan_PP-OCRv4_rec_mobile.onnx")
+                    else:
+                        _files.append("PP-OCRv6_rec_small.onnx")
+                    _ensure_rapidocr_models(_mdir, files=_files)
                 except Exception as _e:
                     print(f"[!] پیش‌دانلود مدل‌ها ناموفق: {_e}")
             try:
@@ -2833,6 +2864,22 @@ def _live_page_dump(out_file: str) -> None:
     _live_dump(out_file, dbg=False)
 
 
+def _live_total_write(n: int) -> None:
+    """تعداد کل صفحه‌ها را در پوشهٔ live می‌نویسد تا نمایشگر زنده از اول
+    برای همه اسلات «در حال ترجمه» بگذارد — اسلات‌ها سر جایشان پر می‌شوند
+    و اسکرولِ کاربر هیچ‌وقت نمی‌پرد (v1.14.29)."""
+    for var in ("MANGA_LIVE_DIR", "MANGA_LIVE_DEBUG_DIR"):
+        d = (os.environ.get(var) or "").strip()
+        if not d:
+            continue
+        try:
+            os.makedirs(d, exist_ok=True)
+            with open(os.path.join(d, "total.txt"), "w", encoding="utf-8") as f:
+                f.write(str(int(n)))
+        except Exception:
+            pass
+
+
 class MangaTranslator:
     _LAMA_MIN_VRAM_GB = 3.5
     _ANDROID_LAMA_MIN_TOTAL_GB = 4.0
@@ -2924,6 +2971,9 @@ class MangaTranslator:
             return True
         if cm == "lama-big":
             if not has_torch:
+                # v1.14.29: torch فقط با انتخاب lama-big نصب می‌شود (بار اول)
+                has_torch = _ensure_torch_cpu()
+            if not has_torch:
                 print("[*] lama-big این‌جا torch ندارد → lama.onnx + flat.")
                 return True
             print("[*] روش پاکسازی: lama-big + flat (تمیزتر، کندتر).")
@@ -2973,6 +3023,12 @@ class MangaTranslator:
                 return False
             print("[*] دسکتاپ/وب → پاک‌سازی پیش‌فرض با big-lama.pt "
                   "(روی CPU کندتر ولی تمیزتر). برای غیرفعال‌سازی: --cpu")
+            return True
+
+        if has_ort and not _on_android():
+            # v1.14.29: دسکتاپ بدون torch → پیش‌فرض lama.onnx (سبک و سریع)، نه OpenCV
+            print("[*] دسکتاپ → پاک‌سازی پیش‌فرض با lama.onnx + flat (سبک و سریع). "
+                  "برای big-lama: --clean-method lama-big | برای OpenCV: --clean-method opencv")
             return True
 
         print("[*] GPU نیست → OpenCV سریع. برای LaMa روی CPU: --lama")
@@ -3442,10 +3498,15 @@ class MangaTranslator:
                     getattr(self, "clean_method", "") or "", "auto")
             if _backend == "onnx":
                 _want_torch = False
+            elif _backend == "torch":
+                # v1.14.29: کاربر lama-big خواسته → torch همین‌جا نصب می‌شود (بار اول)
+                if not _torch_available():
+                    _ensure_torch_cpu()
+                _want_torch = _torch_available()
+                if not _want_torch:
+                    print("    [!] torch نصب نشد → lama.onnx")
             else:
                 _want_torch = _torch_available()
-                if _backend == "torch" and not _want_torch:
-                    print("    [!] torch نصب نیست → lama.onnx")
             if _want_torch:
                 try:
                     print("    [*] بارگذاری big-lama.pt (TorchScript) ...")
@@ -12537,6 +12598,13 @@ html, body { background: #0a0a0b; }
             stitch_dir = os.path.join(cache_dir, "stitched")
             image_files = self._stitch_pages_for_efficiency(image_files, stitch_dir)
 
+        # v1.14.29: تعداد کل صفحه‌ها از همین لحظه معلوم است → نمایشگر زنده
+        # از اول به‌اندازهٔ همه اسلات لودینگ می‌گذارد.
+        try:
+            _live_total_write(len(image_files))
+        except Exception:
+            pass
+
         processed_files = []
         skipped = 0
         page_ext = "." + (self.img_format or "webp").lstrip(".")
@@ -12555,6 +12623,12 @@ html, body { background: #0a0a0b; }
 
         if skipped:
             print(f"[*] {skipped} صفحه از کش (resume).")
+            # صفحه‌های از‌قبل‌ساخته را هم زنده نشان بده تا اسلات‌ها خالی نمانند
+            try:
+                for _rf in processed_files:
+                    _live_page_dump(_rf)
+            except Exception:
+                pass
 
         try:
             self.preload_lama_async()
@@ -12721,7 +12795,10 @@ html, body { background: #0a0a0b; }
 
         if getattr(self, "clean_only", False):
             print("[*] Clean-only mode — API is not called.")
-            min_batch = 10**9
+            # v1.14.29: صفحات همین‌جا پیش می‌روند (نه انبار تا آخر) —
+            # پاکسازی/ذخیرهٔ هر صفحه همان‌طور که آماده می‌شود انجام می‌شود
+            # و «نمایش زنده» هم در clean_only صفحه‌به‌صفحه کار می‌کند.
+            min_batch = 15
         else:
             print(
                 f"[*] حالت صرفه‌جویی API: تا رسیدن به {min_batch} دیالوگ ترجمه نمی‌شود؛ "

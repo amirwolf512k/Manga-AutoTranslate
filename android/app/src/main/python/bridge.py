@@ -984,6 +984,19 @@ def _live_pages(job, dbg: bool = False):
         return []
 
 
+def _live_total(job, dbg: bool = False) -> int:
+    """تعداد کل صفحه‌ها از total.txt (موتور همان اول تعداد کل را می‌نویسد)
+    — تا نمایشگر زنده از اول اسلات لودینگ برای همه بگذارد (v1.14.29)."""
+    d = job.get("live_dbg" if dbg else "live")
+    if not d:
+        return 0
+    try:
+        with open(os.path.join(d, "total.txt"), encoding="utf-8") as f:
+            return int(f.read().strip() or 0)
+    except Exception:
+        return 0
+
+
 def poll():
     with STATE["lock"]:
         job = STATE["job"]
@@ -1003,6 +1016,8 @@ def poll():
             "debug_on": bool((job.get("params") or {}).get("debug")),
             "live_images": _live_pages(job),
             "live_debug_images": _live_pages(job, dbg=True),
+            "live_total": _live_total(job),
+            "live_total_dbg": _live_total(job, dbg=True),
         }, ensure_ascii=False)
 
 

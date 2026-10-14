@@ -2527,44 +2527,130 @@ def run_web():
 html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
 .bar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:9px 12px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;direction:rtl;backdrop-filter:blur(8px)}
 .dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
+.dot.off{background:#2e7d4f;animation:none}
 @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
 .t{flex:1;color:#97948c;font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .n{color:#fff;background:#ff4a3d;border-radius:999px;padding:3px 11px;font-size:.8rem;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
+.n.done{background:#2e7d4f}
+.dbtn{display:none;background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:7px 11px;font-size:.8rem;cursor:pointer;font-family:inherit;flex:none;min-height:36px}
+.dbtn.on{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}
 .c{max-width:min(100%,900px);margin:0 auto;width:100%}
 .c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none}
+.ph{width:100%;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:sh 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}
+@keyframes sh{0%{background-position:120% 0}100%{background-position:-80% 0}}
+.sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spin 1s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
 .hint{padding:16px;text-align:center;color:#6b6963;font-size:.85rem}
+.chip{position:fixed;bottom:18px;left:18px;z-index:3;display:none;background:#ff4a3d;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-size:.85rem;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.5);font-family:inherit}
 </style></head><body>
-<div class="bar"><span class="dot"></span><div class="t">نمایش زنده — صفحه‌های جدید خودشان اضافه می‌شوند</div><div class="n" id="n">0</div></div>
-<main class="c" id="c"><div class="hint" id="h">هنوز صفحه‌ای آماده نشده…</div></main>
+<div class="bar"><span class="dot" id="dot"></span><div class="t">نمایش زنده — صفحه‌ها سر جایشان پر می‌شوند</div><button type="button" class="dbtn" id="db">🔍 دیباگ</button><div class="n" id="n">0</div></div>
+<main class="c" id="c"><div class="hint" id="h">در انتظار اولین صفحه…</div></main>
+<button type="button" class="chip" id="chip">↓ صفحه‌های جدید</button>
 <script>
 (function(){
-  var P = "__PREFIX__", D = "__DIR__", STAMP = Date.now();
-  var n = 0, busy = false;
-  var c = document.getElementById('c'), h = document.getElementById('h'), b = document.getElementById('n');
+  var P = "__PREFIX__", D = "__DIR__", DBG = "__DBGDIR__", STAMP = Date.now();
+  var arrived = 0, total = 0, dbgArrived = 0, dbgMode = false, busy = false;
+  var c = document.getElementById('c'), h = document.getElementById('h'),
+      b = document.getElementById('n'), dot = document.getElementById('dot'),
+      db = document.getElementById('db'), chip = document.getElementById('chip');
+  var haveDbg = !!DBG;
   function pad(i){ return ('000' + i).slice(-4); }
+  function curDir(){ return dbgMode ? DBG : D; }
+  function curArrived(){ return dbgMode ? dbgArrived : arrived; }
+  function imgSrc(i){ return P + curDir() + 'live_' + pad(i + 1) + '.jpg?r=' + STAMP; }
   function nearBottom(){ return (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - 260); }
-  function step(){
+  function mkPh(){
+    var d = document.createElement('div');
+    d.className = 'ph';
+    d.innerHTML = '<span class="sp"></span>در حال ترجمه…';
+    return d;
+  }
+  function mkImg(i){
+    var el = document.createElement('img');
+    el.src = imgSrc(i);
+    el.alt = 'صفحهٔ ' + (i + 1);
+    el.loading = 'lazy'; el.decoding = 'async';
+    return el;
+  }
+  // رندر پایدار: اسلات‌ها سر جایشان می‌مانند، فقط جای خالی با تصویر پر می‌شود.
+  // هیچ اسکرول خودکاری انجام نمی‌شود — خواندنِ کاربر نمی‌پرد.
+  function render(){
+    var a = curArrived(), want = Math.max(total, a);
+    if (h && h.parentNode === c) { c.removeChild(h); h = null; }
+    while (c.children.length < want) c.appendChild(mkPh());
+    for (var i = 0; i < want; i++) {
+      var el = c.children[i];
+      if (i < a && el.tagName !== 'IMG') c.replaceChild(mkImg(i), el);
+    }
+    b.textContent = a + (total > 0 ? ' / ' + total : '');
+    var fin = (total > 0 && a >= total);
+    b.className = 'n' + (fin ? ' done' : '');
+    dot.className = 'dot' + (fin ? ' off' : '');
+    if (haveDbg) db.style.display = (arrived > 0 || dbgArrived > 0 || total > 0) ? 'inline-block' : 'none';
+  }
+  function probe(){
     if (busy) return;
+    var a = curArrived(), mode = dbgMode;
+    if (total > 0 && a >= total) return;
     busy = true;
     var im = new Image();
     im.onload = function(){
       busy = false;
-      if (h && h.parentNode === c) { c.removeChild(h); h = null; }
-      var stick = nearBottom();
-      var el = document.createElement('img');
-      el.src = P + D + 'live_' + pad(n + 1) + '.jpg?r=' + STAMP;
-      el.alt = 'صفحهٔ ' + (n + 1);
-      el.loading = 'lazy'; el.decoding = 'async';
-      c.appendChild(el);
-      n++; b.textContent = n;
-      if (stick) window.scrollTo(0, document.body.offsetHeight);
-      step();
+      if (dbgMode === mode) {
+        if (mode) dbgArrived = Math.max(dbgArrived, a + 1);
+        else arrived = Math.max(arrived, a + 1);
+        render();
+        setTimeout(probe, 60);
+      }
     };
     im.onerror = function(){ busy = false; };
-    im.src = P + D + 'live_' + pad(n + 1) + '.jpg?r=' + STAMP;
+    im.src = imgSrc(a);
   }
-  step();
-  setInterval(step, 1800);
+  if (haveDbg) {
+    db.addEventListener('click', function(){
+      dbgMode = !dbgMode;
+      db.classList.toggle('on', dbgMode);
+      db.textContent = dbgMode ? '📖 نهایی' : '🔍 دیباگ';
+      c.innerHTML = '';
+      h = document.createElement('div');
+      h.className = 'hint';
+      h.textContent = dbgMode ? 'در انتظار دیباگ…' : 'در انتظار صفحه…';
+      c.appendChild(h);
+      render();
+      probe();
+    });
+  }
+  // total.txt: تعداد کل صفحه‌ها → از اول اسلات لودینگ برای همه گذاشته می‌شود
+  function pollTotal(){
+    if (total > 0) return;
+    fetch(P + curDir() + 'total.txt?r=' + STAMP, { cache: 'no-store' })
+      .then(function(r){ return r.ok ? r.text() : ''; })
+      .then(function(t){
+        var v = parseInt((t || '').trim(), 10);
+        if (v > 0) { total = v; render(); }
+      })
+      .catch(function(){});
+  }
+  // چیپ «صفحه‌های جدید»: فقط وقتی کاربر بالا است و صفحهٔ تازه آمده — بدون پرش
+  var lastNew = 0;
+  setInterval(function(){
+    pollTotal();
+    var a = curArrived();
+    if (a > lastNew) {
+      if (!nearBottom()) chip.style.display = 'block';
+      lastNew = a;
+    }
+    probe();
+  }, 1800);
+  chip.addEventListener('click', function(){
+    chip.style.display = 'none';
+    window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
+  });
+  window.addEventListener('scroll', function(){
+    if (nearBottom()) chip.style.display = 'none';
+  }, { passive: true });
+  pollTotal();
+  probe();
 })();
 </script>
 </body></html>"""
@@ -4086,7 +4172,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             shutil.rmtree(live_dbg_dir, ignore_errors=True)
             os.makedirs(live_dbg_dir, exist_ok=True)
             try:
-                _write_live_reader(live_dir)
+                _write_live_reader(live_dir, dbg_dir=live_dbg_dir)
             except Exception as _e:
                 print(f"[!] نوشتن live_reader.html ناموفق: {_e}")
             with job["lock"]:
@@ -4562,8 +4648,27 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             fs.sort()
             return [os.path.join(live_dir, f) for f in fs]
 
-        def _write_live_reader(live_dir: str) -> str:
-            """خوانندهٔ زندهٔ وب را داخل پوشهٔ live می‌نویسد — صفحه‌های جدید بدون رفرش اضافه می‌شوند."""
+        def _dbg_sibling(live_dir: str) -> str:
+            """پوشهٔ live_debug کنار پوشهٔ live — اگر باشد، خوانندهٔ زنده دکمهٔ دیباگ می‌گیرد."""
+            try:
+                base = os.path.dirname(os.path.abspath(live_dir))
+                cand = os.path.join(base, "live_debug")
+                if os.path.isdir(cand):
+                    return cand
+            except Exception:
+                pass
+            return ""
+
+        def _live_total_of(d: str) -> int:
+            try:
+                with open(os.path.join(d, "total.txt"), encoding="utf-8") as f:
+                    return int(f.read().strip() or 0)
+            except Exception:
+                return 0
+
+        def _write_live_reader(live_dir: str, dbg_dir: str = "") -> str:
+            """خوانندهٔ زندهٔ وب را داخل پوشهٔ live می‌نویسد — اسلات لودینگ برای
+            صفحه‌های نرسیده + سوئیچ دیباگ (اگر پوشهٔ live_debug باشد)."""
             import gradio as _gr
             gv = getattr(_gr, "__version__", "4")
             try:
@@ -4574,9 +4679,15 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             d = str(live_dir).replace(os.sep, "/")
             if not d.endswith("/"):
                 d += "/"
+            dbg_q = ""
+            if dbg_dir:
+                dbg_q = str(dbg_dir).replace(os.sep, "/")
+                if not dbg_q.endswith("/"):
+                    dbg_q += "/"
             html = (_LIVE_READER_TMPL
                     .replace("__PREFIX__", prefix)
-                    .replace("__DIR__", urllib.parse.quote(d, safe="/")))
+                    .replace("__DIR__", urllib.parse.quote(d, safe="/"))
+                    .replace("__DBGDIR__", urllib.parse.quote(dbg_q, safe="/")))
             path = os.path.join(live_dir, "live_reader.html")
             with open(path, "w", encoding="utf-8") as f:
                 f.write(html)
@@ -4610,12 +4721,21 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 # بعد از پایان، «نمایش» نهایی جای دکمهٔ زنده را می‌گیرد
                 return (gr.update(visible=False), gr.update(),
                         gr.update())
-            if not files and not dbg_files:
-                return (gr.update(visible=False), gr.update(visible=False),
-                        gr.update())
-            label = "📖 نمایش (%d صفحه)" % len(files) if len(files) > 1 else "📖 نمایش (۱ صفحه)"
-            dbg_lbl = ("🔍 نمایش دیباگ (%d صفحه)" % len(dbg_files)
-                       if len(dbg_files) > 1 else "🔍 نمایش دیباگ (۱ صفحه)")
+            tot = _live_total_of(live_dir) if live_dir else 0
+            if tot > 0:
+                label = "📖 نمایش (%d/%d صفحه)" % (len(files), tot)
+            elif len(files) > 1:
+                label = "📖 نمایش (%d صفحه)" % len(files)
+            else:
+                label = "📖 نمایش (۱ صفحه)"
+            if dbg_dir:
+                dtot = _live_total_of(dbg_dir) or tot
+                dbg_lbl = ("🔍 نمایش دیباگ (%d/%d صفحه)" % (len(dbg_files), dtot)
+                           if dtot > 0 else
+                           ("🔍 نمایش دیباگ (%d صفحه)" % len(dbg_files)
+                            if len(dbg_files) > 1 else "🔍 نمایش دیباگ (۱ صفحه)"))
+            else:
+                dbg_lbl = ""
             return (gr.update(value=label, visible=True),
                     gr.update(visible=True),
                     gr.update(value=dbg_lbl) if dbg_files else gr.update())
@@ -4884,7 +5004,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                         if _d and os.path.isdir(_d):
                             _lp = os.path.join(_d, "live_reader.html")
                             if not os.path.isfile(_lp):
-                                _write_live_reader(_d)
+                                _write_live_reader(_d, dbg_dir=_dbg_sibling(_d))
                             url = _reader_file_url(_lp)
                 except Exception:
                     pass
@@ -4986,7 +5106,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                     try:
                         path = os.path.join(d, "live_reader.html")
                         if not os.path.isfile(path):
-                            _write_live_reader(d)
+                            _write_live_reader(d, dbg_dir=_dbg_sibling(d))
                         url = _reader_file_url(path)
                     except Exception:
                         url = ""

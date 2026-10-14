@@ -67,6 +67,10 @@ class MainActivity : AppCompatActivity() {
     private val liveDbgImages = mutableListOf<String>()
     private var liveBtn: Button? = null
     private var livePush: ((Int) -> Unit)? = null
+    private var liveTotal = 0
+    private var liveDbgTotal = 0
+    private var shownLiveTotal = 0
+    private var shownLiveDbgTotal = 0
     private var jobRunning = false
     private var cancelPending = false
     private lateinit var loadingRow: LinearLayout
@@ -1372,6 +1376,10 @@ class MainActivity : AppCompatActivity() {
             liveBtn = null
             liveImages.clear()
             liveDbgImages.clear()
+            liveTotal = 0
+            liveDbgTotal = 0
+            shownLiveTotal = 0
+            shownLiveDbgTotal = 0
             livePush = null
             Thread {
                 var res: JSONObject? = null
@@ -1444,6 +1452,8 @@ class MainActivity : AppCompatActivity() {
                         lastLogTxt = lg
                         setLog(lg)
                     }
+                    if (s.optInt("live_total", 0) > 0) liveTotal = s.optInt("live_total")
+                    if (s.optInt("live_total_dbg", 0) > 0) liveDbgTotal = s.optInt("live_total_dbg")
                     s.optJSONArray("live_images")?.let { a ->
                         val live = mutableListOf<String>()
                         for (i in 0 until a.length()) live.add(a.optString(i))
@@ -1547,12 +1557,12 @@ class MainActivity : AppCompatActivity() {
         autoSaveOutputs(images, outFile)
     }
 
-    /** نمایشِ زنده = همان نمایشِ اصلی — در همان جعبهٔ نتیجه، با همان دکمه‌ها.
-     *  تا وقتی کار در جریان است، «نمایش (N صفحه)» و «نمایش دیباگ» به‌صورت
-     *  زنده به‌روز می‌شوند و بعد از پایان، showResults جای آن‌ها را با
-     *  نتیجهٔ نهایی می‌گیرد — دیگر دو نمایشِ جدا نیستند. */
+    /** نمایشِ زنده = همان نمایشِ اصلی — در همان جعبهٔ نتیجه. نمایشگر زنده
+     *  اسلات لودینگ برای صفحه‌های نرسیده دارد (بدون پرش اسکرول) و دکمهٔ 🔍
+     *  داخل خودِ نمایشگر، دیباگ زنده را نشان می‌دهد (v1.14.29). */
     private fun updateLiveResults(live: List<String>, liveDbg: List<String>) {
-        if (live.size == liveImages.size && liveDbg.size == liveDbgImages.size) return
+        if (live.size == liveImages.size && liveDbg.size == liveDbgImages.size &&
+            liveTotal == shownLiveTotal && liveDbgTotal == shownLiveDbgTotal) return
         synchronized(liveImages) {
             liveImages.clear()
             liveImages.addAll(live)
@@ -1561,17 +1571,16 @@ class MainActivity : AppCompatActivity() {
             liveDbgImages.clear()
             liveDbgImages.addAll(liveDbg)
         }
-        if (liveImages.isEmpty() && liveDbgImages.isEmpty()) return
+        if (liveImages.isEmpty() && liveDbgImages.isEmpty() && liveTotal <= 0) return
+        shownLiveTotal = liveTotal
+        shownLiveDbgTotal = liveDbgTotal
         resultsBox.removeAllViews()
-        if (liveImages.isNotEmpty()) {
-            resultsBox.addView(resBtn("📖  نمایش (${liveImages.size} صفحه)", true) {
-                viewer(liveImages, live = true)
-            })
-        }
-        if (liveDbgImages.isNotEmpty()) {
-            resultsBox.addView(resBtn(
-                "🔍  نمایش دیباگ (${liveDbgImages.size} صفحه)", false) {
-                viewer(liveDbgImages, live = true, dbg = true)
+        if (liveImages.isNotEmpty() || liveTotal > 0) {
+            val lbl = if (liveTotal > 0) "📖  نمایش (${liveImages.size}/$liveTotal صفحه)"
+                      else "📖  نمایش (${liveImages.size} صفحه)"
+            resultsBox.addView(resBtn(lbl, true) {
+                viewer(liveImages, live = true, dbgPaths = liveDbgImages,
+                       total = maxOf(liveTotal, liveImages.size))
             })
         }
         for (i in 0 until resultsBox.childCount) {
@@ -1627,16 +1636,20 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun viewer(pathsRaw: List<String>, live: Boolean = false,
-                       dbg: Boolean = false) {
-        if (pathsRaw.isEmpty()) return
+                       dbg: Boolean = false, dbgPaths: List<String> = emptyList(),
+                       total: Int = 0) {
+        if (pathsRaw.isEmpty() && total <= 0) return
         // نسخهٔ پایدار از لیست — اگر لیستِ زنده وسط رندر پاک/پُر شود،
         // تصویرها ۴۰۴ می‌شوند و نمایشگر سیاه می‌ماند (باگ «هیچی نشون نداد»)
-        val src: List<String> = pathsRaw
         val paths: MutableList<String> = java.util.Collections.synchronizedList(
-            mutableListOf<String>().apply { addAll(src) })
-        if (paths.isEmpty()) return
+            mutableListOf<String>().apply { addAll(pathsRaw) })
+        // دیباگِ زنده: داخل همان نمایشگر با دکمهٔ سوئیچ 🔍 (v1.14.29)
+        val dpaths: MutableList<String> = java.util.Collections.synchronizedList(
+            mutableListOf<String>().apply { addAll(dbgPaths) })
+        if (paths.isEmpty() && dpaths.isEmpty() && total <= 0) return
 
         val imgRx = Regex("/i/(\\d+)/?$")
+        val dbgRx = Regex("/d/(\\d+)/?$")
         val mimeMap = mapOf(
             "png" to "image/png", "jpg" to "image/jpeg", "jpeg" to "image/jpeg",
             "webp" to "image/webp", "bmp" to "image/bmp", "gif" to "image/gif")
@@ -1670,13 +1683,19 @@ class MainActivity : AppCompatActivity() {
             Toast.makeText(this, "خواننده در دسترس نیست", Toast.LENGTH_LONG).show()
             return
         }
+        // اسلات لودینگ برای صفحه‌های نرسیده (total از total.txt موتور) — v1.14.29
         val imgs = paths.indices.joinToString("") {
             "<img src=\"i/$it\" loading=\"lazy\" decoding=\"async\" alt=\"\" draggable=\"false\">"
+        } + (paths.size until maxOf(paths.size, total)).joinToString("") {
+            "<div class=\"ph\"><span class=\"sp\"></span>در حال ترجمه…</div>"
         }
-        val html = assetHtml
+        var html = assetHtml
             .replace("__TITLE__", title)
             .replace("__IMGS__", imgs)
             .replace("data-act=\"close\"", "data-act=\"close\" hidden")
+        if (dpaths.isNotEmpty()) {
+            html = html.replace("data-act=\"dbg\" hidden", "data-act=\"dbg\"")
+        }
 
         wv.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
 
@@ -1685,6 +1704,18 @@ class MainActivity : AppCompatActivity() {
                 view: android.webkit.WebView,
                 request: android.webkit.WebResourceRequest,
             ): android.webkit.WebResourceResponse? {
+                val dm = dbgRx.find(request.url.toString())
+                if (dm != null) {
+                    val di = dm.groupValues[1].toIntOrNull() ?: return null
+                    if (di < 0 || di >= dpaths.size) return null
+                    val df = File(dpaths[di])
+                    if (!df.isFile) return null
+                    return try {
+                        android.webkit.WebResourceResponse(
+                            mimeMap[df.extension.lowercase()] ?: "image/png", null,
+                            df.inputStream())
+                    } catch (_: Exception) { null }
+                }
                 val m = imgRx.find(request.url.toString()) ?: return null
                 val idx = m.groupValues[1].toIntOrNull() ?: return null
                 if (idx < 0 || idx >= paths.size) return null
@@ -1731,14 +1762,22 @@ class MainActivity : AppCompatActivity() {
         if (live) {
             livePush = { _ ->
                 try {
-                    // صفحه‌های تازهٔ لیستِ زنده را به نسخهٔ پایدارِ نمایشگر اضافه کن
-                    if (paths.size < src.size) {
-                        synchronized(paths) {
-                            for (i in paths.size until src.size) paths.add(src[i])
-                        }
+                    // صفحه‌های تازهٔ وضعیتِ زنده را به نسخهٔ پایدارِ نمایشگر اضافه کن
+                    val curLive: List<String>
+                    val curDbg: List<String>
+                    synchronized(liveImages) { curLive = liveImages.toList() }
+                    synchronized(liveDbgImages) { curDbg = liveDbgImages.toList() }
+                    synchronized(paths) {
+                        if (paths.size < curLive.size)
+                            for (i in paths.size until curLive.size) paths.add(curLive[i])
+                    }
+                    synchronized(dpaths) {
+                        if (dpaths.size < curDbg.size)
+                            for (i in dpaths.size until curDbg.size) dpaths.add(curDbg[i])
                     }
                     wv.evaluateJavascript(
-                        "window.__mangaLive && window.__mangaLive(${paths.size})", null)
+                        "window.__mangaLive && window.__mangaLive(${paths.size}, " +
+                            "${liveTotal}, ${dpaths.size})", null)
                 } catch (_: Exception) {}
             }
             livePush?.invoke(0)
