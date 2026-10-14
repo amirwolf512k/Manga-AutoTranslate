@@ -1218,7 +1218,10 @@ def run_desktop():
     card_opt = ttk.LabelFrame(tab_body, text=" گزینه‌ها ", padding=12)
     card_opt.pack(fill="x", padx=10, pady=6)
     row4 = ttk.Frame(card_opt); row4.pack(fill="x")
-    cleanm_var = tk.StringVar(value=str(cfg.get("clean_method") or "lama-manga"))
+    _cm_t = str(cfg.get("clean_method") or "lama-manga").strip()
+    if _cm_t not in ("lama-manga", "lama-big", "opencv"):
+        _cm_t = "lama-manga"
+    cleanm_var = tk.StringVar(value=_cm_t)
     twopass_var = tk.BooleanVar(value=True)
     debug_var = tk.BooleanVar(value=False)
     ttk.Label(row4, text="روش پاکسازی:").pack(side="right", padx=6)
@@ -2397,14 +2400,11 @@ def _dark_js_src() -> str:
         if (log.lastIndexOf(p[0]) >= 0) phase = p[1];
       }
       if (log.indexOf('ذخیرهٔ نهایی') >= 0) phase = 'ذخیرهٔ نهایی';
-      const tm = log.match(/⏱\\s*([0-9]+:[0-9]{2})/);
-      const time = tm ? tm[1] : '';
       const pages = (log.match(/شروع عملیات جدید/g) || []).length;
       let state = running ? 'run' : (err ? 'err' : (done ? 'ok' : 'idle'));
       const stateTxt = running ? 'در حال اجرا' : (err ? 'خطا' : (done ? 'تمام شد' : 'آماده'));
       let html = '<span class="chip-dot ' + state + '"></span>' +
         '<b>' + stateTxt + '</b>';
-      if (time) html += '<span class="chip-sep">•</span><span>⏱ ' + time + '</span>';
       html += '<span class="chip-sep">•</span><span>' + phase + '</span>';
       if (pages > 0) html += '<span class="chip-sep">•</span><span>📄 ' + pages + ' صفحه</span>';
       el.innerHTML = html;
@@ -2448,23 +2448,6 @@ def _dark_js_src() -> str:
         } else {
           fallback();
         }
-      });
-    }
-    const clearBtn = document.getElementById('manga_clear_log');
-    if (clearBtn && !clearBtn._bound) {
-      clearBtn._bound = true;
-      clearBtn.addEventListener('click', () => {
-        const ta = document.querySelector('#manga_live_log textarea');
-        if (!ta) return;
-        try {
-          const setter = Object.getOwnPropertyDescriptor(
-            HTMLTextAreaElement.prototype, 'value').set;
-          setter.call(ta, '— لاگ بعد از شروع ترجمه اینجا می‌آید —');
-          ta.dispatchEvent(new Event('input', { bubbles: true }));
-          ta.dispatchEvent(new Event('change', { bubbles: true }));
-        } catch (e) {}
-        const chip = document.getElementById('manga_status_chip');
-        if (chip) { chip.style.display = 'none'; chip.innerHTML = ''; }
       });
     }
   } catch (e) {}
@@ -2893,11 +2876,14 @@ def run_web():
                 readord = gr.Radio(["rtl", "ltr"], value=str(cfg.get("reading_order", "rtl")),
                                    label="ترتیب خواندن حباب‌ها")
             with gr.Row():
+                _cm0 = str(cfg.get("clean_method") or "lama-manga").strip()
+                if _cm0 not in ("lama-manga", "lama-big", "opencv"):
+                    _cm0 = "lama-manga"
                 clean_method = gr.Radio(
-                    choices=[["lama-manga", "lama.onnx + flat — پیش‌فرض (همان روش گوشی، سبک و سریع)"],
-                             ["lama-big", "lama-big + flat — فقط PC/وب (تمیزتر، کندتر)"],
-                             ["opencv", "opencv + flat — سریع‌ترین حالت"]],
-                    value=cfg.get("clean_method", "lama-manga"),
+                    choices=[["lama.onnx + flat — پیش‌فرض (همان روش گوشی، سبک و سریع)", "lama-manga"],
+                             ["lama-big + flat — فقط PC/وب (تمیزتر، کندتر)", "lama-big"],
+                             ["opencv + flat — سریع‌ترین حالت", "opencv"]],
+                    value=_cm0,
                     label="روش پاکسازی (سه حالت)")
             with gr.Row():
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
@@ -3275,9 +3261,7 @@ def run_web():
             job = _get_job(sid)
 
             def _fmt(buf_lines):
-                el = int(time.time() - t0)
-                body = "\n".join(buf_lines[-120:]) if buf_lines else "… در حال دریافت خروجی …"
-                return f"⏱ {el // 60}:{el % 60:02d}\n\n{body}"
+                return "\n".join(buf_lines[-120:]) if buf_lines else "… در حال دریافت خروجی …"
 
             def _reader():
                 buf = list(job.get("buf") or [])
@@ -3397,7 +3381,6 @@ def run_web():
 <div id="manga_status_chip"></div>
 <div class="log-tools">
   <button type="button" class="log-tool-btn" id="manga_copy_log" title="کپی متن لاگ">📋 کپی لاگ</button>
-  <button type="button" class="log-tool-btn" id="manga_clear_log" title="پاک کردن کادر لاگ">🧹 پاک کردن</button>
 </div>
 """
             )
@@ -3974,7 +3957,10 @@ def run_web():
                 cmd += ["--ocr-lang"] + [p for p in str(ocr_lang_v).split() if p]
             if model_v and str(model_v).strip():
                 cmd += ["--model", str(model_v).strip()]
-            cmd += ["--clean-method", str(clean_method_v or "lama-manga")]
+            _cm_v = str(clean_method_v or "lama-manga").strip()
+            if _cm_v not in ("lama-manga", "lama-big", "opencv"):
+                _cm_v = "lama-manga"
+            cmd += ["--clean-method", _cm_v]
             if not two_pass_v:
                 cmd += ["--no-two-pass-ocr"]
             if fake_test_v:
@@ -4014,7 +4000,7 @@ def run_web():
                 job["out_v"] = out_v
                 job["src"] = src
                 job["running"] = True
-                job["log"] = "⏱ 0:00\n\n▶ در حال شروع…"
+                job["log"] = "▶ در حال شروع…"
                 job["ts"] = time.time()
 
             live_dir = os.path.join(user_out_dir, "live")
@@ -4046,7 +4032,7 @@ def run_web():
                 job["proc"] = proc
                 job["running"] = True
                 job["ts"] = time.time()
-                job["log"] = "⏱ 0:00\n\n▶ شروع شد — لاگ زنده به‌زودی…\n(اگر صفحه را رفرش کنید لاگ از همین جلسه برمی‌گردد)"
+                job["log"] = "▶ شروع شد — لاگ زنده به‌زودی…\n(اگر صفحه را رفرش کنید لاگ از همین جلسه برمی‌گردد)"
             _persist_job_meta(sid)
             _start_job_reader(sid, proc, t0)
 

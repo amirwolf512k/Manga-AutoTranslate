@@ -256,6 +256,9 @@ def _defaults(mf):
                     cur.setdefault("default", "rtl")
                 elif cur not in ("rtl", "ltr"):
                     f["default"] = "rtl"
+            elif f.get("id") == "clean_method":
+                if f.get("default") not in ("lama-manga", "lama-big", "opencv"):
+                    f["default"] = "lama-manga"
 
 
 def _bundled_source(name):
