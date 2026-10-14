@@ -462,15 +462,16 @@ class _FullLog:
                     return
                 os.makedirs(d, exist_ok=True)
                 p = os.path.join(d, "manga.log")
-                # لاگ اجرای قبلی → manga.log.old (برای مقایسه/گزارش)
+                old_p = os.path.join(d, "manga_old.log")
+                # لاگ اجرای قبلی → manga_old.log (دو فایل، همان‌طور که کاربر خواست)
                 if os.path.isfile(p):
                     try:
                         if os.path.getsize(p) <= 8 * 1024 * 1024:
                             try:
-                                os.remove(p + ".old")
+                                os.remove(old_p)
                             except Exception:
                                 pass
-                            os.replace(p, p + ".old")
+                            os.replace(p, old_p)
                         else:
                             os.remove(p)
                     except Exception:

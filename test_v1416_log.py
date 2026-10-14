@@ -37,7 +37,7 @@ p = os.path.join(td, "manga.log")
 log = open(p, encoding="utf-8").read()
 
 assert log.startswith("=== Manga Translator v"), log[:120]
-assert "v1.14.16" in log, "APP_VER missing"
+assert "v1.14.17" in log, "APP_VER missing"
 assert "params: provider=gemini" in log
 assert long_line.strip() in log, "long line was truncated in file!"
 assert "PROG 42%|" in log, "progress line lost"
@@ -49,9 +49,9 @@ print("FILE LOG OK — %d bytes" % os.path.getsize(p))
 print("--- head ---")
 print("\n".join(log.splitlines()[:4]))
 
-# 2) rotation: second open must move previous to manga.log.old
+# 2) rotation: second open must move previous to manga_old.log (v1.14.17 naming)
 bridge._FULLLOG.open(job["files_dir"])
-assert os.path.isfile(p + ".old"), "rotation failed"
+assert os.path.isfile(os.path.join(td, "manga_old.log")), "rotation failed"
 log2 = open(p, encoding="utf-8").read()
 assert log2.count("=== Manga Translator") == 1
 assert "stage one" not in log2, "old content leaked into new log"

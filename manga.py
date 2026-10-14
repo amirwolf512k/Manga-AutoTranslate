@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.16"
+APP_VER = "1.14.17"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -824,7 +824,11 @@ class LamaMangaONNX:
             except Exception:
                 use_threads = 0
             if use_threads <= 0:
-                _cap = 2 if _on_android() else 2
+                # ⚡ v1.14.17 — کشف بنچمارک (لاگِ گوشی + پروفایل): DFT/FFT با
+                # چند‌نخی سمی است — threads=4: ۲.۵× کندتر، حتی threads=2 هم
+                # ~۱۵٪ کندتر از ۱ نخ (سینکِ ۱۴۴ گره DFT). تک‌نخ = سریع‌ترین؛
+                # موازی‌سازی واقعی از «چند پچِ همزمان» می‌آید نه نخِ intra.
+                _cap = 1 if _on_android() else 2
                 use_threads = max(1, min(_cap, os.cpu_count() or 4))
         else:
             use_threads = max(1, int(threads))
@@ -834,6 +838,20 @@ class LamaMangaONNX:
         names = [i.name for i in self.session.get_inputs()]
         self._in_image = names[0]
         self._in_mask = names[1] if len(names) > 1 else "mask"
+        # ⚡ v1.14.17: سقف ورودی پچ روی گوشی ۵۱۲→۳۸۴ — زمانِ ORT با
+        # threads=1 دقیقاً ∝ مساحتِ ورودی است (~۳۰s/MP سندباکس؛ گوشی ~۳-۴×).
+        # (۳۸۴/۵۱۲)² ≈ ۰.۵۶× محاسبه. نکته: با threads=2 قبلاً ۳۸۴ کندتر
+        # از ۵۱۲ می‌شد (سینک DFT) — با threads=1 دیگر نه. کیفیت: خروجیِ ۳۸۴
+        # در تست چشمی پاک (صفر متن جامانده). برگشت: MANGA_LAMA_PATCH_SIDE=512
+        self._input_cap = self.SIZE
+        try:
+            _env_ps = int(os.environ.get("MANGA_LAMA_PATCH_SIDE", "0") or 0)
+        except Exception:
+            _env_ps = 0
+        if _env_ps > 0:
+            self._input_cap = _env_ps
+        elif not prefer_gpu and _on_android():
+            self._input_cap = 384
         # 🩹 الگوی K3 (CleanSinglePatchInMemory): اگر ورودی مدل داینامیک باشد،
         # پچ‌های کوچک را در رزولوشن اصلی‌شان اجرا کن — بدون بزرگ‌نمایی به ۵۱۲
         # (تا ~۴x سریع‌تر برای حباب‌های کوچک و کیفیت یکسان).
@@ -851,8 +869,9 @@ class LamaMangaONNX:
             pass
         print(
             f"[+] LaMa-Manga ONNX آماده | providers={self.session.get_providers()} | "
-            f"threads={use_threads} | size={self.SIZE} | "
-            f"{'fixed' if self._fixed_size else 'dynamic (پچ در رزولوشن اصلی)'}"
+            f"threads={use_threads} | size={self.SIZE}" +
+            (f" | ⚡سقفِ ورودیِ پچ: {self._input_cap}" if self._input_cap != self.SIZE else "") +
+            f" | {'fixed' if self._fixed_size else 'dynamic (پچ در رزولوشن اصلی)'}"
         )
 
     @classmethod
@@ -911,7 +930,7 @@ class LamaMangaONNX:
         if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
         oh, ow = img_rgb.shape[:2]
-        s = self._dyn_size if self._fixed_size else self.SIZE
+        s = self._dyn_size if self._fixed_size else min(self.SIZE, self._input_cap)
         _mx = max(ow, oh)
 
         if not self._fixed_size and _mx <= s:
@@ -943,9 +962,21 @@ class LamaMangaONNX:
             mask_interp = cv2.INTER_AREA if scale < 1 else cv2.INTER_NEAREST_EXACT
             msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
                               interpolation=mask_interp) > 0).astype(np.uint8)
-            img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
-
-            msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
+            if self._fixed_size:
+                # مدل ثابت: ورودی باید دقیقاً s×s باشد
+                img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
+                msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw, cv2.BORDER_REFLECT)
+            else:
+                # ⚡ v1.14.17 — کشف بنچمارک: pad مربعیِ ۵۱۲×۵۱۲ برای مدل داینامیک
+                # هدررفتِ محاسبه بود (پچِ ۷۰۰×۲۱۹ → مربع کامل = ۲.۳× کندتر؛
+                # ۳۸۴ حتی کندتر از ۵۱۲ شد!). الگوی رقیب K3: فقط pad به مضرب ۸.
+                # → وب‌تون ۶۹۰×۱۱۲۰۰: ۵۹.۵s → ~۳۵s (سندباکس)، گوشی ~۱۰۰s → ~۵۵s
+                _pw, _ph = (-rw) % 8, (-rh) % 8
+                if _pw or _ph:
+                    img_np = cv2.copyMakeBorder(img_np, 0, _ph, 0, _pw,
+                                                cv2.BORDER_REFLECT)
+                    msk = cv2.copyMakeBorder(msk, 0, _ph, 0, _pw,
+                                             cv2.BORDER_CONSTANT, value=0)
         img_np[msk > 0] = 0
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
         mask_in = msk.astype(np.float32)[None, None]
@@ -6400,10 +6431,10 @@ class MangaTranslator:
                           f"{len(groups)} patches on {_img_w}x{_img_h}")
                     t0 = time.time()
                     # 🔥 فشار به گوشی (خواستهٔ کاربر): پچ‌ها «همزمان» اجرا می‌شوند
-                    # (data-parallel). DFT/FFT با intra-op چندنخی سمی است → هر
-                    # اجرا فقط ۲ نخ؛ ولی ۲-۳ پچ مستقل همزمان = استفادهٔ واقعی
-                    # از ۸ هسته بدون کندی DFT. سقف workers با رم آزاد تنظیم
-                    # می‌شود (هر پچ ~۴۰۰MB حافظهٔ ORT).
+                    # (data-parallel). ⚡ v1.14.17: هر اجرا فقط ۱ نخ (سینکِ DFT
+                    # با چند‌نخی سمی است) → موازی‌سازیِ واقعی = workersِ بیشتر:
+                    # ۸ هسته → ۴ پچ همزمان روی هسته‌های بزرگ. سشن مشترک است
+                    # (رمِ مدل تک‌نسخه) و run() ترد-سیف است.
                     _workers = 1
                     _av = 0.0
                     try:
@@ -6415,21 +6446,18 @@ class MangaTranslator:
                         if _wa > 0:
                             _workers = max(1, min(_wa, 4))
                         elif _on_android():
-                            # ⚡ v1.14.15 — خواستهٔ کاربر (گزارش Poco F4 / SD870):
-                            # «بعد دو موازی اخه؟ سریع نمیشه». قبلاً رمِ آزادِ
-                            # لحظه‌ای (0.3GB) gate بود → ۱ worker → ۱۷۶s!
-                            # الان: CPU قوی = موازیِ واقعی؛ هر پچ threads=1 و
-                            # سقفِ پچِ کوچک‌تر → رمِ هر پچ ~نصف. zram/کشِ
-                            # اندروید جا باز می‌کند؛ OOM-retry هم پایین آمد.
+                            # ⚡ v1.14.15/17 — خواستهٔ کاربر (گزارش Poco F4 / SD870):
+                            # «بعد دو موازی اخه؟ سریع نمیشه». با threads=1 برای هر
+                            # پچ، ۸ هسته → ۴ پچِ همزمان (هسته‌های بزرگ پر می‌شوند).
                             _cores_a = 0
                             try:
                                 _cores_a = self._cpu_core_count()
                             except Exception:
                                 _cores_a = 0
                             if _cores_a >= 8:
-                                _workers = 3
+                                _workers = 4
                             elif _cores_a >= 6:
-                                _workers = 2
+                                _workers = 3
                             else:
                                 _workers = 2 if _av >= 0.5 else 1
                         elif _av >= 1.5:
@@ -6447,7 +6475,7 @@ class MangaTranslator:
                             _cores = self._cpu_core_count()
                         except Exception:
                             _cores = "?"
-                        print(f"  [🔥] {_workers} parallel patches × 2 threads "
+                        print(f"  [🔥] {_workers} parallel patches × 1 thread "
                               f"(free RAM {_av:.1f}GB, {_cores} cores) → full CPU")
                         _pex = ThreadPoolExecutor(max_workers=_workers)
                         _futs = []
