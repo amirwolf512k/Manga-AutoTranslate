@@ -83,8 +83,11 @@ jobs:
               --notes "خروجی آخرین اجرای موفق «Build Android APK». برای نسخه‌های رسمی به Releaseهای versionدار سر بزنید."
           gh release edit apk -R "$GITHUB_REPOSITORY" \
             --notes "خروجی بیلد شماره ${{ github.run_number }} — ${{ github.event.head_commit.message || 'اجرای دستی' }}"
-          gh release upload apk MangaTranslator-arm64.apk MangaTranslator-armv7a.apk MangaTranslator-universal.apk \
-            -R "$GITHUB_REPOSITORY" --clobber
+          for i in 1 2 3 4 5; do
+            gh release upload apk MangaTranslator-arm64.apk MangaTranslator-armv7a.apk MangaTranslator-universal.apk \
+              -R "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload failed (try $i) — 10s wait"; sleep 10
+          done
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Publish engine files (mirror آپدیت درون‌اپ)
@@ -95,8 +98,11 @@ jobs:
             gh release create files -R "$GITHUB_REPOSITORY" \
               --title "Engine files (in-app update mirror)" \
               --notes "manga.py / manga_app.py / bridge.py / extract_ui.py برای آپدیت خودکار اپ"
-          gh release upload files manga.py manga_app.py bridge.py extract_ui.py \
-            -R "$GITHUB_REPOSITORY" --clobber
+          for i in 1 2 3 4 5; do
+            gh release upload files manga.py manga_app.py bridge.py extract_ui.py \
+              -R "$GITHUB_REPOSITORY" --clobber && break
+            echo "upload failed (try $i) — 10s wait"; sleep 10
+          done
         env:
           GH_TOKEN: ${{ github.token }}
 
