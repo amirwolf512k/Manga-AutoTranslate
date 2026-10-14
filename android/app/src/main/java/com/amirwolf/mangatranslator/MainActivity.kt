@@ -44,7 +44,6 @@ import android.provider.MediaStore
 
 import java.io.File
 
-
 class MainActivity : AppCompatActivity() {
 
     private val BG = Color.parseColor("#060607")
@@ -118,7 +117,7 @@ class MainActivity : AppCompatActivity() {
     private fun savedOr(id: String, dflt: Any?): Any? {
         val s = prefs.getString(id, null)
         if (s != null) {
-            // فیکس باگ «null» — مقدار ذخیره‌شدهٔ خراب هرگز به فیلد لینک نمی‌رود
+
             if (s.equals("null", true) || s.equals("undefined", true)) return null
             return s
         }
@@ -126,7 +125,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun acquireKeepAwake() {
-        // دسترسی باتری/بیدار نگه‌داشتن برای استخراج متن و پاکسازی (مشکل ۴)
+
         try {
             window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             val pm = getSystemService(POWER_SERVICE) as android.os.PowerManager
@@ -167,7 +166,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // ادامهٔ نصبِ آپدیت بعد از گرفتن اجازهٔ «منابع ناشناس»
+
         val pending = try { prefs.getString("pending_apk", null) } catch (_: Exception) { null }
         if (!pending.isNullOrEmpty()) {
             val f = java.io.File(pending)
@@ -307,7 +306,6 @@ class MainActivity : AppCompatActivity() {
 
         runBtn.setOnClickListener { onStartJob() }
 
-        // 🔄 آپدیت خودکار — پس‌زمینه، بدون مزاحمت برای موتور
         Thread { checkAppUpdate() }.start()
 
         Thread {
@@ -365,12 +363,6 @@ class MainActivity : AppCompatActivity() {
         }, 120_000)
     }
 
-
-
-    // ─── 🔄 آپدیت خودکار APK (v1.14.15) ───
-    // مشکل قبلی: فقط میرور raw.githubusercontent استفاده می‌شد که در ایران
-    // بلاک است. الان: jsDelivr/raw/gh-proxy برای چکِ نسخه + دانلود APK با
-    // فال‌بک gh-proxy. اگر نسخهٔ جدید باشد → دکمهٔ «نصب» بالای لاگ.
     private val UPD_MIRRORS = listOf(
         "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/",
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
@@ -456,7 +448,7 @@ class MainActivity : AppCompatActivity() {
             if (!ok || !dst.exists()) return
             ui.post { showUpdateRow(rname, dst) }
         } catch (_: Exception) {
-            // آپدیت اختیاری است — بی‌صدا رد شو
+
         }
     }
 
@@ -575,8 +567,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun verOf(src: () -> String): String = try {
         Regex("""APP_VER\s*=\s*"([^"]+)"""").find(src())?.groupValues?.get(1) ?: "0"
-    } catch (e: Exception) { "0" }
 
+    } catch (e: Exception) { "0" }
 
     private fun md5Of(f: File): String = try {
         val md = java.security.MessageDigest.getInstance("MD5")
@@ -805,7 +797,6 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
-
     private fun installCrashLogger() {
         val prev = Thread.getDefaultUncaughtExceptionHandler()
         Thread.setDefaultUncaughtExceptionHandler { t, e ->
@@ -903,7 +894,7 @@ class MainActivity : AppCompatActivity() {
                 infoView()?.let { row.addView(it) }
                 fieldViews[id] = et
                 if (id.lowercase().contains("key")) {
-                    // v1.14.19: دکمهٔ تست سیاه شد (بود قرمز — خواستهٔ کاربر)
+
                     val testBtn = Button(this).apply {
                         text = "تست کلیدها / لینک"
                         setTextColor(Color.WHITE); textSize = 13.5f
@@ -947,7 +938,7 @@ class MainActivity : AppCompatActivity() {
                                 testLbl.text = msg
                                 testLbl.setTextColor(if (okTxt != null) TXT else Color.parseColor("#c62828"))
                                 testLbl.visibility = View.VISIBLE
-                                // نتیجهٔ تست بعد از ۶۰ ثانیه خودکار پاک می‌شود (وب = پی‌سی = اندروید)
+
                                 testLbl.postDelayed({ testLbl.visibility = View.GONE }, 60000)
                             }
                         }.start()
@@ -1168,7 +1159,7 @@ class MainActivity : AppCompatActivity() {
                     val intent = Intent(Intent.ACTION_GET_CONTENT).apply {
                         addCategory(Intent.CATEGORY_OPENABLE)
                         setType("*/*")
-                        // چند انتخاب هم‌زمان — وب / پی‌سی / اندروید (مشکل ۲)
+
                         if (!isFontField) putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                     }
                     startActivityForResult(
@@ -1176,7 +1167,7 @@ class MainActivity : AppCompatActivity() {
                             if (isFontField) "انتخاب فونت" else "انتخاب فایل (می‌توانی چندتا بزنی)"),
                         REQ_FILE)
                 }
-                // دکمهٔ لغو انتخاب فایل (مشکل ۱)
+
                 clearBtn.setOnClickListener {
                     pickedFiles.remove(id)
                     prefs.edit().remove(id + "_path").apply()
@@ -1186,7 +1177,7 @@ class MainActivity : AppCompatActivity() {
                     clearBtn.visibility = View.GONE
                     Toast.makeText(this, "انتخاب فایل لغو شد", Toast.LENGTH_SHORT).show()
                 }
-                // مشکل ۱ — دکمهٔ لغو «کنار» دکمهٔ آپلود می‌آید، نه زیرش
+
                 btn.layoutParams = LinearLayout.LayoutParams(
                     0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
                 val fileRow = LinearLayout(this).apply {
@@ -1224,7 +1215,6 @@ class MainActivity : AppCompatActivity() {
             })
         }
     }
-
 
     private fun collect(): JSONObject {
         val o = JSONObject()
@@ -1331,7 +1321,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onCancelJob() {
-        // مشکل ۳ — لغو فوری: پرچم توقف در موتور در تمام حلقه‌های ریز چک می‌شود
+
         if (cancelPending) return
         cancelPending = true
         runBtn.isEnabled = false
@@ -1349,7 +1339,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun onStartJob() {
-        // مشکل ۴ — یک دکمهٔ یکپارچه: اگر کار در حال اجراست، همین دکمه = لغو
+
         if (jobRunning) {
             onCancelJob()
             return
@@ -1364,7 +1354,7 @@ class MainActivity : AppCompatActivity() {
             maybeAskBatteryExemption()
             jobRunning = true
             cancelPending = false
-            // همان دکمهٔ استارت → لغو (قرمز)
+
             runBtn.isEnabled = true
             runBtn.text = "⏹  لغو ترجمه"
             runBtn.setTextColor(Color.WHITE)
@@ -1384,7 +1374,7 @@ class MainActivity : AppCompatActivity() {
                     try {
                         val r = res
                         if (r != null && r.optBoolean("ok")) {
-                            // اگر کاربر قبل از ثبت کار لغو زده بود، الان لغو را اعمال کن
+
                             if (cancelPending) {
                                 Thread { try { bridge.callAttr("cancel") } catch (_: Exception) {} }.start()
                             }
@@ -1453,7 +1443,8 @@ class MainActivity : AppCompatActivity() {
                         }
                         finishJobUi()
                         showResults(s)
-                        autoSaveLog()  // v1.14.16: لاگ کامل ← Download/manga/manga.log
+                        autoSaveLog()
+
                     } else ui.postDelayed({ pollLoop() }, 800)
                 } catch (e: Exception) {
                     logBox.text = "❌ poll: " + (e.message ?: e.toString())
@@ -1483,8 +1474,7 @@ class MainActivity : AppCompatActivity() {
         st.optJSONArray("debug_images")?.let { a -> for (i in 0 until a.length()) debug.add(a.optString(i)) }
         val outFile = st.optString("out_file", "")
         val hasOutFile = outFile.isNotBlank() && File(outFile).isFile()
-        // 🔍 v1.14.13: دیباگ یک خروجیِ «یکپارچه» دارد (مثل خروجی اصلی) —
-        // یک فایل (PDF و...) به‌جای تصاویر جدا جدا
+
         val dbgFile = st.optString("debug_out_file", "")
         val hasDbgFile = dbgFile.isNotBlank() && File(dbgFile).isFile()
 
@@ -1517,8 +1507,7 @@ class MainActivity : AppCompatActivity() {
             }
             resultsBox.addView(tv)
         }
-        // v1.14.19: دکمهٔ «لاگ کامل → Download/manga» حذف شد (خواستهٔ کاربر) —
-        // لاگ خودکار بعد از هر اجرا در Download/manga ذخیره می‌شود.
+
         for (i in 0 until resultsBox.childCount) {
             val lp = resultsBox.getChildAt(i).layoutParams as LinearLayout.LayoutParams
             lp.topMargin = dp(7)
@@ -1725,103 +1714,106 @@ class MainActivity : AppCompatActivity() {
         }.start()
     }
 
-    // v1.14.16/17: لاگ کامل — filesDir/manga.log + filesDir/manga_old.log (بدون برش)
     private fun logFile(): File = File(filesDir, "manga.log")
 
     private fun logOldFile(): File = File(filesDir, "manga_old.log")
 
-    /**
-     * v1.14.19: فقط دو فایل manga.log و manga_old.log در Download/manga —
-     * هر واریانت دیگری («manga.log (1)»، «manga (2).log»، «manga_old.log (3)»…)
-     * حذف می‌شود؛ اگر «manga.log» نبود ولی نسخهٔ شماره‌دارش بود، همان تغییرنام
-     * می‌شود تا هیچ‌وقت فایل تکراری ساخته نشود. (باگ قبلی: کوئری LIKE
-     * "manga%.log" واریانت‌های "manga.log (N)" را نمی‌دید → هر بار insert جدید)
-     */
+    private fun isMangaLogName(dn: String): Boolean =
+        dn == "manga.log" || dn == "manga_old.log" ||
+            Regex("^manga(_old)?\\.(log|txt)( \\(\\d+\\))?$").matches(dn) ||
+            Regex("^manga(_old)?( \\(\\d+\\))?\\.(log|txt)$").matches(dn)
+
+    private fun writeLogEntry(uri: Uri, src: File): Boolean {
+        var ok = false
+        try {
+            contentResolver.openOutputStream(uri, "wt")?.use { o ->
+                src.inputStream().use { it.copyTo(o) }
+                ok = true
+            }
+        } catch (_: Exception) {
+            ok = false
+        }
+        if (!ok) {
+            try { contentResolver.delete(uri, null, null) } catch (_: Exception) {}
+            return false
+        }
+        try {
+            contentResolver.update(uri, ContentValues().apply {
+                put(MediaStore.MediaColumns.IS_PENDING, 0)
+            }, null, null)
+        } catch (_: Exception) {
+        }
+        return true
+    }
+
+    private fun insertLogEntry(name: String, src: File): Boolean {
+        val uri = contentResolver.insert(
+            MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+            ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/manga/")
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }) ?: return false
+        return writeLogEntry(uri, src)
+    }
+
     private fun upsertLogInDownloads(name: String, src: File): Boolean {
         if (!src.isFile) return false
-        return try {
-            if (Build.VERSION.SDK_INT >= 29) {
-                val proj = arrayOf(MediaStore.MediaColumns._ID,
-                    MediaStore.MediaColumns.DISPLAY_NAME,
-                    MediaStore.MediaColumns.RELATIVE_PATH)
-                var target: Uri? = null
-                val dupes = ArrayList<Uri>()
-                // v1.14.19: الگوهای ما — manga.log، manga_old.log و واریانت‌های
-                // شماره‌دار (ناشی از insert تکراری یا نسخه‌های قبل)
-                val ours = Regex("^manga(_old)?\\.log( \\(_?\\d+\\))?$")
-                val legacy = Regex("^manga( \\(_?\\d+\\))?\\.log$")
-                contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    proj, MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
-                    arrayOf("manga%"), null)?.use { c ->
-                        while (c.moveToNext()) {
-                            val dn = c.getString(1) ?: continue
-                            val rp = try {
-                                c.getString(2) ?: ""
-                            } catch (_: Exception) { "" }
-                            if (rp != "Download/manga/") continue
-                            val u = android.content.ContentUris.withAppendedId(
-                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, c.getLong(0))
-                            if (dn == name) {
-                                if (target == null) target = u else dupes.add(u)
-                            } else if (ours.matches(dn) || legacy.matches(dn)) {
-                                dupes.add(u)
-                            }
-                        }
-                    }
-                // v1.14.19: اگر فایل اصلی نبود ولی نسخهٔ شماره‌دارش بود →
-                // تغییرنام به نام اصلی (بدون ساخت فایل جدید)
-                if (target == null && dupes.isNotEmpty()) {
-                    val cand = dupes.removeAt(0)
-                    try {
-                        contentResolver.update(cand, ContentValues().apply {
-                            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                        }, null, null)
-                        target = cand
-                    } catch (_: Exception) {
-                    }
-                }
-                for (u in dupes) try {
-                    contentResolver.delete(u, null, null)
-                } catch (_: Exception) {
-                }
-                val isNew = (target == null)
-                val uri = target ?: contentResolver.insert(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
-                    ContentValues().apply {
-                        put(MediaStore.MediaColumns.DISPLAY_NAME, name)
-                        put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
-                        put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/manga/")
-                        put(MediaStore.MediaColumns.IS_PENDING, 1)
-                    }) ?: return false
-                var okWrite = false
-                try {
-                    contentResolver.openOutputStream(uri, "wt")?.use { o ->
-                        src.inputStream().use { it.copyTo(o) }
-                        okWrite = true
-                    }
-                } finally {
-                    if (!okWrite) try {
-                        contentResolver.delete(uri, null, null)
-                    } catch (_: Exception) {
-                    }
-                }
-                if (!okWrite) return false
-                // v1.14.19: همیشه pending=0 — اگر مدخل قبلی از کرش pending مانده
-                // بود هم آزاد می‌شود و در فایل‌منیجر دیده می‌شود
-                try {
-                    contentResolver.update(uri, ContentValues().apply {
-                        put(MediaStore.MediaColumns.IS_PENDING, 0)
-                    }, null, null)
-                } catch (_: Exception) {
-                }
-                true
-            } else {
+        if (Build.VERSION.SDK_INT < 29) {
+            return try {
                 val dir = File(Environment.getExternalStoragePublicDirectory(
                     Environment.DIRECTORY_DOWNLOADS), "manga")
                 dir.mkdirs()
                 src.copyTo(File(dir, name), overwrite = true)
                 true
+            } catch (e: Exception) {
+                android.util.Log.e("MangaApp", "upsertLogInDownloads", e)
+                false
             }
+        }
+        return try {
+            val proj = arrayOf(MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.RELATIVE_PATH)
+            val rows = ArrayList<Triple<Long, String, String>>()
+            contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                proj, MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
+                arrayOf("manga%"), null)?.use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val dn = c.getString(1) ?: continue
+                        val rp = try {
+                            c.getString(2) ?: ""
+                        } catch (_: Exception) {
+                            ""
+                        }
+                        rows.add(Triple(id, dn, rp))
+                    }
+                }
+            val mains = setOf("manga.log", "manga_old.log")
+            var main: Uri? = null
+            val doomed = ArrayList<Uri>()
+            for ((id, dn, rp) in rows) {
+                val u = android.content.ContentUris.withAppendedId(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                val keep = if (dn == name) {
+                    if (main == null && rp == "Download/manga/") {
+                        main = u
+                        true
+                    } else false
+                } else {
+                    dn in mains && rp == "Download/manga/"
+                }
+                if (!keep && isMangaLogName(dn)) doomed.add(u)
+            }
+            for (u in doomed) try {
+                contentResolver.delete(u, null, null)
+            } catch (_: Exception) {
+            }
+            val target = main
+            if (target != null) writeLogEntry(target, src)
+            else insertLogEntry(name, src)
         } catch (e: Exception) {
             android.util.Log.e("MangaApp", "upsertLogInDownloads", e)
             false
@@ -1885,7 +1877,7 @@ class MainActivity : AppCompatActivity() {
 override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == REQ_FILE && resultCode == Activity.RESULT_OK && data != null) {
-            // چند انتخاب (مشکل ۲): clipData چند فایل / data یک فایل
+
             val uris = mutableListOf<Uri>()
             data.data?.let { uris.add(it) }
             data.clipData?.let { cd ->
@@ -1924,7 +1916,8 @@ override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) 
                     }
                 } catch (_: Exception) {}
                 if (dest.isFile && dest.length() > 0) copied.add(dest.absolutePath)
-                if (isFontField) break // فونت فقط تک‌انتخاب
+                if (isFontField) break
+
             }
             if (copied.isEmpty()) return
             val fid = pickerField ?: return
