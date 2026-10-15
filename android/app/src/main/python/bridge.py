@@ -1039,7 +1039,8 @@ def cancel():
 
 def test_keys(params_json):
     """تست کلیدهای API / لینک سفارشی برای دکمهٔ «تست کلید» اندروید.
-    params_json: {"keys": "...", "provider": "...", "api_base": "..."}"""
+    params_json: {"keys": "...", "provider": "...", "api_base": "...",
+                  "model": "..."}"""
     try:
         p = json.loads(params_json or "{}")
     except Exception:
@@ -1047,11 +1048,12 @@ def test_keys(params_json):
     keys = str(p.get("keys") or "")
     provider = str(p.get("provider") or "gemini")
     api_base = str(p.get("api_base") or "")
+    model = str(p.get("model") or "")
     try:
         import sys
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         from manga import test_api_keys, format_key_test_text
-        res = test_api_keys(keys, provider, api_base)
+        res = test_api_keys(keys, provider, api_base, model=model)
         return json.dumps(
             {"ok": True, "text": format_key_test_text(res)},
             ensure_ascii=False)

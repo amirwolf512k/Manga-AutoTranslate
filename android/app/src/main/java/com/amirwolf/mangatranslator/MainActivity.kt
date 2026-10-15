@@ -929,14 +929,30 @@ class MainActivity : AppCompatActivity() {
                         Thread {
                             var res: JSONObject? = null
                             var err: String? = null
+                            // خواندنِ تنظیم با هر دو شناسهٔ ممکن (manga_* و خام)
+                            // — قبلاً فقط «api_base» خوانده می‌شد که روی گوشی
+                            // همیشه خالی بود → تست کلید پینگِ صفر و خطا می‌داد
+                            fun settingVal(vararg ids: String): String {
+                                for (fid in ids) {
+                                    val v = fieldViews[fid]
+                                    if (v is EditText && v.text.isNotBlank()) return v.text.toString()
+                                }
+                                for (fid in ids) {
+                                    val s = prefs.getString(fid, null)
+                                    if (!s.isNullOrBlank()) return s
+                                }
+                                return ""
+                            }
                             try {
                                 val p = JSONObject()
                                 val prov = prefs.getString("provider", "gemini") ?: "gemini"
                                 val keyVal = (fieldViews[id] as? EditText)?.text?.toString() ?: ""
-                                val baseVal = prefs.getString("api_base", "") ?: ""
+                                val baseVal = settingVal("manga_api_base", "api_base")
+                                val modelVal = settingVal("manga_model", "model")
                                 p.put("keys", keyVal)
                                 p.put("provider", prov)
                                 p.put("api_base", baseVal)
+                                p.put("model", modelVal)
                                 res = JSONObject(bridge.callAttr("test_keys", p.toString()).toString())
                             } catch (e: Exception) {
                                 err = e.message ?: e.toString()
