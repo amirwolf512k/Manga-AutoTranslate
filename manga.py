@@ -5638,6 +5638,26 @@ class MangaTranslator:
         n_ok = 0
         n_skip = 0
         for region in regions:
+            # v1.14.32: خطِ پنجرهٔ سیستم → ماسکِ مستطیلِ کاملِ خط با پهنای
+            # پنجره — پس‌زمینهٔ پنجره یکدست است؛ OCR گاهی تهِ خط را جا می‌اندازد
+            # («speed)» می‌ماند) و ماسکِ جوهری روی زمینهٔ تیره هم ناقص می‌شود.
+            _sys_span = (getattr(region, "sys_span", None)
+                         if getattr(region, "sys_split", False) else None)
+            if _sys_span:
+                try:
+                    _sx, _sy, _sw, _sh = [int(v) for v in region.rect]
+                    _x0 = max(0, min(_sx, int(_sys_span[0])) - padding)
+                    _y0 = max(0, _sy - padding)
+                    _x1 = min(w, max(_sx + _sw, int(_sys_span[1])) + padding)
+                    _y1 = min(h, _sy + _sh + padding)
+                    if _x1 - _x0 >= 6 and _y1 - _y0 >= 6:
+                        _rm = np.zeros_like(m)
+                        cv2.rectangle(_rm, (_x0, _y0), (_x1, _y1), 255, -1)
+                        m = cv2.bitwise_or(m, _rm)
+                        n_ok += 1
+                        continue
+                except Exception:
+                    pass
             pts_list = []
             _tall = 0
             _wide = 0
@@ -6055,6 +6075,23 @@ class MangaTranslator:
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * padding + 1,) * 2)
 
         for region in regions:
+            # v1.14.32: خطِ پنجرهٔ سیستم → مستطیلِ کاملِ خط با پهنای پنجره
+            _sys_span = (getattr(region, "sys_span", None)
+                         if getattr(region, "sys_split", False) else None)
+            if _sys_span:
+                try:
+                    _sx, _sy, _sw, _sh = [int(v) for v in region.rect]
+                    _x0 = max(0, min(_sx, int(_sys_span[0])) - padding)
+                    _y0 = max(0, _sy - padding)
+                    _x1 = min(w_img, max(_sx + _sw, int(_sys_span[1])) + padding)
+                    _y1 = min(h_img, _sy + _sh + padding)
+                    if _x1 - _x0 >= 6 and _y1 - _y0 >= 6:
+                        _rm = np.zeros_like(text_mask)
+                        cv2.rectangle(_rm, (_x0, _y0), (_x1, _y1), 255, -1)
+                        text_mask = cv2.bitwise_or(text_mask, _rm)
+                        continue
+                except Exception:
+                    pass
             x, y, rw, rh = region.rect
             polys = list(getattr(region, "ocr_polys", None) or [])
             if polys:
@@ -6204,6 +6241,11 @@ class MangaTranslator:
             return mask
         n_clip = 0
         for region in regions:
+            # v1.14.32: خط‌های پنجرهٔ سیستم را کوتاه نکن — ماسکشان عمداً
+            # مستطیلِ کاملِ خط است؛ flood-fill روی زمینهٔ بافت‌دار پنجره زود
+            # می‌بُرد و تهِ خط دوباره ظاهر می‌شود.
+            if getattr(region, "sys_split", False):
+                continue
             det_class = (getattr(region, "det_class", "") or "")
             if det_class not in ("bubble", "text_bubble"):
                 continue
@@ -6905,6 +6947,79 @@ class MangaTranslator:
             return image.copy()
 
         cleaned = image.copy()
+
+        # v1.14.32: خط‌ها/برچسب‌های پنجرهٔ سیستم را «قبل از» فیلترِ خوشه‌ای پاک
+        # کن — فیلتر خوشه‌ای ماسک را ۱۳px گنبد می‌کند و خط تزئینی بین ردیف‌های
+        # پنجره را می‌خورد و روی زمینهٔ بافت‌دار هم ماسکِ جوهری ناقص می‌ماند.
+        # اینجا: TELEA روی «نوار»ی از خط‌های هم‌جواری — مستطیلِ خط‌های مجاور
+        # هم‌پوشان است؛ اگر جدا TELEA کنیم مرزِ ماسک از متنِ خطِ همسایه رد
+        # می‌شود و لکهٔ سفید می‌سازد. پس خط‌های با گپِ عمودی <۸px یکی می‌شوند؛
+        # گپِ ≥۸px (خط تزئینی پنجره) بیرونِ ماسک می‌ماند و سالم می‌ماند.
+        try:
+            _H, _W = image.shape[:2]
+            _bands = []
+            for _r in regions:
+                _is_split = getattr(_r, "sys_split", False)
+                _is_label = (getattr(_r, "bubble_style", "") or "") == "system"
+                if not _is_split and not _is_label:
+                    continue
+                try:
+                    _sp = getattr(_r, "sys_span", None)
+                    _x, _y, _rw, _rh = [int(v) for v in _r.rect]
+                    if _is_split and _sp:
+                        _x0 = max(0, min(_x, int(_sp[0])) - 2)
+                        _x1 = min(_W, max(_x + _rw, int(_sp[1])) + 2)
+                        _y0, _y1 = max(0, _y - 2), min(_H, _y + _rh + 2)
+                    else:
+                        # برچسب تک‌قطعه: ۳px داخل برو تا دیواره حباب نخورده شود
+                        _x0, _y0 = max(0, _x + 3), max(0, _y + 3)
+                        _x1, _y1 = min(_W, _x + _rw - 3), min(_H, _y + _rh - 3)
+                    if _x1 - _x0 < 8 or _y1 - _y0 < 6:
+                        continue
+                    _bands.append([_x0, _y0, _x1, _y1])
+                except Exception:
+                    continue
+            # نوارهای هم‌پوشان/نزدیک (گپ < ۸px عمودی و هم‌پوشانی افقی) → یکی
+            _bands.sort(key=lambda b: (b[1], b[0]))
+            _merged: List[List[int]] = []
+            for _b in _bands:
+                _hit = None
+                for _m in _merged:
+                    if (_b[0] < _m[2] and _b[2] > _m[0]
+                            and _b[1] <= _m[3] + 8 and _b[3] >= _m[1] - 8):
+                        _hit = _m
+                        break
+                if _hit is not None:
+                    _hit[0] = min(_hit[0], _b[0])
+                    _hit[1] = min(_hit[1], _b[1])
+                    _hit[2] = max(_hit[2], _b[2])
+                    _hit[3] = max(_hit[3], _b[3])
+                else:
+                    _merged.append(list(_b))
+            _n_sys = 0
+            for _x0, _y0, _x1, _y1 in _merged:
+                try:
+                    _P = 14
+                    _ay0, _ay1 = max(0, _y0 - _P), min(_H, _y1 + _P)
+                    _ax0, _ax1 = max(0, _x0 - _P), min(_W, _x1 + _P)
+                    _crop = image[_ay0:_ay1, _ax0:_ax1].copy()
+                    _mc = np.zeros(_crop.shape[:2], dtype=np.uint8)
+                    cv2.rectangle(_mc, (_x0 - _ax0, _y0 - _ay0),
+                                  (_x1 - _ax0 - 1, _y1 - _ay0 - 1), 255, -1)
+                    _fix = cv2.inpaint(_crop, _mc, 4, cv2.INPAINT_TELEA)
+                    cleaned[_y0:_y1, _x0:_x1] = _fix[
+                        _y0 - _ay0:_y1 - _ay0, _x0 - _ax0:_x1 - _ax0]
+                    mask[_y0:_y1, _x0:_x1] = 0
+                    _n_sys += 1
+                except Exception:
+                    continue
+            if _n_sys:
+                print(f"  [🗔] {_n_sys} نوار پنجرهٔ سیستم بدون اتساع پاک شد")
+            if not np.any(mask):
+                return cleaned
+        except Exception:
+            pass
+
         counts = {"flat": 0, "color": 0, "LaMa": 0, "OpenCV": 0}
         try:
             _n_inst = self._line_instant_fill(image, cleaned, regions, mask)
@@ -9709,12 +9824,11 @@ class MangaTranslator:
             if n <= 0:
                 return 0
             score = 0
-            # ۱) براکتِ سرصفحه — قوی‌ترین نشانه ([ Daily Quest ] / 【】 / (INFO))
-            if re.search(r"[\[\u3010(\uff08][^\]\u3011)\uff09]{1,48}[\]\u3011)\uff09]", t):
+            # ۱) براکتِ سرصفحه — قوی‌ترین نشانه ([ Daily Quest ] / 【】)
+            if re.search(r"[\[\u3010][^\]\u3011\n]{1,48}[\]\u3011]", t):
                 score += 3
-            # ۲) کلیدواژه‌های سیستم (چهار زبان)
-            kw = sum(1 for l in (l.lower() for l in lines)
-                     if any(k in l for k in MangaTranslator._SYSTEM_KEYWORDS))
+            # ۲) کلیدواژه‌های سیستم (چهار زبان — لاتین با مرزِ کلمه)
+            kw = MangaTranslator._sys_keyword_hits(lines)
             if kw >= 1:
                 score += 2
             if kw >= 3:
@@ -9761,6 +9875,57 @@ class MangaTranslator:
             return score
         except Exception:
             return 0
+
+    @staticmethod
+    def _sys_keyword_hits(lines) -> int:
+        """تعداد خط‌های دارای کلیدواژهٔ سیستم. کلیدواژهٔ لاتین با «مرزِ کلمه»
+        (\bexp\b نه «unexpected»!) — ژاپنی/کره‌ای/چینی زیررشته."""
+        n = 0
+        for l in (lines or []):
+            ll = str(l or "").strip().lower()
+            if not ll:
+                continue
+            for k in MangaTranslator._SYSTEM_KEYWORDS:
+                try:
+                    if k.isascii():
+                        if re.search(r"(?<![a-z0-9])" + re.escape(k)
+                                     + r"(?![a-z0-9])", ll):
+                            n += 1
+                            break
+                    elif k in ll:
+                        n += 1
+                        break
+                except Exception:
+                    continue
+        return n
+
+    @staticmethod
+    def _system_window_strong(text: str, line_texts) -> bool:
+        """v1.14.32: نشانهٔ «قوی» پنجرهٔ سیستم — بدون این هیچ حباب عادی
+        نباید پنجره حساب شود (براکت سرصفحه / کلیدواژهٔ سیستم / ≥۲ لیبلِ
+        دونقطه‌دار). حباب عادی فقط امتیازهای ظاهری دارد (فاصله، تراز)،
+        پس این شرط جلوی جدا شدن حباب‌های دیالوگ را می‌گیرد.
+        براکت = فقط [ ] و 【 】 — پرانتزِ عادی («(CLRD & TS)») نشانه نیست."""
+        try:
+            t = str(text or "")
+            # ۱) براکت سرصفحه — قوی‌ترین ([ Daily Quest ] / 【…】)
+            if re.search(r"[\[\u3010][^\]\u3011\n]{1,48}[\]\u3011]", t):
+                return True
+            lines = [str(l or "").strip().lower() for l in (line_texts or [])
+                     if str(l or "").strip()]
+            if not lines:
+                lines = [p.strip().lower() for p in re.split(r"[\n]+", t) if p.strip()]
+            # ۲) کلیدواژهٔ سیستم در یکی از خط‌ها (مرزِ کلمه برای لاتین)
+            if MangaTranslator._sys_keyword_hits(lines) >= 1:
+                return True
+            # ۳) لیبل‌های دونقطه‌دار (HP: 120 / TIME : 05:00 / GOAL :)
+            colons = sum(l.count(":") + l.count("\uff1a") + l.count("\uff1d")
+                         for l in lines)
+            if colons >= 2:
+                return True
+            return False
+        except Exception:
+            return False
 
     @staticmethod
     def _cluster_ocr_lines(polys, texts, y_tol_factor: float = 0.65):
@@ -10708,15 +10873,25 @@ class MangaTranslator:
             if self._is_non_english_script(text):
                 continue
 
-            # ── v1.14.31: پنجرهٔ سیستم → خط‌به‌خط جدا (نه یک متن یکجا) ──
+            # ── v1.14.32: پنجرهٔ سیستم → خط‌به‌خط جدا (نه یک متن یکجا) ──
+            # فقط با «نشانهٔ قوی»: براکت/کلیدواژه/لیبل دونقطه‌دار.
+            # حباب عادی (فقط فاصله و تراز) دیگر جدا نمی‌شود.
             try:
                 _sys_score = MangaTranslator._system_window_score(
                     text, line_texts, line_polys, (x1, y1, x2, y2))
+                _sys_strong = MangaTranslator._system_window_strong(
+                    text, line_texts)
             except Exception:
-                _sys_score = 0
-            _sys_ok = _sys_score >= 5
+                _sys_score, _sys_strong = 0, False
+            _sys_ok = _sys_strong and (
+                _sys_score >= 5
+                # برچسبِ تک‌خطیِ کوتاه مثل «Status» / «NOTICE» — امتیازِ ظاهری
+                # به چند خط نیاز دارد؛ برچسب تک‌خطی با نشانهٔ قوی کافی است
+                or (len(line_polys) <= 1
+                    and len(str(text or '').strip()) <= 28))
             _sys_can_split = (
                 _sys_ok
+                and _sys_score >= 6
                 and len(line_polys) >= 2
                 and len(line_texts or []) == len(line_polys))
             if _sys_can_split:
@@ -10875,6 +11050,37 @@ class MangaTranslator:
                     _drop_ids = {id(r) for r in _sreg if r not in _keep}
                     regions = [r for r in regions if id(r) not in _drop_ids]
                     print(f"    [*] {_drop_ids and len(_drop_ids)} خط تکراری پنجرهٔ سیستم حذف شد")
+        except Exception:
+            pass
+
+        # v1.14.32: «پهنای پنجره» برای خط‌های پنجرهٔ سیستم — OCR گاهی تهِ خط را
+        # نمی‌گیرد («speed)» می‌ماند)؛ پس افقی تا پهنای مشترک همهٔ خط‌های همان
+        # پنجره (یا والد، با حاشیهٔ امن) گسترش بده تا پاکسازی کامل شود.
+        try:
+            _sys_groups: Dict[Tuple[int, int], List[TextRegion]] = {}
+            for _r in regions:
+                if not getattr(_r, "sys_split", False):
+                    continue
+                _cr = getattr(_r, "cover_rect", None)
+                _key = (int(_cr[0]), int(_cr[1])) if _cr else (
+                    int(_r.rect[0]), int(_r.rect[1]))
+                _sys_groups.setdefault(_key, []).append(_r)
+            for _grp in _sys_groups.values():
+                if not _grp:
+                    continue
+                _cr = getattr(_grp[0], "cover_rect", None)
+                if _cr:
+                    _pw = max(1, int(_cr[2]) - int(_cr[0]))
+                    _inset = max(6, int(0.03 * _pw))
+                    _sx0 = min(int(_cr[0]) + _inset,
+                               min(int(r_.rect[0]) for r_ in _grp))
+                    _sx1 = max(int(_cr[2]) - _inset,
+                               max(int(r_.rect[0] + r_.rect[2]) for r_ in _grp))
+                else:
+                    _sx0 = min(int(r_.rect[0]) for r_ in _grp)
+                    _sx1 = max(int(r_.rect[0] + r_.rect[2]) for r_ in _grp)
+                for r_ in _grp:
+                    r_.sys_span = (max(0, _sx0), _sx1)
         except Exception:
             pass
 
