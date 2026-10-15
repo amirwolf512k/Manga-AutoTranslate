@@ -800,1178 +800,100 @@ def run_cli(argv):
         mod.main()
 
 
+def _ensure_webview() -> bool:
+    """pywebview را در صورت نبود نصب می‌کند (فقط بار اول، چند MB)."""
+    try:
+        import webview  # noqa: F401
+        return True
+    except Exception:
+        pass
+    try:
+        print("[*] نصب pywebview برای پنجرهٔ دسکتاپ (فقط بار اول)...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
+                               "pywebview"], timeout=600)
+        import webview  # noqa: F401
+        return True
+    except Exception as e:
+        print(f"[!] pywebview نصب نشد ({e}) → مرورگر")
+        return False
+
+
 def run_desktop():
-    import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox, scrolledtext
-
-    cfg = load_config()
-    q: "queue.Queue[tuple]" = queue.Queue()
-    proc_holder = {"p": None}
-
-    root = tk.Tk()
-    root.title(f"{APP_NAME} v{APP_VER}")
-    root.geometry("1160x800")
-    root.minsize(980, 660)
-    root.configure(bg=C_BG)
-    try:
-        root.option_add("*Font", ("Segoe UI", 10))
-    except Exception:
-        pass
-
-    style = ttk.Style(root)
-    try:
-        style.theme_use("clam")
-    except Exception:
-        pass
-    # --- تم جوهری هم‌خانوادهٔ وب: کارت‌های تخت، قرمز سرخ، متن روشن ---
-    dark = {
-        "TFrame": {"background": C_BG},
-        "Card.TLabelframe": {"background": C_CARD, "bordercolor": C_LINE,
-                             "lightcolor": C_CARD, "darkcolor": C_CARD,
-                             "relief": "solid", "borderwidth": 1},
-        "Card.TLabelframe.Label": {"background": C_CARD, "foreground": C_ACC},
-        "TLabelframe": {"background": C_CARD, "bordercolor": C_LINE,
-                        "lightcolor": C_LINE, "darkcolor": C_LINE},
-        "TLabelframe.Label": {"background": C_CARD, "foreground": C_ACC},
-        "TLabel": {"background": C_CARD, "foreground": C_TXT},
-        "TButton": {"background": "#1c1c22", "foreground": C_TXT, "padding": (12, 7),
-                    "bordercolor": C_LINE, "lightcolor": "#1c1c22", "darkcolor": "#1c1c22",
-                    "focuscolor": C_ACC},
-        "TEntry": {"fieldbackground": "#0f0f13", "foreground": C_TXT,
-                   "insertcolor": C_TXT, "bordercolor": C_LINE,
-                   "lightcolor": "#0f0f13", "darkcolor": "#0f0f13",
-                   "padding": (8, 5), "borderwidth": 0, "relief": "flat"},
-        "TCombobox": {"fieldbackground": "#0f0f13", "foreground": C_TXT,
-                      "background": "#1c1c22", "arrowcolor": C_ACC,
-                      "bordercolor": C_LINE, "lightcolor": "#1c1c22",
-                      "darkcolor": "#1c1c22", "padding": (6, 4)},
-        "TSpinbox": {"fieldbackground": "#0f0f13", "foreground": C_TXT,
-                     "insertcolor": C_TXT, "arrowcolor": C_ACC,
-                     "bordercolor": C_LINE, "lightcolor": "#0f0f13",
-                     "darkcolor": "#0f0f13", "padding": (4, 4)},
-        "TCheckbutton": {"background": C_CARD, "foreground": C_TXT,
-                         "indicatorbackground": "#0f0f13",
-                         "indicatorforeground": C_ACC,
-                         "focuscolor": C_CARD},
-        "TRadiobutton": {"background": C_CARD, "foreground": C_TXT,
-                         "indicatorbackground": "#0f0f13",
-                         "indicatorforeground": C_ACC,
-                         "focuscolor": C_CARD},
-        "TNotebook": {"background": C_BG, "bordercolor": C_BG,
-                      "lightcolor": C_BG, "darkcolor": C_BG},
-        "TNotebook.Tab": {"background": "#17171b", "foreground": C_MUT,
-                          "padding": (20, 9), "bordercolor": "#17171b",
-                          "lightcolor": "#17171b", "darkcolor": "#17171b"},
-        "TProgressbar": {"background": C_ACC, "troughcolor": "#0f0f13",
-                         "bordercolor": "#0f0f13", "lightcolor": C_ACC,
-                         "darkcolor": C_ACC},
-        "TScrollbar": {"background": "#17171b", "troughcolor": C_BG,
-                       "bordercolor": C_BG, "arrowcolor": C_MUT,
-                       "lightcolor": "#17171b", "darkcolor": "#17171b"},
-    }
-    for name, kw in dark.items():
-        try:
-            style.configure(name, **kw)
-        except tk.TclError:
-            pass
-    style.map("TButton",
-              background=[("active", "#26262e"), ("pressed", "#2e2e38")],
-              bordercolor=[("active", C_ACC)])
-    style.map("TSpinbox", bordercolor=[("focus", C_ACC)])
-    style.map("TEntry", bordercolor=[("focus", C_ACC)])
-
-    style.map("TCombobox",
-              fieldbackground=[("readonly", "#0f0f13"), ("active", "#0f0f13"),
-                               ("focus", "#0f0f13")],
-              foreground=[("readonly", C_TXT), ("active", C_TXT)],
-              selectbackground=[("readonly", "#0f0f13"), ("active", "#0f0f13")],
-              selectforeground=[("readonly", C_TXT), ("active", C_TXT)])
-
-    root.option_add("*TCombobox*Listbox.background", "#17171b")
-    root.option_add("*TCombobox*Listbox.foreground", C_TXT)
-    root.option_add("*TCombobox*Listbox.selectBackground", C_ACC)
-    root.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
-    root.option_add("*TCombobox*Listbox.font", (None, 10))
-    style.map("TNotebook.Tab", background=[("selected", C_ACC), ("active", "#222228")],
-              foreground=[("selected", "white"), ("active", C_TXT)])
-    style.map("TCheckbutton", background=[("active", C_CARD)],
-              indicatorforeground=[("selected", C_ACC)])
-    style.map("TRadiobutton", background=[("active", C_CARD)],
-              indicatorforeground=[("selected", C_ACC)])
-    style.configure("Accent.TButton", font=(None, 11, "bold"), foreground="white",
-                    background=C_ACC, padding=(18, 9), bordercolor=C_ACC,
-                    lightcolor=C_ACC, darkcolor=C_ACC, focuscolor="white")
-    style.map("Accent.TButton",
-              background=[("active", "#ff5a4c"), ("pressed", "#c93325"),
-                          ("disabled", "#5c2019")],
-              foreground=[("disabled", "#f0b8b2")])
-    style.configure("TNotebook.Tab", font=(None, 10, "bold"))
-    style.configure("Card.TLabelframe.Label", font=(None, 10, "bold"))
-    style.configure("TLabelframe.Label", font=(None, 10, "bold"))
-    style.configure("Field.TLabel", font=(None, 9))
-
-    
-    head = tk.Frame(root, bg=C_BG2, highlightthickness=0, bd=0)
-    head.pack(fill="x")
-    head_line = tk.Frame(root, bg=C_ACC, highlightthickness=0, bd=0, height=2)
-    head_line.pack(fill="x")
-    stamp = tk.Label(head, text="漫", font=(None, 16, "bold"),
-                     bg=C_ACC, fg="white", width=3, pady=3)
-    stamp.pack(side="right", padx=(16, 10), pady=10)
-    _ttl_box = tk.Frame(head, bg=C_BG2)
-    _ttl_box.pack(side="right")
-    tk.Label(_ttl_box, text=APP_NAME, font=(None, 14, "bold"),
-             bg=C_BG2, fg=C_TXT).pack(anchor="e")
-    tk.Label(_ttl_box, text="PRO · RT-DETR + Gemini/OpenAI + LaMa · اجرا روی CPU",
-             font=(None, 8), bg=C_BG2, fg=C_MUT).pack(anchor="e")
-    tk.Label(head, text=f"v{APP_VER}", font=("IBM Plex Mono", 9),
-             bg=C_BG2, fg=C_MUT).pack(side="left", padx=10)
-    upd_lbl = tk.Label(head, text="", font=(None, 9), bg=C_BG2, fg=C_MUT)
-    upd_lbl.pack(side="left", padx=4)
-
-    def _run_update(manual=True):
-        def _work():
-            try:
-                rep = check_updates(force=manual, log=lambda m: None)
-                if not rep.get("checked"):
-                    return
-                if rep.get("update_available"):
-                    root.after(0, lambda: upd_lbl.config(
-                        text="🔄 آپدیت جدید: " + ", ".join(
-                            f"{n} v{i['remote']}" for n, i in rep["files"].items()
-                            if i.get("newer")),
-                        fg=C_OK))
-                    installed = apply_updates(rep, log=lambda m: None)
-                    if installed:
-                        root.after(0, lambda: upd_lbl.config(
-                            text="✔ نصب شد — برنامه را دوباره باز کنید", fg=C_OK))
-                elif manual:
-                    root.after(0, lambda: upd_lbl.config(
-                        text="✔ به‌روز است", fg=C_MUT))
-            except Exception:
-                if manual:
-                    root.after(0, lambda: upd_lbl.config(
-                        text="✖ چک آپدیت ناموفق", fg=C_ERR))
-
-        threading.Thread(target=_work, daemon=True).start()
-
-    ttk.Button(head, text="🔄 آپدیت", width=9,
-               command=lambda: (_run_update(True))).pack(side="left", padx=(2, 8))
-    status_lbl = tk.Label(head, text="● آماده", font=(None, 10, "bold"),
-                          bg=C_BG2, fg=C_OK)
-    status_lbl.pack(side="left", padx=4)
-    _run_update(manual=False)
-
-    nb = ttk.Notebook(root)
-    nb.pack(fill="both", expand=True, padx=10, pady=10)
-
-    
-    tab = ttk.Frame(nb)
-    nb.add(tab, text="🚀 ترجمه")
-
-    tab_canvas = tk.Canvas(tab, bg=C_BG, highlightthickness=0)
-    tab_sb = ttk.Scrollbar(tab, orient="vertical", command=tab_canvas.yview)
-    tab_body = ttk.Frame(tab_canvas)
-    tab_body.bind("<Configure>",
-                  lambda e: tab_canvas.configure(scrollregion=tab_canvas.bbox("all")))
-    tab_win = tab_canvas.create_window((0, 0), window=tab_body, anchor="nw")
-    tab_canvas.configure(yscrollcommand=tab_sb.set)
-    tab_sb.pack(side="right", fill="y")
-    tab_canvas.pack(side="left", fill="both", expand=True)
-
-    def _tab_resize(e):
-        tab_canvas.itemconfigure(tab_win, width=max(300, e.width))
-    tab_canvas.bind("<Configure>", _tab_resize)
-
-    def _tab_wheel(e):
-        try:
-            if nb.index(nb.select()) != 0:
-                return
-        except Exception:
-            return
-        delta = getattr(e, "delta", 0) or 0
-        if delta:
-            tab_canvas.yview_scroll(int(-delta / 120), "units")
-    root.bind_all("<MouseWheel>", _tab_wheel)
-
-    def field(parent, label):
-        
-        ttk.Label(parent, text=label, style="Field.TLabel",
-                  foreground=C_MUT).pack(fill="x", pady=(7, 3))
-
-    
-    card_io = ttk.Labelframe(tab_body, text=" 📥  ورودی / خروجی ",
-                             style="Card.TLabelframe", padding=14)
-    card_io.pack(fill="x", padx=12, pady=(12, 6))
-    field(card_io, "فایل / پوشه / URL ورودی")
-    row_in = ttk.Frame(card_io); row_in.pack(fill="x")
-    inp_var = tk.StringVar(value=cfg.get("last_input", ""))
-    ttk.Entry(row_in, textvariable=inp_var).pack(side="left", fill="x", expand=True)
-
-    def pick_input():
-        paths = filedialog.askopenfilenames(
-            initialdir=UPLOAD_DIR if os.path.isdir(UPLOAD_DIR) else HERE,
-            filetypes=[("مانگا", "*.pdf *.zip *.cbz *.webp *.jpg *.jpeg *.png *.html"),
-                       ("همه", "*.*")])
-        if not paths:
-            return
-        paths = [p for p in paths if p and os.path.isfile(p)]
-        if not paths:
-            return
-        if len(paths) == 1:
-            inp_var.set(paths[0])
-            return
-        # چند فایل انتخاب شد — همه در یک پوشهٔ دسته‌ای کپی می‌شوند
-        try:
-            batch_dir = os.path.join(
-                UPLOAD_DIR, "batch_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
-            os.makedirs(batch_dir, exist_ok=True)
-            for bi, bf in enumerate(paths, 1):
-                ext_b = os.path.splitext(bf)[1].lower() or ".bin"
-                shutil.copyfile(bf, os.path.join(batch_dir, f"file_{bi:03d}{ext_b}"))
-            inp_var.set(batch_dir)
-            messagebox.showinfo(
-                APP_NAME,
-                f"✔ {len(paths)} فایل انتخاب شد\nهمه با هم ترجمه می‌شوند.\n\n{batch_dir}")
-        except Exception as e:
-            inp_var.set(paths[0])
-            messagebox.showwarning(APP_NAME, f"کپی دسته‌ای نشد — فقط اولین فایل: {e}")
-    ttk.Button(row_in, text="📁 انتخاب (چندتایی)", command=pick_input).pack(side="left", padx=(6, 0))
-
-    row_out = ttk.Frame(card_io); row_out.pack(fill="x", pady=(8, 0))
-    fmt_var = tk.StringVar(value=cfg.get("out_fmt", "PDF"))
-    ttk.Label(row_out, text="قالب:").pack(side="right", padx=(0, 4))
-    for v in ("PDF", "ZIP", "HTML", "PSD", "پوشهٔ تصاویر"):
-        ttk.Radiobutton(row_out, text=v, value=v, variable=fmt_var).pack(side="right", padx=4)
-    quality_var = tk.IntVar(value=int(cfg.get("quality", 92)))
-    ttk.Label(row_out, text="کیفیت:").pack(side="left", padx=(0, 4))
-    ttk.Spinbox(row_out, from_=60, to=100, textvariable=quality_var, width=5).pack(side="left")
-
-    
-    card_ai = ttk.Labelframe(tab_body, text=" 🧠  حساب و مدل ",
-                             style="Card.TLabelframe", padding=14)
-    card_ai.pack(fill="x", padx=12, pady=6)
-    row_ai1 = ttk.Frame(card_ai); row_ai1.pack(fill="x")
-    prov_var = tk.StringVar(value=cfg.get("provider", "gemini"))
-    ttk.Label(row_ai1, text="ارائه‌دهنده:").pack(side="right", padx=(0, 4))
-    ttk.Combobox(row_ai1, textvariable=prov_var, values=PROVIDERS,
-                 state="readonly", width=12).pack(side="right", padx=(0, 16))
-    model_var = tk.StringVar(value=cfg.get("model", ""))
-    ttk.Label(row_ai1, text="مدل (خالی = پیش‌فرض):").pack(side="right", padx=(0, 4))
-    ttk.Entry(row_ai1, textvariable=model_var, width=22).pack(side="right")
-    row_ab = ttk.Frame(card_ai)
-    field(row_ab, "دامنهٔ API سفارشی (فقط برای «custom» — مثال: https://api.example.com/v1)")
-    apibase_var = tk.StringVar(value=cfg.get("api_base", ""))
-    ttk.Entry(row_ab, textvariable=apibase_var).pack(fill="x")
-
-    _keys_label = ttk.Label(card_ai, text="کلید API (چند کلید = با کاما، چرخش خودکار)",
-                            foreground=C_MUT)
-    _keys_label.pack(fill="x", pady=(6, 2))
-    keys_var = tk.StringVar(value=cfg.get("api_keys") or default_keys())
-    keys_entry = ttk.Entry(card_ai, textvariable=keys_var, show="•")
-    keys_entry.pack(fill="x")
-    # ---- دکمهٔ تست کلیدها (پی‌سی) ----
-    row_testk = ttk.Frame(card_ai); row_testk.pack(fill="x", pady=(6, 0))
-    testk_out = tk.StringVar(value="")
-    testk_lbl = None
-    testk_after = [None]
-
-    def _testk_hide():
-        testk_out.set("")
-        if testk_lbl is not None:
-            try:
-                testk_lbl.pack_forget()
-            except Exception:
-                pass
-
-    def _testk_schedule_hide():
-        if testk_after[0] is not None:
-            try:
-                root.after_cancel(testk_after[0])
-            except Exception:
-                pass
-        testk_after[0] = root.after(60000, _testk_hide)
-
-    def _run_test_keys_pc():
-        testk_out.set("در حال تست کلیدها…")
-        def _worker():
-            try:
-                from manga import test_api_keys, format_key_test_text
-                res = test_api_keys(
-                    keys_var.get() or "", str(prov_var.get() or "gemini"),
-                    apibase_var.get() if "apibase_var" in dir() else "")
-                msg = format_key_test_text(res) if res else "کلیدی وارد نشده"
-            except Exception as e:
-                msg = f"خطا در تست: {e}"
-            def _show():
-                global testk_lbl
-                testk_out.set(msg)
-                if testk_lbl is None:
-                    testk_lbl = ttk.Label(row_testk, textvariable=testk_out,
-                                          foreground=C_MUT, wraplength=520,
-                                          justify="right")
-                testk_lbl.pack(side="right", fill="x", expand=True)
-                _testk_schedule_hide()
-            root.after(0, _show)
-        import threading
-        threading.Thread(target=_worker, daemon=True).start()
-    ttk.Button(row_testk, text="تست کلیدها / لینک",
-               command=_run_test_keys_pc).pack(side="right", padx=(0, 6))
-
-    def _toggle_custom_fields(*_a):
-        if str(prov_var.get()).strip() == "custom":
-            try:
-                row_ab.pack(fill="x", pady=(6, 0), before=_keys_label)
-            except Exception:
-                row_ab.pack(fill="x", pady=(6, 0))
-        else:
-            row_ab.pack_forget()
-
-    prov_var.trace_add("write", _toggle_custom_fields)
-    _toggle_custom_fields()
-
-    OCR_LANG_CHOICES = [
-        ("انگلیسی", "en"),
-        ("کره‌ای (+ انگلیسی)", "ko en"),
-        ("ژاپنی (+ انگلیسی)", "ja en"),
-        ("چینی (+ انگلیسی)", "zh en"),
-        ("چندزبانه (کره‌ای/ژاپنی/چینی/انگلیسی)", "ko ja zh en"),
-    ]
-    _ocr_value_for = {lbl: val for lbl, val in OCR_LANG_CHOICES}
-    row_ai2 = ttk.Frame(card_ai); row_ai2.pack(fill="x", pady=(6, 0))
-    ocr_lang_var = tk.StringVar(value=next(
-        (lbl for lbl, val in OCR_LANG_CHOICES
-         if val == str(cfg.get("ocr_lang", "en"))), "انگلیسی"))
-    ttk.Label(row_ai2, text="زبان متن مانگا (OCR):").pack(side="right", padx=(0, 4))
-    ttk.Combobox(row_ai2, textvariable=ocr_lang_var,
-                 values=[lbl for lbl, _v in OCR_LANG_CHOICES],
-                 state="readonly", width=34).pack(side="right", padx=(0, 16))
-
-    def _persist_api_desktop(*_a):
-        try:
-            cur = load_config()
-            cur["api_keys"] = keys_var.get()
-            cur["provider"] = prov_var.get()
-            cur["model"] = model_var.get()
-            cur["api_base"] = apibase_var.get()
-            cur["ocr_lang"] = _ocr_value_for.get(ocr_lang_var.get(), "en")
-            save_config(cur)
-        except Exception:
-            pass
-
-    _api_save_job = {"id": None}
-
-    def _schedule_api_save(*_a):
-        try:
-            if _api_save_job["id"] is not None:
-                root.after_cancel(_api_save_job["id"])
-        except Exception:
-            pass
-        _api_save_job["id"] = root.after(300, _persist_api_desktop)
-
-    keys_var.trace_add("write", _schedule_api_save)
-    prov_var.trace_add("write", _schedule_api_save)
-    model_var.trace_add("write", _schedule_api_save)
-    ocr_lang_var.trace_add("write", _schedule_api_save)
-
-    
-    card_font = ttk.Labelframe(tab_body, text=" 🎙  فونت‌های لحن ",
-                               style="Card.TLabelframe", padding=14)
-    card_font.pack(fill="x", padx=12, pady=6)
-    font_vars = {"main": tk.StringVar(value=cfg.get("font") or find_font())}
-    row_fm = ttk.Frame(card_font); row_fm.pack(fill="x")
-    ttk.Label(row_fm, text="اصلی (پیش‌فرض):", foreground=C_MUT).pack(side="right", padx=(0, 4))
-    ttk.Entry(row_fm, textvariable=font_vars["main"]).pack(side="right", fill="x",
-                                                           expand=True, padx=(0, 4))
-
-    def mk_pick(var):
-        def _p():
-            pth = filedialog.askopenfilename(filetypes=[("فونت", "*.ttf *.otf")])
-            if pth:
-                var.set(pth)
-        return _p
-    ttk.Button(row_fm, text="…", width=3,
-               command=mk_pick(font_vars["main"])).pack(side="left")
-
-    
-    SLOT_LABELS = {
-        "normal": "کودک (عادی)", "shout": "افسانه (خشم)", "comedy_shout": "کروش (کمدی)",
-        "whisper": "زمزمه", "thought": "تفکر", "system": "سیستم/تگ",
-        "letter": "نامه/طومار", "narrator": "راوی", "free_text": "متن آزاد",
-    }
-    font_slots = {}
-    tone_en_vars = {}
-    for slot, fname, _desc, _urls in FONT_BUNDLES:
-        dflt = os.path.join(FONT_DIR, fname) if os.path.isfile(os.path.join(FONT_DIR, fname)) else ""
-        if dflt and not _font_persian_ok(dflt):
-            dflt = ""
-        font_slots[slot] = tk.StringVar(value=dflt)
-        tone_en_vars[slot] = tk.BooleanVar(value=bool(cfg.get("tone_en_" + slot, True)))
-
-    def open_font_editor():
-        win = tk.Toplevel(root)
-        win.title("ویرایش فونت‌های لحن")
-        win.geometry("880x480")
-        win.configure(bg=C_BG)
-        tk.Label(win, text="مسیر هر فونت را عوض کنید یا با … انتخاب کنید؛ "
-                           "لحن خاموش = آن tone از ترجمه حذف و حباب‌ها با فونت اصلی رندر می‌شوند",
-                 bg=C_BG, fg=C_MUT).pack(anchor="e", padx=12, pady=(10, 4))
-        body = tk.Frame(win, bg=C_BG)
-        body.pack(fill="both", expand=True, padx=12)
-        for idx, (slot, _fname, _d, _u) in enumerate(FONT_BUNDLES):
-            r, c = divmod(idx, 2)
-            cell = tk.Frame(body, bg=C_BG)
-            cell.grid(row=r, column=(1 - c), sticky="ew", padx=4, pady=3)
-            body.columnconfigure(1 - c, weight=1)
-            ttk.Checkbutton(cell, text="",
-                            variable=tone_en_vars[slot]).pack(side="left")
-            tk.Label(cell, text=f"{SLOT_LABELS.get(slot, slot)}:",
-                     bg=C_BG, fg=C_TXT).pack(side="right", padx=(0, 4))
-            ttk.Entry(cell, textvariable=font_slots[slot]).pack(
-                side="right", fill="x", expand=True)
-            ttk.Button(cell, text="…", width=2,
-                       command=mk_pick(font_slots[slot])).pack(side="left")
-        ttk.Button(win, text="بستن", command=win.destroy).pack(pady=10)
-
-    row_fd = ttk.Frame(card_font); row_fd.pack(fill="x", pady=(4, 0))
-
-    def do_download_fonts():
-        dl_btn.config(state="disabled")
-        set_status("دانلود فونت…")
-
-        def t():
-            n = download_fonts(log=lambda m: q.put(("log", m)))
-            q.put(("fonts_done", n))
-
-        threading.Thread(target=t, daemon=True).start()
-
-    dl_btn = ttk.Button(row_fd, text="⬇ دانلود فونت‌های گمشده", command=do_download_fonts)
-    dl_btn.pack(side="left")
-    ttk.Button(row_fd, text="✏️ ویرایش فونت‌های لحن",
-               command=open_font_editor).pack(side="left", padx=6)
-
-    
-    card_opt = ttk.Labelframe(tab_body, text=" ⚙️  گزینه‌ها ",
-                              style="Card.TLabelframe", padding=14)
-    card_opt.pack(fill="x", padx=12, pady=6)
-    row4 = ttk.Frame(card_opt); row4.pack(fill="x")
-    _cm_t = str(cfg.get("clean_method") or "lama-manga").strip()
-    if _cm_t not in ("lama-manga", "lama-big", "opencv"):
-        _cm_t = "lama-manga"
-    cleanm_var = tk.StringVar(value=_cm_t)
-    twopass_var = tk.BooleanVar(value=True)
-    debug_var = tk.BooleanVar(value=False)
-    ttk.Label(row4, text="روش پاکسازی:").pack(side="right", padx=6)
-    for _cm_v, _cm_l in (("lama-manga", "lama.onnx + flat (پیش‌فرض)"),
-                         ("lama-big", "lama-big + flat"),
-                         ("opencv", "opencv + flat")):
-        ttk.Radiobutton(row4, text=_cm_l, value=_cm_v,
-                        variable=cleanm_var).pack(side="right", padx=6)
-    ttk.Checkbutton(row4, text="OCR دومرحله‌ای", variable=twopass_var).pack(side="right", padx=6)
-    ttk.Checkbutton(row4, text="دیباگ", variable=debug_var).pack(side="right", padx=6)
-    fake_var = tk.BooleanVar(value=bool(cfg.get("fake_test", False)))
-    ttk.Checkbutton(row4, text="حالت تست — متن فارسی الکی (بدون API)",
-                    variable=fake_var).pack(side="right", padx=6)
-    clean_only_var = tk.BooleanVar(value=bool(cfg.get("clean_only", False)))
-    ttk.Checkbutton(row4, text="فقط پاکسازی (بدون ترجمه)",
-                    variable=clean_only_var).pack(side="right", padx=6)
-    row5 = ttk.Frame(card_opt); row5.pack(fill="x", pady=(8, 0))
-    workers_var = tk.IntVar(value=int(cfg.get("workers", 2)))
-    bubbles_var = tk.IntVar(value=int(cfg.get("bubbles", 6)))
-    timeout_var = tk.IntVar(value=int(cfg.get("timeout", 40)))
-    for lbl, var, a, b in (("ورکر OCR", workers_var, 1, 8),
-                           ("حباب در هر درخواست", bubbles_var, 1, 12),
-                           ("تایم‌اوت (ثانیه)", timeout_var, 10, 120)):
-        ttk.Label(row5, text=lbl + ":").pack(side="right", padx=(12, 4))
-        ttk.Spinbox(row5, from_=a, to=b, textvariable=var, width=5).pack(side="right")
-    adv = ttk.Frame(card_opt)
-    adv_open = {"v": False}
-    def toggle_adv():
-        adv_open["v"] = not adv_open["v"]
-        if adv_open["v"]:
-            adv.pack(fill="x", after=row5, pady=(6, 0))
-            adv_btn.config(text="▲ بستن تنظیمات پیشرفته")
-        else:
-            adv.pack_forget()
-            adv_btn.config(text="▼ تنظیمات پیشرفته")
-    adv_btn = ttk.Button(row5, text="▼ تنظیمات پیشرفته", command=toggle_adv, width=22)
-    adv_btn.pack(side="left", padx=6)
-    row5b = ttk.Frame(adv); row5b.pack(fill="x", pady=(6, 0))
-    batchw_var = tk.IntVar(value=int(cfg.get("batch_workers", 3)))
-    maxre_var = tk.IntVar(value=int(cfg.get("max_retries", 8)))
-    reqdelay_var = tk.DoubleVar(value=float(cfg.get("request_delay", 0)))
-    temp_var = tk.DoubleVar(value=float(cfg.get("temperature", 0.85)))
-    readord_var = tk.StringVar(value=str(cfg.get("reading_order", "rtl")))
-    for lbl, var, a, b in (("بستهٔ ترجمهٔ موازی", batchw_var, 1, 8),
-                           ("حداکثر تلاش", maxre_var, 1, 15),
-                           ("تأخیر درخواست (ث)", reqdelay_var, 0, 5),
-                           ("temperature", temp_var, 0, 1.5)):
-        ttk.Label(row5b, text=lbl + ":").pack(side="right", padx=(12, 4))
-        ttk.Spinbox(row5b, from_=a, to=b, textvariable=var, width=5,
-                    increment=0.05 if a == 0 and b == 1.5 else 1).pack(side="right")
-    ttk.Label(row5b, text="ترتیب خواندن:").pack(side="right", padx=(12, 4))
-    ttk.Combobox(row5b, textvariable=readord_var, values=["rtl", "ltr"],
-                 state="readonly", width=5).pack(side="right")
-
-    row5c = ttk.Frame(adv); row5c.pack(fill="x", pady=(6, 0))
-    brief_var = tk.BooleanVar(value=bool(cfg.get("story_brief", True)))
-    ttk.Label(row5c, text="واژه‌نامهٔ اسامی (هر خط: English=فارسی):").pack(anchor="e")
-    glos_txt = tk.Text(adv, height=4, font=("Consolas", 10), bg=C_CARD, fg=C_TXT)
-    glos_txt.pack(fill="x", pady=(2, 4))
-    glos_txt.insert("1.0", str(cfg.get("glossary_text", "") or ""))
-    ttk.Checkbutton(row5c, text="بریف داستان قبل از ترجمه (لحن شخصیت‌ها حفظ شود)",
-                    variable=brief_var).pack(anchor="e")
-    ttk.Label(adv, text="متن دستور مترجم (فقط لحن/سبک — بخش JSON و tone قفل است؛ خالی = پیش‌فرض):"
-              ).pack(anchor="e", pady=(8, 0))
-    instr_txt = tk.Text(adv, height=6, font=("Consolas", 10), bg=C_CARD, fg=C_TXT)
-    instr_txt.pack(fill="x", pady=(2, 4))
-    instr_txt.insert("1.0", str(cfg.get("instruction_text") or default_system_instruction()))
-
-    
-    row6 = ttk.Frame(tab_body); row6.pack(fill="x", padx=12, pady=(6, 2))
-    run_btn = ttk.Button(row6, text="🚀  شروع ترجمه", style="Accent.TButton")
-    run_btn.pack(side="right")
-    stop_btn = ttk.Button(row6, text="⏹ توقف", state="disabled")
-    stop_btn.pack(side="right", padx=6)
-    read_btn = ttk.Button(row6, text="📖 خواندن", state="disabled",
-                          command=lambda: open_reader())
-    read_btn.pack(side="left")
-    open_btn = ttk.Button(row6, text="📂 خروجی", state="disabled")
-    open_btn.pack(side="left")
-    read_dbg_btn = ttk.Button(row6, text="🔍 خواندن دیباگ", state="disabled",
-                              command=lambda: open_reader(debug=True))
-    open_dbg_btn = ttk.Button(row6, text="📂 دیباگ", state="disabled")
-    
-    out_path_holder = {"p": "", "d": "", "dbg_p": "", "dbg_d": ""}
-
-    def _sync_debug_btns(*_a):
-        try:
-            on = bool(debug_var.get())
-        except Exception:
-            on = False
-        if on:
-            if not read_dbg_btn.winfo_ismapped():
-                read_dbg_btn.pack(side="left", padx=(6, 0), after=open_btn)
-            if not open_dbg_btn.winfo_ismapped():
-                open_dbg_btn.pack(side="left", padx=(4, 0), after=read_dbg_btn)
-        else:
-            try:
-                read_dbg_btn.pack_forget()
-            except Exception:
-                pass
-            try:
-                open_dbg_btn.pack_forget()
-            except Exception:
-                pass
-
-    try:
-        debug_var.trace_add("write", _sync_debug_btns)
-    except Exception:
-        try:
-            debug_var.trace("w", lambda *_: _sync_debug_btns())
-        except Exception:
-            pass
-    root.after(50, _sync_debug_btns)
-    progress = ttk.Progressbar(tab_body, mode="indeterminate")
-
-    
-    tab_log = ttk.Frame(nb)
-    row_log = ttk.Frame(tab_log); row_log.pack(fill="x", padx=10, pady=(8, 4))
-    copy_btn = ttk.Button(row_log, text="📋 کپی لاگ")
-    log_box = scrolledtext.ScrolledText(tab_log, height=26, font=("Consolas", 10),
-                                        bg="#0e0e12", fg=C_TXT,
-                                        insertbackground=C_TXT, wrap="none",
-                                        relief="flat", padx=10, pady=8)
-    log_box.pack(fill="both", expand=True, padx=10, pady=(2, 8))
-    log_newest_top = tk.BooleanVar(value=False)
-    _log_count = {"n": 0}
-
-    def on_log_key(e):
-        
-        if e.state & 0x0004 and e.keysym.lower() in ("c", "a"):
-            return None
-        return "break"
-    log_box.bind("<Key>", on_log_key)
-
-    def log_write(msg):
-        log_box.config(state="normal")
-        if log_newest_top.get():
-            log_box.insert("1.0", msg + "\n")
-        else:
-            log_box.insert("end", msg + "\n")
-            log_box.see("end")
-        log_box.config(state="disabled")
-
-    def toggle_log_dir():
-        log_newest_top.set(not log_newest_top.get())
-        dir_btn.config(text="⬆ جدید در بالا" if log_newest_top.get() else "⬇ جدید در پایین")
-    dir_btn = ttk.Button(row_log, text="⬇ جدید در پایین", command=toggle_log_dir, width=14)
-    dir_btn.pack(side="left", padx=6)
-    ttk.Label(row_log, text="لاگ با Ctrl+C قابل کپی است", foreground=C_MUT
-              ).pack(side="left", padx=8)
-
-    def copy_log():
-        txt = log_box.get("1.0", "end").strip()
-        root.clipboard_clear()
-        root.clipboard_append(txt)
-        set_status("لاگ کپی شد")
-
-    copy_btn.config(command=copy_log)
-
-    
-    def open_reader(debug=False):
-        d = out_path_holder.get("dbg_d" if debug else "d")
-        files = []
-        if d and os.path.isdir(d):
-            for f in sorted(os.listdir(d)):
-                if f.lower().endswith((".webp", ".png", ".jpg", ".jpeg", ".bmp")):
-                    files.append(os.path.join(d, f))
-        p = out_path_holder.get("dbg_p" if debug else "p")
-        if not files and p and os.path.isfile(p) and \
-                p.lower().endswith((".webp", ".png", ".jpg", ".jpeg")):
-            files = [p]
-        if not files and p and os.path.isfile(p) and p.lower().endswith(".pdf"):
-            open_path(p)
-            return
-        if not files:
-            if debug:
-                messagebox.showinfo("خواندن دیباگ",
-                    "خروجی دیباگ پیدا نشد (_debug.pdf یا پوشه debug).")
-            else:
-                messagebox.showinfo(
-                    "خواندن", "فایل تصویری برای نمایش پیدا نشد.\n"
-                    "برای حالت خواندن، خروجی را ZIP یا «پوشهٔ تصاویر» بگیرید (PDF صفحه‌تصویری ندارد).")
-            return
-        win = tk.Toplevel(root)
-        win.title("🔍 خواندن دیباگ" if debug else "📖 حالت خواندن")
-        win.geometry("920x860")
-        win.configure(bg=C_BG)
-
-        from PIL import Image as PILImage, ImageTk
-
-        bar = tk.Frame(win, bg="#10131c", highlightthickness=0)
-        bar.pack(side="top", fill="x")
-        zlbl = tk.Label(bar, text="۱۰۰٪", font=(None, 10, "bold"),
-                        bg="#10131c", fg="#e8e6e1", width=7)
-
-        cv = tk.Canvas(win, bg=C_BG, highlightthickness=0)
-        sb = ttk.Scrollbar(win, orient="vertical", command=cv.yview)
-        inner = tk.Frame(cv, bg=C_BG)
-        inner.bind("<Configure>",
-                   lambda e: cv.configure(scrollregion=cv.bbox("all")))
-        win_id = cv.create_window((0, 0), window=inner, anchor="nw")
-        cv.configure(yscrollcommand=sb.set)
-        cv.pack(side="left", fill="both", expand=True)
-        sb.pack(side="right", fill="y")
-
-        state = {"zoom": 1.0, "imgs": [], "full": False}
-
-        def _on_mousewheel(e):
-            cv.yview_scroll(int(-e.delta / 120), "units")
-
-        def _on_zoom_wheel(e):
-            if e.state & 0x0004:
-                set_zoom(state["zoom"] * (1.15 if e.delta > 0 else 1 / 1.15))
-            else:
-                _on_mousewheel(e)
-
-        def _sync_width(_e=None):
-            if not state["full"]:
-                cv.itemconfigure(win_id, width=cv.winfo_width())
-
-        cv.bind("<Configure>", _sync_width)
-        cv.bind_all("<MouseWheel>", _on_zoom_wheel)
-
-        def set_zoom(z, center=True):
-            z = max(0.15, min(4.0, z))
-            if abs(z - state["zoom"]) < 1e-3:
-                return
-            if center:
-                frac = cv.yview()[0]
-            state["zoom"] = z
-            zlbl.config(text=f"{int(z * 100)}٪")
-            w = int(cv.winfo_width() or 880)
-            target_w = int(w * z)
-            for img0, lb in state["imgs"]:
-                h = max(1, int(img0.height * target_w / img0.width))
-                im2 = img0.resize((target_w, h), PILImage.LANCZOS)
-                ph = ImageTk.PhotoImage(im2)
-                lb.configure(image=ph, width=target_w, height=h)
-                lb.image = ph
-            if center:
-                cv.update_idletasks()
-                cv.yview_moveto(frac)
-
-        def zi():
-            set_zoom(state["zoom"] * 1.2)
-
-        def zo():
-            set_zoom(state["zoom"] / 1.2)
-
-        def toggle_full(_e=None):
-            state["full"] = not state["full"]
-            win.attributes("-fullscreen", state["full"])
-            if state["full"]:
-                cv.itemconfigure(win_id, width=win.winfo_screenwidth())
-            else:
-                cv.itemconfigure(win_id, width=880)
-
-        tk.Button(bar, text="✕", command=win.destroy, bd=0, padx=10,
-                  bg="#10131c", fg="#ff4a3d", font=(None, 11, "bold"),
-                  cursor="hand2", activebackground="#1c1c22",
-                  activeforeground="#ff4a3d").pack(side="left")
-        tk.Button(bar, text="🔍−", command=zo, bd=0, padx=8,
-                  bg="#10131c", fg="#e8e6e1", font=(None, 10),
-                  cursor="hand2", activebackground="#1c1c22").pack(side="left")
-        tk.Button(bar, text="🔍+", command=zi, bd=0, padx=8,
-                  bg="#10131c", fg="#e8e6e1", font=(None, 10),
-                  cursor="hand2", activebackground="#1c1c22").pack(side="left")
-        tk.Button(bar, text="⛶ فول‌اسکرین", command=toggle_full, bd=0, padx=8,
-                  bg="#10131c", fg="#e8e6e1", font=(None, 10),
-                  cursor="hand2", activebackground="#1c1c22").pack(side="left")
-        tk.Label(bar, text="Ctrl+چرخ = زوم · دابل‌کلیک = فول‌اسکرین",
-                 font=(None, 8), bg="#10131c", fg="#6a6a72").pack(side="right",
-                                                                  padx=8)
-        zlbl.pack(side="right")
-        cv.bind("<Double-Button-1>", toggle_full)
-        win.bind("<F11>", toggle_full)
-        win.bind("<Escape>", lambda e: win.attributes("-fullscreen", False)
-                 if state["full"] else win.destroy())
-
-        for f in files:
-            try:
-                img0 = PILImage.open(f)
-                w = 860
-                h = max(1, int(img0.height * w / img0.width))
-                ph = ImageTk.PhotoImage(img0.resize((w, h), PILImage.LANCZOS))
-                lb = tk.Label(inner, image=ph, bg=C_BG, cursor="fleur")
-                lb.image = ph
-                lb.pack(fill="x", pady=(0, 6))
-                state["imgs"].append((img0, lb))
-            except Exception:
-                continue
-        win.protocol("WM_DELETE_WINDOW", win.destroy)
-
-    
-    hist_var = tk.StringVar(value=history_text())
-    hist_lbl = tk.Label(tab_log, textvariable=hist_var, justify="right", anchor="e",
-                        bg=C_BG2, fg=C_MUT, font=("Consolas", 8))
-    hist_lbl.pack(fill="x", padx=12, pady=(0, 10))
-
-    def refresh_history():
-        hist_var.set(history_text())
-
-    def set_status(text, color=C_OK):
-        status_lbl.config(text="● " + text, fg=color)
-
-    def log_write(msg):
-        log_box.config(state="normal")
-        if log_newest_top.get():
-            log_box.insert("1.0", msg + "\n")
-        else:
-            log_box.insert("end", msg + "\n")
-            log_box.see("end")
-        log_box.config(state="disabled")
-
-    def toggle_log_dir():
-        log_newest_top.set(not log_newest_top.get())
-        dir_btn.config(text="⬆ جدید در بالا" if log_newest_top.get() else "⬇ جدید در پایین")
-
-    def poll_queue():
-        try:
-            while True:
-                kind, payload = q.get_nowait()
-                if kind == "log":
-                    log_write(payload)
-                    refresh_history()
-                elif kind == "status":
-                    set_status(*payload)
-                elif kind == "done":
-                    out_path_holder["p"] = payload
-                    open_btn.config(state="normal")
-                    read_btn.config(state="normal")
-                elif kind == "reader_dir":
-                    out_path_holder["d"] = payload
-                elif kind == "debug_done":
-                    out_path_holder["dbg_p"] = payload or ""
-                    if payload:
-                        open_dbg_btn.config(state="normal")
-                        read_dbg_btn.config(state="normal")
-                elif kind == "debug_dir":
-                    out_path_holder["dbg_d"] = payload or ""
-                    if payload:
-                        open_dbg_btn.config(state="normal")
-                        read_dbg_btn.config(state="normal")
-                elif kind == "fonts_done":
-                    dl_btn.config(state="normal")
-                    font_vars["main"].set(find_font())
-                    for slot, fname, _d, _u in FONT_BUNDLES:
-                        pth = os.path.join(FONT_DIR, fname)
-                        if os.path.isfile(pth):
-                            font_slots[slot].set(pth)
-                    log_write(f"🔤 فونت‌ها: {payload} فایل جدید دانلود شد.")
-                elif kind == "finished":
-                    run_btn.config(state="normal")
-                    stop_btn.config(state="disabled")
-                    progress.stop()
-                    progress.pack_forget()
-                    refresh_history()
-        except queue.Empty:
-            pass
-        root.after(150, poll_queue)
-
-    def on_stop():
-        p = proc_holder.get("p")
-        if p and p.poll() is None:
-            p.terminate()
-
-    def on_open():
-        p = out_path_holder.get("p")
-        if p:
-            open_path(os.path.dirname(p) or p)
-
-    def on_open_debug():
-        p = out_path_holder.get("dbg_p")
-        d = out_path_holder.get("dbg_d")
-        if p and os.path.isfile(p):
-            open_path(p)
-        elif d and os.path.isdir(d):
-            open_path(d)
-        elif p:
-            open_path(os.path.dirname(p) or p)
-
-    def worker(src, out_v, cmd):
-        t0 = time.time()
-        proc = subprocess.Popen(
-            cmd, cwd=HERE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, encoding="utf-8", errors="replace", bufsize=1,
-        )
-        proc_holder["p"] = proc
-        for line in proc.stdout:
-            q.put(("log", line.rstrip()))
-        proc.wait()
-        dur = time.time() - t0
-        dur_s = f"{int(dur // 60)}:{int(dur % 60):02d}"
-        if proc.returncode != 0:
-            append_history({"time": datetime.now().strftime("%m-%d %H:%M"),
-                            "input": src, "status": f"❌ ({proc.returncode})",
-                            "duration": dur_s})
-            q.put(("log", f"❌ خطا — کد خروج {proc.returncode}"))
-            q.put(("status", ("ناموفق", C_ERR)))
-        else:
-            target = out_v
-            if os.path.isdir(out_v):
-                fs = sorted(os.listdir(out_v))
-                target = os.path.join(out_v, fs[0]) if fs else out_v
-            size = os.path.getsize(target) if os.path.isfile(target) else 0
-            append_history({"time": datetime.now().strftime("%m-%d %H:%M"),
-                            "input": src, "status": "✅", "duration": dur_s})
-            q.put(("log", f"✅ تمام شد ({dur_s}) — {human_size(size)}: {target}"))
-            q.put(("status", ("موفق ✅", C_OK)))
-            q.put(("done", target))
-            
-            parent = os.path.dirname(out_v) or "."
-            cands = [
-                out_v if os.path.isdir(out_v) else "",
-            ]
-            _cache_subs = ("out", "out_safe_v3", "debug", "debug_safe_v3")
-            try:
-                cache_root = out_v + ".cache"
-                if os.path.isdir(cache_root):
-                    for sub in _cache_subs:
-                        cands.append(os.path.join(cache_root, sub))
-                    for name in os.listdir(cache_root):
-                        if name.startswith("out") or name.startswith("debug"):
-                            cands.append(os.path.join(cache_root, name))
-            except Exception:
-                pass
-            try:
-                for name in os.listdir(parent):
-                    if name.endswith(".cache"):
-                        cr = os.path.join(parent, name)
-                        for sub in _cache_subs:
-                            cands.append(os.path.join(cr, sub))
-                        try:
-                            for subn in os.listdir(cr):
-                                if subn.startswith("out") or subn.startswith("debug"):
-                                    cands.append(os.path.join(cr, subn))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-            rd = ""
-            for c in cands:
-                if c and os.path.isdir(c):
-                    try:
-                        if any(f.lower().endswith((".webp", ".png", ".jpg", ".jpeg"))
-                               for f in os.listdir(c)):
-                            rd = c
-                            break
-                    except Exception:
-                        pass
-            
-            if not rd and os.path.isfile(out_v) and out_v.lower().endswith(".pdf"):
-                rd = out_v
-            q.put(("reader_dir", rd))
-
-            
-            dbg_pdf = os.path.splitext(str(out_v))[0] + "_debug.pdf"
-            dbg_dir = ""
-            dbg_file = ""
-            if os.path.isfile(dbg_pdf):
-                dbg_file = dbg_pdf
-            dbg_cands = []
-            _dbg_subs = ("debug", "debug_safe_v3")
-            try:
-                cache_root = str(out_v) + ".cache"
-                if os.path.isdir(cache_root):
-                    for sub in _dbg_subs:
-                        dbg_cands.append(os.path.join(cache_root, sub))
-                    for name in os.listdir(cache_root):
-                        if name.startswith("debug"):
-                            dbg_cands.append(os.path.join(cache_root, name))
-            except Exception:
-                pass
-            try:
-                for name in os.listdir(parent):
-                    if name.endswith(".cache"):
-                        cr = os.path.join(parent, name)
-                        for sub in _dbg_subs:
-                            dbg_cands.append(os.path.join(cr, sub))
-                        try:
-                            for subn in os.listdir(cr):
-                                if subn.startswith("debug"):
-                                    dbg_cands.append(os.path.join(cr, subn))
-                        except Exception:
-                            pass
-            except Exception:
-                pass
-            for c in dbg_cands:
-                if c and os.path.isdir(c):
-                    try:
-                        if any(f.lower().endswith((".webp", ".png", ".jpg", ".jpeg"))
-                               for f in os.listdir(c)):
-                            dbg_dir = c
-                            break
-                    except Exception:
-                        pass
-            if dbg_file or dbg_dir:
-                q.put(("log", f"🔍 دیباگ آماده: {dbg_file or dbg_dir}"))
-            if dbg_file:
-                q.put(("debug_done", dbg_file))
-            if dbg_dir:
-                q.put(("debug_dir", dbg_dir))
-            elif dbg_file:
-                
-                q.put(("debug_dir", ""))
-        q.put(("finished", None))
-
-    def on_run():
-        src = inp_var.get().strip()
-        if not src:
-            messagebox.showwarning(APP_NAME, "ورودی را انتخاب کنید یا مسیر/URL بدهید.")
-            return
-        if not os.path.exists(src) and not src.lower().startswith(("http://", "https://")):
-            messagebox.showerror(APP_NAME, "مسیر پیدا نشد:\n" + src)
-            return
-        _prov_v = str(prov_var.get()).strip()
-        if _prov_v == "custom":
-            _ab = normalize_api_base(apibase_var.get())
-            if not _ab:
-                messagebox.showerror(
-                    APP_NAME,
-                    "provider «custom» به دامنهٔ API معتبر نیاز دارد.\n"
-                    "مثال: https://api.example.com/v1\n"
-                    "(https:// اگر جا افتاده باشد خودکار اضافه می‌شود.)")
-                return
-            apibase_var.set(_ab)
-            if not model_var.get().strip():
-                messagebox.showerror(
-                    APP_NAME,
-                    "provider «custom» به نام مدل نیاز دارد.\nمثال: gpt-4o-mini")
-                return
-        font_v = font_vars["main"].get().strip() or find_font()
-        if not font_v or not os.path.isfile(font_v):
-            messagebox.showerror(APP_NAME, "فونت اصلی معتبر پیدا نشد.")
-            return
-
-        ext = {"PDF": ".pdf", "ZIP": ".zip", "HTML": ".html", "PSD": ".psd", "پوشهٔ تصاویر": ""}[fmt_var.get()]
-        out_v = os.path.join(OUT_DIR, smart_output_base(src) + ext)
-
-        save_config({"last_input": src, "out_fmt": fmt_var.get(),
-                     "quality": quality_var.get(), "api_keys": keys_var.get(),
-                     "model": model_var.get(), "font": font_v,
-                     "provider": prov_var.get(),
-                     "workers": workers_var.get(), "bubbles": bubbles_var.get(),
-                     "timeout": timeout_var.get(), "clean_method": cleanm_var.get(),
-                     "batch_workers": batchw_var.get(), "max_retries": maxre_var.get(),
-                     "request_delay": reqdelay_var.get(), "temperature": temp_var.get(),
-                     "reading_order": readord_var.get(),
-                     "story_brief": brief_var.get(),
-                     "fake_test": fake_var.get(),
-                     "instruction_text": instruction_for_config(
-                         instr_txt.get("1.0", "end")),
-                     "glossary_text": glos_txt.get("1.0", "end").rstrip()})
-        for _slot, _en in tone_en_vars.items():
-            save_config({**load_config(), "tone_en_" + _slot: _en.get()})
-
-        cmd = [sys.executable, MANGA_PY, "-i", src, "-o", out_v, "--font", font_v,
-               "--provider", prov_var.get(),
-               "--workers", str(workers_var.get()),
-               "--bubbles-per-request", str(bubbles_var.get()),
-               "--api-timeout", str(timeout_var.get()),
-               "--quality", str(quality_var.get()),
-               "--batch-workers", str(batchw_var.get()),
-               "--max-retries", str(maxre_var.get()),
-               "--request-delay", str(reqdelay_var.get()),
-               "--temperature", str(temp_var.get()),
-               "--reading-order", str(readord_var.get())]
-        
-        cli_font = {"free_text": "free"}
-        active_tones = ["normal"]
-        for slot, var in font_slots.items():
-            if not tone_en_vars.get(slot, tk.BooleanVar(value=True)).get():
-                continue
-            pv = var.get().strip()
-            if pv and os.path.isfile(pv):
-                cmd += ["--font-" + cli_font.get(slot, slot.replace("_", "-")), pv]
-                if slot not in active_tones:
-                    active_tones.append(slot)
-        if active_tones:
-            cmd += ["--active-tones", ",".join(active_tones)]
-        keys = [k.strip() for k in keys_var.get().replace(";", ",").split(",") if k.strip()]
-        if keys:
-            cmd += ["--api-key", ",".join(keys)]
-        _ocr_lang_v = _ocr_value_for.get(ocr_lang_var.get(), "en")
-        if _ocr_lang_v and _ocr_lang_v != "en":
-            cmd += ["--ocr-lang"] + _ocr_lang_v.split()
-        if model_var.get().strip():
-            cmd += ["--model", model_var.get().strip()]
-        if str(prov_var.get()).strip() == "custom" and apibase_var.get().strip():
-            cmd += ["--api-base", apibase_var.get().strip()]
-        cmd += ["--clean-method", cleanm_var.get()]
-        if not twopass_var.get():
-            cmd += ["--no-two-pass-ocr"]
-        if debug_var.get():
-            cmd += ["--debug"]
-        glos_text = glos_txt.get("1.0", "end").strip()
-        if glos_text:
-            glos_path = os.path.join(OUT_DIR, "glossary_user.txt")
-            with open(glos_path, "w", encoding="utf-8") as _gf:
-                _gf.write(glos_text + "\n")
-            cmd += ["--glossary", glos_path]
-        if not brief_var.get():
-            cmd += ["--no-brief"]
-        if fake_var.get():
-            cmd += ["--fake-translate"]
-        if clean_only_var.get():
-            cmd += ["--clean-only"]
-        instr_text = instr_txt.get("1.0", "end").strip()
-        if is_custom_instruction(instr_text):
-            instr_path = os.path.join(OUT_DIR, "instruction_user.txt")
-            with open(instr_path, "w", encoding="utf-8") as _inf:
-                _inf.write(instr_text + "\n")
-            cmd += ["--instruction", instr_path]
-
-        log_box.config(state="normal")
-        log_box.delete("1.0", "end")
-        log_box.config(state="disabled")
-        log_write("▶ " + " ".join(cmd))
-        run_btn.config(state="disabled")
-        stop_btn.config(state="normal")
-        open_btn.config(state="disabled")
-        read_btn.config(state="disabled")
-        open_dbg_btn.config(state="disabled")
-        read_dbg_btn.config(state="disabled")
-        out_path_holder["dbg_p"] = ""
-        out_path_holder["dbg_d"] = ""
-        set_status("در حال اجرا…", ACCENT)
-        progress.pack(fill="x", padx=10, pady=(0, 6))
-        progress.start(12)
-        threading.Thread(target=worker, args=(src, out_v, cmd), daemon=True).start()
-
-    run_btn.config(command=on_run)
-    stop_btn.config(command=on_stop)
-    open_btn.config(command=on_open)
-    open_dbg_btn.config(command=on_open_debug)
-    poll_queue()
-
-    
-    tab_sys = ttk.Frame(nb, padding=12)
-    nb.add(tab_sys, text="🖥️ سیستم")
-    sys_txt = tk.Text(tab_sys, font=("Consolas", 10), bg=C_CARD, fg=C_TXT,
-                      relief="flat", height=18)
-    sys_txt.pack(fill="both", expand=True)
-    sys_txt.insert("1.0", system_info())
-    sys_txt.config(state="disabled")
-
-    tab_help = ttk.Frame(nb, padding=12)
-    nb.add(tab_help, text="❓ راهنما")
-    help_txt = tk.Text(tab_help, font=(None, 10), bg=C_CARD, fg=C_TXT,
-                       relief="flat", wrap="word")
-    help_txt.pack(fill="both", expand=True)
-    help_txt.insert("1.0", HELP_TEXT)
-    help_txt.config(state="disabled")
-
-    nb.add(tab_log, text="📜 لاگ")
-
-    
+    """v1.14.30: پنجرهٔ دسکتاپ = دقیقاً همان رابط وب.
+
+    رابط قدیمی tkinter حذف شد؛ حالا سرور وب همان UI محبوبِ گوشی/وب را سرو
+    می‌کند و پنجرهٔ نیتیو (pywebview / WebView2) همان صفحه را نشان می‌دهد —
+    شکلِ پنجرهٔ ویندوز دقیقاً مثل وب. اگر webview نبود → همان آدرس در مرورگر.
+    """
+    import socket
+    import time as _t
     import webbrowser
-    import base64 as _b64
-    GH_ICON_B64 = "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"
-    TG_ICON_B64 = "iVBORw0KGgoAAAANSUhEUgAAABIAAAASCAYAAABWzo5XAAABzElEQVR4nJ2TPUskQRCGn11HDeSM/Gg66cxAzsBAETQQ0UQvETwXOThQ8APxF5iIkZiLoQiCifgLDAyMFA7u5M7g1GDulmE4uMBAUNFZqaVam3WVxYIZZrqrq596qyrH+ywH5IGS/mfvCVD32kYtllffB/1vTJN4FJgHLo11S1GN+JkspElsgSlgDuhQv9/yit7Av/cEaRJ3AzPABGDU7waoB07ksugV/HvF/wTMAsOBNodAM9CtZ36FRLkAvx34AkwDHytoV4AWYDGo2HcfSIKU0iTuCfDFWewOaAD+AZ+BLmBVL5Vzt8C5T0cotjTXBQ3i9WnQVDqBNmBD10saqGis+/sUCGiqSCFSTdaMdUNAL7CnQfwZsTOlzpfLa6wrAH3AuqL+B8aMdctpEvcD+0E6ZSk00A9fqBcNmSax0G0b676mSfwB+Am0Ko2vnP+eNNYJaRRiynejse5aujVN4kGh4jlIeGmdrsklYlnYR5mKLAcOgPGgezNtvkzTkkBF4I/ul0Iij4yx7ggYAEaAYxV7JxgZufBC6ctr1UZENqQSuyIZUDDWXQGi2akWRHy+Bf5ZrdMvqZSHV7WTZ9NYJ40aVrGq+emvFLmqPQIRpIZPBEo6vAAAAABJRU5ErkJggg=="
-    foot = tk.Frame(root, bg=C_BG2, highlightthickness=0, bd=0)
-    foot.pack(side="bottom", fill="x")
-    def _open_link(url):
+
+    port = int(os.environ.get("MANGA_APP_PORT", "7860") or 7860)
+    url = f"http://127.0.0.1:{port}"
+
+    def _up() -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return True
+        except Exception:
+            return False
+
+    proc = None
+    if not _up():
+        print("[*] راه‌اندازی سرور رابط وب ...")
+        proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--web"])
+        for _ in range(300):  # حداکثر ~۶۰ ثانیه
+            if _up():
+                break
+            _t.sleep(0.2)
+            if proc.poll() is not None:
+                break
+        if not _up():
+            print("[!] سرور وب بالا نیامد")
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+            sys.exit(1)
+    print(f"[i] رابط وب آماده: {url}")
+
+    opened_browser = False
+    if not _ensure_webview():
         webbrowser.open(url)
-    def _hover(lbl, on):
-        lbl.config(fg=C_ACC if on else "#c8c5bd")
-    try:
-        from PIL import Image as _PILImage, ImageTk as _ImageTk
-        import io as _io
-        _gh_img = _ImageTk.PhotoImage(_PILImage.open(_io.BytesIO(_b64.b64decode(GH_ICON_B64))))
+        opened_browser = True
+    else:
         try:
-            _tg_img = tk.PhotoImage(data=_b64.b64decode(TG_ICON_B64))
-        except Exception:
-            _tg_img = None
-    except Exception:
-        try:
-            _gh_img = tk.PhotoImage(data=_b64.b64decode(GH_ICON_B64))
-            _tg_img = tk.PhotoImage(data=_b64.b64decode(TG_ICON_B64))
-        except Exception:
-            _gh_img = _tg_img = None
-    gh_lbl = tk.Label(foot, text="سورس (گیت‌هاب)", font=(None, 10),
-                      bg=C_BG2, fg="#c8c5bd", cursor="hand2",
-                      image=_gh_img, compound="right", padx=6)
-    gh_lbl.image_ref = _gh_img
-    gh_lbl.pack(side="right", padx=14, pady=6)
-    gh_lbl.bind("<Button-1>", lambda e: _open_link(
-        "https://github.com/amirwolf512k/Manga-AutoTranslate"))
-    gh_lbl.bind("<Enter>", lambda e: _hover(gh_lbl, True))
-    gh_lbl.bind("<Leave>", lambda e: _hover(gh_lbl, False))
-    tg_lbl = tk.Label(foot, text="سازنده (تلگرام)", font=(None, 10),
-                      bg=C_BG2, fg="#c8c5bd", cursor="hand2",
-                      image=_tg_img, compound="right", padx=6)
-    tg_lbl.image_ref = _tg_img
-    tg_lbl.pack(side="right", padx=14, pady=6)
-    tg_lbl.bind("<Button-1>", lambda e: _open_link("https://t.me/amir_wolf512"))
-    tg_lbl.bind("<Enter>", lambda e: _hover(tg_lbl, True))
-    tg_lbl.bind("<Leave>", lambda e: _hover(tg_lbl, False))
-    tk.Label(foot, text="مانگا مترجم", font=(None, 9),
-             bg=C_BG2, fg=C_MUT).pack(side="left", padx=14)
+            import webview
+            webview.create_window(f"{APP_NAME} v{APP_VER}", url,
+                                  width=1280, height=880,
+                                  min_size=(980, 640),
+                                  background_color="#060607")
+            print("[i] پنجرهٔ دسکتاپ (همان رابط وب) باز شد — با بستن پنجره، برنامه تمام می‌شود")
+            webview.start()
+        except Exception as e:
+            print(f"[!] پنجرهٔ وب‌ویو ناموفق ({e}) → مرورگر")
+            webbrowser.open(url)
+            opened_browser = True
 
-    def _on_close_desktop():
+    if opened_browser:
+        # تا مرورگر باز است، سرور باید بماند
         try:
-            _persist_api_desktop()
+            if proc is not None:
+                proc.wait()
+            else:
+                while True:
+                    _t.sleep(3600)
+        except KeyboardInterrupt:
+            pass
+    else:
+        try:
+            if proc is not None:
+                proc.terminate()
         except Exception:
             pass
-        try:
-            root.destroy()
-        except Exception:
-            pass
+    sys.exit(0)
 
-    root.protocol("WM_DELETE_WINDOW", _on_close_desktop)
-    root.mainloop()
 
 WEB_CSS = """
 @import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
@@ -2521,11 +1443,11 @@ def run_web():
     # صفحهٔ خواندن زندهٔ وب — داخل پوشهٔ live نوشته می‌شود و صفحه‌های جدید خودکار به آن اضافه می‌شوند
     _LIVE_READER_TMPL = """<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>نمایش زنده</title>
+<title>صفحه زنده</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
-.bar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:9px 12px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;direction:rtl;backdrop-filter:blur(8px)}
+.bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;direction:rtl;backdrop-filter:blur(8px)}
 .dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
 .dot.off{background:#2e7d4f;animation:none}
 @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
@@ -2542,10 +1464,16 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 @keyframes spin{to{transform:rotate(360deg)}}
 .hint{padding:16px;text-align:center;color:#6b6963;font-size:.85rem}
 .chip{position:fixed;bottom:18px;left:18px;z-index:3;display:none;background:#ff4a3d;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-size:.85rem;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.5);font-family:inherit}
+.zbtn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:7px 11px;font-size:.85rem;cursor:pointer;font-family:inherit;flex:none;min-height:36px;min-width:36px}
+.zbtn:active{background:#2a2a30}
+.zv{color:#97948c;font-size:.78rem;min-width:42px;text-align:center;flex:none;font-variant-numeric:tabular-nums}
+.pbar{position:fixed;bottom:0;left:0;right:0;height:4px;background:#1a1a1c;z-index:4}
+.pfill{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}
 </style></head><body>
-<div class="bar"><span class="dot" id="dot"></span><div class="t">نمایش زنده — صفحه‌ها سر جایشان پر می‌شوند</div><button type="button" class="dbtn" id="db">🔍 دیباگ</button><div class="n" id="n">0</div></div>
+<div class="bar"><span class="dot" id="dot"></span><div class="t">صفحه زنده — صفحه‌ها سر جایشان پر می‌شوند</div><button type="button" class="zbtn" id="zo" title="کوچک‌تر">−</button><span class="zv" id="zv">100%</span><button type="button" class="zbtn" id="zi" title="بزرگ‌تر">+</button><button type="button" class="zbtn" id="zf" title="پهنای صفحه">پهنا</button><button type="button" class="dbtn" id="db">🔍 دیباگ</button><div class="n" id="n">0</div></div>
 <main class="c" id="c"><div class="hint" id="h">در انتظار اولین صفحه…</div></main>
 <button type="button" class="chip" id="chip">↓ صفحه‌های جدید</button>
+<div class="pbar"><div class="pfill" id="pf"></div></div>
 <script>
 (function(){
   var P = "__PREFIX__", D = "__DIR__", DBG = "__DBGDIR__", STAMP = Date.now();
@@ -2646,11 +1574,52 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
     chip.style.display = 'none';
     window.scrollTo({ top: document.body.scrollHeight, behavior: 'smooth' });
   });
+  // ——— زوم پهنا (بزرگ/کوچک) + نوار پیشرفت پایین — همان سبکِ نمایشگر نهایی ———
+  var zv = document.getElementById('zv'), pf = document.getElementById('pf');
+  var z = 1;
+  var baseW = function(){ return Math.max(200, Math.min(900, window.innerWidth || 360)); };
+  var applyZoom = function(nz){
+    nz = Math.min(4, Math.max(0.5, +nz || 1));
+    var midY = window.innerHeight / 2;
+    var relY = (window.scrollY + midY) / Math.max(0.01, z);
+    z = nz;
+    c.style.maxWidth = 'none';
+    c.style.width = Math.round(baseW() * z) + 'px';
+    c.style.marginLeft = 'auto';
+    c.style.marginRight = 'auto';
+    window.scrollTo(0, Math.max(0, relY * z - midY));
+    if (zv) zv.textContent = Math.round(z * 100) + '%';
+  };
+  var zi = document.getElementById('zi'), zo = document.getElementById('zo'), zf = document.getElementById('zf');
+  if (zi) zi.addEventListener('click', function(){ applyZoom(z * 1.25); });
+  if (zo) zo.addEventListener('click', function(){ applyZoom(z * 0.8); });
+  if (zf) zf.addEventListener('click', function(){ applyZoom(1); });
+  window.addEventListener('wheel', function(e){
+    if (!e.ctrlKey && !e.metaKey) return;
+    e.preventDefault();
+    applyZoom(e.deltaY < 0 ? z * 1.12 : z / 1.12);
+  }, { passive: false });
+  document.addEventListener('keydown', function(e){
+    if (e.key === '+' || e.key === '=') applyZoom(z * 1.15);
+    else if (e.key === '-' || e.key === '_') applyZoom(z * 0.87);
+    else if (e.key === '0') applyZoom(1);
+  });
+  var updateProgress = function(){
+    if (!pf) return;
+    var m = document.documentElement.scrollHeight - window.innerHeight;
+    pf.style.width = (m > 0 ? Math.min(100, Math.max(0, window.scrollY / m * 100)) : 0) + '%';
+  };
   window.addEventListener('scroll', function(){
     if (nearBottom()) chip.style.display = 'none';
+    updateProgress();
   }, { passive: true });
+  window.addEventListener('resize', function(){
+    if (z !== 1) applyZoom(z);
+    updateProgress();
+  });
   pollTotal();
   probe();
+  updateProgress();
 })();
 </script>
 </body></html>"""
@@ -2866,16 +1835,20 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             "</head>\n"
             "<body>\n"
             '<div class="rdr" id="manga_rdr" data-zoom="1">\n'
-            '  <div class="rdr-bar">\n'
-            '    <button type="button" class="rdr-btn" data-act="close" title="بستن">✕</button>\n'
-            f'    <div class="rdr-title">{title_esc}</div>\n'
-            '    <button type="button" class="rdr-btn" data-act="zoom-out" title="دور">−</button>\n'
-            '    <span class="zlv">100%</span>\n'
-            '    <button type="button" class="rdr-btn" data-act="zoom-in" title="نزدیک">+</button>\n'
-            '    <button type="button" class="rdr-btn" data-act="zoom-fit" title="پهنای صفحه">پهنا</button>\n'
-            '    <button type="button" class="rdr-btn fs" data-act="fs" title="فول‌اسکرین">⛶</button>\n'
+            # v1.14.30: نوار بالا داخل ناحیهٔ اسکرول است — با پایین آمدن، خودش هم
+            # پایین می‌رود (ثابت نیست). نوار پیشرفت پایین همچنان همیشه دیده می‌شود.
+            '  <div class="rdrS">\n'
+            '    <div class="rdr-bar">\n'
+            '      <button type="button" class="rdr-btn" data-act="close" title="بستن">✕</button>\n'
+            f'      <div class="rdr-title">{title_esc}</div>\n'
+            '      <button type="button" class="rdr-btn" data-act="zoom-out" title="دور">−</button>\n'
+            '      <span class="zlv">100%</span>\n'
+            '      <button type="button" class="rdr-btn" data-act="zoom-in" title="نزدیک">+</button>\n'
+            '      <button type="button" class="rdr-btn" data-act="zoom-fit" title="پهنای صفحه">پهنا</button>\n'
+            '      <button type="button" class="rdr-btn fs" data-act="fs" title="فول‌اسکرین">⛶</button>\n'
+            "    </div>\n"
+            f'    <div class="rdrC">{imgs}</div>\n'
             "  </div>\n"
-            f'  <div class="rdrS"><div class="rdrC">{imgs}</div></div>\n'
             '  <div class="rdr-progress"><div class="rdrB"></div></div>\n'
             "</div>\n"
             f"<script>\n{js}\n</script>\n"
@@ -3555,8 +2528,8 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
         # نه دو نمایشِ جدا (خواستهٔ کاربر)
         with gr.Group(elem_classes=["stepcard"], visible=False) as result_group:
             gr.HTML('<div class="steptitle"><span class="stepnum">📖</span> '
-                    'نمایش — زنده و نتیجه</div>')
-            live_btn = _safe(gr.Button, "📖 نمایش", visible=False, elem_id="manga_live_btn")
+                    'صفحه‌ها — زنده و نتیجه</div>')
+            live_btn = _safe(gr.Button, "📖 صفحه زنده", visible=False, elem_id="manga_live_btn")
             gr.HTML('<div class="livehint" id="manga_live_hint" style="display:none">'
                     'تا کار در جریان است، هر صفحهٔ جدید خودش داخل نمایشگر اضافه می‌شود — بدون رفرش</div>')
             with gr.Row():
@@ -3565,7 +2538,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 dl_btn = _safe(gr.DownloadButton, label="⬇ دانلود", visible=False)
             debug_row = gr.Row(visible=False)
             with debug_row:
-                btn_view_debug = _safe(gr.Button, "🔍 نمایش دیباگ", visible=False,
+                btn_view_debug = _safe(gr.Button, "🔍 صفحه دیباگ", visible=False,
                                        elem_id="manga_view_debug_btn")
                 dl_btn_debug = _safe(gr.DownloadButton, label="⬇ دانلود دیباگ", visible=False)
             viewer_html = gr.HTML(visible=False, elem_id="reader_wrap")
@@ -4723,17 +3696,17 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                         gr.update())
             tot = _live_total_of(live_dir) if live_dir else 0
             if tot > 0:
-                label = "📖 نمایش (%d/%d صفحه)" % (len(files), tot)
+                label = "📖 صفحه زنده (%d/%d صفحه)" % (len(files), tot)
             elif len(files) > 1:
-                label = "📖 نمایش (%d صفحه)" % len(files)
+                label = "📖 صفحه زنده (%d صفحه)" % len(files)
             else:
-                label = "📖 نمایش (۱ صفحه)"
+                label = "📖 صفحه زنده (۱ صفحه)"
             if dbg_dir:
                 dtot = _live_total_of(dbg_dir) or tot
-                dbg_lbl = ("🔍 نمایش دیباگ (%d/%d صفحه)" % (len(dbg_files), dtot)
+                dbg_lbl = ("🔍 صفحه دیباگ (%d/%d صفحه)" % (len(dbg_files), dtot)
                            if dtot > 0 else
-                           ("🔍 نمایش دیباگ (%d صفحه)" % len(dbg_files)
-                            if len(dbg_files) > 1 else "🔍 نمایش دیباگ (۱ صفحه)"))
+                           ("🔍 صفحه دیباگ (%d صفحه)" % len(dbg_files)
+                            if len(dbg_files) > 1 else "🔍 صفحه دیباگ (۱ صفحه)"))
             else:
                 dbg_lbl = ""
             return (gr.update(value=label, visible=True),

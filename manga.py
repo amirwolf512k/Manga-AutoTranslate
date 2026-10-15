@@ -1793,13 +1793,15 @@ class RTDetrV2ONNXDetector:
     TILE_OVERLAP = 520
     TILE_MIN_GAIN = 1.25
 
-    def detect(self, image_bgr: np.ndarray):
+    def detect(self, image_bgr: np.ndarray, fast: bool = False):
+        # fast=True → فقط یک مقیاس (بدون پاس دوم multi_scale) — برای برش امن
+        # که فقط محل حباب‌ها را می‌خواهد؛ ~۲× سریع‌تر روی CPU.
         h = int(image_bgr.shape[0])
         if h > int(self.TILE_HEIGHT * self.TILE_MIN_GAIN):
-            return self._detect_tiled(image_bgr)
-        return self._detect_plain(image_bgr)
+            return self._detect_tiled(image_bgr, fast=fast)
+        return self._detect_plain(image_bgr, fast=fast)
 
-    def _detect_tiled(self, image_bgr: np.ndarray):
+    def _detect_tiled(self, image_bgr: np.ndarray, fast: bool = False):
         h, w = image_bgr.shape[:2]
         tile_h = int(self.TILE_HEIGHT)
         overlap = int(self.TILE_OVERLAP)
@@ -1829,10 +1831,10 @@ class RTDetrV2ONNXDetector:
         if _tw > 1:
             with ThreadPoolExecutor(max_workers=_tw) as _dex:
                 _results = list(_dex.map(
-                    self._detect_plain,
+                    lambda _t: self._detect_plain(_t, fast=fast),
                     [image_bgr[ys:ye] for (_cs, _ce, ys, ye) in tiles]))
         else:
-            _results = [self._detect_plain(image_bgr[ys:ye])
+            _results = [self._detect_plain(image_bgr[ys:ye], fast=fast)
                         for (_cs, _ce, ys, ye) in tiles]
 
         all_boxes: List[dict] = []
@@ -1850,7 +1852,7 @@ class RTDetrV2ONNXDetector:
         return MangaTranslator._drop_contained_boxes(merged, contain_thresh=0.65)
 
 
-    def _detect_plain(self, image_bgr: np.ndarray):
+    def _detect_plain(self, image_bgr: np.ndarray, fast: bool = False):
         h, w = image_bgr.shape[:2]
         page_area = float(max(1, h * w))
 
@@ -1868,7 +1870,7 @@ class RTDetrV2ONNXDetector:
                     and b["confidence"] >= low_th + 0.04):
                 all_boxes.append(b)
 
-        if self.multi_scale and h >= 1100 and w >= 500:
+        if self.multi_scale and not fast and h >= 1100 and w >= 500:
             sw = max(1, int(w * 0.55))
             sh = max(1, int(h * 0.55))
             if sw >= 280 and sh >= 280:
@@ -6978,7 +6980,9 @@ class MangaTranslator:
                             if _gap_env > 0:
                                 _gap = _gap_env
                             else:
-                                _gap = int(max(28, min(64, round(_short * 0.045))))
+                                # v1.14.30: گپِ بزرگ‌تر → پچِ کمتر → پاکسازی سریع‌تر
+                                # (هزینهٔ هر پچ تقریباً ثابت است — سقف ورودی 512)
+                                _gap = int(max(96, min(128, round(_short * 0.06))))
                         groups = self._group_nearby_patches(pending, gap=_gap)
                     if _short * 2.5 < _long:
                         _mode += " — long strip"
@@ -12371,19 +12375,53 @@ html, body { background: #0a0a0b; }
             if ih >= work_h + min_strip:
 
 
-                for top in range(max(0, scan_from - 520), ih, 1160):
-                    bottom = min(ih, top + 1680)
+                # v1.14.30: اسکن فقط تا دورنمای کاندیدهای برش (نه کل نوار) +
+                # پرش از پنجره‌های خالی (کاغذ سفید) + تشخیص موازی + fast-mode
+                # (بدون پاس دوم multi_scale) — برش امن چند برابر سریع‌تر.
+                _max_cut_probe = ih - max(min_strip, lookahead if not final else 0)
+                scan_limit = (ih if final
+                              else max(scan_from, min(ih, _max_cut_probe + 480)))
+                _win_starts = list(range(max(0, scan_from - 520), scan_limit, 1160))
+                if _win_starts and _win_starts[-1] + 1680 < scan_limit:
+                    _win_starts.append(max(_win_starts[-1] + 1160,
+                                           scan_limit - 1680))
+
+                def _scan_window(_top: int) -> List[Tuple[int, int]]:
+                    _bottom = min(scan_limit, _top + 1680)
+                    _win = strip[_top:_bottom]
                     try:
-                        boxes = self.det.detect(strip[top:bottom])
-                        for box in boxes:
+                        _g = (cv2.cvtColor(_win, cv2.COLOR_BGR2GRAY)
+                              if _win.ndim == 3 else _win)
+                        if int(_g.min()) >= 205:
+                            return []  # پنجرهٔ کاملاً خالی — حباب/متنی ندارد
+                    except Exception:
+                        pass
+                    _out: List[Tuple[int, int]] = []
+                    try:
+                        for box in self.det.detect(_win, fast=True):
                             _, y1, _, y2 = box["rect"]
-                            protected.append((top + y1 - padding, top + y2 + padding))
+                            _out.append((_top + y1 - padding, _top + y2 + padding))
                     except Exception as exc:
                         raise RuntimeError("تشخیص حباب برای برش امن ناموفق بود؛ "
                                            "برش اجباری انجام نشد.") from exc
-                    if bottom == ih:
-                        break
-                scan_from = ih
+                    return _out
+
+                _scan_tw = 1
+                try:
+                    if len(_win_starts) > 1:
+                        _scan_tw = (2 if _on_android()
+                                    else max(2, min(3, (os.cpu_count() or 2) // 2)))
+                except Exception:
+                    _scan_tw = 1
+                _scan_tw = max(1, min(_scan_tw, len(_win_starts)))
+                if _scan_tw > 1:
+                    with ThreadPoolExecutor(max_workers=_scan_tw) as _sex:
+                        for _res in _sex.map(_scan_window, _win_starts):
+                            protected.extend(_res)
+                else:
+                    for _t in _win_starts:
+                        protected.extend(_scan_window(_t))
+                scan_from = scan_limit
 
             offset = 0
             while ih - offset >= work_h + min_strip:
