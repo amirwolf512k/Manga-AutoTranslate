@@ -1181,6 +1181,17 @@ class LamaONNX:
         original_mask = mask_u8 > 0
         if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
+
+        # Crop to active mask bounding box with padding to accelerate inference
+        y_idx, x_idx = np.where(original_mask)
+        pad = 32
+        ymin, ymax = max(0, int(y_idx.min()) - pad), min(img_rgb.shape[0], int(y_idx.max()) + 1 + pad)
+        xmin, xmax = max(0, int(x_idx.min()) - pad), min(img_rgb.shape[1], int(x_idx.max()) + 1 + pad)
+        full_img_rgb = img_rgb
+        full_mask = original_mask
+        img_rgb = full_img_rgb[ymin:ymax, xmin:xmax]
+        original_mask = full_mask[ymin:ymax, xmin:xmax]
+
         orig_size = (img_rgb.shape[1], img_rgb.shape[0])
         run_size = self._pick_size(orig_size[0], orig_size[1])
         if not self.prefer_gpu and not getattr(self, "_fixed_size", False):
@@ -1215,8 +1226,10 @@ class LamaONNX:
         out = np.clip(o, 0, 255).astype(np.uint8)
 
         predicted = cv2.resize(out[:rh, :rw], orig_size, interpolation=cv2.INTER_LANCZOS4)
-        result = img_rgb.copy()
-        result[original_mask] = predicted[original_mask]
+        result = full_img_rgb.copy()
+        result_sub = img_rgb.copy()
+        result_sub[original_mask] = predicted[original_mask]
+        result[ymin:ymax, xmin:xmax] = result_sub
         return Image.fromarray(result)
 
 
@@ -1338,6 +1351,17 @@ class LamaMangaONNX:
         original_mask = mask_u8 > 0
         if not np.any(original_mask):
             return Image.fromarray(img_rgb.copy())
+
+        # Crop to active mask bounding box with padding to accelerate inference
+        y_idx, x_idx = np.where(original_mask)
+        pad = 32
+        ymin, ymax = max(0, int(y_idx.min()) - pad), min(img_rgb.shape[0], int(y_idx.max()) + 1 + pad)
+        xmin, xmax = max(0, int(x_idx.min()) - pad), min(img_rgb.shape[1], int(x_idx.max()) + 1 + pad)
+        full_img_rgb = img_rgb
+        full_mask = original_mask
+        img_rgb = full_img_rgb[ymin:ymax, xmin:xmax]
+        original_mask = full_mask[ymin:ymax, xmin:xmax]
+
         oh, ow = img_rgb.shape[:2]
         s = self._dyn_size if self._fixed_size else min(self.SIZE, self._input_cap)
         _mx = max(ow, oh)
@@ -1392,8 +1416,10 @@ class LamaMangaONNX:
         o = np.clip(o, 0.0, 1.0)
         o = (o * 255).astype(np.uint8)
         predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
-        result = img_rgb.copy()
-        result[original_mask] = predicted[original_mask]
+        result = full_img_rgb.copy()
+        result_sub = img_rgb.copy()
+        result_sub[original_mask] = predicted[original_mask]
+        result[ymin:ymax, xmin:xmax] = result_sub
         return Image.fromarray(result)
 
 
@@ -7338,6 +7364,13 @@ class MangaTranslator:
             same = (np.abs(gc.astype(np.int16) - g.astype(np.int16)) <= 14)
             _mcore = (mask[y0:y1, x0:x1] > 0)
             resid = ink & same & _mcore
+            if r.kind == "dialogue":
+                gc_lum = gc.astype(np.float32)
+                bg_med = float(np.median(gc_lum))
+                if bg_med >= 165.0:
+                    leftover_glyphs = (gc_lum < bg_med - 48.0)
+                    if np.any(leftover_glyphs):
+                        resid = resid | (leftover_glyphs & _mzone)
             try:
                 _zp = cc[_mcore].astype(np.float32)
                 _zlum = (_zp[:, 0] * 0.114 + _zp[:, 1] * 0.587 + _zp[:, 2] * 0.299)
@@ -12029,11 +12062,11 @@ html, body { background: #0a0a0b; }
             band = band[:, :, None]
         gray = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY) if band.shape[2] == 3 else band[:, :, 0]
 
-        row_min = band.min(axis=1).astype(np.int16)
-        row_max = band.max(axis=1).astype(np.int16)
-        uniform = np.all(row_max - row_min <= 14, axis=1)
+        row_min = band.min(axis=(1, 2)).astype(np.int16) if band.ndim == 3 else band.min(axis=1).astype(np.int16)
+        row_max = band.max(axis=(1, 2)).astype(np.int16) if band.ndim == 3 else band.max(axis=1).astype(np.int16)
+        uniform = (row_max - row_min) <= 18
         mean = gray.mean(axis=1)
-        paper = mean >= 225
+        paper = mean >= 210
         empty = uniform & paper
 
         for top, bottom in protected_ranges:
@@ -12042,19 +12075,46 @@ html, body { background: #0a0a0b; }
             if lo < hi:
                 empty[lo:hi] = False
 
-        edges = cv2.Canny(gray, 40, 120)
+        # Fast path: check for contiguous empty paper runs without running Canny edge detector
+        edges_idx = np.flatnonzero(np.diff(np.r_[False, empty, False].astype(np.int8)))
+        min_run = max(2 * clearance, 50)
+        fast_candidates = []
+        for start, end in zip(edges_idx[::2], edges_idx[1::2]):
+            if end - start < min_run:
+                continue
+            # avoid margin boundaries of the run
+            s_lo = start + edge_margin
+            s_hi = end - edge_margin
+            if s_hi > s_lo:
+                for s in range(s_lo, s_hi):
+                    cy = wy0 + s
+                    if y0 <= cy <= y1:
+                        fast_candidates.append(int(cy))
+
+        if fast_candidates:
+            return min(fast_candidates, key=lambda y: abs(y - target_y))
+
+        # Fallback: Canny on downsampled gray image for speed
+        gh, gw = gray.shape[:2]
+        ds = 2 if (gh > 100 and gw > 200) else 1
+        gray_sub = cv2.resize(gray, (gw // ds, gh // ds), interpolation=cv2.INTER_AREA) if ds > 1 else gray
+        edges = cv2.Canny(gray_sub, 40, 120)
         edge_ratio = (edges > 0).mean(axis=1)
-        barrier = (edge_ratio > 0.012) | (~empty)
+        if ds > 1:
+            edge_ratio = np.repeat(edge_ratio, ds)[:gh]
+            if len(edge_ratio) < gh:
+                edge_ratio = np.pad(edge_ratio, (0, gh - len(edge_ratio)), mode="edge")
+
+        barrier = (edge_ratio > 0.015) | (~empty)
         dil = barrier.copy()
         for i in range(1, edge_margin + 1):
             dil[:-i] |= barrier[i:]
             dil[i:] |= barrier[:-i]
         safe = empty & ~dil
 
-        edges_idx = np.flatnonzero(np.diff(np.r_[False, safe, False].astype(np.int8)))
+        edges_idx_safe = np.flatnonzero(np.diff(np.r_[False, safe, False].astype(np.int8)))
         candidates = []
-        min_run = max(2 * clearance, 60)
-        for start, end in zip(edges_idx[::2], edges_idx[1::2]):
+        for start, end in zip(edges_idx_safe[::2], edges_idx_safe[1::2]):
             if end - start < min_run:
                 continue
             for s in range(start, end):

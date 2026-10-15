@@ -2521,20 +2521,22 @@ def run_web():
     # صفحهٔ خواندن زندهٔ وب — داخل پوشهٔ live نوشته می‌شود و صفحه‌های جدید خودکار به آن اضافه می‌شوند
     _LIVE_READER_TMPL = """<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>نمایش زنده</title>
+<title>صفحه زنده</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
-.bar{position:sticky;top:0;z-index:2;display:flex;align-items:center;gap:8px;padding:9px 12px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;direction:rtl;backdrop-filter:blur(8px)}
+.bar{position:relative;z-index:2;display:flex;align-items:center;gap:8px;padding:9px 12px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;direction:rtl;backdrop-filter:blur(8px)}
 .dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
 .dot.off{background:#2e7d4f;animation:none}
 @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
 .t{flex:1;color:#97948c;font-size:.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .n{color:#fff;background:#ff4a3d;border-radius:999px;padding:3px 11px;font-size:.8rem;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
 .n.done{background:#2e7d4f}
+.btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:5px 9px;font-size:.8rem;cursor:pointer;font-family:inherit;flex:none;min-height:32px}
 .dbtn{display:none;background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:7px 11px;font-size:.8rem;cursor:pointer;font-family:inherit;flex:none;min-height:36px}
 .dbtn.on{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}
-.c{max-width:min(100%,900px);margin:0 auto;width:100%}
+.zlv{color:#97948c;font-size:.8rem;min-width:38px;text-align:center;font-variant-numeric:tabular-nums}
+.c{max-width:min(100%,900px);margin:0 auto;width:100%;transition:max-width 0.15s ease}
 .c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none}
 .ph{width:100%;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:sh 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}
 @keyframes sh{0%{background-position:120% 0}100%{background-position:-80% 0}}
@@ -2542,23 +2544,47 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 @keyframes spin{to{transform:rotate(360deg)}}
 .hint{padding:16px;text-align:center;color:#6b6963;font-size:.85rem}
 .chip{position:fixed;bottom:18px;left:18px;z-index:3;display:none;background:#ff4a3d;color:#fff;border:none;border-radius:999px;padding:10px 16px;font-size:.85rem;font-weight:700;cursor:pointer;box-shadow:0 4px 16px rgba(0,0,0,.5);font-family:inherit}
+.rdr-progress{position:fixed;bottom:0;left:0;right:0;height:4px;background:#1a1a1c;z-index:999}
+.rdrB{height:100%;width:0%;background:linear-gradient(90deg,#ff4a3d,#ff8a5e);transition:width 0.1s}
 </style></head><body>
-<div class="bar"><span class="dot" id="dot"></span><div class="t">نمایش زنده — صفحه‌ها سر جایشان پر می‌شوند</div><button type="button" class="dbtn" id="db">🔍 دیباگ</button><div class="n" id="n">0</div></div>
+<div class="bar"><span class="dot" id="dot"></span><div class="t">صفحه زنده</div><button type="button" class="btn" id="zo" title="کوچک">−</button><span class="zlv" id="zlv">100%</span><button type="button" class="btn" id="zi" title="بزرگ">+</button><button type="button" class="btn" id="zf" title="پهنا">پهنا</button><button type="button" class="dbtn" id="db">🔍 دیباگ</button><div class="n" id="n">0</div></div>
 <main class="c" id="c"><div class="hint" id="h">در انتظار اولین صفحه…</div></main>
 <button type="button" class="chip" id="chip">↓ صفحه‌های جدید</button>
+<div class="rdr-progress"><div class="rdrB" id="pb"></div></div>
 <script>
 (function(){
   var P = "__PREFIX__", D = "__DIR__", DBG = "__DBGDIR__", STAMP = Date.now();
-  var arrived = 0, total = 0, dbgArrived = 0, dbgMode = false, busy = false;
+  var arrived = 0, total = 0, dbgArrived = 0, dbgMode = false, busy = false, zoomLevel = 1.0;
   var c = document.getElementById('c'), h = document.getElementById('h'),
       b = document.getElementById('n'), dot = document.getElementById('dot'),
-      db = document.getElementById('db'), chip = document.getElementById('chip');
+      db = document.getElementById('db'), chip = document.getElementById('chip'),
+      zo = document.getElementById('zo'), zi = document.getElementById('zi'),
+      zf = document.getElementById('zf'), zlv = document.getElementById('zlv'),
+      pb = document.getElementById('pb');
   var haveDbg = !!DBG;
   function pad(i){ return ('000' + i).slice(-4); }
   function curDir(){ return dbgMode ? DBG : D; }
   function curArrived(){ return dbgMode ? dbgArrived : arrived; }
   function imgSrc(i){ return P + curDir() + 'live_' + pad(i + 1) + '.jpg?r=' + STAMP; }
   function nearBottom(){ return (window.innerHeight + window.scrollY) >= (document.body.offsetHeight - 260); }
+  function applyZoom(z){
+    zoomLevel = Math.max(0.5, Math.min(2.5, z));
+    var maxW = Math.round(900 * zoomLevel);
+    c.style.maxWidth = maxW + 'px';
+    zlv.textContent = Math.round(zoomLevel * 100) + '%';
+  }
+  if (zo) zo.addEventListener('click', function(){ applyZoom(zoomLevel - 0.15); });
+  if (zi) zi.addEventListener('click', function(){ applyZoom(zoomLevel + 0.15); });
+  if (zf) zf.addEventListener('click', function(){ applyZoom(1.0); });
+
+  function updateProgress(){
+    if (!pb) return;
+    var maxScroll = document.documentElement.scrollHeight - window.innerHeight;
+    var pct = maxScroll > 0 ? (window.scrollY / maxScroll * 100) : 0;
+    pb.style.width = Math.min(100, Math.max(0, pct)) + '%';
+  }
+  window.addEventListener('scroll', updateProgress, { passive: true });
+
   function mkPh(){
     var d = document.createElement('div');
     d.className = 'ph';
@@ -2573,7 +2599,6 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
     return el;
   }
   // رندر پایدار: اسلات‌ها سر جایشان می‌مانند، فقط جای خالی با تصویر پر می‌شود.
-  // هیچ اسکرول خودکاری انجام نمی‌شود — خواندنِ کاربر نمی‌پرد.
   function render(){
     var a = curArrived(), want = Math.max(total, a);
     if (h && h.parentNode === c) { c.removeChild(h); h = null; }
@@ -2587,6 +2612,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
     b.className = 'n' + (fin ? ' done' : '');
     dot.className = 'dot' + (fin ? ' off' : '');
     if (haveDbg) db.style.display = (arrived > 0 || dbgArrived > 0 || total > 0) ? 'inline-block' : 'none';
+    updateProgress();
   }
   function probe(){
     if (busy) return;
@@ -2686,7 +2712,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             "overscroll-behavior:none;-webkit-user-select:none;user-select:none}"
             ".rdr{position:fixed;inset:0;z-index:1;background:#000;display:flex;flex-direction:column;direction:ltr}"
             ".rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;"
-            "background:rgba(12,12,14,.96);border-bottom:1px solid #232326;flex:none;backdrop-filter:blur(8px);z-index:2}"
+      "background:rgba(12,12,14,.96);border-bottom:1px solid #232326;flex:none;backdrop-filter:blur(8px);z-index:2;position:relative}"
             ".rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;"
             "padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;"
             "min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}"
@@ -2866,16 +2892,18 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             "</head>\n"
             "<body>\n"
             '<div class="rdr" id="manga_rdr" data-zoom="1">\n'
-            '  <div class="rdr-bar">\n'
-            '    <button type="button" class="rdr-btn" data-act="close" title="بستن">✕</button>\n'
-            f'    <div class="rdr-title">{title_esc}</div>\n'
-            '    <button type="button" class="rdr-btn" data-act="zoom-out" title="دور">−</button>\n'
-            '    <span class="zlv">100%</span>\n'
-            '    <button type="button" class="rdr-btn" data-act="zoom-in" title="نزدیک">+</button>\n'
-            '    <button type="button" class="rdr-btn" data-act="zoom-fit" title="پهنای صفحه">پهنا</button>\n'
-            '    <button type="button" class="rdr-btn fs" data-act="fs" title="فول‌اسکرین">⛶</button>\n'
-            "  </div>\n"
-            f'  <div class="rdrS"><div class="rdrC">{imgs}</div></div>\n'
+            '  <div class="rdrS">\n'
+            '    <div class="rdr-bar">\n'
+            '      <button type="button" class="rdr-btn" data-act="close" title="بستن">✕</button>\n'
+            f'      <div class="rdr-title">{title_esc}</div>\n'
+            '      <button type="button" class="rdr-btn" data-act="zoom-out" title="دور">−</button>\n'
+            '      <span class="zlv">100%</span>\n'
+            '      <button type="button" class="rdr-btn" data-act="zoom-in" title="نزدیک">+</button>\n'
+            '      <button type="button" class="rdr-btn" data-act="zoom-fit" title="پهنای صفحه">پهنا</button>\n'
+            '      <button type="button" class="rdr-btn fs" data-act="fs" title="فول‌اسکرین">⛶</button>\n'
+            '    </div>\n'
+            f'    <div class="rdrC">{imgs}</div>\n'
+            '  </div>\n'
             '  <div class="rdr-progress"><div class="rdrB"></div></div>\n'
             "</div>\n"
             f"<script>\n{js}\n</script>\n"
