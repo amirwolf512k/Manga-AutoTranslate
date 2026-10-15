@@ -4103,12 +4103,17 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
         open_live_js = """
 (url) => {
   const u = (url || "").toString().trim();
+  const isDesk = (new URLSearchParams(location.search)).get('desktop') === '1'
+                 || !!(window.pywebview);
   if (!u) {
     try { if (window.__mangaPopup) { window.__mangaPopup.close(); } } catch (e) {}
     window.__mangaPopup = null;
-    alert("هنوز صفحه‌ای آماده نشده — چند لحظه بعد دوباره بزن.");
+    if (!isDesk) { alert("هنوز صفحه‌ای آماده نشده — چند لحظه بعد دوباره بزن."); }
     return [];
   }
+  // v1.14.34: در پنجرهٔ دسکتاپ (pywebview) هرگز window.open نزن —
+  // پنجرهٔ مرورگرِ سیستم باز می‌شد (خواستهٔ کاربر: نمایش داخل خود برنامه).
+  if (isDesk) { window.location.href = u; return []; }
   let w = window.__mangaPopup;
   if (w && !w.closed) {
     try { w.location.href = u; } catch (err) { w = null; }
@@ -4162,9 +4167,14 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 
         # گارد پاپ‌آپ: با کلیک روی دکمه‌های نمایش، یک پنجرهٔ خالی «همزمان با
         # کلیک» باز می‌شود تا مرورگر آن را مسدود نکند (رفعِ «هیچی نشون نداد»)
+        # v1.14.34: در پنجرهٔ دسکتاپ اجرا نشود — window.open خالی همان‌جا
+        # مرورگرِ سیستم را باز می‌کرد (بازشدن خودکار مرورگر روی PC).
         _popup_guard_js = """
 () => {
   try {
+    const isDesk = (new URLSearchParams(location.search)).get('desktop') === '1'
+                   || !!(window.pywebview);
+    if (isDesk) return [];
     if (window.__mangaPopupGuard) return [];
     window.__mangaPopupGuard = true;
     document.addEventListener('click', function (e) {

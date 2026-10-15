@@ -9900,6 +9900,33 @@ class MangaTranslator:
         return n
 
     @staticmethod
+    def _is_label_block(line_texts) -> bool:
+        """v1.14.34: «بلوکِ برچسب» — جعبهٔ مشخصاتِ شخصیت (NAME / AGE: 40 /
+        RACE: …) و پنجره‌های UI چندخطیِ کوتاه. این خط‌ها باید «جدا جدا»
+        ترجمه شوند (خواستهٔ کاربر)، ولی حبابِ دیالوگِ عادی هرگز نباید.
+        شرط‌ها: چند خطِ کوتاه + حداقل ۲ لیبلِ دونقطه‌دار یا براکتِ سرصفحه +
+        هیچ خطی با نقطه‌گذاریِ جملهٔ گفتاری تمام نشود (؟ ! …)."""
+        try:
+            lines = [str(l or "").strip() for l in (line_texts or [])
+                     if str(l or "").strip()]
+            n = len(lines)
+            if not (2 <= n <= 12):
+                return False
+            lens = [len(l) for l in lines]
+            if max(lens) > 46 or (sum(lens) / float(n)) > 30.0:
+                return False
+            # جملهٔ گفتاری — هیچ خط نباید با ؟/!/… تمام شود (جعبهٔ مشخصات ندارد)
+            if any(re.search(r"[?!…\u3002\uff01\uff1f]$", l) for l in lines):
+                return False
+            colon_lines = sum(1 for l in lines if re.search(r"[:\uff1a\uff1d=]", l))
+            has_bracket = any(
+                re.search(r"[\[\u3010][^\]\u3011]{1,48}[\]\u3011]", l)
+                for l in lines)
+            return colon_lines >= 2 or has_bracket
+        except Exception:
+            return False
+
+    @staticmethod
     def _system_window_strong(text: str, line_texts) -> bool:
         """v1.14.32: نشانهٔ «قوی» پنجرهٔ سیستم — بدون این هیچ حباب عادی
         نباید پنجره حساب شود (براکت سرصفحه / کلیدواژهٔ سیستم / ≥۲ لیبلِ
@@ -10883,17 +10910,31 @@ class MangaTranslator:
                     text, line_texts)
             except Exception:
                 _sys_score, _sys_strong = 0, False
+            # v1.14.34: جعبهٔ مشخصات (NAME / AGE: 40 / RACE: …) همیشه جدا شود —
+            # بلوکِ برچسبِ کوتاه با نشانهٔ قوی (≥۲ لیبل دونقطه‌دار یا براکت)
+            # کافی است؛ دیگر به امتیازِ هندسیِ سخت‌گیر وابسته نیست (قبلاً
+            # جعبهٔ «DEVON … AGE: 18» با امتیاز ۳ از دست می‌رفت).
+            _lbl_block = MangaTranslator._is_label_block(line_texts or [])
             _sys_ok = _sys_strong and (
                 _sys_score >= 5
                 # برچسبِ تک‌خطیِ کوتاه مثل «Status» / «NOTICE» — امتیازِ ظاهری
                 # به چند خط نیاز دارد؛ برچسب تک‌خطی با نشانهٔ قوی کافی است
                 or (len(line_polys) <= 1
-                    and len(str(text or '').strip()) <= 28))
+                    and len(str(text or '').strip()) <= 28)
+                or _lbl_block)
             _sys_can_split = (
                 _sys_ok
-                and _sys_score >= 6
                 and len(line_polys) >= 2
-                and len(line_texts or []) == len(line_polys))
+                and len(line_texts or []) == len(line_polys)
+                and (_lbl_block or _sys_score >= 6))
+            if os.environ.get("MANGA_SYS_DEBUG"):
+                try:
+                    print(f"    [SYSDBG] text={str(text)[:60]!r} score={_sys_score} "
+                          f"strong={_sys_strong} nlp={len(line_polys)} "
+                          f"nlt={len(line_texts or [])} lbl={_lbl_block} "
+                          f"ok={_sys_ok} cansplit={_sys_can_split}")
+                except Exception:
+                    pass
             if _sys_can_split:
                 # v1.14.31: OCR گاهی هر «کلمه» را جدا می‌دهد → اول خط‌سازی کن
                 _lines = MangaTranslator._cluster_ocr_lines(
