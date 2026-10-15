@@ -752,7 +752,7 @@ def run_cli_interactive():
         ("openrouter", "OpenRouter"),
         ("ollama", "لوکال - بدون کلید"),
         ("together", "Together AI"),
-        ("custom", "سرویس دلخواه سازگار با OpenAI (دامنه + توکن + مدل)"),
+        ("custom", "سرویس دلخواه — ۴ فرمت: OpenAI / Responses / Anthropic / Google (دامنه + توکن + مدل)"),
     ]
     for i, (pid, desc) in enumerate(prov_menu, 1):
         print(f"  {i}) {pid:12} ({desc})")
@@ -767,7 +767,7 @@ def run_cli_interactive():
         or cfg.get("model", "")
     api_base_v = ""
     if provider == "custom":
-        print("── سرویس دلخواه (سازگار با OpenAI) ──")
+        print("── سرویس دلخواه (۴ فرمت: OpenAI / Responses / Anthropic / Google) ──")
         api_base_v = str(cfg.get("api_base", "") or "")
         for _try in range(3):
             hint = f" [Enter = همان {api_base_v}]" if api_base_v else " [خالی = انصراف]"
@@ -2049,8 +2049,8 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 placeholder="وضعیت هر کلید — سالم ✔ / خراب ✘ (بعد از ۶۰ ثانیه خودکار پاک می‌شود)")
             api_base = gr.Textbox(label="دامنهٔ API سفارشی (فقط برای provider «custom»)",
                                   value=str(cfg.get("api_base", "") or ""),
-                                  placeholder="https://your-server.example.com/v1",
-                                  info="فقط وقتی provider = custom باشد دیده می‌شود؛ https:// اگر جا افتاده باشد خودکار اضافه می‌شود.",
+                                  placeholder="https://opencode.ai/inference/openai/v1/chat/completions",
+                                  info="۴ فرمت خودکار شناخته می‌شود: …/chat/completions | …/responses | …/messages (Anthropic) | …:generateContent (Google) — لینک کامل endpoint را هم می‌شود چسباند؛ https:// اگر جا افتاده باشد خودکار اضافه می‌شود.",
                                   elem_id="manga_api_base",
                                   visible=False,
                                   scale=3)

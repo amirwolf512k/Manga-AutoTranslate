@@ -140,6 +140,16 @@ python manga_app.py -- -i input -o out.psd --font fonts/Vazirmatn-Bold.ttf --api
 | together | meta-llama/Llama-3.3-70B-Instruct-Turbo | TOGETHER_API_KEY |
 | openrouter | google/gemini-2.0-flash-001 | OPENROUTER_API_KEY |
 | ollama | llama3.2 | — |
+| custom | — | CUSTOM_API_KEY |
+
+**سرویس دلخواه (custom)** — ۴ فرمت API خودکار از روی خودِ لینک شناخته می‌شود؛ لینک کامل endpoint را هم می‌شود چسباند:
+
+| فرمت | نمونه لینک |
+|---|---|
+| OpenAI Chat Completions | `https://opencode.ai/inference/openai/v1/chat/completions` |
+| OpenAI Responses API | `https://…/v1/responses` |
+| Anthropic Compatible | `https://…/v1/messages` |
+| Google Generative AI | `https://…/models/gemini-2.0-flash:generateContent` |
 
 ---
 

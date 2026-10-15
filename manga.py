@@ -2380,6 +2380,54 @@ def normalize_api_base(url: str) -> str:
     return u
 
 
+# ── فرمت‌های API که «کلید کاستوم» می‌فهمد ──────────────────────────────
+# 1) OpenAI Chat Completions   …/chat/completions
+# 2) OpenAI Responses API      …/responses
+# 3) Anthropic Compatible      …/messages
+# 4) Google Generative AI      …:generateContent
+CUSTOM_API_FORMAT_HINTS = {
+    "openai": "OpenAI Chat Completions (/chat/completions)",
+    "openai-responses": "OpenAI Responses API (/responses)",
+    "anthropic": "Anthropic Compatible (/messages)",
+    "google-endpoint": "Google Generative AI (:generateContent)",
+}
+
+
+def detect_custom_api_format(url: str) -> Tuple[str, str]:
+    """فرمت API را از خودِ لینک تشخیص می‌دهد و لینک را به Base URL
+    تمیز تبدیل می‌کند. کاربر می‌تواند هرکدام از این‌ها را بچسباند:
+      https://opencode.ai/inference/openai/v1/chat/completions → openai
+      https://opencode.ai/inference/openai/v1/responses        → openai-responses
+      https://opencode.ai/inference/anthropic/v1/messages      → anthropic
+      https://…/v1beta/models/gemini-2.0-flash:generateContent → google-endpoint
+    لینک بدون پسوند → openai (پیش‌فرض سازگار با OpenAI)
+    خروجی: (نوع_فرمت, base_url_تمیز)"""
+    u = str(url or "").strip().strip('"').strip("'").rstrip("/")
+    if not u:
+        return "openai", ""
+    # Google Generative AI: …/models/MODEL:generateContent
+    if ":generateContent" in u or ":streamGenerateContent" in u:
+        cut = u.find(":generateContent")
+        if cut < 0:
+            cut = u.find(":streamGenerateContent")
+        u = u[:cut]
+        if "/models/" in u:
+            u = u[: u.rfind("/models/")]
+        elif u.endswith("/models"):
+            u = u[: -len("/models")]
+        return "google-endpoint", u.rstrip("/")
+    low = u.lower()
+    for suffix, ftype in (
+        ("/chat/completions", "openai"),
+        ("/responses", "openai-responses"),
+        ("/messages", "anthropic"),
+        ("/completions", "openai"),
+    ):
+        if low.endswith(suffix):
+            return ftype, u[: -len(suffix)].rstrip("/")
+    return "openai", u
+
+
 def test_api_keys(keys_text: str, provider: str = "gemini",
                   api_base: str = "", timeout: float = 15.0) -> list:
     """تست سریع کلیدهای API (تکی/چندتایی) و لینک سفارشی — برای دکمهٔ
@@ -2425,18 +2473,94 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
             else:
                 if not base:
                     raise ValueError("لینک (Base URL) وارد نشده")
-                url = base.rstrip("/")
-                if not url.endswith("/v1"):
-                    url += "/v1"
-                url += "/models"
-                req = urllib.request.Request(
-                    url, headers={
-                        "User-Agent": "Mozilla/5.0",
-                        "Authorization": "Bearer " + k,
-                    })
-                with urllib.request.urlopen(req, timeout=timeout) as resp:
-                    r["ok"] = (getattr(resp, "status", 200) == 200)
-                    r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+                ftype, fbase = detect_custom_api_format(base)
+                fbase = fbase.rstrip("/")
+                if ftype == "anthropic":
+                    # POST سبک /v1/messages —Anthropic یا پراکسی سازگارش
+                    post_url = fbase if fbase.endswith("/v1") else fbase + "/v1"
+                    post_url += "/messages"
+                    body = json.dumps({
+                        "model": "claude-3-5-haiku-20241022",
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "hi"}],
+                    }).encode("utf-8")
+                    req = urllib.request.Request(
+                        post_url, data=body, method="POST",
+                        headers={
+                            "User-Agent": "Mozilla/5.0",
+                            "Content-Type": "application/json",
+                            "x-api-key": k,
+                            "anthropic-version": "2023-06-01",
+                            "Authorization": "Bearer " + k,
+                        })
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        r["ok"] = (getattr(resp, "status", 200) == 200)
+                        r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+                elif ftype == "google-endpoint":
+                    # POST سبک :generateContent — Google یا پراکسی سازگارش
+                    post_url = fbase + "/models/gemini-2.0-flash:generateContent"
+                    body = json.dumps({
+                        "contents": [{"parts": [{"text": "hi"}]}],
+                        "generationConfig": {"maxOutputTokens": 1},
+                    }).encode("utf-8")
+                    req = urllib.request.Request(
+                        post_url, data=body, method="POST",
+                        headers={
+                            "User-Agent": "Mozilla/5.0",
+                            "Content-Type": "application/json",
+                            "x-goog-api-key": k,
+                            "Authorization": "Bearer " + k,
+                        })
+                    with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        r["ok"] = (getattr(resp, "status", 200) == 200)
+                        r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+                else:
+                    # openai / openai-responses → اول GET /models سبک
+                    url = fbase.rstrip("/")
+                    if not url.endswith("/v1"):
+                        url += "/v1"
+                    url += "/models"
+                    req = urllib.request.Request(
+                        url, headers={
+                            "User-Agent": "Mozilla/5.0",
+                            "Authorization": "Bearer " + k,
+                        })
+                    try:
+                        with urllib.request.urlopen(req, timeout=timeout) as resp:
+                            r["ok"] = (getattr(resp, "status", 200) == 200)
+                            r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+                    except urllib.error.HTTPError as e2:
+                        if e2.code in (404, 405):
+                            # سرور /models ندارد → POST سبک روی خودِ endpoint
+                            if ftype == "openai-responses":
+                                post_url = fbase.rstrip("/") + "/responses"
+                                body = json.dumps({
+                                    "model": "gpt-4o-mini",
+                                    "input": "hi",
+                                    "max_output_tokens": 16,
+                                }).encode("utf-8")
+                            else:
+                                post_url = (fbase.rstrip("/") + "/chat/completions")
+                                body = json.dumps({
+                                    "model": "gpt-4o-mini",
+                                    "messages": [{"role": "user",
+                                                  "content": "hi"}],
+                                    "max_tokens": 1,
+                                }).encode("utf-8")
+                            req2 = urllib.request.Request(
+                                post_url, data=body, method="POST",
+                                headers={
+                                    "User-Agent": "Mozilla/5.0",
+                                    "Content-Type": "application/json",
+                                    "Authorization": "Bearer " + k,
+                                })
+                            with urllib.request.urlopen(
+                                    req2, timeout=timeout) as resp:
+                                r["ok"] = (getattr(resp, "status", 200) == 200)
+                                r["error"] = ("" if r["ok"]
+                                              else f"HTTP {resp.status}")
+                        else:
+                            raise
         except urllib.error.HTTPError as e:
             if e.code in (401, 403):
                 r["error"] = "کلید نامعتبر/رد شد (401/403)"
@@ -2489,7 +2613,9 @@ def _ask(prompt: str) -> str:
 
 def _prompt_custom_endpoint(base: str = "", model: str = "") -> Tuple[str, str]:
 
-    print("── تنظیم سرویس دلخواه (سازگار با OpenAI) ──")
+    print("── تنظیم سرویس دلخواه (۴ فرمت: OpenAI / Responses / Anthropic / Google) ──")
+    print("    لینک کامل endpoint را هم می‌شود چسباند — فرمت خودکار شناخته می‌شود:")
+    print("    …/chat/completions | …/responses | …/messages | …:generateContent")
     for _attempt in range(3):
         if not base:
             raw = _ask("دامنهٔ API (مثال: https://api.example.com/v1) "
@@ -3124,6 +3250,23 @@ class MangaTranslator:
         _user_base = (api_base or "").strip()
         self.api_base = normalize_api_base(_user_base) if _user_base \
             else self.provider_cfg.get("base_url")
+        # کلید کاستوم: فرمت API از خودِ لینک شناخته می‌شود —
+        # …/chat/completions | …/responses | …/messages | …:generateContent
+        if _user_base and self.api_base:
+            _ftype, _fbase = detect_custom_api_format(self.api_base)
+            if _ftype != "openai" or re.search(
+                    r"/(?:chat/completions|responses|messages|completions)$",
+                    self.api_base, flags=re.I):
+                if provider in ("custom", "openai", "openrouter", "together",
+                                "xai", "groq", "deepseek", "mistral",
+                                "gemini-openai"):
+                    if _ftype != self.provider_type:
+                        print(f"[*] فرمت API از لینک شناخته شد: "
+                              f"{CUSTOM_API_FORMAT_HINTS.get(_ftype, _ftype)}")
+                    self.provider_type = _ftype
+                    self.provider_cfg = dict(self.provider_cfg)
+                    self.provider_cfg["type"] = _ftype
+            self.api_base = _fbase if _fbase else self.api_base
 
         self.font_path = font_path
 
@@ -8489,6 +8632,180 @@ class MangaTranslator:
             _do, label=f"{self.provider}/{model}"
         )
 
+    # ── کلید کاستوم: فرمت‌های دیگر API ────────────────────────────────
+    def _raw_api_post_text(self, url: str, headers: dict, payload: dict,
+                           label: str) -> str:
+        """POST با urllib و استخراج متن — بدون وابستگی SDK اضافه."""
+        import urllib.request as _ureq
+        import urllib.error as _uerr
+
+        key = self._current_api_key()
+        hdrs = {
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        }
+        hdrs.update(headers or {})
+        # برخی پراکسی‌ها فقط Bearer می‌فهمند؛ هر دو را می‌فرستیم
+        if key and "Authorization" not in hdrs:
+            hdrs["Authorization"] = "Bearer " + key
+        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+        timeout_s = float(getattr(self, "api_timeout", 30.0) or 30.0)
+
+        def _do():
+            req = _ureq.Request(url, data=data, method="POST", headers=hdrs)
+            try:
+                with _ureq.urlopen(req, timeout=timeout_s) as resp:
+                    raw = (resp.read() or b"").decode("utf-8", "ignore")
+            except _uerr.HTTPError as e:
+                body = ""
+                try:
+                    body = (e.read() or b"").decode("utf-8", "ignore")[:300]
+                except Exception:
+                    pass
+                if e.code in (401, 403):
+                    raise RuntimeError(
+                        f"کلید نامعتبر/رد شد (HTTP {e.code})"
+                        + (f" — {body}" if body else "")) from e
+                raise RuntimeError(
+                    f"HTTP {e.code} از {label}"
+                    + (f" — {' '.join(body.split())[:200]}" if body else "")
+                ) from e
+            try:
+                return json.loads(raw)
+            except Exception:
+                raise RuntimeError(
+                    f"پاسخ JSON نیست از {label}: {raw[:200]}")
+
+        obj = self._call_ai_with_timeout(_do, label=label)
+        return obj
+
+    def _translate_with_openai_responses(self, user_prompt: str,
+                                         system_instruction: str,
+                                         *, structured: bool = True) -> str:
+        """OpenAI Responses API — POST {base}/responses"""
+        model = self._thread_model()
+        url = (self.api_base or "").rstrip("/") + "/responses"
+        payload = {
+            "model": model,
+            "input": [
+                {"role": "system", "content": system_instruction},
+                {"role": "user", "content": user_prompt},
+            ],
+        }
+        data = self._raw_api_post_text(url, {}, payload,
+                                       label=f"{self.provider}-responses/{model}")
+        text = ""
+        if isinstance(data, dict):
+            text = str(data.get("output_text") or "")
+            if not text.strip():
+                parts = []
+                for item in (data.get("output") or []):
+                    if not isinstance(item, dict):
+                        continue
+                    for c in (item.get("content") or []):
+                        if isinstance(c, dict) and c.get("text"):
+                            parts.append(str(c["text"]))
+                text = "".join(parts)
+            if not text.strip():
+                ch = data.get("choices")
+                if isinstance(ch, list) and ch:
+                    msg = (ch[0] or {}).get("message") or {}
+                    text = str(msg.get("content") or "")
+        if not text or not text.strip():
+            raise RuntimeError(f"پاسخ خالی از {self.provider} (responses) دریافت شد.")
+        return text
+
+    def _translate_with_anthropic(self, user_prompt: str,
+                                  system_instruction: str,
+                                  *, structured: bool = True) -> str:
+        """Anthropic Compatible — POST {base}/v1/messages"""
+        model = self._thread_model()
+        base = (self.api_base or "").rstrip("/")
+        if not base.endswith("/v1"):
+            base += "/v1"
+        url = base + "/messages"
+        key = self._current_api_key()
+        payload = {
+            "model": model,
+            "max_tokens": 4096,
+            "system": system_instruction,
+            "messages": [{"role": "user", "content": user_prompt}],
+            "temperature": self.translation_temperature if structured else 0.2,
+        }
+        headers = {
+            "x-api-key": key,
+            "anthropic-version": "2023-06-01",
+            "Authorization": "Bearer " + key,
+        }
+        data = self._raw_api_post_text(url, headers, payload,
+                                       label=f"{self.provider}-anthropic/{model}")
+        text = ""
+        if isinstance(data, dict):
+            parts = []
+            for c in (data.get("content") or []):
+                if isinstance(c, dict) and c.get("text"):
+                    parts.append(str(c["text"]))
+            text = "".join(parts)
+        if not text or not text.strip():
+            raise RuntimeError(f"پاسخ خالی از {self.provider} (messages) دریافت شد.")
+        return text
+
+    def _translate_with_google_endpoint(self, user_prompt: str,
+                                        system_instruction: str,
+                                        *, structured: bool = True) -> str:
+        """Google Generative AI — POST {base}/models/{model}:generateContent"""
+        import urllib.parse as _uparse
+        model = self._thread_model()
+        base = (self.api_base or "").rstrip("/")
+        url = f"{base}/models/{_uparse.quote(model)}:generateContent"
+        key = self._current_api_key()
+        payload = {
+            "systemInstruction": {"parts": [{"text": system_instruction}]},
+            "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
+            "generationConfig": {
+                "temperature": self.translation_temperature if structured else 0.2,
+            },
+        }
+        headers = {
+            "x-goog-api-key": key,
+            "Authorization": "Bearer " + key,
+        }
+        data = self._raw_api_post_text(url, headers, payload,
+                                       label=f"{self.provider}-google/{model}")
+        text = ""
+        if isinstance(data, dict):
+            parts = []
+            for cand in (data.get("candidates") or []):
+                if not isinstance(cand, dict):
+                    continue
+                cont = cand.get("content") or {}
+                for p in (cont.get("parts") or []):
+                    if isinstance(p, dict) and p.get("text"):
+                        parts.append(str(p["text"]))
+            text = "".join(parts)
+        if not text or not text.strip():
+            raise RuntimeError(f"پاسخ خالی از {self.provider} (generateContent) دریافت شد.")
+        return text
+
+    def _translate_via_provider(self, user_prompt: str,
+                                system_instruction: str,
+                                *, structured: bool = True) -> str:
+        """روتر واحد — هر provider_type به موتور درست خودش می‌رود."""
+        if self.provider_type == "gemini":
+            return self._translate_with_gemini(
+                user_prompt, system_instruction, structured=structured)
+        if self.provider_type == "openai-responses":
+            return self._translate_with_openai_responses(
+                user_prompt, system_instruction, structured=structured)
+        if self.provider_type == "anthropic":
+            return self._translate_with_anthropic(
+                user_prompt, system_instruction, structured=structured)
+        if self.provider_type == "google-endpoint":
+            return self._translate_with_google_endpoint(
+                user_prompt, system_instruction, structured=structured)
+        return self._translate_with_openai(
+            user_prompt, system_instruction, structured=structured)
+
 
     @staticmethod
     def _fix_ocr_text(text: str) -> str:
@@ -8679,7 +8996,7 @@ class MangaTranslator:
                         prompt, "فقط شواهد صریح متن را برای مترجم خلاصه کن.",
                         structured=False)
                 else:
-                    raw = self._translate_with_openai(
+                    raw = self._translate_via_provider(
                         prompt, "فقط شواهد صریح متن را برای مترجم خلاصه کن.",
                         structured=False)
             finally:
@@ -8904,7 +9221,7 @@ class MangaTranslator:
                     if self.provider_type == "gemini":
                         text = self._translate_with_gemini(user_prompt, system_instruction)
                     else:
-                        text = self._translate_with_openai(user_prompt, system_instruction)
+                        text = self._translate_via_provider(user_prompt, system_instruction)
 
 
                 self._parse_translation_response(text, work_regions)
@@ -9233,7 +9550,7 @@ class MangaTranslator:
                 if self.provider_type == "gemini":
                     text_final = self._translate_with_gemini(user_prompt, system_instruction)
                 else:
-                    text_final = self._translate_with_openai(user_prompt, system_instruction)
+                    text_final = self._translate_via_provider(user_prompt, system_instruction)
             self._parse_translation_response(text_final, work_regions)
             self.save_glossary()
             for r in work_regions:
