@@ -2428,13 +2428,54 @@ def detect_custom_api_format(url: str) -> Tuple[str, str]:
     return "openai", u
 
 
+def explain_api_http_error(code: int, body: str) -> Tuple[bool, str]:
+    """خطای HTTP یک سرویس AI را به پیام فارسیِ قابل‌فهم تبدیل می‌کند.
+    خروجی: (کلید_سالم_هست؟, پیام) — بعضی خطاها ربطی به کلید ندارند
+    (مثل FreeTierError اوپن‌کد یا «مدل در دسترس نیست») و کلید سالم است."""
+    b = str(body or "")
+    bl = b.lower()
+    if ("freetiererror" in bl or "within opencode" in bl
+            or "free tier" in bl and "opencode" in bl):
+        return True, ("کلید سالم است ✅ ولی مدل‌های «free» اوپن‌کد فقط داخل "
+                      "خود برنامهٔ OpenCode کار می‌کنند و از بیرون رد می‌شوند "
+                      "— باید مدل پولی همان سرویس یا کلید/سرویس دیگری بگذاری")
+    if ("model is unavailable" in bl or "model_not_found" in bl
+            or "does not exist" in bl or "no such model" in bl
+            or "model not found" in bl
+            or "not allowed to access" in bl
+            or "does not have access" in bl
+            or "unavailable model" in bl):
+        return True, ("کلید پذیرفته شد ✅ ولی این مدل در سرویس فعال نیست "
+                      "— نام مدل را عوض کن (مدل باید در پنل سرویس فعال/موجود باشد)")
+    if ("quota" in bl and ("exceed" in bl or "exceeded" in bl)) \
+            or "insufficient_quota" in bl or "billing" in bl \
+            or "insufficient credit" in bl or "credit balance" in bl:
+        return True, "کلید سالم است ✅ ولی اعتبار/سهمیهٔ حساب تمام شده"
+    if "invalid api key" in bl or ("invalid" in bl and "key" in bl) \
+            or "unauthorized" in bl or "authentication" in bl \
+            or "invalid_api_key" in bl or "wrong api key" in bl:
+        return False, "کلید نامعتبر است — کلید را دوباره چک کن"
+    if code in (401, 403):
+        return False, f"کلید نامعتبر/رد شد ({code})"
+    if code == 429:
+        return True, "معتبر ولی Rate-limit (429) — کمی بعد دوباره"
+    if code == 402:
+        return True, "کلید سالم است ✅ ولی اعتبار حساب تمام شده (402)"
+    if code == 404:
+        return True, ("کلید پذیرفته شد ✅ ولی این آدرس/مدل روی سرویس نیست "
+                      "(404) — لینک و نام مدل را چک کن")
+    detail = " ".join(b.split())[:120]
+    return False, f"HTTP {code}" + (f" — {detail}" if detail else "")
+
+
 def test_api_keys(keys_text: str, provider: str = "gemini",
-                  api_base: str = "", timeout: float = 15.0) -> list:
+                  api_base: str = "", timeout: float = 15.0,
+                  model: str = "") -> list:
     """تست سریع کلیدهای API (تکی/چندتایی) و لینک سفارشی — برای دکمهٔ
     «تست کلید» در همهٔ پلتفرم‌ها (وب/پی‌سی/اندروید). هر کلید با یک
-    درخواست سبک (لیست مدل‌ها) بررسی می‌شود؛ نتیجهٔ هر کلید جدا
-    برمی‌گردد: [{'key': 'مخفی‌شده', 'ok': True/False, 'error': '...',
-    'ms': 123}, ...]"""
+    درخواست سبک (لیست مدل‌ها؛ اگر نبود POST سبک با مدلِ خودِ کاربر)
+    بررسی می‌شود؛ نتیجهٔ هر کلید جدا برمی‌گردد: [{'key': 'مخفی‌شده',
+    'ok': True/False, 'error': '...', 'ms': 123}, ...]"""
     import urllib.request
     import urllib.error
     import urllib.parse
@@ -2450,6 +2491,7 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
         prov = "gemini"
     preset = PROVIDER_PRESETS[prov]
     base = normalize_api_base(api_base) or (preset.get("base_url") or "")
+    user_model = str(model or "").strip()
 
     def _mask(k: str) -> str:
         if len(k) <= 12:
@@ -2476,11 +2518,11 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
                 ftype, fbase = detect_custom_api_format(base)
                 fbase = fbase.rstrip("/")
                 if ftype == "anthropic":
-                    # POST سبک /v1/messages —Anthropic یا پراکسی سازگارش
+                    # POST سبک /v1/messages — Anthropic یا پراکسی سازگارش
                     post_url = fbase if fbase.endswith("/v1") else fbase + "/v1"
                     post_url += "/messages"
                     body = json.dumps({
-                        "model": "claude-3-5-haiku-20241022",
+                        "model": user_model or "claude-3-5-haiku-20241022",
                         "max_tokens": 1,
                         "messages": [{"role": "user", "content": "hi"}],
                     }).encode("utf-8")
@@ -2498,7 +2540,9 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
                         r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
                 elif ftype == "google-endpoint":
                     # POST سبک :generateContent — Google یا پراکسی سازگارش
-                    post_url = fbase + "/models/gemini-2.0-flash:generateContent"
+                    gmodel = user_model or "gemini-2.0-flash"
+                    post_url = fbase + "/models/" \
+                        + urllib.parse.quote(gmodel) + ":generateContent"
                     body = json.dumps({
                         "contents": [{"parts": [{"text": "hi"}]}],
                         "generationConfig": {"maxOutputTokens": 1},
@@ -2526,23 +2570,27 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
                             "Authorization": "Bearer " + k,
                         })
                     try:
-                        with urllib.request.urlopen(req, timeout=timeout) as resp:
+                        with urllib.request.urlopen(
+                                req, timeout=timeout) as resp:
                             r["ok"] = (getattr(resp, "status", 200) == 200)
-                            r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
+                            r["error"] = ("" if r["ok"]
+                                          else f"HTTP {resp.status}")
                     except urllib.error.HTTPError as e2:
                         if e2.code in (404, 405):
                             # سرور /models ندارد → POST سبک روی خودِ endpoint
+                            m = user_model or "gpt-4o-mini"
                             if ftype == "openai-responses":
                                 post_url = fbase.rstrip("/") + "/responses"
                                 body = json.dumps({
-                                    "model": "gpt-4o-mini",
+                                    "model": m,
                                     "input": "hi",
                                     "max_output_tokens": 16,
                                 }).encode("utf-8")
                             else:
-                                post_url = (fbase.rstrip("/") + "/chat/completions")
+                                post_url = (fbase.rstrip("/")
+                                            + "/chat/completions")
                                 body = json.dumps({
-                                    "model": "gpt-4o-mini",
+                                    "model": m,
                                     "messages": [{"role": "user",
                                                   "content": "hi"}],
                                     "max_tokens": 1,
@@ -2562,19 +2610,14 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
                         else:
                             raise
         except urllib.error.HTTPError as e:
-            if e.code in (401, 403):
-                r["error"] = "کلید نامعتبر/رد شد (401/403)"
-            elif e.code == 429:
-                r["ok"] = True
-                r["error"] = "معتبر ولی Rate-limit (429)"
-            else:
-                r["error"] = f"HTTP {e.code}"
-                try:
-                    detail = (e.read() or b"")[:180].decode("utf-8", "ignore")
-                    if detail:
-                        r["error"] += " — " + " ".join(detail.split())[:120]
-                except Exception:
-                    pass
+            body = ""
+            try:
+                body = (e.read() or b"")[:600].decode("utf-8", "ignore")
+            except Exception:
+                pass
+            ok, msg = explain_api_http_error(e.code, body)
+            r["ok"] = ok
+            r["error"] = msg
         except urllib.error.URLError as e:
             r["error"] = f"اتصال برقرار نشد: {getattr(e, 'reason', e)}"
         except Exception as e:
@@ -6595,6 +6638,65 @@ class MangaTranslator:
             dom = np.abs(rv - med_g) <= 28.0
             dom_share = float(dom.mean())
             dom_std = float(np.std(rv[dom])) if dom.any() else 255.0
+
+            # ── حبابِ سفید/روشن (v1.14.36) ──────────────────────────────
+            # اکثریتِ حلقه روشن است → رنگِ پرکردن «فقط» از پیکسل‌های روشنِ
+            # حلقه (دیوارِ داخلی حباب) گرفته می‌شود تا تیرگیِ حاشیهٔ حباب /
+            # هافتونِ بیرون هرگز به داخل کشیده نشود (لکهٔ سیاه/خاکستری).
+            # تشخیصِ «داخلِ حباب» نه هافتون: نوارِ باریکِ چسبیده به متن —
+            # هافتون نقطه در «همهٔ» جهت‌ها دارد؛ دیوارِ حباب فقط یک سمت.
+            bright = rv >= 185.0
+            bright_share = float(bright.mean())
+            if bright_share >= 0.55:
+                _bo = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0)
+                _bi = (cv2.dilate(crop_msk, np.ones((3, 3), np.uint8)) > 0)
+                _band = _bo & (~_bi) & (~m)
+                _ys, _xs = np.nonzero(_band)
+                _wb_ok = False
+                if _ys.size >= 80:
+                    _gv = g[_band].astype(np.float32)
+                    _darkm = _gv < 150.0
+                    _dsi = float(_darkm.mean())
+                    if _dsi <= 0.30:
+                        _cy2, _cx2 = float(_ys.mean()), float(_xs.mean())
+                        _ang = np.arctan2(_ys - _cy2, _xs - _cx2)
+                        _sec = ((np.floor((_ang + np.pi)
+                                          / (2.0 * np.pi) * 8.0)).astype(int)
+                                % 8)
+                        _sdark = len(set(_sec[_darkm].tolist())) \
+                            if _darkm.any() else 0
+                        # نقطهٔ هافتون در همهٔ جهت‌هاست (۸/۸)؛ دیوار/تاجِ حباب
+                        # حداکثر چند جهت (≤۴)
+                        _wb_ok = (_sdark <= 4)
+                else:
+                    _wb_ok = True
+                if _wb_ok:
+                    bp = crop_img[ring][bright].astype(np.float32)
+                    if bp.shape[0] >= 60:
+                        fill = np.median(bp, axis=0)
+                        # خطِ حباب/هنرِ تیرهٔ دور از متن حفظ شود
+                        far = (cv2.dilate(crop_msk,
+                                          np.ones((27, 27), np.uint8)) == 0)
+                        dark_art = (g < 130) & far
+                        # اگر تیغه/هنرِ تیره به متن چسبیده (حبابِ فکوس)،
+                        # هالهٔ پرشدن را کوچک نگه دار تا تیغه خورده نشود
+                        _near_dark = float(((g < 130) & (~far)).mean())
+                        if _near_dark > 0.02:
+                            fill_zone = cv2.morphologyEx(
+                                cv2.dilate(crop_msk,
+                                           np.ones((7, 7), np.uint8)),
+                                cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+                        else:
+                            fill_zone = (dil > 0)
+                        fm = (fill_zone & (~dark_art)).astype(np.uint8) * 255
+                        fm = cv2.GaussianBlur(fm, (11, 11), 0)
+                        alpha = (fm.astype(np.float32) / 255.0)[..., None]
+                        base = crop_img.astype(np.float32)
+                        out = (base * (1.0 - alpha)
+                               + np.clip(fill, 0, 255)[None, None, :] * alpha
+                               ).astype(np.uint8)
+                        return dil, out
+
             # پرکردنِ جامد برای رنگِ غالبِ یکدست (حباب زرد/صورتی صاف)
             if dom_share >= 0.45 and dom_std <= 22.0 and sat_med >= 45.0:
                 px = crop_img[ring].astype(np.float32)
@@ -7652,6 +7754,87 @@ class MangaTranslator:
                         cv2.getStructuringElement(
                             cv2.MORPH_ELLIPSE, (31, 31))) > 0
                     resid = resid | _blob | (_dark_raw & _band)
+
+                    # ── v1.14.36: بقایای بیرونِ ماسک (OCR تکه‌ای از خط را جا
+                    # انداخته — مثل «TH») در ناحیهٔ 31px منبسط‌شده هم بگیر.
+                    # فقط لکه‌هایی که در حلقهٔ خودشان اکثریتِ روشن دارند
+                    # (داخلِ حباب) — خطِ حباب/هنرِ تیره به‌خاطر پس‌زمینهٔ
+                    # تیرهٔ دورش رد می‌شود.
+                    try:
+                        _mz31k = cv2.getStructuringElement(
+                            cv2.MORPH_ELLIPSE, (31, 31))
+                        _mz31 = (cv2.dilate(
+                            mask[y0:y1, x0:x1], _mz31k) > 0) & ink
+                        _zone31 = (cv2.dilate(
+                            mask[y0:y1, x0:x1], _mz31k) > 0)
+                        _dark_z = (_gcl < _bg_lum - 45.0) & _mz31 \
+                            & (~_blob) & (~_band)
+                        _blob_z = cv2.morphologyEx(
+                            _dark_z.astype(np.uint8),
+                            cv2.MORPH_OPEN, np.ones((3, 3), np.uint8)) > 0
+                        if _blob_z.any():
+                            _nb, _lbl, _st, _cen = cv2.connectedComponentsWithStats(
+                                _blob_z.astype(np.uint8), 8)
+                            _keep = np.zeros_like(_blob_z)
+                            for _i in range(1, _nb):
+                                _a = int(_st[_i, cv2.CC_STAT_AREA])
+                                if _a < 14:
+                                    continue
+                                _bxi = int(_st[_i, cv2.CC_STAT_LEFT])
+                                _byi = int(_st[_i, cv2.CC_STAT_TOP])
+                                _bwi = int(_st[_i, cv2.CC_STAT_WIDTH])
+                                _bhi = int(_st[_i, cv2.CC_STAT_HEIGHT])
+                                _pd = 8
+                                _ry0 = max(0, _byi - _pd)
+                                _ry1 = min(_blob_z.shape[0], _byi + _bhi + _pd)
+                                _rx0 = max(0, _bxi - _pd)
+                                _rx1 = min(_blob_z.shape[1], _bxi + _bwi + _pd)
+                                if _ry1 - _ry0 < 4 or _rx1 - _rx0 < 4:
+                                    continue
+                                _corem = (_lbl[_ry0:_ry1, _rx0:_rx1] == _i)
+                                # ── اگر لکه به هنرِ تیرهٔ بیرونِ ناحیه (تیغهٔ
+                                # فکوس/حاشیه) چسبیده، ردش کن — متنِ جاافتاده
+                                # در سفیدیِ حباب ایستاده، نه روی تیغه.
+                                try:
+                                    _blo = (cv2.dilate(
+                                        _corem.astype(np.uint8),
+                                        np.ones((11, 11), np.uint8)) > 0)
+                                    _outs = _blo & (~_zone31[_ry0:_ry1,
+                                                             _rx0:_rx1])
+                                    if _outs.any():
+                                        _od = g[_ry0:_ry1,
+                                                _rx0:_rx1][_outs]
+                                        if int((_od < 120).sum()) >= 12:
+                                            continue
+                                    # حلقهٔ خودِ لکه: گلیفِ داخلِ حباب حلقهٔ
+                                    # سفید دارد؛ تیغه/تکهٔ هافتون حلقهٔ تیره
+                                    _rng_o = (cv2.dilate(
+                                        _corem.astype(np.uint8),
+                                        np.ones((11, 11), np.uint8)) > 0)
+                                    _rng_i = (cv2.dilate(
+                                        _corem.astype(np.uint8),
+                                        np.ones((5, 5), np.uint8)) > 0)
+                                    _rng = _rng_o & (~_rng_i)
+                                    if int(_rng.sum()) >= 30:
+                                        _rvv = g[_ry0:_ry1,
+                                                 _rx0:_rx1][_rng]
+                                        if float(
+                                                (_rvv < 120).mean()) > 0.30:
+                                            continue
+                                except Exception:
+                                    pass
+                                _rr = (cv2.dilate(
+                                    _corem.astype(np.uint8),
+                                    np.ones((5, 5), np.uint8)) > 0) & (~_corem)
+                                if int(_rr.sum()) < 12:
+                                    continue
+                                _rl = gc[_ry0:_ry1, _rx0:_rx1][_rr]
+                                if float((_rl >= 170.0).mean()) >= 0.55:
+                                    _keep[_ry0:_ry1, _rx0:_rx1] |= _corem
+                            if _keep.any():
+                                resid = resid | _keep
+                    except Exception:
+                        pass
             except Exception:
                 pass
             if r.kind == "dialogue" and not getattr(r, "ocr_empty", False):
@@ -7799,7 +7982,7 @@ class MangaTranslator:
                         _csame4 = (np.abs(
                             _ccc.astype(np.int16)
                             - _ggray.astype(np.int16)) <= 14)
-                        _cin = ((_ggray < _cmed - 40.0)
+                        _cin = ((_ggray < _cmed - 32.0)
                                 & (_dom > 0) & _csame4).astype(np.uint8)
                         _nz4, _lab4, _st4, _ = cv2.connectedComponentsWithStats(
                             _cin, 8)
@@ -7837,6 +8020,38 @@ class MangaTranslator:
                             resid = resid | _r4
             except Exception:
                 pass
+            # ── v1.14.36: فیلترِ مؤلفه‌ای resid — تکه‌ای از resid که حلقهٔ
+            # دورش تیره است (تیغهٔ فکوس/خطِ حباب/هافتون که ماسکِ متن رویش
+            # افتاده) هنر است نه متنِ جاافتاده؛ گلیفِ واقعیِ داخلِ حباب
+            # حلقهٔ سفید دارد. پرکردنِ سفیدِ آنها = گازِ مستطیلیِ سفید.
+            try:
+                _rcand = resid.astype(np.uint8)
+                if _rcand.any():
+                    _nrc, _lrc, _strc, _ = cv2.connectedComponentsWithStats(
+                        _rcand, 8)
+                    _resf = np.zeros_like(resid)
+                    for _ci in range(1, _nrc):
+                        _comp = (_lrc == _ci)
+                        _rng_o = (cv2.dilate(
+                            _comp.astype(np.uint8),
+                            np.ones((13, 13), np.uint8)) > 0)
+                        _rng_i = (cv2.dilate(
+                            _comp.astype(np.uint8),
+                            np.ones((5, 5), np.uint8)) > 0)
+                        _rng = _rng_o & (~_rng_i) & (~_comp)
+                        _nd = 0
+                        _nr = int(_rng.sum())
+                        if _nr >= 30:
+                            _rvv = g[_rng]
+                            _nd = int((_rvv < 120).sum())
+                            if _nr and float((_rvv < 120).mean()) > 0.22:
+                                continue
+                        if _nd >= 40:
+                            continue
+                        _resf |= _comp
+                    resid = _resf
+            except Exception:
+                pass
             n_res = int(np.count_nonzero(resid))
             if n_res < max(40, int(0.003 * _m_px)):
                 continue
@@ -7850,8 +8065,41 @@ class MangaTranslator:
                 n_fix += 1
                 continue
             try:
-                patch = cv2.inpaint(cc, mc, 6, cv2.INPAINT_TELEA)
-                cleaned[y0:y1, x0:x1] = patch
+                # ── v1.14.36: حباب/پس‌زمینهٔ روشن → پرکردن با رنگِ روشنِ
+                # همسایه (نه TELEA) — TELEA کنارِ حباب/هافتون تیرگی را
+                # به داخل می‌کشد و دوباره لکهٔ خاکستری می‌سازد.
+                _use_white = False
+                try:
+                    _rg = cv2.cvtColor(cc, cv2.COLOR_BGR2GRAY)
+                    _near = (cv2.dilate(mc, np.ones((25, 25), np.uint8)) > 0) \
+                        & (mc == 0)
+                    _npx = _rg[_near]
+                    _bright = _npx[_npx >= 175.0]
+                    if _bright.size >= 150 \
+                            and float((_bright >= 200.0).mean()) >= 0.55:
+                        _fill_v = float(np.median(_bright))
+                        _use_white = True
+                except Exception:
+                    _use_white = False
+                if _use_white:
+                    _core9 = (cv2.dilate(resid.astype(np.uint8),
+                                         np.ones((9, 9), np.uint8)) > 0)
+                    # هنرِ تیرهٔ دور از هستهٔ باقی‌مانده (تیغه/حاشیه) حفظ شود
+                    _darkkeep = (_rg < 120) & (
+                        ~(cv2.dilate(resid.astype(np.uint8),
+                                     np.ones((5, 5), np.uint8)) > 0))
+                    _fmask = (_core9 & (~_darkkeep)) | resid
+                    _fm = _fmask.astype(np.uint8) * 255
+                    _fm = cv2.GaussianBlur(_fm, (9, 9), 0)
+                    _al = (_fm.astype(np.float32) / 255.0)[..., None]
+                    _fillc = np.array([_fill_v, _fill_v, _fill_v],
+                                      dtype=np.float32)
+                    _patch = (cc.astype(np.float32) * (1.0 - _al)
+                              + _fillc[None, None, :] * _al).astype(np.uint8)
+                    cleaned[y0:y1, x0:x1] = _patch
+                else:
+                    patch = cv2.inpaint(cc, mc, 6, cv2.INPAINT_TELEA)
+                    cleaned[y0:y1, x0:x1] = patch
                 n_fix += 1
             except Exception:
                 continue
@@ -8301,6 +8549,9 @@ class MangaTranslator:
 
         t = t.replace("?", "؟")
 
+        # مدل گاهی \n را به‌صورت کاراکترِ literal برمی‌گرداند → واقعی کن
+        t = t.replace("\\n", "\n").replace("\\r", "").replace("\\t", " ")
+
 
         t = re.sub(r"(?i)([a-z])\1{1,}", "", t)
         t = re.sub(r"(?i)([!؟])\s*[a-z]{1,3}\s*", r"\1", t)
@@ -8313,7 +8564,9 @@ class MangaTranslator:
             r"\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]+",
             "", t,
         )
-        t = re.sub(r"\s{2,}", " ", t)
+        # دو متنِ جدا با \n حفظ می‌شوند — فقط فاصله/تک‌تکراری جمع می‌شود
+        t = re.sub(r"[^\S\n]{2,}", " ", t)
+        t = re.sub(r" *\n *", "\n", t)
         t = re.sub(r"\s+([؟!.,،])", r"\1", t)
         return t.strip()
 
@@ -8659,17 +8912,16 @@ class MangaTranslator:
             except _uerr.HTTPError as e:
                 body = ""
                 try:
-                    body = (e.read() or b"").decode("utf-8", "ignore")[:300]
+                    body = (e.read() or b"").decode("utf-8", "ignore")[:600]
                 except Exception:
                     pass
-                if e.code in (401, 403):
+                ok, msg = explain_api_http_error(e.code, body)
+                if not ok:
                     raise RuntimeError(
-                        f"کلید نامعتبر/رد شد (HTTP {e.code})"
-                        + (f" — {body}" if body else "")) from e
-                raise RuntimeError(
-                    f"HTTP {e.code} از {label}"
-                    + (f" — {' '.join(body.split())[:200]}" if body else "")
-                ) from e
+                        msg + (f" — {' '.join(body.split())[:150]}"
+                               if body and "HTTP" in msg else "")) from e
+                # کلید سالم است ولی سرویس/مدل مشکل دارد — پیام واضح بده
+                raise RuntimeError(msg) from e
             try:
                 return json.loads(raw)
             except Exception:
@@ -9196,6 +9448,9 @@ class MangaTranslator:
                 + self._glossary_prompt_block(source_text) + self._brief_prompt_block()
                 + "\nفقط آرایه JSON؛ هر id در items دقیقاً یک‌بار، بدون ادغام حباب‌ها. "
                 "translation رشته فارسی؛ برای متن واقعاً ناخوانا رشته خالی، نه توضیح خطا.\n"
+                "اگر source یک ورودی دو متنِ جدا دارد (دو جملهٔ مستقل، دو لیبل مثل "
+                "«AGE: 40» و «RACE: VAMPIRE»، یا پرسش و پاسخ)، در translation آنها را "
+                "با \\n جدا کن — هرگز دو متنِ جدا را با فاصله در یک خط ننویس.\n"
                 + ("tone یکی از: " + ", ".join(allowed) + "\n" if allowed else "tone نفرست.\n")
                 + "قالب نمونه (متن نمونه را کپی نکن): "
                 + json.dumps([example], ensure_ascii=False, separators=(",", ":"))
@@ -9728,6 +9983,10 @@ class MangaTranslator:
         words = text.split()
         if not words:
             words = [""]
+        # دو متن هرگز یکی نمی‌شوند: هر شکستِ \n (از مدل یا از جداکنندهٔ
+        # چندمتن) در خطِ خودش می‌ماند و زیرِ خطِ قبل رندر می‌شود.
+        _segments = [s.strip() for s in str(text).split("\n")]
+        _segments = [s for s in _segments if s] or [str(text).strip() or " "]
 
 
         def wrap_at(size: int, line_gap: int):
@@ -9736,19 +9995,24 @@ class MangaTranslator:
 
             usable_w = max(8, max_w - 2 * sw)
             lines: List[str] = []
-            current = ""
-            for word in words:
-                candidate = f"{current} {word}".strip()
-                w = draw.textbbox(
-                    (0, 0), self._shape_farsi(candidate), font=font, stroke_width=sw
-                )[2]
-                if w <= usable_w or not current:
-                    current = candidate
-                else:
+            for seg in _segments:
+                seg_words = seg.split()
+                if not seg_words:
+                    lines.append("")
+                    continue
+                current = ""
+                for word in seg_words:
+                    candidate = f"{current} {word}".strip()
+                    w = draw.textbbox(
+                        (0, 0), self._shape_farsi(candidate), font=font, stroke_width=sw
+                    )[2]
+                    if w <= usable_w or not current:
+                        current = candidate
+                    else:
+                        lines.append(current)
+                        current = word
+                if current:
                     lines.append(current)
-                    current = word
-            if current:
-                lines.append(current)
 
 
             bb = font.getbbox("آیگچ", stroke_width=sw)

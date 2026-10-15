@@ -3076,7 +3076,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             try:
                 from manga import test_api_keys, format_key_test_text
                 res = test_api_keys(api_keys_v or "", provider_v or "gemini",
-                                    api_base_v or "")
+                                    api_base_v or "", model=model_v or "")
                 txt = format_key_test_text(res)
                 return gr.update(value=txt, visible=True)
             except Exception as e:
