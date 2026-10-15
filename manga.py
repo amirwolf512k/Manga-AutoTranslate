@@ -5469,11 +5469,10 @@ class MangaTranslator:
             crop = image[y0:y1, x0:x1]
             if crop.size == 0 or ch < 12 or cw < 12:
                 return rm
-            # فقط برای حباب‌ها — جعبه‌های کپشن/توضیح مثل قبل با مستطیل کامل
-            # پر می‌شوند (پرکردن یکدستِ جعبهٔ کپشن ظاهر بهتری می‌دهد)
+            # v1.14.29: برای همهٔ کلاس‌ها — متنِ متراکم روی عکس با مستطیلِ
+            # کامل، لکهٔ خاکستری بزرگ می‌سازد؛ ماسکِ گلیف خیلی تمیزتر است.
+            # (روی جعبهٔ سفیدِ ساده هم پرکردنِ گلیف‌به‌گلیف = همان سفیدِ یکدست)
             det_class = (getattr(region, "det_class", "") or "")
-            if det_class not in ("bubble", "text_bubble"):
-                return rm
             zone = rm[y0:y1, x0:x1]
             n_z = int(np.count_nonzero(zone))
             if n_z < 200:
@@ -5513,7 +5512,7 @@ class MangaTranslator:
                 return rm
             g_full = np.zeros_like(rm)
             g_full[y0:y1, x0:x1] = cv2.dilate(
-                g, np.ones((3, 3), np.uint8), iterations=1)
+                g, np.ones((3, 3), np.uint8), iterations=2)
             # پلی‌گون‌های اصلی OCR همیشه داخل ماسک بمانند (متنِ قطعی)
             _pts = []
             for p in (getattr(region, "ocr_polys", None) or []):
@@ -5529,6 +5528,64 @@ class MangaTranslator:
                 except Exception:
                     pass
             return cv2.bitwise_and(rm, g_full)
+        except Exception:
+            return rm
+
+    def _glyph_limit_fat(self, image: np.ndarray, rm: np.ndarray,
+                         region: "TextRegion", polys_raw: list) -> np.ndarray:
+        """ماسکِ چاقِ متنِ متراکم (پلی‌گون‌های OCR یا absorb پهن) را به جوهر
+        واقعیِ متن محدود می‌کند — روی عکس، مستطیلِ کاملِ متن لکهٔ خاکستری
+        بزرگ می‌سازد؛ ماسکِ گلیف تمیزتر است (v1.14.29). اگر استخراج گلیف
+        قابل‌اعتماد نبود، ماسکِ قبلی دست‌نخورده برمی‌گردد."""
+        try:
+            if not polys_raw or rm is None or not np.any(rm):
+                return rm
+            _all = np.concatenate([np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                                   for p in polys_raw if np.asarray(p).size], axis=0)
+            h, w = rm.shape[:2]
+            x0 = max(0, int(_all[:, 0].min()) - 4)
+            y0 = max(0, int(_all[:, 1].min()) - 4)
+            x1 = min(w, int(_all[:, 0].max()) + 5)
+            y1 = min(h, int(_all[:, 1].max()) + 5)
+            if x1 - x0 < 12 or y1 - y0 < 12:
+                return rm
+            ch, cw = y1 - y0, x1 - x0
+            zone = rm[y0:y1, x0:x1]
+            n_z = int(np.count_nonzero(zone))
+            if n_z < 200:
+                return rm
+            gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            g = MangaTranslator._glyph_mask_in_zone(gray, zone)
+            if g is None:
+                return rm
+            n2, lab2, st2, _ = cv2.connectedComponentsWithStats(
+                (g > 0).astype(np.uint8), 8)
+            if n2 > 1:
+                hs = np.array([st2[i, cv2.CC_STAT_HEIGHT]
+                               for i in range(1, n2)], dtype=np.float32)
+                med_h = float(np.median(hs)) if hs.size else 0.0
+                keep = np.zeros_like(g)
+                n_keep = 0
+                for i in range(1, n2):
+                    h_i = float(st2[i, cv2.CC_STAT_HEIGHT])
+                    w_i = float(st2[i, cv2.CC_STAT_WIDTH])
+                    if h_i < 4.0 and w_i < 4.0:
+                        continue
+                    if h_i > max(2.8 * med_h, med_h + 22.0):
+                        continue
+                    if max(w_i, h_i) > 0.60 * max(ch, cw):
+                        continue
+                    keep[lab2 == i] = 255
+                    n_keep += 1
+                if n_keep >= 3 and int(np.count_nonzero(keep)) >= 120:
+                    g = keep
+            n_g = int(np.count_nonzero(g))
+            if n_g < 60 or n_g > 0.88 * n_z:
+                return rm
+            out = np.zeros_like(rm)
+            out[y0:y1, x0:x1] = cv2.dilate(
+                g, np.ones((3, 3), np.uint8), iterations=2)
+            return cv2.bitwise_and(rm, out)
         except Exception:
             return rm
 
@@ -5623,6 +5680,8 @@ class MangaTranslator:
                             image, _rm, _polys_raw, band=26,
                             box=tuple([int(v) for v in region.rect]), levels=2)
                         if _ink is not None and np.any(_ink):
+                            _ink = self._glyph_limit_fat(image, _ink, region,
+                                                         _polys_raw)
                             m = cv2.bitwise_or(m, _ink)
                             n_ok += 1
                             continue
@@ -5638,6 +5697,7 @@ class MangaTranslator:
                         _rm = cv2.bitwise_or(_rm, _ink2)
                 except Exception:
                     pass
+                _rm = self._glyph_limit_fat(image, _rm, region, _polys_raw)
                 m = cv2.bitwise_or(m, _rm)
                 n_ok += 1
             else:
@@ -5772,6 +5832,7 @@ class MangaTranslator:
             full[wy0:wy1, wx0:wx1] = out
             full = cv2.morphologyEx(full, cv2.MORPH_CLOSE,
                                     np.ones((3, 3), np.uint8))
+            full = cv2.dilate(full, np.ones((3, 3), np.uint8), iterations=1)
             return full
         except Exception:
             return None
@@ -6248,19 +6309,26 @@ class MangaTranslator:
             m = crop_msk > 0
             if not m.any():
                 return None
-            ring = (cv2.dilate(crop_msk, np.ones((5, 5), np.uint8)) > 0) & (~m)
+            # حلقه بیرونِ ناحیهٔ لبهٔ ضدلبه (anti-alias) — وگرنه برای متنِ
+            # متراکم، حلقه از پیکسل‌های لبه پر می‌شود و رنگِ پرکردنِ کمرنگ
+            # می‌شود (ردِ گلیفِ کمرنگ — شکایت کاربر) (v1.14.29)
+            _d5 = (cv2.dilate(crop_msk, np.ones((5, 5), np.uint8)) > 0) | m
+            ring = (cv2.dilate(crop_msk, np.ones((13, 13), np.uint8)) > 0) & (~_d5)
             n_ring = int(np.count_nonzero(ring))
             if n_ring < 40:
-                return None
+                ring = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0) & (~_d5)
+                n_ring = int(np.count_nonzero(ring))
+                if n_ring < 40:
+                    return None
             rp = crop_img[ring].astype(np.int16)
             med = np.median(rp, axis=0)
             d = np.abs(rp - med[None, :]).max(axis=1)
-            if float((d <= 20).mean()) < 0.96:
+            if float((d <= 20).mean()) < 0.94:
                 return None
             sel = rp[d <= 22]
             fill = np.median(sel, axis=0) if sel.shape[0] >= 30 else med
             out = crop_img.copy()
-            out[m] = np.clip(fill, 0, 255).astype(np.uint8)
+            out[_d5] = np.clip(fill, 0, 255).astype(np.uint8)
             return out
         except Exception:
             return None
@@ -6268,34 +6336,55 @@ class MangaTranslator:
     @staticmethod
     def _color_fill_cluster(crop_img: np.ndarray,
                             crop_msk: np.ndarray) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        """حباب/ناحیهٔ رنگی — پرکردن با رنگِ غالب یا TELEA نرم.
+
+        برای حباب‌های زرد/صورتی/آبی، LaMa (مدل سیاه‌وسفید مانگا) بافتِ
+        سفیدِ نامربوط می‌سازد — مثل ردِ گلیف‌های سفید. این متد:
+        ۱) اگر حلقهٔ دورِ متن رنگِ غالبِ یکدست داشته باشد → پرکردنِ جامد
+        ۲) وگرنه اگر پس‌زمینهٔ رنگیِ صاف باشد (حتی مخلوط مثل زرد+ابرِ سفید)
+           → TELEA با ماسکِ پهن (blend نرم، بدون توهم بافت)
+        هافتونِ قوی رد می‌شود تا LaMa بافت واقعی بسازد (v1.14.29)."""
         try:
             m = crop_msk > 0
             if not m.any():
                 return None
-            ring = (cv2.dilate(crop_msk, np.ones((9, 9), np.uint8)) > 0) & (~m)
-            if int(np.count_nonzero(ring)) < 60:
-                return None
-            hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
-            sat = hsv[..., 1][ring].astype(np.float32)
-            if float(np.median(sat)) < 75.0:
-                return None
-            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
-            gx = cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3)
-            gy = cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3)
-            grad = cv2.magnitude(gx, gy)[ring]
-            if float(np.median(grad)) > 24.0:
-                return None
-            try:
-                _thick = float(cv2.distanceTransform(
-                    m.astype(np.uint8), cv2.DIST_L2, 3).max())
-            except Exception:
-                _thick = 4.0
-            _kd = int(np.clip(2 * int(round(max(3.0, _thick * 0.75))) + 1, 9, 25))
-            kk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (_kd, _kd))
+            kk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
             dil = cv2.morphologyEx(cv2.dilate(crop_msk, kk, iterations=1),
                                    cv2.MORPH_CLOSE, kk)
-            out = cv2.inpaint(crop_img, dil, 5, cv2.INPAINT_TELEA)
-            return dil, out
+            m2 = (cv2.dilate(crop_msk, np.ones((5, 5), np.uint8)) > 0) | m
+            # حلقه بیرونِ لبهٔ ناحیهٔ پرشدن (dil) — برای ماسکِ چاق (پلی‌گون‌های
+            # OCR متراکم) حلقهٔ داخل ماسک به دیوارِ سفید حباب می‌خورد و رنگِ
+            # پرشدن کمرنگ می‌شود (v1.14.29)
+            ring = (cv2.dilate(dil, np.ones((7, 7), np.uint8)) > 0) & (~m2) & (dil == 0)
+            if int(np.count_nonzero(ring)) < 60:
+                ring = (dil > 0) & (~m2)
+                if int(np.count_nonzero(ring)) < 60:
+                    return None
+            hsv = cv2.cvtColor(crop_img, cv2.COLOR_BGR2HSV)
+            sat_r = hsv[..., 1][ring].astype(np.float32)
+            sat_med = float(np.median(sat_r))
+            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            rv = g[ring].astype(np.float32)
+            med_g = float(np.median(rv))
+            dom = np.abs(rv - med_g) <= 28.0
+            dom_share = float(dom.mean())
+            dom_std = float(np.std(rv[dom])) if dom.any() else 255.0
+            # پرکردنِ جامد برای رنگِ غالبِ یکدست (حباب زرد/صورتی صاف)
+            if dom_share >= 0.45 and dom_std <= 22.0 and sat_med >= 45.0:
+                px = crop_img[ring].astype(np.float32)
+                fill = np.median(px[dom], axis=0)
+                out = crop_img.copy()
+                out[dil > 0] = np.clip(fill, 0, 255).astype(np.uint8)
+                return dil, out
+            # TELEA نرم برای پس‌زمینهٔ محلی-صاف (مثل زرد + ابرِ سفید، یا
+            # حباب سفید با هالهٔ بنفش) — مهارِ هافتون با گرادیانِ حلقه (v1.14.29)
+            grad = cv2.magnitude(
+                cv2.Sobel(g, cv2.CV_32F, 1, 0, ksize=3),
+                cv2.Sobel(g, cv2.CV_32F, 0, 1, ksize=3))[ring]
+            if float(np.median(grad)) <= 30.0:
+                out = cv2.inpaint(crop_img, dil, 7, cv2.INPAINT_TELEA)
+                return dil, out
+            return None
         except Exception:
             return None
 
@@ -6849,7 +6938,7 @@ class MangaTranslator:
                         _pf_ok = True
             if result is None and not _q_lama:
                 result = self._flat_fill_cluster(crop_img, crop_msk)
-            if (result is not None and not _pf_ok
+            if (result is not None and method == "flat" and not _pf_ok
                     and self._bg_is_textured(crop_img, crop_msk, strong=True)):
                 result = None
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method])
