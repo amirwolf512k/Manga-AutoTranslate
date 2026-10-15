@@ -9922,7 +9922,16 @@ class MangaTranslator:
             has_bracket = any(
                 re.search(r"[\[\u3010][^\]\u3011]{1,48}[\]\u3011]", l)
                 for l in lines)
-            return colon_lines >= 2 or has_bracket
+            if colon_lines >= 2 or has_bracket:
+                return True
+            # v1.14.34: بلوکِ کلیدواردی — لیستِ مهارت‌ها (SKILL(S): … / MEDITATION
+            # / MOBILE MEDITATION (LV.11) / …): یک خطِ کلیدواژه + یک لیبلِ
+            # دونقطه‌دار + همهٔ خط‌ها ≤۴ کلمه (نثرِ گفتاری این‌قدر کوتاه نیست)
+            if len(lines) >= 3 and all(len(l.split()) <= 4 for l in lines):
+                kw = MangaTranslator._sys_keyword_hits(lines)
+                if kw >= 1 and colon_lines >= 1:
+                    return True
+            return False
         except Exception:
             return False
 
