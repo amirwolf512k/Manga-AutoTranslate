@@ -6348,7 +6348,10 @@ class MangaTranslator:
             m = crop_msk > 0
             if not m.any():
                 return None
-            kk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+            # 13px → لبهٔ ناحیهٔ پرشدن بیرونِ هالهٔ ضدلبهٔ گلیف است؛ وگرنه
+            # TELEA از پیکسل‌های خاکستریِ هاله درون‌یابی می‌کند و لکهٔ خاکستری
+            # وسط حباب می‌سازد (v1.14.29)
+            kk = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
             dil = cv2.morphologyEx(cv2.dilate(crop_msk, kk, iterations=1),
                                    cv2.MORPH_CLOSE, kk)
             m2 = (cv2.dilate(crop_msk, np.ones((5, 5), np.uint8)) > 0) | m
@@ -7226,13 +7229,43 @@ class MangaTranslator:
                     image, cleaned, regions, mask,
                     collect=(_rboxes if _want_lama else None))
                 if _want_lama and _rboxes:
-                    _n_l = self._lama_rescue_boxes(cleaned, _rboxes, _kern_r)
+                    # v1.14.29: جعبه‌های روی پس‌زمینهٔ سفید/روشن با TELEA —
+                    # LaMa روی سفید لکهٔ خاکستری می‌سازد
+                    _white_bx = []
+                    _other_bx = []
+                    for _bx in _rboxes:
+                        try:
+                            _x0, _y0, _x1, _y1, _mc = _bx
+                            _M = 12
+                            _sy0, _sy1 = max(0, _y0 - _M), min(cleaned.shape[0], _y1 + _M)
+                            _sx0, _sx1 = max(0, _x0 - _M), min(cleaned.shape[1], _x1 + _M)
+                            _sub = cleaned[_sy0:_sy1, _sx0:_sx1]
+                            _sm = np.zeros(_sub.shape[:2], np.uint8)
+                            _mh = min(_mc.shape[0], _sub.shape[0])
+                            _mw = min(_mc.shape[1], _sub.shape[1])
+                            _sm[_y0 - _sy0:_y0 - _sy0 + _mh,
+                                _x0 - _sx0:_x0 - _sx0 + _mw] = 255
+                            _sk = cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE, (9, 9))
+                            _ring = (cv2.dilate(_sm, _sk) > 0) & (_sm == 0)
+                            _gl = cv2.cvtColor(_sub, cv2.COLOR_BGR2GRAY)
+                            _lum = float(np.median(_gl[_ring])) if _ring.any() else 255.0
+                            if _lum >= 195.0:
+                                _white_bx.append(_bx)
+                            else:
+                                _other_bx.append(_bx)
+                        except Exception:
+                            _other_bx.append(_bx)
+                    _n_l = (self._lama_rescue_boxes(cleaned, _other_bx, _kern_r)
+                            if _other_bx else 0)
                     _lama_fix += _n_l
-                    if _n_l < len(_rboxes):
-                        _n = _n_l + self._telea_fix_boxes(
-                            cleaned, _rboxes[_n_l:])
+                    _n_t = self._telea_fix_boxes(cleaned, _white_bx) \
+                        if _white_bx else 0
+                    if _n_l < len(_other_bx):
+                        _n = (_n_l + _n_t
+                              + self._telea_fix_boxes(cleaned, _other_bx[_n_l:]))
                     else:
-                        _n = _n_l
+                        _n = _n_l + _n_t
                 _n_res += _n
                 if not _n:
                     break
