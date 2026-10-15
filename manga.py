@@ -3210,7 +3210,11 @@ class MangaTranslator:
         # خودکار دنبال فونت UI (Sahel/System/Code/Mono) کنار فونت اصلی بگرد.
         try:
             _sys_fp = (self.font_by_style or {}).get("system")
-            if not _sys_fp or not os.path.isfile(_sys_fp):
+            _sys_default = (not _sys_fp
+                            or not os.path.isfile(_sys_fp)
+                            or os.path.abspath(str(_sys_fp))
+                            == os.path.abspath(str(font_path)))
+            if _sys_default:
                 _dirs = []
                 _dirs.append(os.path.dirname(os.path.abspath(font_path)))
                 _dirs.append(os.path.join(os.getcwd(), "fonts"))
@@ -9758,6 +9762,53 @@ class MangaTranslator:
         except Exception:
             return 0
 
+    @staticmethod
+    def _cluster_ocr_lines(polys, texts, y_tol_factor: float = 0.65):
+        """جعبه‌های OCR (که گاهی کلمه‌به‌کلمه‌اند) را به «خط» خوشه‌بندی می‌کند.
+        خروجی: [(x0, y0, x1, y1, text)] مرتب بر اساس y."""
+        try:
+            items = []
+            for _i, _p in enumerate(list(polys or [])):
+                _t = str((list(texts or []) + [""] * (len(polys or []) ))[_i] or "").strip()
+                if not _t:
+                    continue
+                _a = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                items.append([float(_a[:, 1].min()), float(_a[:, 1].max()),
+                              float(_a[:, 0].min()), float(_a[:, 0].max()), _t])
+            if not items:
+                return []
+            _hs = sorted(it[1] - it[0] for it in items)
+            _hmed = max(1.0, float(np.median(_hs)))
+            items.sort(key=lambda it: ((it[0] + it[1]) / 2.0, it[2]))
+            lines: List[dict] = []
+            for it in items:
+                _cy = (it[0] + it[1]) / 2.0
+                _hit = None
+                for ln in lines:
+                    _lcy = (ln["y0"] + ln["y1"]) / 2.0
+                    if abs(_cy - _lcy) <= max(_hmed * y_tol_factor,
+                                              (ln["y1"] - ln["y0"]) * 0.6):
+                        _hit = ln
+                        break
+                if _hit is None:
+                    lines.append({"y0": it[0], "y1": it[1], "x0": it[2],
+                                  "x1": it[3], "words": [it]})
+                else:
+                    _hit["y0"] = min(_hit["y0"], it[0])
+                    _hit["y1"] = max(_hit["y1"], it[1])
+                    _hit["x0"] = min(_hit["x0"], it[2])
+                    _hit["x1"] = max(_hit["x1"], it[3])
+                    _hit["words"].append(it)
+            out = []
+            for ln in lines:
+                ln["words"].sort(key=lambda w2: w2[2])
+                _txt = " ".join(w2[4] for w2 in ln["words"]).strip()
+                out.append((ln["x0"], ln["y0"], ln["x1"], ln["y1"], _txt))
+            out.sort(key=lambda t2: t2[1])
+            return out
+        except Exception:
+            return []
+
     def _ocr_crop(self, image_bgr: np.ndarray, rect) -> Tuple[str, List[np.ndarray]]:
 
         x1, y1, x2, y2 = [int(v) for v in rect]
@@ -10669,20 +10720,18 @@ class MangaTranslator:
                 and len(line_polys) >= 2
                 and len(line_texts or []) == len(line_polys))
             if _sys_can_split:
-                _order = sorted(
-                    range(len(line_polys)),
-                    key=lambda _j: float(np.asarray(
-                        line_polys[_j], dtype=np.float32).reshape(-1, 2)[:, 1].mean()))
+                # v1.14.31: OCR گاهی هر «کلمه» را جدا می‌دهد → اول خط‌سازی کن
+                _lines = MangaTranslator._cluster_ocr_lines(
+                    line_polys, line_texts or [])
                 _made = 0
-                for _j in _order:
-                    _lt = str((line_texts or [""])[_j] or "").strip()
+                for (_qx1, _qy1, _qx2, _qy2, _lt) in _lines:
+                    _lt = _lt.strip()
                     if not _lt:
                         continue
-                    _pl = np.asarray(line_polys[_j], dtype=np.float32).reshape(-1, 2)
-                    _lx1 = int(max(0, np.floor(float(_pl[:, 0].min()))) - 4)
-                    _ly1 = int(max(0, np.floor(float(_pl[:, 1].min()))) - 3)
-                    _lx2 = int(min(w - 1, np.ceil(float(_pl[:, 0].max()))) + 4)
-                    _ly2 = int(min(h - 1, np.ceil(float(_pl[:, 1].max()))) + 3)
+                    _lx1 = int(max(0, np.floor(_qx1)) - 4)
+                    _ly1 = int(max(0, np.floor(_qy1)) - 3)
+                    _lx2 = int(min(w - 1, np.ceil(_qx2)) + 4)
+                    _ly2 = int(min(h - 1, np.ceil(_qy2)) + 3)
                     if _lx2 - _lx1 < 12 or _ly2 - _ly1 < 8:
                         continue
                     _lpoly = np.array(
@@ -10696,10 +10745,13 @@ class MangaTranslator:
                         angle=0.0,
                         kind="dialogue",
                         bubble_style="system",
-                        ocr_polys=[np.asarray(line_polys[_j], dtype=np.int32)],
+                        ocr_polys=[_lpoly],
                         det_class=b.get("class_name", "") or "",
                     )
                     _sr.style_locked = True
+                    _sr.sys_split = True
+                    # مستطیلِ والد برای پوششِ gap-OCR (تا خط‌ها دوباره OCR نشوند)
+                    _sr.cover_rect = (x1, y1, x2, y2)
                     regions.append(_sr)
                     _made += 1
                 if _made:
@@ -10800,6 +10852,32 @@ class MangaTranslator:
                 regions[-1].style_locked = True
                 print(f"    [*] برچسب/پنجرهٔ سیستم (تک‌قطعه) → فونت سیستم")
 
+        # v1.14.31: خط‌های تکراریِ پنجرهٔ سیستم (والدهای هم‌پوشان detector) → یکی
+        try:
+            _sreg = [r for r in regions if getattr(r, "sys_split", False)]
+            if len(_sreg) > 1:
+                def _riou(_a, _b):
+                    ax, ay, aw, ah = _a.rect
+                    bx, by, bw2, bh2 = _b.rect
+                    ix = max(0, min(ax + aw, bx + bw2) - max(ax, bx))
+                    iy = max(0, min(ay + ah, by + bh2) - max(ay, by))
+                    inter = ix * iy
+                    if inter <= 0:
+                        return 0.0
+                    return inter / float(min(aw * ah, bw2 * bh2) or 1)
+                _keep = []
+                for _r in sorted(_sreg, key=lambda r: -(len(r.source_text or "")
+                                                        * 1000 + r.rect[2] * r.rect[3])):
+                    if any(_riou(_r, _k) >= 0.45 for _k in _keep):
+                        continue
+                    _keep.append(_r)
+                if len(_keep) < len(_sreg):
+                    _drop_ids = {id(r) for r in _sreg if r not in _keep}
+                    regions = [r for r in regions if id(r) not in _drop_ids]
+                    print(f"    [*] {_drop_ids and len(_drop_ids)} خط تکراری پنجرهٔ سیستم حذف شد")
+        except Exception:
+            pass
+
         before = len(regions)
         regions = self._merge_overlapping_regions(regions, iou_thresh=0.35, contain_thresh=0.65)
         print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
@@ -10883,6 +10961,14 @@ class MangaTranslator:
         cov = np.zeros((h, w), dtype=np.uint8)
         for r in existing:
             try:
+                # v1.14.31: پنجرهٔ سیستم خط‌شده → والدش «پوشیده» حساب می‌شود
+                _cr = getattr(r, "cover_rect", None)
+                if _cr is not None:
+                    cx0, cy0, cx1, cy1 = [int(v) for v in _cr]
+                    cx0, cy0 = max(0, cx0 - 8), max(0, cy0 - 8)
+                    cx1, cy1 = min(w, cx1 + 8), min(h, cy1 + 8)
+                    cv2.rectangle(cov, (cx0, cy0), (cx1, cy1), 255, -1)
+                    continue
                 x, y, rw, rh = [int(v) for v in r.rect]
             except Exception:
                 continue
