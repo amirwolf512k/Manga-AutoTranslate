@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.26"
+APP_VER = "1.14.31"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3205,6 +3205,38 @@ class MangaTranslator:
                 "یک فونت معتبر فارسی (ttf) با --font مشخص کنید. "
                 "پیشنهاد: فونت Vazirmatn (رایگان و متن‌باز)."
             )
+
+        # v1.14.31: فونت مخصوص «پنجرهٔ سیستم» — اگر --font-system داده نشد،
+        # خودکار دنبال فونت UI (Sahel/System/Code/Mono) کنار فونت اصلی بگرد.
+        try:
+            _sys_fp = (self.font_by_style or {}).get("system")
+            if not _sys_fp or not os.path.isfile(_sys_fp):
+                _dirs = []
+                _dirs.append(os.path.dirname(os.path.abspath(font_path)))
+                _dirs.append(os.path.join(os.getcwd(), "fonts"))
+                try:
+                    _dirs.append(os.path.join(
+                        os.path.dirname(os.path.abspath(__file__)), "fonts"))
+                except Exception:
+                    pass
+                for _d in _dirs:
+                    if not os.path.isdir(_d):
+                        continue
+                    _hit = ""
+                    for _prio in ("code", "mono", "system", "sahel"):
+                        for _f in sorted(os.listdir(_d)):
+                            _fl = _f.lower()
+                            if _fl.endswith((".ttf", ".otf")) and _prio in _fl:
+                                _hit = os.path.join(_d, _f)
+                                break
+                        if _hit:
+                            break
+                    if _hit:
+                        self.font_by_style["system"] = _hit
+                        print(f"[*] فونت سیستم: {os.path.basename(_hit)}")
+                        break
+        except Exception:
+            pass
 
         if gpu is None:
             ocr_gpu = self._detect_paddle_gpu() or self._detect_torch_cuda() or _ort_has_cuda()
@@ -8103,19 +8135,21 @@ class MangaTranslator:
                 or item.get("bubble_style")
                 or ""
             )
-            allowed = self._allowed_tones()
-            if allowed:
-                st = str(st).strip().lower().replace("-", "_").replace(" ", "_")
-                st = tone_aliases.get(st, st)
-                _visual = (getattr(region, "bubble_style", "") or "").strip()
-                if _visual and _visual != "normal":
-                    pass
-                elif st in allowed:
-                    region.bubble_style = st
-                elif not (region.bubble_style or "").strip():
+            # v1.14.31: سبکِ قفل‌شده (پنجرهٔ سیستم) از تغییر لحنِ AI مصون است
+            if not getattr(region, "style_locked", False):
+                allowed = self._allowed_tones()
+                if allowed:
+                    st = str(st).strip().lower().replace("-", "_").replace(" ", "_")
+                    st = tone_aliases.get(st, st)
+                    _visual = (getattr(region, "bubble_style", "") or "").strip()
+                    if _visual and _visual != "normal":
+                        pass
+                    elif st in allowed:
+                        region.bubble_style = st
+                    elif not (region.bubble_style or "").strip():
+                        region.bubble_style = "normal"
+                else:
                     region.bubble_style = "normal"
-            else:
-                region.bubble_style = "normal"
 
             names = item.get("names")
             if not isinstance(names, list):
@@ -9624,6 +9658,106 @@ class MangaTranslator:
         except Exception:
             return 0.0
 
+    # ──────────────────────────────────────────────────────────────────────
+    # v1.14.31: تشخیص «پنجرهٔ سیستم» (System Window / Quest / INFO …) از
+    # نشانه‌های متنی — براکت [ ] ، دونقطه، کلیدواژه و فاصلهٔ خط‌ها — برای
+    # همهٔ زبان‌ها: انگلیسی، ژاپنی، کره‌ای، چینی. هر خط جدا ترجمه و با
+    # فونت مخصوص سیستم رندر می‌شود (خواستهٔ کاربر).
+    # ──────────────────────────────────────────────────────────────────────
+    _SYSTEM_KEYWORDS = (
+        # انگلیسی
+        "system", "info", "information", "quest", "mission", "level", "status",
+        "window", "menu", "alert", "notice", "warning", "shop", "store",
+        "skill", "inventory", "reward", "daily", "weekly", "tutorial",
+        "settings", "objective", "complete", "completed", "failed", "bonus",
+        "achievement", "notification", "loading", "confirm", "cancel",
+        "accept", "decline", "points", "exp", "time left", "countdown",
+        "timer", "update", "guild", "dungeon", "penalty", "runaway",
+        # ژاپنی
+        "システム", "情報", "インフォ", "クエスト", "ミッション", "レベル",
+        "ステータス", "警告", "注意", "通知", "ショップ", "商店", "アイテム",
+        "報酬", "デイリー", "ウィークリー", "達成", "実績", "完了", "失敗",
+        "確認", "キャンセル", "設定", "スキル", "経験値", "所持", "メニュー",
+        "討伐", "侵入", "準備",
+        # کره‌ای
+        "시스템", "정보", "퀘스트", "미션", "레벨", "상태", "경고", "알림",
+        "상점", "아이템", "보상", "일일", "주간", "업적", "완료", "실패",
+        "확인", "취소", "설정", "스킬", "경험치", "메뉴", "공지",
+        # چینی
+        "系统", "信息", "任务", "等级", "状态", "警告", "提醒", "通知", "商店",
+        "道具", "奖励", "日常", "每周", "成就", "完成", "失败", "确认", "取消",
+        "设置", "技能", "经验", "公告", "菜单", "副本", "公会",
+    )
+
+    @staticmethod
+    def _system_window_score(text: str, line_texts, line_polys, rect) -> int:
+        """امتیاز ۰..۱۲ برای «پنجرهٔ سیستم» از نشانه‌های متنی/هندسی.
+        ≥۵ → پنجرهٔ سیستم: خط‌ها جدا و با فونت سیستم رندر می‌شوند."""
+        try:
+            t = str(text or "").strip()
+            if not t:
+                return 0
+            lines = [str(l or "").strip() for l in (line_texts or [])
+                     if str(l or "").strip()]
+            if not lines:
+                lines = [p for p in re.split(r"[\n]+", t) if p.strip()]
+            n = len(lines)
+            if n <= 0:
+                return 0
+            score = 0
+            # ۱) براکتِ سرصفحه — قوی‌ترین نشانه ([ Daily Quest ] / 【】 / (INFO))
+            if re.search(r"[\[\u3010(\uff08][^\]\u3011)\uff09]{1,48}[\]\u3011)\uff09]", t):
+                score += 3
+            # ۲) کلیدواژه‌های سیستم (چهار زبان)
+            kw = sum(1 for l in (l.lower() for l in lines)
+                     if any(k in l for k in MangaTranslator._SYSTEM_KEYWORDS))
+            if kw >= 1:
+                score += 2
+            if kw >= 3:
+                score += 1
+            # ۳) دونقطه‌های لیبل (HP: 120 / TIME : 05:00)
+            colons = sum(l.count(":") + l.count("\uff1a") + l.count("\uff1d")
+                         for l in lines)
+            if colons >= 2:
+                score += 2
+            # ۴) یکنواختی طول خط‌ها — ترازِ متنِ پنجره (فاصلهٔ متن‌ها)
+            lens = [len(l) for l in lines]
+            if n >= 3 and max(lens) - min(lens) <= max(6, int(0.35 * max(lens))):
+                score += 2
+            # ۵) فاصلهٔ عمودی باز بین خط‌ها — تایپوگرافی UI
+            if line_polys and len(line_polys) >= 3:
+                try:
+                    tops, hts = [], []
+                    for _p in line_polys:
+                        _a = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                        tops.append(float(_a[:, 1].min()))
+                        hts.append(max(1.0, float(_a[:, 1].max() - _a[:, 1].min())))
+                    tops.sort()
+                    gaps = [tops[i2 + 1] - tops[i2] for i2 in range(len(tops) - 1)]
+                    hmed = float(np.median(hts))
+                    if hmed > 1 and gaps and float(np.median(gaps)) >= hmed * 1.35:
+                        score += 2
+                except Exception:
+                    pass
+            # ۶) خط‌های کوتاه متعدد
+            if n >= 4 and max(lens) <= 42:
+                score += 1
+            # ۷) بدون نقطه‌گذاری جمله‌ای
+            if n >= 3 and not any(re.search(r"[\u3002\uff0e\uff01!?\u2026]$", l)
+                                  for l in lines):
+                score += 1
+            # ۸) پنجرهٔ عریض با چند خط
+            try:
+                w_ = int(rect[2]) - int(rect[0])
+                h_ = int(rect[3]) - int(rect[1])
+                if w_ > 0 and h_ > 0 and (w_ / float(h_)) >= 2.2 and n >= 3:
+                    score += 1
+            except Exception:
+                pass
+            return score
+        except Exception:
+            return 0
+
     def _ocr_crop(self, image_bgr: np.ndarray, rect) -> Tuple[str, List[np.ndarray]]:
 
         x1, y1, x2, y2 = [int(v) for v in rect]
@@ -9632,7 +9766,7 @@ class MangaTranslator:
         x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
         x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
         if x2 - x1 < 8 or y2 - y1 < 8:
-            return "", []
+            return "", [], [], []
         crop0 = image_bgr[y1:y2, x1:x2]
         ch0, cw0 = crop0.shape[:2]
 
@@ -9781,7 +9915,7 @@ class MangaTranslator:
             return inter / min(aa, ab)
 
         merged: List[List] = []
-        best = ("", [], -1.0, [])
+        best = ("", [], -1.0, [], [])
         inset_used = inset if core is not crop0 else 0
         early_stop = False
         for name, crop_v, sc in variants:
@@ -9812,7 +9946,8 @@ class MangaTranslator:
 
             scv = _score(txt, conf)
             if scv > best[2]:
-                best = (txt, polys, scv, _poly_angs)
+                best = (txt, polys, scv, _poly_angs,
+                        [e[0] for e in entries if e[2] is not None])
 
             _latin_n = len(re.sub(r"[^A-Za-z]", "", txt or ""))
             if ((not _tilted0)
@@ -9871,9 +10006,10 @@ class MangaTranslator:
             ]
             u_angs = [float(m_item[3]) if len(m_item) > 3 else 0.0
                       for m_item in merged if m_item[2] is not None]
+            u_texts = [str(m_item[0] or "") for m_item in merged if m_item[2] is not None]
             scv = _score(u_txt, u_conf)
             if scv >= best[2]:
-                best = (u_txt, u_polys, scv, u_angs)
+                best = (u_txt, u_polys, scv, u_angs, u_texts)
 
 
         best_txt = best[0] or ""
@@ -9926,11 +10062,14 @@ class MangaTranslator:
                                     MangaTranslator._poly_long_side_angle(_bp)))
                             except Exception:
                                 _desk_angs.append(0.0)
-                        best = (txt, back_polys, scv, _desk_angs)
+                        _desk_texts = [str(e[0] or "") for e in _entries
+                                       if e[2] is not None]
+                        best = (txt, back_polys, scv, _desk_angs, _desk_texts)
             except Exception:
                 pass
 
-        return best[0], best[1], (best[3] if len(best) > 3 else [])
+        return (best[0], best[1], (best[3] if len(best) > 3 else []),
+                (best[4] if len(best) > 4 else []))
 
 
     @staticmethod
@@ -10470,7 +10609,7 @@ class MangaTranslator:
                     any_text = True
                 if any_text:
                     continue
-                full_txt, full_polys, full_angs = self._ocr_crop(image, full_rect)
+                full_txt, full_polys, full_angs, _full_lts = self._ocr_crop(image, full_rect)
                 if not str(full_txt or "").strip():
                     continue
                 print(f"    [*] اجزای شکسته خالی بودند → OCR باکس کامل {full_rect}")
@@ -10481,7 +10620,7 @@ class MangaTranslator:
                 }, fx1, fy1, fx2, fy2, fx2 - fx1, fy2 - fy1))
                 ocr_results.append((full_txt, full_polys, full_angs))
 
-        for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs) in zip(
+        for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs, line_texts) in zip(
                 cand, ocr_results):
             if not text:
                 _gink = 0.0
@@ -10517,6 +10656,56 @@ class MangaTranslator:
 
             if self._is_non_english_script(text):
                 continue
+
+            # ── v1.14.31: پنجرهٔ سیستم → خط‌به‌خط جدا (نه یک متن یکجا) ──
+            try:
+                _sys_score = MangaTranslator._system_window_score(
+                    text, line_texts, line_polys, (x1, y1, x2, y2))
+            except Exception:
+                _sys_score = 0
+            _sys_ok = _sys_score >= 5
+            _sys_can_split = (
+                _sys_ok
+                and len(line_polys) >= 2
+                and len(line_texts or []) == len(line_polys))
+            if _sys_can_split:
+                _order = sorted(
+                    range(len(line_polys)),
+                    key=lambda _j: float(np.asarray(
+                        line_polys[_j], dtype=np.float32).reshape(-1, 2)[:, 1].mean()))
+                _made = 0
+                for _j in _order:
+                    _lt = str((line_texts or [""])[_j] or "").strip()
+                    if not _lt:
+                        continue
+                    _pl = np.asarray(line_polys[_j], dtype=np.float32).reshape(-1, 2)
+                    _lx1 = int(max(0, np.floor(float(_pl[:, 0].min()))) - 4)
+                    _ly1 = int(max(0, np.floor(float(_pl[:, 1].min()))) - 3)
+                    _lx2 = int(min(w - 1, np.ceil(float(_pl[:, 0].max()))) + 4)
+                    _ly2 = int(min(h - 1, np.ceil(float(_pl[:, 1].max()))) + 3)
+                    if _lx2 - _lx1 < 12 or _ly2 - _ly1 < 8:
+                        continue
+                    _lpoly = np.array(
+                        [[_lx1, _ly1], [_lx2, _ly1], [_lx2, _ly2], [_lx1, _ly2]],
+                        dtype=np.int32)
+                    _sr = TextRegion(
+                        id=len(regions),
+                        boxes=[_lpoly],
+                        source_text=_lt,
+                        rect=(_lx1, _ly1, _lx2 - _lx1, _ly2 - _ly1),
+                        angle=0.0,
+                        kind="dialogue",
+                        bubble_style="system",
+                        ocr_polys=[np.asarray(line_polys[_j], dtype=np.int32)],
+                        det_class=b.get("class_name", "") or "",
+                    )
+                    _sr.style_locked = True
+                    regions.append(_sr)
+                    _made += 1
+                if _made:
+                    print(f"    [*] پنجرهٔ سیستم شناخته شد → {_made} خط جداگانه "
+                          f"(ترجمهٔ جدا + فونت سیستم)")
+                    continue
 
             kind = self._classify_text(text)
 
@@ -10605,6 +10794,11 @@ class MangaTranslator:
                 det_class=b.get("class_name", "") or "",
             ))
             regions[-1].angle_src = ang_src
+            if _sys_ok:
+                # تک‌خطی/تگ براکت‌دار مثل [ Daily Quest ] — فونت سیستم
+                regions[-1].bubble_style = "system"
+                regions[-1].style_locked = True
+                print(f"    [*] برچسب/پنجرهٔ سیستم (تک‌قطعه) → فونت سیستم")
 
         before = len(regions)
         regions = self._merge_overlapping_regions(regions, iou_thresh=0.35, contain_thresh=0.65)
@@ -11037,6 +11231,8 @@ class MangaTranslator:
             self._tone_clf = clf
         h, w = image.shape[:2]
         for r in regions:
+            if getattr(r, "style_locked", False):
+                continue  # v1.14.31: سبکِ قفل‌شده (پنجرهٔ سیستم) دست‌نخورده می‌ماند
             try:
                 x0, y0, x1, y1 = r.rect
                 x0, y0 = max(0, int(x0)), max(0, int(y0))
@@ -12330,6 +12526,90 @@ html, body { background: #0a0a0b; }
         current_bounds: List[int] = []
         min_strip = max(1, int(work_h * 0.65))
         scan_from = 0
+
+        # ── v1.14.31: برش امن دوطرفه ──
+        # نقشهٔ صفحه‌ها در مختصات «عمرِ نوار» (هرگز ری‌بیس نمی‌شود) + کشِ
+        # پیش‌تشخیص. دو کارگرِ تشخیص فصل را از دو سر می‌خورند: یکی از صفحهٔ
+        # اول به آخر، یکی از صفحهٔ آخر به اول (خواستهٔ کاربر) → جعبه‌های
+        # حباب آماده‌اند و حلقهٔ برش منتظر تشخیصِ زنده نمی‌ماند.
+        _page_spans: List[List[int]] = []   # [abs_page_idx, y0_lifetime]
+        _life = [0, 0]                      # [life_h, life_off]
+        _pre_boxes: Dict[int, Tuple[float, List[Tuple[int, int]], bool]] = {}
+        _pre_lock = threading.Lock()
+        _pre_pages = list(range(start_idx, len(image_files)))
+
+        def _pre_detect_page(_idx: int) -> None:
+            try:
+                _im = cv2.imread(image_files[_idx])
+                if _im is None:
+                    with _pre_lock:
+                        _pre_boxes[_idx] = (0.0, [], True)
+                    return
+                _pw = float(_im.shape[1])
+                _blank = False
+                try:
+                    _g = (cv2.cvtColor(_im, cv2.COLOR_BGR2GRAY)
+                          if _im.ndim == 3 else _im)
+                    if int(_g.min()) >= 205:
+                        _blank = True
+                except Exception:
+                    pass
+                _bx: List[Tuple[int, int]] = []
+                if not _blank:
+                    try:
+                        for _box in self.det.detect(_im, fast=True):
+                            _r = _box.get("rect")
+                            if not _r:
+                                continue
+                            _bx.append((int(_r[1]), int(_r[3])))
+                    except Exception:
+                        _bx = []
+                with _pre_lock:
+                    _pre_boxes[_idx] = (_pw, _bx, _blank)
+            except Exception:
+                with _pre_lock:
+                    _pre_boxes.setdefault(_idx, (0.0, [], True))
+
+        _pre_threads: List[threading.Thread] = []
+        if _pre_pages and self.det is not None:
+            try:
+                from collections import deque as _deque
+                _dq = _deque(_pre_pages)
+                try:
+                    _n_pre = 2 if _on_android() else max(2, min(4, (os.cpu_count() or 2)))
+                except Exception:
+                    _n_pre = 2
+                _n_pre = max(1, min(_n_pre, len(_pre_pages)))
+
+                def _pre_worker(_from_right: bool) -> None:
+                    while True:
+                        try:
+                            _idx = _dq.pop() if _from_right else _dq.popleft()
+                        except IndexError:
+                            return
+                        _pre_detect_page(_idx)
+
+                for _k in range(_n_pre):
+                    _t = threading.Thread(
+                        target=_pre_worker, args=(bool(_k % 2),), daemon=True)
+                    _t.start()
+                    _pre_threads.append(_t)
+                print(f"[*] برش امن دوطرفه: {_n_pre} کارگر تشخیص — یکی از صفحهٔ "
+                      f"اول به آخر، یکی از آخر به اول")
+            except Exception:
+                _pre_threads = []
+
+        def _pre_wait(_idx: int, _timeout: float = 120.0) -> bool:
+            _t0 = time.time()
+            while time.time() < _t0 + _timeout:
+                with _pre_lock:
+                    if _idx in _pre_boxes:
+                        return True
+                if _pre_threads and not any(_t.is_alive() for _t in _pre_threads):
+                    break
+                time.sleep(0.04)
+            with _pre_lock:
+                return _idx in _pre_boxes
         print(
             f"[*] چسباندن streaming + برش امن: هدف={work_h}px | "
             f"نگاه به جلو={lookahead}px | ارتفاع هدف است، نه برش اجباری"
@@ -12388,6 +12668,45 @@ html, body { background: #0a0a0b; }
 
                 def _scan_window(_top: int) -> List[Tuple[int, int]]:
                     _bottom = min(scan_limit, _top + 1680)
+                    # ── v1.14.31: خواندن از کش دوطرفه (اگر صفحه‌ها کش شدند) ──
+                    try:
+                        if _page_spans and _pre_threads:
+                            _ih_now = int(strip.shape[0])
+                            _end_cur = _life[0] - _life[1]
+                            _out_c: List[Tuple[int, int]] = []
+                            _have_all = True
+                            for _j in range(len(_page_spans)):
+                                _pid, _y0 = _page_spans[_j]
+                                _seg_a = _y0 - _life[1]
+                                _y0n = _page_spans[_j + 1][1] \
+                                    if _j + 1 < len(_page_spans) else _life[0]
+                                _seg_b = _y0n - _life[1]
+                                if _seg_b <= _top or _seg_a >= _bottom:
+                                    continue
+                                if not _pre_wait(_pid):
+                                    _have_all = False
+                                    break
+                                with _pre_lock:
+                                    _ent = _pre_boxes.get(_pid)
+                                if _ent is None or _ent[0] <= 0:
+                                    _have_all = False
+                                    break
+                                _pw, _bx, _blank = _ent
+                                if _blank:
+                                    continue
+                                _sc = target_w / _pw
+                                _base = _seg_a
+                                for (_by1, _by2) in _bx:
+                                    _sy1 = _base + int(_by1 * _sc)
+                                    _sy2 = _base + int(_by2 * _sc)
+                                    if _sy2 < _top or _sy1 > _bottom:
+                                        continue
+                                    _out_c.append((_sy1, _sy2))
+                            if _have_all:
+                                return [(_sy1 - padding, _sy2 + padding)
+                                        for (_sy1, _sy2) in _out_c]
+                    except Exception:
+                        pass
                     _win = strip[_top:_bottom]
                     try:
                         _g = (cv2.cvtColor(_win, cv2.COLOR_BGR2GRAY)
@@ -12447,6 +12766,10 @@ html, body { background: #0a0a0b; }
             current_protected = [(max(0, top - offset), bottom - offset)
                                  for top, bottom in current_protected if bottom >= offset]
             scan_from = max(0, scan_from - offset)
+            # v1.14.31: مختصات عمرِ نوار جلو می‌رود + صفحه‌های کاملاً مصرف‌شده حذف
+            _life[1] += offset
+            while len(_page_spans) > 1 and (_page_spans[1][1] - _life[1]) <= 0:
+                _page_spans.pop(0)
             if final:
                 label = ("پایان فصل" if current_h <= work_h + min_strip
                          else "بزرگ‌تر از هدف: محل برش امن پیدا نشد")
@@ -12459,7 +12782,7 @@ html, body { background: #0a0a0b; }
                     raise RuntimeError("نوار بدون محل برش امن بیش از حد بلند شد؛ "
                                        "برای جلوگیری از قطع متن، پردازش متوقف شد.")
 
-        for f in image_files[start_idx:]:
+        for _abs_i, f in enumerate(image_files[start_idx:], start=start_idx):
             im = cv2.imread(f)
             if im is None:
                 raise RuntimeError(f"خواندن تصویر ناموفق بود؛ صفحه حذف نشد: {f}")
@@ -12473,6 +12796,8 @@ html, body { background: #0a0a0b; }
             if current_pages:
                 current_bounds.append(current_h)
             current_pages.append(im)
+            _page_spans.append([_abs_i, _life[0]])
+            _life[0] += h
             current_h += h
             _cut_and_emit()
 

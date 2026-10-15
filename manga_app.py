@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.26"
+APP_VER = "1.14.31"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -72,7 +72,9 @@ FONT_BUNDLES = [
     ("thought",      "Samim-Bold.ttf", "تفکر ابری", [
         "https://raw.githubusercontent.com/rastikerdar/samim-font/master/dist/Samim-Bold.ttf",
     ]),
-    ("system",       "Sahel-Bold.ttf", "UI سیستم/تگ", [
+    ("system",       "Vazir-Code.ttf", "پنجرهٔ سیستم/UI (دیجیتال)", [
+        "https://raw.githubusercontent.com/rastikerdar/vazir-code-font/master/dist/Vazir-Code.ttf",
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazir-Code.ttf",
         "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Bold.ttf",
     ]),
     ("letter",       "Amiri-Regular.ttf", "نامه/طومار", [
@@ -1443,7 +1445,7 @@ def run_web():
     # صفحهٔ خواندن زندهٔ وب — داخل پوشهٔ live نوشته می‌شود و صفحه‌های جدید خودکار به آن اضافه می‌شوند
     _LIVE_READER_TMPL = """<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>صفحه زنده</title>
+<title>نمایش</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
@@ -1470,7 +1472,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 .pbar{position:fixed;bottom:0;left:0;right:0;height:4px;background:#1a1a1c;z-index:4}
 .pfill{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}
 </style></head><body>
-<div class="bar"><span class="dot" id="dot"></span><div class="t">صفحه زنده — صفحه‌ها سر جایشان پر می‌شوند</div><button type="button" class="zbtn" id="zo" title="کوچک‌تر">−</button><span class="zv" id="zv">100%</span><button type="button" class="zbtn" id="zi" title="بزرگ‌تر">+</button><button type="button" class="zbtn" id="zf" title="پهنای صفحه">پهنا</button><button type="button" class="dbtn" id="db">🔍 دیباگ</button><div class="n" id="n">0</div></div>
+<div class="bar"><span class="dot" id="dot"></span><div class="t">نمایش — صفحه‌ها سر جایشان پر می‌شوند</div><button type="button" class="zbtn" id="zo" title="کوچک‌تر">−</button><span class="zv" id="zv">100%</span><button type="button" class="zbtn" id="zi" title="بزرگ‌تر">+</button><button type="button" class="zbtn" id="zf" title="پهنای صفحه">پهنا</button><button type="button" class="dbtn" id="db">🔍 دیباگ</button><div class="n" id="n">0</div></div>
 <main class="c" id="c"><div class="hint" id="h">در انتظار اولین صفحه…</div></main>
 <button type="button" class="chip" id="chip">↓ صفحه‌های جدید</button>
 <div class="pbar"><div class="pfill" id="pf"></div></div>
@@ -1649,13 +1651,15 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             str(title).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;")
         )
+        # v1.14.31: نوار بالا دیگر هرگز ثابت نیست — کل صفحه اسکرول طبیعی سند
+        # را دارد (روی WebView اندروید هم مطمئن). فقط نوار پیشرفت پایین ثابت است.
         css = (
             "*{box-sizing:border-box;margin:0;padding:0}"
-            "html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;"
-            "overscroll-behavior:none;-webkit-user-select:none;user-select:none}"
-            ".rdr{position:fixed;inset:0;z-index:1;background:#000;display:flex;flex-direction:column;direction:ltr}"
+            "html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;"
+            "overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}"
+            ".rdr{background:#000;direction:ltr}"
             ".rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;"
-            "background:rgba(12,12,14,.96);border-bottom:1px solid #232326;flex:none;backdrop-filter:blur(8px);z-index:2}"
+            "background:rgba(12,12,14,.96);border-bottom:1px solid #232326;backdrop-filter:blur(8px);z-index:2}"
             ".rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;"
             "padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;"
             "min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}"
@@ -1663,46 +1667,48 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             ".rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}"
             ".rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;"
             "overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}"
-            ".rdrS{flex:1;overflow:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;"
-            "touch-action:pan-y;position:relative;background:#000}"
+            ".rdrS{position:relative;background:#000}"
             ".rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}"
             ".rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;"
             "-webkit-user-drag:none;pointer-events:none}"
-            ".rdr-progress{position:relative;height:3px;background:#1a1a1c;flex:none}"
+            ".rdr-progress{position:fixed;bottom:0;left:0;right:0;height:3px;background:#1a1a1c;z-index:3}"
             ".rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}"
             ".zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}"
+            ".ph{width:100%;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:shph 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}"
+            "@keyframes shph{0%{background-position:120% 0}100%{background-position:-80% 0}}"
+            ".sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spinph 1s linear infinite}"
+            "@keyframes spinph{to{transform:rotate(360deg)}}"
             "@media (max-width:480px){"
             ".rdr-bar{gap:4px;padding:6px 8px}"
             ".rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}"
             ".rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}"
             "}"
         )
+        # v1.14.31: جاوااسکریپت روی اسکرولِ خودِ سند (window) — نه داخل باکس؛
+        # نوار بالا با اسکرول کامل پایین می‌رود (وب + اندروید WebView).
         js = r"""
 (function(){
   const root = document.getElementById('manga_rdr');
   if (!root) return;
-  const sc = root.querySelector('.rdrS');
   const c = root.querySelector('.rdrC');
   const bar = root.querySelector('.zlv');
   const prog = root.querySelector('.rdrB');
-  if (!sc || !c) return;
+  if (!c) return;
   let z = 1;
   const MIN = 0.5, MAX = 4;
-  const baseWidth = () => Math.max(200, Math.min(900, sc.clientWidth || window.innerWidth || 360));
+  const baseWidth = () => Math.max(200, Math.min(900, window.innerWidth || 360));
   const applyZoom = (nz, cx, cy) => {
     nz = Math.min(MAX, Math.max(MIN, +nz || 1));
-    const rect = sc.getBoundingClientRect();
-    const sx = (typeof cx === 'number') ? cx : (rect.left + rect.width / 2);
-    const sy = (typeof cy === 'number') ? cy : (rect.top + rect.height / 2);
-    const relX = (sc.scrollLeft + (sx - rect.left)) / Math.max(0.01, z);
-    const relY = (sc.scrollTop + (sy - rect.top)) / Math.max(0.01, z);
+    const sx = (typeof cx === 'number') ? cx : (window.innerWidth / 2);
+    const sy = (typeof cy === 'number') ? cy : (window.innerHeight / 2);
+    const relX = (window.scrollX + sx) / Math.max(0.01, z);
+    const relY = (window.scrollY + sy) / Math.max(0.01, z);
     z = nz;
     c.style.maxWidth = 'none';
     c.style.width = Math.round(baseWidth() * z) + 'px';
     c.style.marginLeft = 'auto';
     c.style.marginRight = 'auto';
-    sc.scrollLeft = relX * z - (sx - rect.left);
-    sc.scrollTop = relY * z - (sy - rect.top);
+    window.scrollTo(Math.max(0, relX * z - sx), Math.max(0, relY * z - sy));
     if (bar) bar.textContent = Math.round(z * 100) + '%';
     root.dataset.zoom = String(z);
   };
@@ -1722,7 +1728,14 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
       try { if (history.length > 1) history.back(); } catch (err) {}
       return;
     }
-    if (act === 'zoom-in') zoomBy(1.25);
+    if (act === 'dbg') {
+      dbgMode = !dbgMode;
+      btn.textContent = dbgMode ? '\ud83d\udcd6 نهایی' : '🔍 دیباگ';
+      btn.classList.toggle('fs', dbgMode);
+      rebuild();
+      return;
+    }
+    else if (act === 'zoom-in') zoomBy(1.25);
     else if (act === 'zoom-out') zoomBy(0.8);
     else if (act === 'zoom-fit') setZoom(1);
     else if (act === 'fs') {
@@ -1743,12 +1756,12 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
       }
     }
   });
-  sc.addEventListener('wheel', (e) => {
+  window.addEventListener('wheel', (e) => {
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
     zoomBy(e.deltaY < 0 ? 1.12 : 1 / 1.12, e.clientX, e.clientY);
   }, { passive: false });
-  sc.addEventListener('dblclick', (e) => {
+  window.addEventListener('dblclick', (e) => {
     e.preventDefault();
     if (z > 1.3) setZoom(1);
     else zoomBy(2.2, e.clientX, e.clientY);
@@ -1756,16 +1769,16 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
   let pinch = null, pan = null;
   const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
-  sc.addEventListener('touchstart', (e) => {
+  document.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
-      e.preventDefault();
       pinch = { startDist: dist(e.touches[0], e.touches[1]), startZ: z };
       pan = null;
     } else if (e.touches.length === 1) {
-      pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, sl: sc.scrollLeft, st: sc.scrollTop };
+      pan = { x: e.touches[0].clientX, y: e.touches[0].clientY,
+              sl: window.scrollX, st: window.scrollY };
     }
-  }, { passive: false });
-  sc.addEventListener('touchmove', (e) => {
+  }, { passive: true });
+  document.addEventListener('touchmove', (e) => {
     if (pinch && e.touches.length === 2) {
       e.preventDefault();
       const d = dist(e.touches[0], e.touches[1]);
@@ -1774,20 +1787,21 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
     } else if (pan && e.touches.length === 1 && z > 1.05) {
       e.preventDefault();
       const t = e.touches[0];
-      sc.scrollLeft = pan.sl - (t.clientX - pan.x);
-      sc.scrollTop = pan.st - (t.clientY - pan.y);
+      window.scrollTo(pan.sl - (t.clientX - pan.x), pan.st - (t.clientY - pan.y));
     }
   }, { passive: false });
-  sc.addEventListener('touchend', (e) => {
+  document.addEventListener('touchend', (e) => {
     if (e.touches.length < 2) pinch = null;
     if (e.touches.length === 0) pan = null;
   });
-  sc.addEventListener('touchcancel', () => { pinch = null; pan = null; });
-  sc.addEventListener('scroll', () => {
+  document.addEventListener('touchcancel', () => { pinch = null; pan = null; });
+  const updateProgress = () => {
     if (!prog) return;
-    const m = sc.scrollHeight - sc.clientHeight;
-    prog.style.width = (m > 0 ? (sc.scrollTop / m * 100) : 0) + '%';
-  }, { passive: true });
+    const m = document.documentElement.scrollHeight - window.innerHeight;
+    prog.style.width = (m > 0 ? Math.min(100, Math.max(0, window.scrollY / m * 100)) : 0) + '%';
+  };
+  window.addEventListener('scroll', updateProgress, { passive: true });
+  window.addEventListener('resize', () => { if (z !== 1) applyZoom(z); updateProgress(); });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       try {
@@ -1803,25 +1817,54 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
       if (btn) btn.click();
     }
   });
-  setZoom(1);
+  // ——— نمایش زنده داخل خواننده (اسلات لودینگ) + سوئیچ دیباگ ———
+  let dbgMode = false, arrived = c.querySelectorAll('img').length, total = 0, ndbg = 0;
+  const mkPh = () => {
+    const d = document.createElement('div');
+    d.className = 'ph';
+    d.innerHTML = '<span class="sp"></span>در حال ترجمه…';
+    return d;
+  };
+  const mkImg = (i) => {
+    const im = document.createElement('img');
+    im.src = (dbgMode ? 'd/' : 'i/') + i;
+    im.loading = 'lazy';
+    im.decoding = 'async';
+    im.alt = '';
+    im.draggable = false;
+    return im;
+  };
+  function rebuild() {
+    const a = dbgMode ? ndbg : arrived;
+    const w = Math.max(total, a);
+    c.innerHTML = '';
+    for (let i = 0; i < w; i++) c.appendChild(i < a ? mkImg(i) : mkPh());
+  }
+  function renderLive() {
+    const a = dbgMode ? ndbg : arrived;
+    const w = Math.max(total, a);
+    while (c.children.length < w) c.appendChild(mkPh());
+    for (let i = 0; i < w; i++) {
+      const el = c.children[i];
+      if (i < a && el && el.tagName !== 'IMG') c.replaceChild(mkImg(i), el);
+    }
+  }
+  window.__mangaLive = function(n, tot, nd) {
+    try {
+      if (typeof tot === 'number' && tot > 0) total = tot;
+      if (typeof nd === 'number' && nd > 0) {
+        ndbg = nd;
+        const tb = root.querySelector('[data-act="dbg"]');
+        if (tb) tb.hidden = false;
+      }
+      if (!dbgMode) arrived = Math.max(arrived, n | 0);
+      renderLive();
+    } catch (err) {}
+  };
+  if (arrived > 0) renderLive();
+  updateProgress();
 })();
 """
-        
-        js = js.replace("sl: sc.scrollLeft", "sl: sc.scrollLeft").replace("sl: sc.scrollLeft", "sl: sc.scrollLeft")
-        js = js.replace("sl: sc.scrollLeft", "sl: sc.scrollLeft")
-        js = js.replace("sl: sc.scrollLeft", "sl: sc.scrollLeft")
-        
-        js = js.replace("sl: sc.scrollLeft", "sl: sc.scrollLeft")
-        js = js.replace("sl: sc.scrollLeft", "sl: sc.scrollLeft")
-        js = js.replace("pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, sl: sc.scrollLeft, st: sc.scrollTop };",
-                        "pan = { x: e.touches[0].clientX, y: e.touches[0].clientY, sl: sc.scrollLeft, st: sc.scrollTop };")
-        
-        js = js.replace("sl: sc.scrollLeft, st: sc.scrollTop", "sl: sc.scrollLeft, st: sc.scrollTop")
-        js = js.replace("sl: sc.scrollLeft", "sl: sc.scrollLeft")
-        
-        if "sc؛" in js:
-            js = js.replace("sc؛Left", "sc.scrollLeft")
-        pass
 
         page = (
             "<!DOCTYPE html>\n"
@@ -2524,14 +2567,17 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 
         html_state = gr.State("")
         html_debug_state = gr.State("")
-        # نمایش زنده و نتیجهٔ نهایی حالا یک کارت مشترک‌اند — یک «نمایش»،
-        # نه دو نمایشِ جدا (خواستهٔ کاربر)
+        # v1.14.31: فقط «یک» نمایش — دکمه‌های «نمایش اصلی» و «صفحه دیباگ» حذف شدند.
+        # دیباگ با همان دکمهٔ 🔍 داخل خود نمایش عوض می‌شود (خواستهٔ کاربر).
+        # کامپوننت‌های قدیمی فقط به‌عنوان hidden-stub می‌مانند تا امضای خروجی‌ها نشکند؛
+        # همه‌جا visible=False اجباری می‌شود.
         with gr.Group(elem_classes=["stepcard"], visible=False) as result_group:
             gr.HTML('<div class="steptitle"><span class="stepnum">📖</span> '
-                    'صفحه‌ها — زنده و نتیجه</div>')
-            live_btn = _safe(gr.Button, "📖 صفحه زنده", visible=False, elem_id="manga_live_btn")
+                    'نمایش</div>')
+            live_btn = _safe(gr.Button, "📖 نمایش", visible=False, elem_id="manga_live_btn")
             gr.HTML('<div class="livehint" id="manga_live_hint" style="display:none">'
-                    'تا کار در جریان است، هر صفحهٔ جدید خودش داخل نمایشگر اضافه می‌شود — بدون رفرش</div>')
+                    'تا کار در جریان است، هر صفحهٔ جدید خودش داخل نمایش اضافه می‌شود — '
+                    'دکمهٔ 🔍 دیباگ هم داخل خودِ نمایش است</div>')
             with gr.Row():
                 btn_view = _safe(gr.Button, "👁 نمایش", visible=False,
                                  elem_id="manga_view_btn")
@@ -2957,20 +3003,22 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 
             def _pack(btn, log, dl=None, view=None, group=None, viewer=None, html="",
                       dl_dbg=None, view_dbg=None, dbg_row=None, html_dbg=""):
+                # v1.14.31: «نمایش اصلی» و «نمایش دیباگ» برای همیشه مخفی —
+                # فقط یک نمایش (دکمهٔ 📖) وجود دارد.
                 return (
                     sid,
                     gr.update(value=sid),
                     gr.update(value=btn),
                     gr.update(value=log),
                     dl if dl is not None else gr.update(),
-                    view if view is not None else gr.update(),
+                    gr.update(visible=False),
                     group if group is not None else gr.update(),
                     viewer if viewer is not None else gr.update(),
                     html if html is not None else gr.update(),
-                    dl_dbg if dl_dbg is not None else gr.update(),
-                    view_dbg if view_dbg is not None else gr.update(),
-                    dbg_row if dbg_row is not None else gr.update(),
-                    html_dbg if html_dbg is not None else gr.update(),
+                    gr.update(visible=False),
+                    gr.update(visible=False),
+                    gr.update(visible=False),
+                    gr.update(),
                 )
 
             with job["lock"]:
@@ -3404,7 +3452,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 gr.update(value=btn),
                 gr.update(value=log),
                 gr.update(value=dl, label=_dl_label(dl), visible=vis) if vis else gr.update(),
-                gr.update(visible=vis),
+                gr.update(visible=False),
                 gr.update(visible=vis),
                 gr.update(visible=False),
                 html if vis else gr.update(),
@@ -3507,13 +3555,13 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                     gr.update(value=btn),
                     gr.update(value=log),
                     gr.update(value=dl, label=_dl_label(dl), visible=vis) if vis else gr.update(),
-                    gr.update(visible=vis),
+                    gr.update(visible=False),
                     gr.update(visible=vis),
                     gr.update(visible=False),
                     html if vis else gr.update(),
-                    gr.update(value=dl_dbg, visible=show_dbg and has_dbg) if (show_dbg and has_dbg) else gr.update(visible=show_dbg),
-                    gr.update(visible=show_dbg),
-                    gr.update(visible=show_dbg),
+                    gr.update(visible=False),
+                    gr.update(visible=False),
+                    gr.update(visible=False),
                     gr.update(),
                 )
 
@@ -3591,6 +3639,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             with job["lock"]:
                 html_dbg = job.get("html_debug") or ""
             show_card = bool(vis or (running and live_cnt > 0))
+            # v1.14.31: نمایش اصلی/دیباگ حذف — همه‌جا مخفی؛ فقط «نمایش» (دکمهٔ 📖) می‌ماند
             return (
                 sid,
                 gr.update(value=sid),
@@ -3598,14 +3647,14 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 gr.update(value=btn),
                 gr.update(value=log) if (log and log_changed) else gr.update(),
                 gr.update(value=dl, label=_dl_label(dl), visible=vis) if vis else gr.update(),
-                gr.update(visible=vis),
+                gr.update(visible=False),
                 gr.update(visible=show_card),
                 gr.update(),
                 gr.update(),
-                gr.update(value=dl_dbg, visible=show_dbg and has_dbg) if (show_dbg and has_dbg) else gr.update(visible=show_dbg),
-                gr.update(visible=show_dbg),
-                gr.update(visible=show_dbg),
-                gr.update(value=html_dbg) if html_dbg else gr.update(),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(visible=False),
+                gr.update(),
             )
 
 
@@ -3691,27 +3740,31 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 job["_live_was_running"] = running
                 job["ts"] = time.time()
             if not running:
-                # بعد از پایان، «نمایش» نهایی جای دکمهٔ زنده را می‌گیرد
-                return (gr.update(visible=False), gr.update(),
-                        gr.update())
+                # v1.14.31: بعد از پایان هم همان «نمایش» می‌ماند (پوشهٔ live همهٔ
+                # صفحه‌های نهایی را دارد) — دیگر پنهان نمی‌شود.
+                tot_end = _live_total_of(live_dir) if live_dir else 0
+                n_end = len(files)
+                if n_end > 0 or tot_end > 0:
+                    if tot_end > 0:
+                        lbl_end = "📖 نمایش (%d/%d صفحه)" % (n_end, tot_end)
+                    elif n_end > 1:
+                        lbl_end = "📖 نمایش (%d صفحه)" % n_end
+                    else:
+                        lbl_end = "📖 نمایش (۱ صفحه)"
+                    return (gr.update(value=lbl_end, visible=True),
+                            gr.update(),
+                            gr.update(visible=False))
+                return (gr.update(visible=False), gr.update(), gr.update())
             tot = _live_total_of(live_dir) if live_dir else 0
             if tot > 0:
-                label = "📖 صفحه زنده (%d/%d صفحه)" % (len(files), tot)
+                label = "📖 نمایش (%d/%d صفحه)" % (len(files), tot)
             elif len(files) > 1:
-                label = "📖 صفحه زنده (%d صفحه)" % len(files)
+                label = "📖 نمایش (%d صفحه)" % len(files)
             else:
-                label = "📖 صفحه زنده (۱ صفحه)"
-            if dbg_dir:
-                dtot = _live_total_of(dbg_dir) or tot
-                dbg_lbl = ("🔍 صفحه دیباگ (%d/%d صفحه)" % (len(dbg_files), dtot)
-                           if dtot > 0 else
-                           ("🔍 صفحه دیباگ (%d صفحه)" % len(dbg_files)
-                            if len(dbg_files) > 1 else "🔍 صفحه دیباگ (۱ صفحه)"))
-            else:
-                dbg_lbl = ""
+                label = "📖 نمایش (۱ صفحه)"
             return (gr.update(value=label, visible=True),
                     gr.update(visible=True),
-                    gr.update(value=dbg_lbl) if dbg_files else gr.update())
+                    gr.update(visible=False))
         try:
             _timer = gr.Timer(1.0, active=True)
             _tick_evt = _timer.tick(
@@ -3913,22 +3966,8 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             pass
 
 
-        def _toggle_debug_ui(on):
-            on = bool(on)
-            return (
-                gr.update(visible=on),  
-                gr.update(visible=on),  
-                gr.update(visible=on),  
-            )
-        try:
-            web_debug.change(
-                _toggle_debug_ui,
-                inputs=[web_debug],
-                outputs=[debug_row, btn_view_debug, dl_btn_debug],
-            )
-        except Exception:
-            pass
-
+        # v1.14.31: نمایش دیباگ جدا حذف شد — دیباگ داخل خود «نمایش» است؛
+        # ورودی web_debug فقط علامت می‌زند که موتور دیباگ بسازد.
         threading.Thread(target=_cleanup_old_jobs, daemon=True).start()
 
 
@@ -3941,111 +3980,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             prefix = "/gradio_api/file=" if major >= 5 else "/file="
             return prefix + str(path).replace(os.sep, "/")
 
-        def _open_viewer(sid, sid_box_v, st):
-            preferred = (sid or sid_box_v or "").strip()
-            sid = _find_active_sid(preferred) or preferred
-            job = _get_job(sid) if sid else None
-            path = ""
-            if job:
-                with job["lock"]:
-                    path = job.get("reader_path") or ""
-            if not path or not os.path.isfile(path):
-                html = st or ""
-                if job and not html:
-                    with job["lock"]:
-                        html = job.get("html_state") or ""
-                if html and "<html" in html.lower():
-                    try:
-                        base = os.path.join(OUT_DIR, (sid or "tmp")[:12])
-                        os.makedirs(base, exist_ok=True)
-                        path = os.path.join(base, "reader.html")
-                        with open(path, "w", encoding="utf-8") as f:
-                            f.write(html)
-                        if job:
-                            with job["lock"]:
-                                job["reader_path"] = path
-                    except Exception:
-                        path = ""
-            url = _reader_file_url(path)
-            if not url:
-                # نتیجهٔ نهایی هنوز نیست → نمایشِ زندهٔ همان صفحه‌های آماده را باز کن
-                try:
-                    _jb = _get_job(sid) if sid else None
-                    if _jb:
-                        with _jb["lock"]:
-                            _d = _jb.get("live_dir")
-                        if _d and os.path.isdir(_d):
-                            _lp = os.path.join(_d, "live_reader.html")
-                            if not os.path.isfile(_lp):
-                                _write_live_reader(_d, dbg_dir=_dbg_sibling(_d))
-                            url = _reader_file_url(_lp)
-                except Exception:
-                    pass
-            return gr.update(visible=False), (st if st is not None else gr.update()), url
-
-        def _open_viewer_debug(sid, sid_box_v, st_dbg):
-            preferred = (sid or sid_box_v or "").strip()
-            sid = _find_active_sid(preferred) or preferred
-            job = _get_job(sid) if sid else None
-            path = ""
-            if job:
-                with job["lock"]:
-                    path = job.get("reader_debug_path") or ""
-            if not path or not os.path.isfile(path):
-                html = st_dbg or ""
-                if job and not html:
-                    with job["lock"]:
-                        html = job.get("html_debug") or ""
-                if html and "<html" in html.lower():
-                    try:
-                        base = os.path.join(OUT_DIR, (sid or "tmp")[:12])
-                        os.makedirs(base, exist_ok=True)
-                        path = os.path.join(base, "reader_debug.html")
-                        with open(path, "w", encoding="utf-8") as f:
-                            f.write(html)
-                        if job:
-                            with job["lock"]:
-                                job["reader_debug_path"] = path
-                    except Exception:
-                        path = ""
-            url = _reader_file_url(path)
-            if not url:
-                # دیباگ زنده — مثل نمایش اصلی، تا نتیجهٔ نهایی آماده شود
-                try:
-                    _jb = _get_job(sid) if sid else None
-                    if _jb:
-                        with _jb["lock"]:
-                            _d = _jb.get("live_dbg_dir")
-                        if _d and os.path.isdir(_d):
-                            _lp = os.path.join(_d, "live_reader.html")
-                            if not os.path.isfile(_lp):
-                                _write_live_reader(_d)
-                            url = _reader_file_url(_lp)
-                except Exception:
-                    pass
-            return gr.update(visible=False), (st_dbg if st_dbg is not None else gr.update()), url
-
         reader_url_box = gr.Textbox(value="", visible=False, elem_id="manga_reader_url")
-
-        open_reader_js = """
-(sid, sidBox, htmlSt, url) => {
-  const u = (url || "").toString().trim();
-  if (!u) {
-    try { if (window.__mangaPopup) { window.__mangaPopup.close(); } } catch (e) {}
-    window.__mangaPopup = null;
-    alert("صفحهٔ خواندن هنوز آماده نیست.");
-    return [];
-  }
-  let w = window.__mangaPopup;
-  if (w && !w.closed) {
-    try { w.location.href = u; } catch (err) { w = null; }
-  } else { w = null; }
-  window.__mangaPopup = null;
-  if (!w) { w = window.open(u, "_blank"); }
-  if (!w) { window.location.href = u; }
-  return [];
-}
-"""
 
         open_live_js = """
 (url) => {
@@ -4098,48 +4033,6 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             )
         except Exception:
             pass
-
-        try:
-            btn_view.click(
-                fn=_open_viewer,
-                inputs=[session_id, sid_box, html_state],
-                outputs=[viewer_html, html_state, reader_url_box],
-            ).then(
-                fn=None,
-                inputs=[session_id, sid_box, html_state, reader_url_box],
-                outputs=[],
-                js=open_reader_js,
-            )
-        except Exception:
-            try:
-                btn_view.click(
-                    fn=_open_viewer,
-                    inputs=[session_id, sid_box, html_state],
-                    outputs=[viewer_html, html_state, reader_url_box],
-                )
-            except Exception:
-                pass
-
-        try:
-            btn_view_debug.click(
-                fn=_open_viewer_debug,
-                inputs=[session_id, sid_box, html_debug_state],
-                outputs=[viewer_html, html_debug_state, reader_url_box],
-            ).then(
-                fn=None,
-                inputs=[session_id, sid_box, html_debug_state, reader_url_box],
-                outputs=[],
-                js=open_reader_js,
-            )
-        except Exception:
-            try:
-                btn_view_debug.click(
-                    fn=_open_viewer_debug,
-                    inputs=[session_id, sid_box, html_debug_state],
-                    outputs=[viewer_html, html_debug_state, reader_url_box],
-                )
-            except Exception:
-                pass
 
         try:
             demo.load(None, None, None, js=_dark_js_src())

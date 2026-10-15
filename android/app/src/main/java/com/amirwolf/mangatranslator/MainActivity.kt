@@ -1520,16 +1520,17 @@ class MainActivity : AppCompatActivity() {
         val dbgFile = st.optString("debug_out_file", "")
         val hasDbgFile = dbgFile.isNotBlank() && File(dbgFile).isFile()
 
+        // v1.14.31: فقط «یک» نمایش — همان نمایشِ زنده ادامه می‌دهد؛ دیباگ با
+        // دکمهٔ 🔍 داخل خودِ نمایش عوض می‌شود. نمایش جدا و نمایش دیباگ حذف شدند.
         if (images.isNotEmpty()) {
             resultsBox.addView(resBtn("📖  نمایش (${images.size} صفحه)", true) {
-                viewer(images)
+                viewer(images, live = true, dbgPaths = debug, total = images.size)
             })
         }
         if (hasOutFile) {
             resultsBox.addView(resBtn("⬇  دانلود خروجی", false) { saveToDownloads(outFile) })
         }
         if (debug.isNotEmpty()) {
-            resultsBox.addView(resBtn("🔍  نمایش دیباگ (${debug.size})", false) { viewer(debug) })
             if (hasDbgFile) {
                 resultsBox.addView(resBtn("⬇  دانلود دیباگ (یک فایل)", false) {
                     saveToDownloads(dbgFile)
