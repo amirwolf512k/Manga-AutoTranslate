@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.31"
+APP_VER = "1.14.33"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -281,8 +281,10 @@ def download_fonts(log=print) -> int:
 
 GITHUB_RAW_BASE = ("https://raw.githubusercontent.com/"
                    "amirwolf512k/Manga-AutoTranslate/main/")
-UPDATE_FILES = ("manga.py", "manga_app.py")
-UPDATE_INTERVAL_S = 12 * 3600
+# v1.14.33: لانچرها هم آپدیت می‌شوند (Manga.bat / manga.sh)
+UPDATE_FILES = ("manga.py", "manga_app.py", "Manga.bat", "manga.sh")
+# v1.14.33: چکِ آپدیت حالا ارزان است (فایل VERSION چندبایتی) → هر ۳۰ دقیقه
+UPDATE_INTERVAL_S = 30 * 60
 UPD_DIR = os.path.join(WORK_DIR, "updates")
 
 
@@ -318,6 +320,52 @@ def _http_get(url: str, timeout: float = 30.0) -> bytes:
         return r.read()
 
 
+def _remote_app_ver(log=print) -> str:
+    """v1.14.33: نسخهٔ_remote را از فایل VERSION (چند بایت) می‌خواند —
+    قبلاً برای چکِ نسخه، خودِ manga.py (~نیم مگابایت) دانلود می‌شد که روی
+    اینترنتِ کند عملاً «آپدیت گیر کردن» بود."""
+    try:
+        txt = _http_get(GITHUB_RAW_BASE + "VERSION?cb="
+                        + str(int(time.time() // 300)), timeout=12).decode("utf-8", "ignore")
+        m = re.search(r"versionName\s*=\s*([0-9][0-9.]*)", txt or "")
+        if m:
+            return m.group(1).strip()
+    except Exception as e:
+        log(f"[!] چک نسخهٔ remote ناموفق: {str(e)[:80]}")
+    return ""
+
+
+def _local_app_ver() -> str:
+    """نسخهٔ محلی: اول فایل VERSION کنار برنامه، بعد APP_VER در manga_app.py."""
+    try:
+        vp = os.path.join(HERE, "VERSION")
+        if os.path.isfile(vp):
+            with open(vp, encoding="utf-8") as f:
+                m = re.search(r"versionName\s*=\s*([0-9][0-9.]*)", f.read(2048) or "")
+                if m:
+                    return m.group(1).strip()
+    except Exception:
+        pass
+    return _local_file_ver("manga_app.py")
+
+
+def _stage_update_file(name: str, log=print) -> dict:
+    """یک فایل آپدیت را می‌گیرد و کنار بقیه stage می‌کند (برای apply)."""
+    info = {"local": "", "remote": "", "newer": False}
+    try:
+        src = _http_get(GITHUB_RAW_BASE + name + "?cb="
+                        + str(int(time.time() // 300)), timeout=60).decode("utf-8", "ignore")
+        info["remote"] = _read_ver_from_src(src[:8192])
+        info["local"] = _local_file_ver(name)
+        os.makedirs(UPD_DIR, exist_ok=True)
+        with open(os.path.join(UPD_DIR, name + ".staged"), "w", encoding="utf-8") as f:
+            f.write(src)
+        info["newer"] = True
+    except Exception as e:
+        info["error"] = str(e)[:120]
+    return info
+
+
 def check_updates(force: bool = False, log=print) -> dict:
     try:
         last = float(load_config().get("last_update_check", 0) or 0)
@@ -328,35 +376,43 @@ def check_updates(force: bool = False, log=print) -> dict:
         return {"checked": False}
 
     rep: dict = {"checked": True, "update_available": False, "files": {}}
-    for name in UPDATE_FILES:
-        info = {"local": _local_file_ver(name), "remote": "", "newer": False}
-        try:
-            src = _http_get(GITHUB_RAW_BASE + name).decode("utf-8", "ignore")
-            info["remote"] = _read_ver_from_src(src[:8192])
-            info["newer"] = (info["remote"] != "0"
-                             and _cmp_ver(info["remote"], info["local"]) > 0)
-            if info["newer"]:
-                os.makedirs(UPD_DIR, exist_ok=True)
-                with open(os.path.join(UPD_DIR, name + ".staged"),
-                          "w", encoding="utf-8") as f:
-                    f.write(src)
-        except Exception as e:
-            info["error"] = str(e)[:120]
-        rep["files"][name] = info
-        if info["newer"]:
-            rep["update_available"] = True
+    remote_ver = _remote_app_ver(log=log)
+    local_ver = _local_app_ver()
+    newer_global = bool(remote_ver and _cmp_ver(remote_ver, local_ver) > 0)
+
+    if newer_global:
+        # v1.14.33: فقط وقتی نسخهٔ جدید واقعاً هست، فایل‌ها دانلود می‌شوند —
+        # و به‌صورت موازی (۴ فایل همزمان) تا آپدیت خیلی سریع‌تر بیاید.
+        log(f"🔄 آپدیت جدید پیدا شد: v{local_ver} → v{remote_ver} — در حال گرفتن…")
+        results: dict = {}
+        threads = []
+
+        def _worker(n):
+            results[n] = _stage_update_file(n, log=log)
+
+        for name in UPDATE_FILES:
+            th = threading.Thread(target=_worker, args=(name,), daemon=True)
+            th.start()
+            threads.append(th)
+        for th in threads:
+            th.join(timeout=180)
+        for name in UPDATE_FILES:
+            info = results.get(name) or {"local": "", "remote": remote_ver,
+                                         "newer": False, "error": "timeout"}
+            rep["files"][name] = info
+            if info.get("newer"):
+                rep["update_available"] = True
+    else:
+        for name in UPDATE_FILES:
+            rep["files"][name] = {"local": _local_file_ver(name),
+                                  "remote": local_ver, "newer": False}
+        log("✔ برنامه به‌روز است.")
     try:
         cfg = load_config()
         cfg["last_update_check"] = now
         save_config(cfg)
     except Exception:
         pass
-    if rep.get("checked"):
-        if rep.get("update_available"):
-            log("🔄 آپدیت جدید پیدا شد: " + ", ".join(
-                f"{n} v{i['remote']}" for n, i in rep["files"].items() if i["newer"]))
-        else:
-            log("✔ برنامه به‌روز است.")
     return rep
 
 
@@ -364,6 +420,7 @@ def apply_updates(report: Optional[dict] = None, log=print) -> list:
 
     installed = []
     rep = report if (report and report.get("checked")) else check_updates(force=True, log=log)
+    gver = _local_app_ver()
     for name, info in (rep.get("files") or {}).items():
         staged = os.path.join(UPD_DIR, name + ".staged")
         if not (info.get("newer") and os.path.isfile(staged)):
@@ -374,8 +431,9 @@ def apply_updates(report: Optional[dict] = None, log=print) -> list:
             if os.path.isfile(dst):
                 shutil.copyfile(dst, bak)
             os.replace(staged, dst)
-            installed.append(f"{name} → v{info['remote']}")
-            log(f"✔ نصب شد: {name} v{info['remote']} (بکاپ: {os.path.basename(bak)})")
+            v = info.get("remote") or gver
+            installed.append(f"{name} → v{v}")
+            log(f"✔ نصب شد: {name} v{v} (بکاپ: {os.path.basename(bak)})")
         except Exception as e:
             log(f"✖ نصب {name} ناموفق: {e}")
     if installed:
@@ -832,7 +890,9 @@ def run_desktop():
     import webbrowser
 
     port = int(os.environ.get("MANGA_APP_PORT", "7860") or 7860)
-    url = f"http://127.0.0.1:{port}"
+    # v1.14.33: ?desktop=1 → صفحه می‌فهمد داخل پنجرهٔ دسکتاپ است؛ تنظیمات و
+    # کلیدهای API برای همیشه ذخیره می‌شوند (مثل اندروید)، نه ۳۰ دقیقه‌ایِ وب.
+    url = f"http://127.0.0.1:{port}/?desktop=1"
 
     def _up() -> bool:
         try:
@@ -867,12 +927,22 @@ def run_desktop():
     else:
         try:
             import webview
+            # v1.14.33: private_mode=False → localStorage مثل اندروید دائمی می‌ماند
+            # (کلیدهای API بعد از بستن برنامه هم پاک نمی‌شوند).
+            _store = os.path.join(WORK_DIR, "webview_profile")
+            try:
+                os.makedirs(_store, exist_ok=True)
+            except Exception:
+                _store = None
+            _start_kw = {"private_mode": False}
+            if _store:
+                _start_kw["storage_path"] = _store
             webview.create_window(f"{APP_NAME} v{APP_VER}", url,
                                   width=1280, height=880,
                                   min_size=(980, 640),
                                   background_color="#060607")
             print("[i] پنجرهٔ دسکتاپ (همان رابط وب) باز شد — با بستن پنجره، برنامه تمام می‌شود")
-            webview.start()
+            webview.start(**_start_kw)
         except Exception as e:
             print(f"[!] پنجرهٔ وب‌ویو ناموفق ({e}) → مرورگر")
             webbrowser.open(url)
@@ -898,7 +968,15 @@ def run_desktop():
 
 
 WEB_CSS = """
-@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
+/* v1.14.33: فونت از سرورِ خودِ برنامه می‌آید (@font-face محلی) — دیگر هیچ
+   درخواستی به fonts.googleapis.com نمی‌رود. در ایران آن دامنه کند/مسدود است و
+   پنجرهٔ PC ده‌ها ثانیه معطلش می‌ماند («اپ کند میاد بالا»). */
+@font-face{font-family:'Vazirmatn';font-style:normal;font-weight:400;
+  src:url('__FONTPFX__/Vazirmatn-Regular.ttf') format('truetype');
+  font-display:swap}
+@font-face{font-family:'Vazirmatn';font-style:normal;font-weight:700;
+  src:url('__FONTPFX__/Vazirmatn-Bold.ttf') format('truetype');
+  font-display:swap}
 
 :root, .gradio-container {
   --ink-bg: #060607;
@@ -912,7 +990,7 @@ WEB_CSS = """
 }
 body, .gradio-container, footer, .gradio-container .prose {
   background: var(--ink-bg) !important; color: var(--ink-text) !important;
-  font-family: 'Vazirmatn', sans-serif !important;
+  font-family: 'Vazirmatn', 'Segoe UI', Tahoma, system-ui, sans-serif !important;
 }
 .gradio-container {
   background:
@@ -952,7 +1030,7 @@ body, .gradio-container, footer, .gradio-container .prose {
 .nav-sub { display: block; color: var(--ink-dim); font-size: .74rem; font-weight: 400; letter-spacing: .04em; }
 .nav-chips { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 .chip {
-  font-family: 'IBM Plex Mono', monospace; font-size: .7rem;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; font-size: .7rem;
   background: var(--ink-surface2); border: 1px solid var(--ink-line);
   color: var(--ink-dim); padding: 4px 11px; border-radius: 999px;
   display: inline-flex; align-items: center; gap: 6px;
@@ -1448,8 +1526,8 @@ def run_web():
 <title>نمایش</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior:none;-webkit-user-select:none;user-select:none}
-.bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:rgba(12,12,14,.96);border-bottom:1px solid #232326;direction:rtl;backdrop-filter:blur(8px)}
+html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}
+.bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;direction:rtl}
 .dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
 .dot.off{background:#2e7d4f;animation:none}
 @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
@@ -1459,7 +1537,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 .dbtn{display:none;background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:7px 11px;font-size:.8rem;cursor:pointer;font-family:inherit;flex:none;min-height:36px}
 .dbtn.on{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}
 .c{max-width:min(100%,900px);margin:0 auto;width:100%}
-.c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none}
+.c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none;content-visibility:auto;contain-intrinsic-size:auto 1200px}
 .ph{width:100%;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:sh 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}
 @keyframes sh{0%{background-position:120% 0}100%{background-position:-80% 0}}
 .sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spin 1s linear infinite}
@@ -1659,7 +1737,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             "overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}"
             ".rdr{background:#000;direction:ltr}"
             ".rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;"
-            "background:rgba(12,12,14,.96);border-bottom:1px solid #232326;backdrop-filter:blur(8px);z-index:2}"
+            "background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2}"
             ".rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;"
             "padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;"
             "min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}"
@@ -1670,7 +1748,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             ".rdrS{position:relative;background:#000}"
             ".rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}"
             ".rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;"
-            "-webkit-user-drag:none;pointer-events:none}"
+            "-webkit-user-drag:none;pointer-events:none;content-visibility:auto;contain-intrinsic-size:auto 1200px}"
             ".rdr-progress{position:fixed;bottom:0;left:0;right:0;height:3px;background:#1a1a1c;z-index:3}"
             ".rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}"
             ".zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}"
@@ -1900,9 +1978,19 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
         return page
 
     g6 = _gradio_major() >= 6
+    # v1.14.33: فونتِ Vazirmatn از پوشهٔ fonts خود برنامه سرو می‌شود (بدون
+    # fonts.googleapis.com — در ایران کند/مسدود است و PC را خیلی دیر بالا می‌آورد).
+    try:
+        import gradio as _gr_css
+        _gmaj = int(str(getattr(_gr_css, "__version__", "4")).split(".")[0] or 4)
+    except Exception:
+        _gmaj = 4
+    _fpfx = ("/gradio_api/file=" if _gmaj >= 5 else "/file=") \
+        + urllib.parse.quote(str(FONT_DIR).replace(os.sep, "/"), safe="/")
+    WEB_CSS_RUNTIME = WEB_CSS.replace("__FONTPFX__", _fpfx)
     blocks_kw = {} if g6 else {"theme": gr.themes.Soft(primary_hue="indigo",
                                                        neutral_hue="slate"),
-                               "css": WEB_CSS}
+                               "css": WEB_CSS_RUNTIME}
     with gr.Blocks(title=APP_NAME, **blocks_kw) as demo:
 
         
@@ -1931,7 +2019,10 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                                  elem_classes=["compact-upload"])
             inp_path = gr.Textbox(label="یا URL تصویر/مانهوا",
                                   placeholder="https://cdn.example.com/chapter/1/001.webp",
-                                  info="چند لینک = با کاما جدا کن — چند فایل هم می‌توانی بالا بفرستی و همه با هم ترجمه می‌شوند.")
+                                  info=("چند لینک = با کاما جدا کن. حالت‌های جدید: "
+                                        "«…/1 > 14.jpg» از اول تا آخر، "
+                                        "«…/1 < 14.jpg» از آخر به اول، "
+                                        "«…/*.jpg» هرچه پیدا کند — همه با هم ترجمه می‌شوند."))
 
         
         with gr.Group(elem_classes=["stepcard"]):
@@ -2086,7 +2177,14 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 label="بریف داستان قبل از ترجمه (AI یک‌بار فصل را می‌خواند تا لحن شخصیت‌ها حفظ شود)",
                 value=bool(cfg.get("story_brief", True)))
 
-        SESSION_TTL = 2 * 60 * 60
+        # v1.14.33: سیوِ فرم در «مرورگر وب» ۳۰ دقیقه می‌ماند (خواستهٔ کاربر).
+        # در پنجرهٔ دسکتاپ (?desktop=1) و اپ اندروید (UA مخصوص) ذخیره دائمی است.
+        SESSION_TTL = 30 * 60
+        JOB_TTL = 12 * 3600
+        _perm_js = (
+            "const PERM = (new URLSearchParams(location.search)).get('desktop') === '1' "
+            "|| !!(window.pywebview) || /MangaTranslatorApp/i.test(navigator.userAgent || '');"
+        )
         live_jobs = {}
 
         def _get_job(sid: str) -> dict:
@@ -2749,7 +2847,8 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
       return [""];
     }}
     const d = JSON.parse(raw);
-    if (!d || !d.ts || (Date.now() - d.ts) > {SESSION_TTL * 1000}) {{
+    {_perm_js}
+    if (!d || !d.ts || (!PERM && (Date.now() - d.ts) > {SESSION_TTL * 1000})) {{
       if (bestSid) {{
         return [JSON.stringify({{
           sid: bestSid,
@@ -2882,9 +2981,10 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
       }}
 
       let raw = localStorage.getItem(KEY) || localStorage.getItem("manga_autotranslate_form_v1");
+      {_perm_js}
       if (raw) {{
         const d = JSON.parse(raw);
-        if (d && d.ts && (Date.now() - d.ts) <= TTL) {{
+        if (d && (!d.ts || PERM || (Date.now() - d.ts) <= TTL)) {{
           const byId = (id) => {{
             const root = document.getElementById(id);
             if (!root) return null;
@@ -3549,6 +3649,12 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 if not log or log.startswith("—"):
                     return (sid, gr.update(value=sid)) + (gr.update(),) * 11
                 btn = "⏹  متوقف ترجمه" if still_running else "🚀  شروع ترجمه"
+                _dbg_sz = ""
+                try:
+                    if dl_dbg and os.path.isfile(dl_dbg):
+                        _dbg_sz = f" ({human_size(os.path.getsize(dl_dbg))})"
+                except Exception:
+                    pass
                 return (
                     sid,
                     gr.update(value=sid),
@@ -3559,9 +3665,12 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                     gr.update(visible=vis),
                     gr.update(visible=False),
                     html if vis else gr.update(),
+                    # v1.14.33: دکمهٔ «دانلود دیباگ» بعد از پایان کار دیده می‌شود
+                    gr.update(value=dl_dbg,
+                              label="⬇ دانلود دیباگ" + _dbg_sz,
+                              visible=bool(show_dbg and dl_dbg and vis)),
                     gr.update(visible=False),
-                    gr.update(visible=False),
-                    gr.update(visible=False),
+                    gr.update(visible=bool(show_dbg and dl_dbg and vis)),
                     gr.update(),
                 )
 
@@ -3639,6 +3748,12 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
             with job["lock"]:
                 html_dbg = job.get("html_debug") or ""
             show_card = bool(vis or (running and live_cnt > 0))
+            _dbg_sz = ""
+            try:
+                if dl_dbg and os.path.isfile(dl_dbg):
+                    _dbg_sz = f" ({human_size(os.path.getsize(dl_dbg))})"
+            except Exception:
+                pass
             # v1.14.31: نمایش اصلی/دیباگ حذف — همه‌جا مخفی؛ فقط «نمایش» (دکمهٔ 📖) می‌ماند
             return (
                 sid,
@@ -3651,9 +3766,12 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                 gr.update(visible=show_card),
                 gr.update(),
                 gr.update(),
+                # v1.14.33: «دانلود دیباگ» — بعد از پایان کار در دسترس است
+                gr.update(value=dl_dbg,
+                          label="⬇ دانلود دیباگ" + _dbg_sz,
+                          visible=bool(dl_dbg and vis)),
                 gr.update(visible=False),
-                gr.update(visible=False),
-                gr.update(visible=False),
+                gr.update(visible=bool(dl_dbg and vis)),
                 gr.update(),
             )
 
@@ -3813,7 +3931,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                             with job["lock"]:
                                 alive = job.get("proc") is not None and job["proc"].poll() is None
                                 ts = job.get("ts") or 0
-                            if not alive and (now - ts) > SESSION_TTL:
+                            if not alive and (now - ts) > JOB_TTL:
                                 dead.append(sid)
                                 out_sub = os.path.join(OUT_DIR, sid[:12])
                                 if os.path.isdir(out_sub):
@@ -3837,7 +3955,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                                                 mtime = max(mtime, os.path.getmtime(os.path.join(root, f)))
                                             except Exception:
                                                 pass
-                                    if (now - mtime) > SESSION_TTL:
+                                    if (now - mtime) > JOB_TTL:
                                         shutil.rmtree(p, ignore_errors=True)
                                 except Exception:
                                     pass
@@ -3847,7 +3965,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
                         for name in os.listdir(old_sess):
                             fp = os.path.join(old_sess, name)
                             try:
-                                if (now - os.path.getmtime(fp)) > SESSION_TTL:
+                                if (now - os.path.getmtime(fp)) > JOB_TTL:
                                     if os.path.isfile(fp):
                                         os.remove(fp)
                                     elif os.path.isdir(fp):
@@ -4076,7 +4194,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
 
         gr.Markdown(
             "<div style='text-align:center; opacity:.45; margin-top:16px'>"
-            "مانگا مترجم PRO · RT-DETR + Gemini/… + LaMa-Manga · اجرا روی CPU</div>"
+            f"مانگا مترجم PRO v{APP_VER} · RT-DETR + Gemini/… + LaMa-Manga · اجرا روی CPU</div>"
         )
 
         gr.HTML(
@@ -4155,7 +4273,7 @@ html,body{height:100%;background:#000;color:#e8e6e1;font-family:system-ui,-apple
     launch_kw = {}
     if _gradio_major() >= 6:
         launch_kw["theme"] = gr.themes.Soft(primary_hue="indigo", neutral_hue="slate")
-        launch_kw["css"] = WEB_CSS
+        launch_kw["css"] = WEB_CSS_RUNTIME
     demo.queue(max_size=64).launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("MANGA_APP_PORT", "7860")),

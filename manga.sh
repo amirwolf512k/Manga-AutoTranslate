@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # ============================================
 #   Manga Translator - Linux/macOS launcher
+# VER:1.14.33
 # ============================================
 cd "$(dirname "$0")"
 

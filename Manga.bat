@@ -3,6 +3,7 @@ rem ============================================
 rem   Manga Translator - Windows launcher
 rem ============================================
 chcp 65001 >nul
+rem VER:1.14.33
 title Manga Translator
 cd /d "%~dp0"
 

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.31"
+APP_VER = "1.14.33"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -11610,8 +11610,24 @@ class MangaTranslator:
 
     @staticmethod
     def _is_direct_image_url(url: str) -> bool:
-        path = (url or "").split("?")[0].lower()
-        return any(path.endswith(e) for e in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"))
+        """v1.14.33: هوشمندتر — لینک‌هایی مثل گوگل‌تیترِ thumbnail
+        (encrypted-tbn0.gstatic.com/images?q=tbn:…) یا ویکیا
+        (…/DailyQuest1.jpg/revision/latest) هم «تصویر مستقیم» حساب می‌شوند.
+        قبلاً این‌ها «فصل» حساب می‌شدند و تک‌تک جدا پردازش می‌شدند — برای
+        همین با چند لینک، فقط اولی خوانده می‌شد و بقیه معطل می‌ماند."""
+        u = (url or "").strip()
+        low = u.lower()
+        path = low.split("?")[0]
+        exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
+        if any(path.endswith(e) for e in exts):
+            return True
+        # بسته‌بندی‌های گالری: name.jpg/revision/latest ، name.jpg/900 等
+        if re.search(r"\.(jpe?g|png|webp|bmp|gif)(/|$)", path):
+            return True
+        # thumbnail های گوگل و مشابه: images?q=tbn:…
+        if "gstatic.com/images" in low and "q=tbn:" in low:
+            return True
+        return False
 
     @staticmethod
     def _expand_input_urls(input_str: str) -> List[str]:
@@ -11630,11 +11646,41 @@ class MangaTranslator:
             )
         }
 
+        # v1.14.33: الگوهای بازه — «1 > 14.jpg» صعودی (از اول به آخر) و
+        # «1 < 14.jpg» نزولی (از آخر به اول). بعد از کاما هم کار می‌کند:
+        #   https://…/chapter-264/1 > 14.jpg
+        #   https://…/chapter-264/1 < 14.jpg
+        #   https://…/chapter-264/1.jpg,https://…/2.jpg  (فقط ۱ و ۲)
+        #   https://…/chapter-264/*.jpg                   (هرچه پیدا کند)
+        _range_re = re.compile(
+            r"^(?P<base>.+?)(?P<a>\d+)\s*(?P<op>[><])\s*(?P<b>\d+)"
+            r"(?P<ext>\.[A-Za-z0-9]{2,5})?(?P<q>\?.*)?$"
+        )
+
         for part in parts:
+            _rm = _range_re.match(part)
+            if _rm and "*" not in part:
+                base = _rm.group("base")
+                a = int(_rm.group("a"))
+                b = int(_rm.group("b"))
+                op = _rm.group("op")
+                ext = _rm.group("ext") or ".jpg"
+                q = _rm.group("q") or ""
+                lo, hi = min(a, b), max(a, b)
+                if hi - lo > 2000:
+                    print(f"[!] بازه خیلی بزرگ نادیده گرفته شد: {part[:80]}")
+                    continue
+                # > از اول به آخر (صعودی) — < از آخر به اول (نزولی)
+                nums = range(lo, hi + 1) if op == ">" else range(hi, lo - 1, -1)
+                _found = [f"{base}{n}{ext}{q}" for n in nums]
+                print(f"[*] بازهٔ لینک: {lo} {'→' if op == '>' else '←'} {hi} "
+                      f"({len(_found)} صفحه)")
+                expanded.extend(_found)
+                continue
+
             if "*" not in part:
                 expanded.append(part)
                 continue
-
 
             m = re.search(r"(.*?)(\d*)\*(\d*)(.*)", part)
             if not m:
@@ -13154,7 +13200,45 @@ html, body { background: #0a0a0b; }
                 return
 
 
-            all_direct = all(self._is_direct_image_url(u) for u in urls)
+            # v1.14.33: اگر الگوی لینک مشخص نبود، با یک HEAD کوتاه Content-Type
+            # چک می‌شود — هر لینکی که image/* بدهد «صفحهٔ مستقیم» است. این همان
+            # باگ «فقط اولی خوانده می‌شد» را برای همهٔ هاست‌های عکس می‌بندد.
+            _probe_urls = [u for u in urls
+                           if not (u.lower().startswith("file://")
+                                   or self._is_direct_image_url(u))]
+            _probe_image = set()
+            if _probe_urls and len(urls) > 1:
+                try:
+                    from concurrent.futures import ThreadPoolExecutor as _TPE
+
+                    def _probe(u: str) -> tuple:
+                        try:
+                            import requests as _rq
+                            h = dict(headers) if headers else {
+                                "User-Agent": "Mozilla/5.0"}
+                            r = _rq.head(u, headers=h, timeout=8,
+                                         allow_redirects=True)
+                            ct = (r.headers.get("Content-Type") or "").lower()
+                            if not ct.startswith("image/"):
+                                h["Range"] = "bytes=0-255"
+                                r2 = _rq.get(u, headers=h, timeout=8, stream=True)
+                                ct = (r2.headers.get("Content-Type") or "").lower()
+                                r2.close()
+                            return (u, ct.startswith("image/"))
+                        except Exception:
+                            return (u, False)
+
+                    with _TPE(max_workers=min(8, len(_probe_urls))) as _ex:
+                        for _u, _ok in _ex.map(_probe, _probe_urls):
+                            if _ok:
+                                _probe_image.add(_u)
+                    if _probe_image:
+                        print(f"[*] {len(_probe_image)} لینک با چکِ Content-Type "
+                              f"«تصویر مستقیم» شناخته شد.")
+                except Exception:
+                    pass
+            all_direct = all(
+                self._is_direct_image_url(u) or u in _probe_image for u in urls)
             if len(urls) == 1:
                 print(f"[*] دانلود تصاویر از لینک: {urls[0]}")
                 image_files = self._download_images_from_url(urls[0], src_dir)
@@ -13203,6 +13287,11 @@ html, body { background: #0a0a0b; }
                                 ext = ".jpg"
                         _ub = os.path.splitext(os.path.basename(u.split("?")[0]))[0]
                         _ub = re.sub(r'[\\/:*?"<>|]+', "_", _ub).strip("._ ")[:80]
+                        # v1.14.33: اسمِ بدونِ رقم (مثل «images» در گوگل‌تیتر) →
+                        # شمارهٔ صفحه تا ترتیبِ صفحات در سورتِ نیچرال حفظ شود؛
+                        # وگرنه images-2.jpg قبل از images.jpg سورت می‌شد!
+                        if not re.search(r"\d", _ub):
+                            _ub = f"page_{i:03d}"
                         out_file = os.path.join(src_dir, f"{_ub or f'page_{i:03d}'}{ext}")
                         _kk = 2
                         while os.path.exists(out_file):
