@@ -73,6 +73,9 @@ class MainActivity : AppCompatActivity() {
     private var liveDbgTotal = 0
     private var shownLiveTotal = 0
     private var shownLiveDbgTotal = 0
+    // v1.14.45: پایانِ نشستِ زنده به نمایشگر اعلام می‌شود تا اسلاتِ
+    // «در حال ترجمه…» حالتِ دیباگ هم موقعِ تمام‌شدن برداشته شود
+    @Volatile private var liveDone = false
     private var jobRunning = false
     private var cancelPending = false
     private lateinit var loadingRow: LinearLayout
@@ -1407,6 +1410,7 @@ class MainActivity : AppCompatActivity() {
             shownLiveTotal = 0
             shownLiveDbgTotal = 0
             livePush = null
+            liveDone = false
             Thread {
                 var res: JSONObject? = null
                 var err: String? = null
@@ -1500,6 +1504,10 @@ class MainActivity : AppCompatActivity() {
                             setLog(lg + "\n\n⏹ ترجمه لغو شد.")
                         }
                         finishJobUi()
+                        // v1.14.45: پایانِ نشستِ زنده → نمایشگرِ بازِ دیباگ هم
+                        // اسلاتِ «در حال ترجمه…» را بردارد (دیباگ هم زنده است)
+                        liveDone = true
+                        livePush?.invoke(0)
                         liveBox.removeAllViews()
                         liveBtn = null
                         showResults(s)
@@ -1898,7 +1906,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     wv.evaluateJavascript(
                         "window.__mangaLive && window.__mangaLive(${paths.size}, " +
-                            "${liveTotal}, ${dpaths.size})", null)
+                            "${liveTotal}, ${dpaths.size}, ${liveDone})", null)
                 } catch (_: Exception) {}
             }
             livePush?.invoke(0)

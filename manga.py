@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.44"
+APP_VER = "1.14.45"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -1240,10 +1240,16 @@ class LamaMangaONNX:
             except Exception:
                 use_threads = 0
             if use_threads <= 0:
-                _cap = 1 if _on_android() else 2
-                use_threads = max(1, min(_cap, os.cpu_count() or 4))
+                # v1.14.45: نخِ صریحِ فراهم‌شده از _get_lama(threads=…) محترم است —
+                # وقتی پچِ موازی کم است باید هر پچ چندنخی شود (هسته‌های بیکار نماند)
+                if threads and int(threads) > 0:
+                    use_threads = max(1, min(int(threads), os.cpu_count() or 4))
+                else:
+                    _cap = 1 if _on_android() else 2
+                    use_threads = max(1, min(_cap, os.cpu_count() or 4))
         else:
-            use_threads = max(1, int(threads))
+            use_threads = max(1, int(threads or 1))
+        self.thr_used = int(use_threads)
         self.ep_used = None
         try:
             self.ep_used = _resolve_lama_ep()
@@ -3664,9 +3670,51 @@ class MangaTranslator:
         except Exception:
             self._lama_preload_started = False
 
-    def _get_lama(self):
+    def _get_lama(self, threads: int = 0):
         with self._lama_lock:
-            return self._get_lama_locked()
+            _l = self._get_lama_locked()
+            # v1.14.45: سرعتِ LaMa — دورِ دوم. وقتی پچِ موازی کم است، تک‌نخی
+            # بودنِ هر پچ یعنی بیشترِ هسته‌ها بیکار (لاگِ POCO F4 کاربر:
+            # ۲ پچ × ۱ نخ = 17.8s). سشن با نخِ بیشتر بازسازی می‌شود تا هر
+            # پچ چندنخی شود؛ محدودیت در _lama_switch_ok.
+            if (threads and _l is not None and self.use_lama
+                    and int(threads) != int(getattr(self, "_lama_threads", 0) or 0)
+                    and isinstance(_l, LamaMangaONNX)
+                    and str(getattr(_l, "ep_used", "") or "cpu").lower()
+                        in ("", "cpu", "none")
+                    and self._lama_switch_ok(int(threads))):
+                self._lama_switch_at = time.time()
+                _new = self._build_lama_cpu(int(threads))
+                if _new is not None:
+                    self._lama = _new
+                    self._lama_threads = int(threads)
+                    try:
+                        print(f"    [🔥] سشنِ LaMa → {threads} نخ "
+                              "(پچِ کم → هسته‌های بیکار پر می‌شود)", flush=True)
+                    except Exception:
+                        pass
+            return self._lama
+
+    def _lama_switch_ok(self, threads: int) -> bool:
+        """محدودِ تغییرِ نخِ سشنِ LaMa — از رگبارِ بازسازی جلوگیری می‌کند."""
+        try:
+            _now = time.time()
+            if _now - float(getattr(self, "_lama_switch_at", 0.0) or 0.0) < 2.0:
+                return False
+            if not (1 <= int(threads) <= 4):
+                return False
+            _av = self._available_ram_gb()
+            if _av and _av < 0.35:
+                return False
+            return True
+        except Exception:
+            return False
+
+    def _build_lama_cpu(self, threads: int):
+        try:
+            return LamaMangaONNX(prefer_gpu=False, threads=max(1, int(threads)))
+        except Exception:
+            return None
 
     def _get_lama_locked(self):
 
@@ -3771,6 +3819,11 @@ class MangaTranslator:
                         self.use_lama = False
                         self._lama = None
                         self._inpainter_name = "OpenCV"
+        # v1.14.45: نخِ واقعیِ سشنِ اولیه ثبت شود تا اولین سوئیچِ تطبیقیِ
+        # _get_lama(threads=…) بی‌دلیل بازسازی نکند
+        if self._lama is not None and not getattr(self, "_lama_threads_seen", False):
+            self._lama_threads = int(getattr(self._lama, "thr_used", 0) or 0)
+            self._lama_threads_seen = True
         return self._lama
 
     @staticmethod
@@ -6759,9 +6812,22 @@ class MangaTranslator:
             _rw = min(int(self._lama_workers_auto()), len(groups))
         except Exception:
             _rw = 1
+        _rw = max(1, min(_rw, len(groups)))
+        # v1.14.45: مانند مسیرِ اصلی — پچِ کم → نخِ بیشتر برای هر پچ
+        try:
+            _rcores = int(self._cpu_core_count())
+        except Exception:
+            _rcores = 0
+        _rthr = (1 if _rw >= 5
+                 else max(1, min(4, max(2, _rcores) // _rw)))
+        try:
+            lama = self._get_lama(threads=_rthr) or lama
+        except Exception:
+            pass
         if _rw > 1:
             try:
-                print(f"  [🩹] {_rw} parallel rescue patches")
+                _rt = max(1, int(getattr(lama, "thr_used", 1) or 1))
+                print(f"  [🩹] {_rw} parallel rescue patches × {_rt} thread(s)")
             except Exception:
                 pass
             _rex = ThreadPoolExecutor(max_workers=_rw)
@@ -6923,13 +6989,26 @@ class MangaTranslator:
                     except Exception:
                         _workers = 1
                     _workers = max(1, min(_workers, len(groups)))
+                    # v1.14.45: نخِ هر پچ = هسته‌ها ÷ پچِ موازی — پچِ کم →
+                    # نخِ بیشتر (قبلاً همیشه ۱ نخ بود و هسته‌ها بیکار می‌ماند)
+                    try:
+                        _cores_n = int(self._cpu_core_count())
+                    except Exception:
+                        _cores_n = 0
+                    _thr_want = (1 if _workers >= 5
+                                 else max(1, min(4, max(2, _cores_n) // _workers)))
+                    try:
+                        lama = self._get_lama(threads=_thr_want) or lama
+                    except Exception:
+                        pass
+                    _thr_eff = max(1, int(getattr(lama, "thr_used", 1) or 1))
                     if _workers > 1:
                         try:
                             _cores = self._cpu_core_count()
                         except Exception:
                             _cores = "?"
-                        print(f"  [🔥] {_workers} parallel patches × 1 thread "
-                              f"({_cores} cores → full CPU)")
+                        print(f"  [🔥] {_workers} parallel patches × "
+                              f"{_thr_eff} thread(s) ({_cores} cores → full CPU)")
                         _pex = ThreadPoolExecutor(max_workers=_workers)
                         _futs = []
                         try:

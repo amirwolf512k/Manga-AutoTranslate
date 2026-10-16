@@ -162,7 +162,13 @@
   // نمایشِ غیرِزنده window.__mangaLive هرگز صدا نمی‌خورد و قبلاً ndbg صفر
   // می‌ماند → زدنِ 🔍 صفحهٔ خالی می‌ساخت («کار نمی‌کند») و در نمایشگری که
   // از دکمهٔ دیباگ باز شده بود «نهایی» هم دیباگ نشان می‌داد (جابه‌جایی).
+  // v1.14.45: دیباگ هم زنده — درخواستِ کاربر (POCO F4): «دیباگ میزنم حالت
+  // زنده میره عادی میشه» → در حالتِ دیباگ: ① arrived همیشه به‌روز می‌شود
+  // (برگشت به «نهایی» هیچ صفحه‌ای را از دست نمی‌دهد) ② تا وقتی نشست زنده است
+  // یک اسلاتِ «در حال ترجمه…» آخرِ لیستِ دیباگ می‌ماند (پایانِ نشست از
+  // آرگومانِ چهارمِ __mangaLive) ③ rebuild اسکرول را نگه می‌دارد.
   let dbgMode = false, arrived = c.querySelectorAll('img').length, total = 0, ndbg = 0;
+  let isLive = false, sessionDone = false;
   try {
     const tb0 = root.querySelector('[data-act="dbg"]');
     ndbg = tb0 ? (parseInt(tb0.getAttribute('data-ndbg') || '0', 10) || 0) : 0;
@@ -183,24 +189,46 @@
     return im;
   };
   function rebuild() {
+    // v1.14.45: اسکرول هنگامِ سوئیچِ دیباگ/نهایی حفظ می‌شود (قبلاً innerHTML
+    // خالی می‌شد و کاربر به بالای صفحه می‌پرید = «حالت زنده میره»)
+    const st = s.scrollTop, sl = s.scrollLeft;
     const a = dbgMode ? ndbg : arrived;
-    // در حالتِ دیباگ فقط صفحه‌های دیباگ — بدون اسلاتِ «در حال ترجمه»
-    const w = dbgMode ? ndbg : Math.max(total, a);
+    let w = dbgMode ? ndbg : Math.max(total, a);
+    if (dbgMode && isLive && !sessionDone) w += 1; // اسلاتِ زندهٔ آخرِ لیست
+    if (!dbgMode && total <= 0) w = Math.max(w, arrived + countPh());
     c.innerHTML = '';
     for (let i = 0; i < w; i++) c.appendChild(i < a ? mkImg(i) : mkPh());
+    try { s.scrollTop = st; s.scrollLeft = sl; } catch (err) {}
     updateProgress();
+  }
+  function countPh() {
+    let n = 0;
+    for (const el of c.children) if (el && el.className === 'ph') n++;
+    return n;
   }
   function renderLive() {
     const a = dbgMode ? ndbg : arrived;
-    const w = dbgMode ? ndbg : Math.max(total, a);
-    while (c.children.length < w) c.appendChild(mkPh());
-    for (let i = 0; i < w; i++) {
-      const el = c.children[i];
-      if (i < a && el && el.tagName !== 'IMG') c.replaceChild(mkImg(i), el);
+    let w = dbgMode ? ndbg : Math.max(total, a);
+    if (dbgMode && isLive && !sessionDone) w += 1; // اسلاتِ زندهٔ آخرِ لیست
+    if (dbgMode) {
+      // حالتِ دیباگ فقط صفحه‌های دیباگ + اسلاتِ زنده — با پایانِ نشست کوچک می‌شود
+      while (c.children.length < w) c.appendChild(mkPh());
+      while (c.children.length > w) c.removeChild(c.lastChild);
+    } else {
+      // حالتِ نهایی هرگز اسلات‌های موجود را حذف نمی‌کند (اسلاتِ استاتیکِ
+      // تزریقیِ اندروید قبل از اولین __mangaLive هست — total هنوز 0 است)
+      w = Math.max(w, c.children.length);
+      while (c.children.length < w) c.appendChild(mkPh());
     }
+    for (let i = 0; i < Math.min(a, w); i++) {
+      const el = c.children[i];
+      if (el && el.tagName !== 'IMG') c.replaceChild(mkImg(i), el);
+    }
+    updateProgress();
   }
-  window.__mangaLive = function(n, tot, nd) {
+  window.__mangaLive = function(n, tot, nd, fin) {
     try {
+      isLive = true;
       if (typeof tot === 'number' && tot > 0) total = tot;
       if (typeof nd === 'number' && nd > 0) {
         ndbg = nd;
@@ -213,7 +241,10 @@
           tb.style.fontWeight = '700';
         }
       }
-      if (!dbgMode) arrived = Math.max(arrived, n | 0);
+      // v1.14.45: arrived در هر دو حالت به‌روز می‌شود — قبلاً در حالتِ دیباگ
+      // منجمد می‌شد و برگشت به «نهایی» صفحه‌های رسیده را نشان نمی‌داد
+      arrived = Math.max(arrived, n | 0);
+      if (fin === true) sessionDone = true;
       renderLive();
     } catch (err) {}
   };
