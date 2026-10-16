@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.45"
+APP_VER = "1.14.46"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5730,6 +5730,72 @@ class MangaTranslator:
         except Exception:
             return True
 
+    def _limit_mask_to_bubble(self, image: np.ndarray, rm: np.ndarray,
+                              region: "TextRegion") -> np.ndarray:
+        """v1.14.46 — درخواستِ کاربر: «پاکسازی به اندازهٔ حباب محدود شود؛
+        بیشتر از آن حذف نکند».
+        ۱) اگر دورِ متن حبابِ واقعی (جزیرهٔ بسته) پیدا شود → ماسک فقط داخلِ
+           حباب می‌ماند؛ دیوارِ حباب و بیرونِ آن هرگز پاک نمی‌شود.
+        ۲) اگر حباب نبود (متن روی عکس/نرده/چوب) → ماسک به شکلِ تنگِ خودِ
+           خطوطِ OCR برمی‌گردد؛ بلوکِ مستطیلی و جذبِ پس‌زمینه دور ریخته
+           می‌شود تا لکهٔ سیاه/روشن و پاک‌شدنِ حباب رخ ندهد."""
+        try:
+            ys, xs = np.nonzero(rm)
+            if xs.size == 0:
+                return rm
+            h, w = image.shape[:2]
+            n_orig = int(xs.size)
+            M = 26
+            x0 = max(0, int(xs.min()) - M)
+            y0 = max(0, int(ys.min()) - M)
+            x1 = min(w, int(xs.max()) + 1 + M)
+            y1 = min(h, int(ys.max()) + 1 + M)
+            if x1 - x0 < 12 or y1 - y0 < 12:
+                return rm
+            sub = rm[y0:y1, x0:x1]
+            gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            interior = self._bubble_interior_mask(gray, sub)
+            if interior is not None and int(cv2.countNonZero(interior)) > 0:
+                ch, cw = gray.shape[:2]
+                _area = float(ch * cw)
+                _fa = float(cv2.countNonZero(interior))
+                _t = bool((interior[0] > 0).any())
+                _b = bool((interior[-1] > 0).any())
+                _l = bool((interior[:, 0] > 0).any())
+                _r = bool((interior[:, -1] > 0).any())
+                if (0.12 * _area <= _fa <= 0.88 * _area
+                        and int(_t) + int(_b) + int(_l) + int(_r) <= 1):
+                    core = cv2.erode(interior,
+                                     np.ones((5, 5), np.uint8), iterations=1)
+                    clipped = cv2.bitwise_and(sub, core)
+                    if int(cv2.countNonZero(clipped)) >= max(
+                            150, 0.30 * n_orig):
+                        rm[y0:y1, x0:x1] = clipped
+                        return rm
+            polys = []
+            for p in (getattr(region, "ocr_polys", None) or []):
+                try:
+                    pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                if pp.shape[0] >= 3:
+                    polys.append(pp)
+            if not polys:
+                return rm
+            tight = np.zeros_like(sub)
+            off = np.array([x0, y0], dtype=np.int32)
+            for pp in polys:
+                c = pp.mean(axis=0)
+                q = np.rint(c + (pp - c) * 1.18).astype(np.int32) - off
+                cv2.fillPoly(tight, [q], 255)
+            if int(cv2.countNonZero(tight)) < max(120, 0.18 * n_orig):
+                return rm
+            rm[:] = 0
+            rm[y0:y1, x0:x1] = tight
+            return rm
+        except Exception:
+            return rm
+
     def _build_text_mask_fast(self, image: np.ndarray,
                               regions: List[TextRegion]) -> Optional[np.ndarray]:
         try:
@@ -5776,6 +5842,8 @@ class MangaTranslator:
                                         image, _rm, region, True):
                                     n_skip += 1
                                     continue
+                                _rm = self._limit_mask_to_bubble(
+                                    image, _rm, region)
                                 m = cv2.bitwise_or(m, _rm)
                                 n_ok += 1
                                 continue
@@ -5804,6 +5872,8 @@ class MangaTranslator:
                                         _rm = cv2.bitwise_or(_rm, _inkB)
                                 except Exception:
                                     pass
+                                _rm = self._limit_mask_to_bubble(
+                                    image, _rm, region)
                                 m = cv2.bitwise_or(m, _rm)
                                 n_ok += 1
                                 continue
@@ -5832,6 +5902,8 @@ class MangaTranslator:
                         _rm = cv2.bitwise_or(_rm, _ink2)
                 except Exception:
                     pass
+                _rm = self._limit_mask_to_bubble(
+                    image, _rm, region)
                 m = cv2.bitwise_or(m, _rm)
                 n_ok += 1
             else:
@@ -5845,6 +5917,8 @@ class MangaTranslator:
                         if not self._fast_bubble_guard(image, _rm, region, False):
                             n_skip += 1
                             continue
+                        _rm = self._limit_mask_to_bubble(
+                            image, _rm, region)
                         m = cv2.bitwise_or(m, _rm)
                         n_ok += 1
                 except Exception:
@@ -6976,7 +7050,18 @@ class MangaTranslator:
                             _gap = int(max(32, min(144, round(_short * 0.16))))
                         elif _on_android():
                             _gap = int(max(24, min(96, round(_short * 0.04))))
-                        groups = self._group_nearby_patches(pending, gap=_gap)
+                        try:
+                            _mm = int(os.environ.get(
+                                "MANGA_LAMA_MAX_MEMBERS", "0") or 0)
+                        except Exception:
+                            _mm = 0
+                        # v1.14.46: هزینهٔ هر فراخوانیِ LaMa با مساحتِ داخلیِ
+                        # سقف‌خورده (≤۳۸۴) متناسب است — پچِ بزرگ‌تر = مجموعِ
+                        # محاسبهٔ کمتر. اندروید ۶→۱۰ عضو (~۲x سریع‌تر)
+                        if _mm <= 0:
+                            _mm = 10 if _on_android() else 6
+                        groups = self._group_nearby_patches(
+                            pending, gap=_gap, max_members=_mm)
                     if _short * 2.5 < _long:
                         _mode += " — long strip"
                     print(f"  [*] LaMa {_mode}: {len(pending)} clusters → "
@@ -6988,6 +7073,16 @@ class MangaTranslator:
                         _workers = self._lama_workers_auto()
                     except Exception:
                         _workers = 1
+                    # v1.14.46: بیش از cores÷2 پچِ همزمان، حافظه/کش را اشباع
+                    # می‌کند (صفحهٔ ۶ پچیِ POCO: 6×1نخی = 53.8s!) — 4×2نخی
+                    # همان‌ها را در ۲ موج و سریع‌تر تمام می‌کند
+                    if _on_android():
+                        try:
+                            _workers = max(1, min(
+                                _workers, len(groups),
+                                max(1, self._cpu_core_count() // 2)))
+                        except Exception:
+                            pass
                     _workers = max(1, min(_workers, len(groups)))
                     # v1.14.45: نخِ هر پچ = هسته‌ها ÷ پچِ موازی — پچِ کم →
                     # نخِ بیشتر (قبلاً همیشه ۱ نخ بود و هسته‌ها بیکار می‌ماند)
