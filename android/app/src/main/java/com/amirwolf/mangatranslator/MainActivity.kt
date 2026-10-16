@@ -801,6 +801,8 @@ class MainActivity : AppCompatActivity() {
 
                 val fields = sec.getJSONArray("fields")
                 for (i in 0 until fields.length()) addField(contentBox, fields.getJSONObject(i))
+                // اگر «مدل» در این بخش نبود، دکمهٔ تست همین‌جا اضافه می‌شود
+                flushPendingTest(contentBox)
                 formBox.addView(card, lp)
             }
         } catch (e: Exception) {
@@ -945,8 +947,9 @@ class MainActivity : AppCompatActivity() {
                             }
                             try {
                                 val p = JSONObject()
-                                val prov = prefs.getString("provider", "gemini") ?: "gemini"
-                                val keyVal = (fieldViews[id] as? EditText)?.text?.toString() ?: ""
+                                val prov = settingVal("provider", "manga_provider")
+                                    .ifBlank { "gemini" }
+                                val keyVal = settingVal("manga_api_keys", "api_keys", "keys")
                                 val baseVal = settingVal("manga_api_base", "api_base")
                                 val modelVal = settingVal("manga_model", "model")
                                 p.put("keys", keyVal)
@@ -971,8 +974,13 @@ class MainActivity : AppCompatActivity() {
                             }
                         }.start()
                     }
-                    row.addView(testBtn)
-                    row.addView(testLbl)
+                    // ترتیبِ خواستهٔ کاربر: لینک → کلید → مدل → تست
+                    // دکمهٔ تست بعد از ردیفِ «مدل» رندر می‌شود (flushPendingTest)
+                    pendingTestBtn = testBtn
+                    pendingTestLbl = testLbl
+                }
+                if (id.equals("manga_model", true) || id.equals("model", true)) {
+                    flushPendingTest(card)
                 }
             }
             "select" -> {
@@ -1915,10 +1923,42 @@ class MainActivity : AppCompatActivity() {
 
     private fun logOldFile(): File = File(filesDir, "manga_old.log")
 
-    private fun isMangaLogName(dn: String): Boolean =
-        dn == "manga.log" || dn == "manga_old.log" ||
-            Regex("^manga(_old)?\\.(log|txt)( \\(\\d+\\))?$").matches(dn) ||
-            Regex("^manga(_old)?( \\(\\d+\\))?\\.(log|txt)$").matches(dn)
+    // دکمهٔ «تست کلید» که بعد از ردیفِ «مدل» رندر می‌شود (ترتیبِ لینک→کلید→مدل→تست)
+    private var pendingTestBtn: Button? = null
+    private var pendingTestLbl: TextView? = null
+
+    private fun flushPendingTest(card: LinearLayout?) {
+        val btn = pendingTestBtn ?: return
+        val lbl = pendingTestLbl ?: return
+        val ctx = this
+        if (card == null) {
+            pendingTestBtn = null; pendingTestLbl = null
+            return
+        }
+        val wrap = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(4), dp(2), dp(2))
+        }
+        wrap.addView(btn, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT))
+        wrap.addView(lbl)
+        card.addView(wrap)
+        pendingTestBtn = null
+        pendingTestLbl = null
+    }
+
+    // هر اسمی که MediaStore از «manga.log / manga_old.log» ساخته باشد:
+    // manga.log | manga_old.log | manga.log.txt | manga.log (11).txt | manga (2).log …
+    private fun normMangaLogName(dn: String): String? {
+        val s = dn.lowercase().trim()
+        if (!s.startsWith("manga")) return null
+        if (!s.contains(".log") && !s.endsWith(".txt")) return null
+        val noDup = s.replace(Regex(" \\(\\d+\\)"), "")
+        return if (noDup.startsWith("manga_old")) "manga_old.log" else "manga.log"
+    }
+
+    private fun isMangaLogName(dn: String): Boolean = normMangaLogName(dn) != null
 
     private fun writeLogEntry(uri: Uri, src: File): Boolean {
         var ok = false
@@ -1955,13 +1995,25 @@ class MainActivity : AppCompatActivity() {
         return writeLogEntry(uri, src)
     }
 
+    // فقط دو فایل: manga.log (لاگ فعلی) و manga_old.log (لاگ قبلی)
+    // MediaStore موقع insertِ اسمِ تکراری خودش « (N).txt» می‌سازد — پس
+    // هر ردیفِ هم‌خانواده (manga.log (11).txt و…) را با norm پیدا می‌کنیم،
+    // یکی را main نگه می‌داریم و داخل همان می‌نویسیم، بقیه پاک می‌شوند.
     private fun upsertLogInDownloads(name: String, src: File): Boolean {
         if (!src.isFile) return false
+        val kind = normMangaLogName(name) ?: return false
         if (Build.VERSION.SDK_INT < 29) {
             return try {
                 val dir = File(Environment.getExternalStoragePublicDirectory(
                     Environment.DIRECTORY_DOWNLOADS), "manga")
                 dir.mkdirs()
+                // پاک‌کردن نسخه‌های تکراریِ همین kind (مثل manga.log (1).txt)
+                for (f in dir.listFiles() ?: emptyArray()) {
+                    if (!f.isFile) continue
+                    if (normMangaLogName(f.name) == kind && f.name != name) {
+                        try { f.delete() } catch (_: Exception) {}
+                    }
+                }
                 src.copyTo(File(dir, name), overwrite = true)
                 true
             } catch (e: Exception) {
@@ -1973,7 +2025,8 @@ class MainActivity : AppCompatActivity() {
             val proj = arrayOf(MediaStore.MediaColumns._ID,
                 MediaStore.MediaColumns.DISPLAY_NAME,
                 MediaStore.MediaColumns.RELATIVE_PATH)
-            val rows = ArrayList<Triple<Long, String, String>>()
+            data class Row(val id: Long, val dn: String, val rp: String)
+            val rows = ArrayList<Row>()
             contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
                 proj, MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
                 arrayOf("manga%"), null)?.use { c ->
@@ -1985,32 +2038,60 @@ class MainActivity : AppCompatActivity() {
                         } catch (_: Exception) {
                             ""
                         }
-                        rows.add(Triple(id, dn, rp))
+                        rows.add(Row(id, dn, rp))
                     }
                 }
-            val mains = setOf("manga.log", "manga_old.log")
-            var main: Uri? = null
+            // فقط ردیف‌های پوشهٔ خودمان
+            val mine = rows.filter {
+                it.rp == "Download/manga/" && normMangaLogName(it.dn) != null
+            }
+            fun dupNum(dn: String): Int {
+                val m = Regex("\\((\\d+)\\)").find(dn) ?: return 0
+                return m.groupValues[1].toIntOrNull() ?: 0
+            }
+            // main = اسم دقیق، وگرنه کم‌ترین شمارهٔ (N)، وگرنه تازه‌ترین _id
+            val cands = mine.filter { normMangaLogName(it.dn) == kind }
+            val main = cands.firstOrNull { it.dn.equals(name, ignoreCase = true) }
+                ?: cands.sortedByDescending { it.id }
+                    .sortedBy { dupNum(it.dn) }
+                    .firstOrNull()
+            var mainUri: Uri? = null
+            if (main != null) {
+                mainUri = android.content.ContentUris.withAppendedId(
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, main.id)
+            }
+            // تکراری‌ها = هر ردیفِ هم‌kind که main نیست (ردیف‌های kindِ دیگر حفظ می‌شوند)
             val doomed = ArrayList<Uri>()
-            for ((id, dn, rp) in rows) {
+            for (r in mine) {
+                if (normMangaLogName(r.dn) != kind) continue
                 val u = android.content.ContentUris.withAppendedId(
-                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
-                val keep = if (dn == name) {
-                    if (main == null && rp == "Download/manga/") {
-                        main = u
-                        true
-                    } else false
-                } else {
-                    dn in mains && rp == "Download/manga/"
-                }
-                if (!keep && isMangaLogName(dn)) doomed.add(u)
+                    MediaStore.Downloads.EXTERNAL_CONTENT_URI, r.id)
+                if (u == mainUri) continue
+                doomed.add(u)
             }
             for (u in doomed) try {
                 contentResolver.delete(u, null, null)
             } catch (_: Exception) {
             }
-            val target = main
-            if (target != null) writeLogEntry(target, src)
-            else insertLogEntry(name, src)
+            var ok = false
+            val target = mainUri
+            if (target != null) {
+                ok = writeLogEntry(target, src)
+                if (!ok) {
+                    try { contentResolver.delete(target, null, null) } catch (_: Exception) {}
+                }
+                // اسمِ main را به اسمِ دقیق برسان (بهترین تلاش)
+                if (ok) {
+                    try {
+                        contentResolver.update(target, ContentValues().apply {
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                        }, null, null)
+                    } catch (_: Exception) {
+                    }
+                }
+            }
+            if (!ok) ok = insertLogEntry(name, src)
+            ok
         } catch (e: Exception) {
             android.util.Log.e("MangaApp", "upsertLogInDownloads", e)
             false

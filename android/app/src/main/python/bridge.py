@@ -338,6 +338,16 @@ def manifest():
                 f["choices"] = _drop_choice(f.get("choices") or [], "lama-big")
                 if f.get("default") == "lama-big":
                     f["default"] = "lama-manga"
+        # --- ترتیبِ خواستهٔ کاربر: ارائه‌دهنده → لینک(custom) → کلید → مدل ---
+        # (دکمهٔ «تست کلید» در MainActivity بعد از «مدل» رندر می‌شود)
+        _forder = {"provider": 0, "manga_provider": 0,
+                   "manga_api_base": 1, "api_base": 1,
+                   "manga_api_keys": 2, "api_keys": 2,
+                   "manga_model": 3, "model": 3}
+        _fs = sec.get("fields") or []
+        if any(f.get("id") in _forder for f in _fs):
+            sec["fields"] = sorted(_fs,
+                                   key=lambda f: _forder.get(f.get("id"), 10))
     try:
         _defaults(mf)
     except Exception:

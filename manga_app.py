@@ -1235,9 +1235,9 @@ footer { display: none !important; }
   .nav, .stepcard { animation: none; }
 }
 
-/* ---- دکمهٔ قرمز «تست کلیدها / لینک» — یک دکمه، هر سه پلتفرم ---- */
+/* ---- دکمهٔ سیاه «تست کلیدها / لینک» — یک دکمه، هر سه پلتفرم ---- */
 #manga_test_key {
-  background: linear-gradient(160deg, #ff4a3d, #c9271c) !important;
+  background: linear-gradient(160deg, #16161a, #050506) !important;
   color: #fff !important;
   border: none !important;
   border-radius: 14px !important;
@@ -1245,20 +1245,20 @@ footer { display: none !important; }
   font-size: 1rem !important;
   padding: 14px 18px !important;
   min-height: 52px !important;
-  box-shadow: 0 8px 22px rgba(224,53,42,.35), inset 0 0 0 1.5px rgba(255,255,255,.18) !important;
+  box-shadow: 0 8px 22px rgba(0,0,0,.45), inset 0 0 0 1.5px rgba(255,255,255,.16) !important;
   transition: filter .18s ease, transform .18s ease !important;
 }
-#manga_test_key:hover { filter: brightness(1.08); transform: translateY(-1px); }
-#manga_test_key:active { transform: translateY(0); filter: brightness(.96); }
+#manga_test_key:hover { filter: brightness(1.35); transform: translateY(-1px); }
+#manga_test_key:active { transform: translateY(0); filter: brightness(.9); }
 #manga_test_key span, #manga_test_key div { color: #fff !important; }
 
 /* ---- جعبهٔ نتیجهٔ تست هر کلید ---- */
 #manga_test_key_out textarea {
   background: #08080a !important;
-  color: #ffd7d2 !important;
+  color: #d9d9e0 !important;
   font-family: 'IBM Plex Mono', monospace !important;
   font-size: .88rem !important;
-  border: 1px solid rgba(255,74,61,.35) !important;
+  border: 1px solid rgba(255,255,255,.14) !important;
   border-radius: 12px !important;
   direction: rtl !important;
 }
@@ -2027,9 +2027,17 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
         
         with gr.Group(elem_classes=["stepcard"]):
             gr.HTML('<div class="steptitle"><span class="stepnum">۲</span> مترجم هوش مصنوعی</div>')
+            # ترتیب خواستهٔ کاربر: ارائه‌دهنده → لینک (custom) → کلید → مدل → تست
+            provider = gr.Dropdown(PROVIDERS, value="gemini",
+                                   label="ارائه‌دهنده", scale=1)
+            api_base = gr.Textbox(label="دامنهٔ API سفارشی (فقط برای provider «custom»)",
+                                  value=str(cfg.get("api_base", "") or ""),
+                                  placeholder="https://opencode.ai/inference/openai/v1/chat/completions",
+                                  info="۴ فرمت خودکار شناخته می‌شود: …/chat/completions | …/responses | …/messages (Anthropic) | …:generateContent (Google) — لینک کامل endpoint را هم می‌شود چسباند؛ https:// اگر جا افتاده باشد خودکار اضافه می‌شود.",
+                                  elem_id="manga_api_base",
+                                  visible=False,
+                                  scale=3)
             with gr.Row():
-                provider = gr.Dropdown(PROVIDERS, value="gemini",
-                                       label="ارائه‌دهنده", scale=1)
                 api_keys = gr.Textbox(label="کلیدهای API شما (با کاما = چرخش خودکار)",
                                       value="",
                                       type="password", scale=3,
@@ -2047,13 +2055,6 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 label="", value="", interactive=False, show_label=False,
                 elem_id="manga_test_key_out", visible=False,
                 placeholder="وضعیت هر کلید — سالم ✔ / خراب ✘ (بعد از ۶۰ ثانیه خودکار پاک می‌شود)")
-            api_base = gr.Textbox(label="دامنهٔ API سفارشی (فقط برای provider «custom»)",
-                                  value=str(cfg.get("api_base", "") or ""),
-                                  placeholder="https://opencode.ai/inference/openai/v1/chat/completions",
-                                  info="۴ فرمت خودکار شناخته می‌شود: …/chat/completions | …/responses | …/messages (Anthropic) | …:generateContent (Google) — لینک کامل endpoint را هم می‌شود چسباند؛ https:// اگر جا افتاده باشد خودکار اضافه می‌شود.",
-                                  elem_id="manga_api_base",
-                                  visible=False,
-                                  scale=3)
             gr.Markdown("<div class='hint'>کلید از aistudio.google.com (Gemini) یا "
                         "platform.openai.com (ChatGPT) یا console.groq.com بگیرید. "
                         "تنظیمات وب فقط در مرورگر ذخیره می‌شود.</div>")

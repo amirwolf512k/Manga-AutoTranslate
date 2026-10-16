@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.39"
+APP_VER = "1.14.40"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5821,9 +5821,22 @@ class MangaTranslator:
         except Exception:
             return None
         padding = max(0, int(getattr(self, "mask_padding", 3)))
+
+        def _need_bubble_guard(region: "TextRegion") -> bool:
+            """گاردِ حباب فقط برای ناحیه‌های واقعاً داخلِ حباب — متنِ آزادِ
+            رویِ عکس (det_class=free_text/"") حباب ندارد و گارد ماسکش را
+            بی‌دلیل رد می‌کرد (متنِ رویِ عکس هرگز پاک نمی‌شد)."""
+            return ((getattr(region, "det_class", "") or "")
+                    in ("bubble", "text_bubble"))
+
         n_ok = 0
         n_skip = 0
         for region in regions:
+            # متنِ آزادِ بیرونِ حباب این‌جا ماسک نمی‌شود — مسیرِ کلاسیک
+            # (گاردِ حباب ماسکش را رد می‌کرد و متنِ رویِ عکس می‌ماند)
+            if ((getattr(region, "det_class", "") or "")
+                    not in ("bubble", "text_bubble")):
+                continue
             # v1.14.32: خطِ پنجرهٔ سیستم → ماسکِ مستطیلِ کاملِ خط با پهنای
             # پنجره — پس‌زمینهٔ پنجره یکدست است؛ OCR گاهی تهِ خط را جا می‌اندازد
             # («speed)» می‌ماند) و ماسکِ جوهری روی زمینهٔ تیره هم ناقص می‌شود.
@@ -5875,7 +5888,7 @@ class MangaTranslator:
                             if x1 - x0 >= 6 and y1 - y0 >= 6:
                                 _rm = np.zeros_like(m)
                                 cv2.rectangle(_rm, (x0, y0), (x1, y1), 255, -1)
-                                if not self._fast_bubble_guard(
+                                if _need_bubble_guard(region) and not self._fast_bubble_guard(
                                         image, _rm, region, True):
                                     n_skip += 1
                                     continue
@@ -5896,7 +5909,7 @@ class MangaTranslator:
                             if x1 - x0 >= 6 and y1 - y0 >= 6:
                                 _rm = np.zeros_like(m)
                                 cv2.rectangle(_rm, (x0, y0), (x1, y1), 255, -1)
-                                if not self._fast_bubble_guard(
+                                if _need_bubble_guard(region) and not self._fast_bubble_guard(
                                         image, _rm, region, True):
                                     n_skip += 1
                                     continue
@@ -5918,7 +5931,8 @@ class MangaTranslator:
                         pass
                 _rm = np.zeros_like(m)
                 cv2.fillPoly(_rm, pts_list, 255)
-                if not self._fast_bubble_guard(image, _rm, region, True):
+                if _need_bubble_guard(region) and not self._fast_bubble_guard(
+                        image, _rm, region, True):
                     try:
                         _ink = MangaTranslator._ink_absorb_mask(
                             image, _rm, _polys_raw, band=26,
@@ -5952,7 +5966,8 @@ class MangaTranslator:
                     if x1 - x0 >= 6 and y1 - y0 >= 4:
                         _rm = np.zeros_like(m)
                         cv2.rectangle(_rm, (x0, y0), (x1, y1), 255, -1)
-                        if not self._fast_bubble_guard(image, _rm, region, False):
+                        if _need_bubble_guard(region) and not self._fast_bubble_guard(
+                                image, _rm, region, False):
                             n_skip += 1
                             continue
                         m = cv2.bitwise_or(m, _rm)
@@ -6255,12 +6270,26 @@ class MangaTranslator:
         return n_fill
 
     def _build_text_mask(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+        """ماسکِ متن — اگر متنِ آزادِ بیرونِ حباب در صفحه باشد، کلِ صفحه با
+        مسیرِ کلاسیک ساخته می‌شود (ماسکِ یکدست → خوشه‌بندی و پرکردنِ درست)؛
+        صفحهٔ فقط-حبابی با مسیرِ سریع می‌ماند."""
 
-        if (os.environ.get("MANGA_FAST_MASK", "1") != "0"
-                and not getattr(self, "erase_bubble_interior", False)):
-            _fm = self._build_text_mask_fast(image, regions)
-            if _fm is not None:
-                return _fm
+        def _is_bub_det(r):
+            return ((getattr(r, "det_class", "") or "")
+                    in ("bubble", "text_bubble"))
+
+        _has_free = any(not _is_bub_det(r) for r in regions)
+        if (_has_free
+                or os.environ.get("MANGA_FAST_MASK", "1") == "0"
+                or getattr(self, "erase_bubble_interior", False)):
+            return self._build_text_mask_classic(image, regions)
+        mask = self._build_text_mask_fast(image, regions)
+        if mask is None:
+            return self._build_text_mask_classic(image, regions)
+        return mask
+
+    def _build_text_mask_classic(self, image: np.ndarray,
+                                 regions: List[TextRegion]) -> np.ndarray:
 
         h_img, w_img = image.shape[:2]
         text_mask = np.zeros((h_img, w_img), dtype=np.uint8)
@@ -7677,6 +7706,12 @@ class MangaTranslator:
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
+        try:
+            _dmp = os.environ.get("MANGA_DEBUG_MASK", "")
+            if _dmp:
+                cv2.imwrite(_dmp, mask)
+        except Exception:
+            pass
         if not np.any(mask):
             return image.copy()
         # v1.14.37: نسخهٔ دست‌نخوردهٔ ماسک برای جاروباقی‌سنج — پرکردنِ
@@ -8334,6 +8369,41 @@ class MangaTranslator:
             import traceback as _tb
             print("  [!] Leftover-clean error:")
             _tb.print_exc()
+
+        # v1.14.40: تورِ ایمنیِ متنِ آزاد — هیچ مسیری حق ندارد بیرونِ
+        # خط‌های OCRِ متنِ آزاد را تغییر دهد؛ هر افکتِ بیرون‌زده (مثلِ
+        # باندِ سفید روی صورتِ شخصیت) به تصویرِ اصلی برمی‌گردد
+        try:
+            _ft = [r for r in regions
+                   if (getattr(r, "kind", "") == "free_text")]
+            if _ft:
+                _H2, _W2 = image.shape[:2]
+                _allow = np.zeros((_H2, _W2), dtype=np.uint8)
+                for _r in _ft:
+                    for _p in (getattr(_r, "ocr_polys", None) or []):
+                        try:
+                            _pa = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                            _px0 = int(max(0, _pa[:, 0].min())) - 7
+                            _py0 = int(max(0, _pa[:, 1].min())) - 6
+                            _px1 = int(min(_W2 - 1, _pa[:, 0].max())) + 7
+                            _py1 = int(min(_H2 - 1, _pa[:, 1].max())) + 6
+                            cv2.rectangle(_allow, (_px0, _py0),
+                                          (_px1, _py1), 255, -1)
+                        except Exception:
+                            continue
+                if np.any(_allow):
+                    _allow_d = cv2.dilate(_allow, np.ones((5, 5), np.uint8))
+                    _diff = (np.abs(
+                        cleaned.astype(np.int16)
+                        - image.astype(np.int16)).max(axis=2) > 24)
+                    _bad = _diff & (_allow_d == 0)
+                    _n_bad = int(_bad.sum())
+                    if _n_bad:
+                        cleaned[_bad] = image[_bad]
+                        print(f"  [🛡] {_n_bad}px بیرونِ متنِ آزاد "
+                              "به اصل برگردانده شد")
+        except Exception:
+            pass
 
         print(f"  - Cleanup: {counts}")
         return cleaned
@@ -12766,6 +12836,12 @@ class MangaTranslator:
                     except Exception:
                         continue
                     extra.append(r)
+                    # متنِ بیرونِ حباب است — گاردِ حباب و کلیپِ حباب نباید
+                    # ماسکش را رد/کوچک کنند
+                    try:
+                        r.det_class = "free_text"
+                    except Exception:
+                        pass
                     if len(extra) >= 12:
                         break
                 if len(extra) >= 12:
@@ -12779,6 +12855,207 @@ class MangaTranslator:
             print(f"    [+] Gap-OCR: {len(extra)} ناحیهٔ اضافی "
                   f"({time.time() - t0:.1f}s) → پاک/ترجمه می‌شوند")
         return extra
+
+    def _discover_free_text_regions(self, image: np.ndarray,
+                                    regions: List["TextRegion"]) -> List["TextRegion"]:
+        """متنِ تایپ‌شدهٔ بیرونِ حباب (زیرنویسِ روی عکس، بنر، کاغذ، سند و…)
+        را پیدا می‌کند — RT-DETR فقط حباب می‌بیند و متنِ رویِ عکسِ خالی
+        («LEARN, THROUGHOUT ALL…»، «THE … BY …») هرگز پاک نمی‌شد.
+        روش: اجزای همبندِ جوهرِ هم‌اندازهٔ حرف بیرونِ پوشش → خوشهٔ خط →
+        OCRِ فقط همان تکه‌های کوچک (ارزان) → متنِ خوانا روی زمینهٔ یکدست.
+        متنِ عمودی/استایل‌دار (افکتِ صوتی/لوگو = هنر) و زمینهٔ شلوغ هرگز
+        لمس نمی‌شود. MANGA_FREE_TEXT=0 → خاموش."""
+        try:
+            h, w = image.shape[:2]
+        except Exception:
+            return []
+        t0 = time.time()
+        # ۱) پوششِ نواحی موجود (+حاشیه) — فقط بیرونِ آن‌ها جست‌وجو می‌شود
+        cov = np.zeros((h, w), dtype=np.uint8)
+        _rects = []
+        for r in regions:
+            try:
+                x, y, rw, rh = [int(v) for v in r.rect]
+            except Exception:
+                continue
+            x0, y0 = max(0, x - 8), max(0, y - 8)
+            x1, y1 = min(w, x + rw + 8), min(h, y + rh + 8)
+            cv2.rectangle(cov, (x0, y0), (x1, y1), 255, -1)
+            _rects.append((x0, y0, x1, y1))
+        cov = cv2.dilate(cov, np.ones((17, 17), np.uint8))
+
+        # ۲) نقشهٔ جوهر — تفاوت با زمینهٔ محلی (متنِ تیره و روشن هر دو)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        _sc = 0.5 if max(h, w) > 2200 else 1.0
+        if _sc < 1.0:
+            _gsm = cv2.resize(gray, None, fx=_sc, fy=_sc,
+                              interpolation=cv2.INTER_AREA)
+            _csm = cv2.resize(cov, None, fx=_sc, fy=_sc,
+                              interpolation=cv2.INTER_NEAREST)
+        else:
+            _gsm, _csm = gray, cov
+        _med = cv2.medianBlur(_gsm, 31)
+        _ink = ((np.abs(_gsm.astype(np.int16) - _med.astype(np.int16)) > 52)
+                & (_csm == 0)).astype(np.uint8) * 255
+        _ink = cv2.morphologyEx(_ink, cv2.MORPH_OPEN,
+                                np.ones((2, 2), np.uint8))
+        _ncc, _lab, _st, _ = cv2.connectedComponentsWithStats(_ink, 8)
+        # اجزای هم‌اندازهٔ حرف (نه بلوکِ بزرگِ هنر، نه نویزِ تک‌پیکسل)
+        _cand = np.zeros_like(_ink)
+        for i in range(1, _ncc):
+            _a = int(_st[i, cv2.CC_STAT_AREA])
+            if _a < 14:
+                continue
+            _cw = int(_st[i, cv2.CC_STAT_WIDTH]) / max(_sc, 1e-6)
+            _ch = int(_st[i, cv2.CC_STAT_HEIGHT]) / max(_sc, 1e-6)
+            if _ch < 6 or _ch > 78 or _cw < 5 or _cw > 420:
+                continue
+            _cand[_lab == i] = 255
+        if not np.any(_cand):
+            return []
+        # ۳) حروفِ نزدیک → خط (اتساعِ افقیِ کوچک + اجزا دوباره)
+        _kx = max(3, int(round(9 * _sc)))
+        _lines_m = cv2.dilate(_cand, np.ones((3, _kx), np.uint8))
+        _ncc2, _lab2, _st2, _ = cv2.connectedComponentsWithStats(_lines_m, 8)
+        boxes = []
+        for i in range(1, _ncc2):
+            _a = int(_st2[i, cv2.CC_STAT_AREA])
+            if _a < 60:
+                continue
+            _bx = int(_st2[i, cv2.CC_STAT_LEFT]) / _sc
+            _by = int(_st2[i, cv2.CC_STAT_TOP]) / _sc
+            _bw = int(_st2[i, cv2.CC_STAT_WIDTH]) / _sc
+            _bh = int(_st2[i, cv2.CC_STAT_HEIGHT]) / _sc
+            # ماسکِ اصلیِ داخلِ باکس (بدون اتساع) برای اندازهٔ واقعیِ متن
+            _x0, _y0 = int(_bx * _sc), int(_by * _sc)
+            _x1 = int(min(_csm.shape[1], (_bx + _bw) * _sc))
+            _y1 = int(min(_csm.shape[0], (_by + _bh) * _sc))
+            _sub = _ink[_y0:_y1, _x0:_x1]
+            _ys, _xs = np.nonzero(_sub)
+            if len(_xs) < 40:
+                continue
+            _rx0, _rx1 = float(_xs.min()), float(_xs.max())
+            _ry0, _ry1 = float(_ys.min()), float(_ys.max())
+            _tw = (_rx1 - _rx0 + 1) / _sc
+            _th = (_ry1 - _ry0 + 1) / _sc
+            if _th < 7 or _th > 92 or _tw < 24:
+                continue
+            if _tw < 1.15 * _th:
+                continue  # متنِ عمودی/استایل‌دار = هنر → دست نمی‌زنیم
+            boxes.append((_bx + _rx0 / _sc, _by + _ry0 / _sc,
+                          _bx + _rx1 / _sc, _by + _ry1 / _sc, _th))
+        if not boxes:
+            return []
+        # ۴) خط‌های نزدیک → بلوک
+        boxes.sort(key=lambda b: (b[1], b[0]))
+        blocks: List[List[tuple]] = []
+        for b in boxes:
+            placed = False
+            for bl in blocks:
+                ref = bl[-1]
+                _mh = max(b[4], ref[4])
+                _gy = abs((b[1] + b[3]) / 2 - (ref[1] + ref[3]) / 2)
+                _gx = max(0.0, max(ref[0], b[0]) - min(ref[2], b[2]))
+                if _gy <= max(14.0, 0.9 * _mh) and _gx <= max(30.0, 1.6 * _mh):
+                    bl.append(b)
+                    placed = True
+                    break
+            if not placed:
+                blocks.append([b])
+        # ۵) OCRِ فقط بلوک‌های کوچک + فیلترِ زمینه/کنتراست/متن
+        out: List["TextRegion"] = []
+        for bl in blocks[:28]:
+            try:
+                xs0 = max(0, int(min(b[0] for b in bl)) - 8)
+                ys0 = max(0, int(min(b[1] for b in bl)) - 6)
+                xs1 = min(w - 1, int(max(b[2] for b in bl)) + 8)
+                ys1 = min(h - 1, int(max(b[3] for b in bl)) + 6)
+                if xs1 - xs0 < 20 or ys1 - ys0 < 9:
+                    continue
+                # زمینهٔ یکدست؟ (حلقهٔ ۸px دورِ بلوک)
+                _mx0 = max(0, xs0 - 8)
+                _my0 = max(0, ys0 - 8)
+                _mx1 = min(w, xs1 + 8)
+                _my1 = min(h, ys1 + 8)
+                _sub = gray[_my0:_my1, _mx0:_mx1]
+                if _sub.size < 250:
+                    continue
+                _ring = np.ones(_sub.shape, dtype=bool)
+                _ring[(ys0 - _my0):(ys1 - _my0) + 1,
+                      (xs0 - _mx0):(xs1 - _mx0) + 1] = False
+                if _ring.sum() < 40:
+                    continue
+                if float(_sub[_ring].astype(np.float32).std()) > 46.0:
+                    continue  # زمینهٔ شلوغ → هنر/صحنه
+                _raise_if_stop()
+                crop = image[ys0:ys1 + 1, xs0:xs1 + 1]
+                try:
+                    res = self.ocr.ocr(crop)
+                except Exception:
+                    continue
+                if not res or not res[0]:
+                    continue
+                best_txt, best_conf, best_box = "", 0.0, None
+                for line in res[0]:
+                    try:
+                        if not (isinstance(line, (list, tuple))
+                                and len(line) >= 2):
+                            continue
+                        pair = line[1]
+                        if isinstance(pair, (list, tuple)):
+                            text = str(pair[0]).strip()
+                            conf = float(pair[1]) if len(pair) > 1 else 1.0
+                        else:
+                            text = str(pair).strip()
+                            conf = 1.0
+                        box = np.asarray(line[0], dtype=np.float32).reshape(-1, 2)
+                        if box.size < 8:
+                            continue
+                        box[:, 0] += xs0
+                        box[:, 1] += ys0
+                    except Exception:
+                        continue
+                    text = (text or "").strip()
+                    _al = sum(1 for c in text if c.isalnum())
+                    if _al < 3:
+                        continue
+                    _sp = sum(1 for c in text if c.isalnum() or c.isspace())
+                    if _sp < 0.55 * len(text):
+                        continue
+                    if conf > best_conf:
+                        best_txt, best_conf, best_box = text, conf, box
+                if best_conf < 0.45 or best_box is None:
+                    continue  # متنِ خوانا نیست → هنر/بقایای مبهم
+                # مرکزِ بلوک داخلِ ناحیهٔ موجود؟ (دوباره‌چک با باکسِ OCR)
+                _cx = float(best_box[:, 0].mean())
+                _cy = float(best_box[:, 1].mean())
+                _hit = False
+                for (rx0, ry0, rx1, ry1) in _rects:
+                    if rx0 <= _cx <= rx1 and ry0 <= _cy <= ry1:
+                        _hit = True
+                        break
+                if _hit:
+                    continue
+                polys = [np.asarray(best_box, dtype=np.float32)]
+                out.append(TextRegion(
+                    id=-1,
+                    boxes=[np.array([[xs0, ys0], [xs1, ys0], [xs1, ys1],
+                                     [xs0, ys1]], dtype=np.int32)],
+                    source_text=best_txt,
+                    rect=(xs0, ys0, xs1 - xs0, ys1 - ys0),
+                    angle=0.0,
+                    kind="free_text",
+                    bubble_style="free_text",
+                    det_class="",
+                    ocr_polys=polys,
+                ))
+            except Exception:
+                continue
+        if out:
+            print(f"    [+] متنِ بیرونِ حباب: {len(out)} ناحیهٔ اضافی "
+                  f"({len(boxes)} خطِ کاندید، {time.time() - t0:.1f}s) "
+                  "→ پاک/ترجمه می‌شوند")
+        return out
 
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
 
@@ -12797,6 +13074,19 @@ class MangaTranslator:
                 _extra = self._gap_ocr_regions(image, unique_regions)
                 if _extra:
                     unique_regions.extend(_extra)
+            except Exception:
+                pass
+        _raise_if_stop()
+
+        # v1.14.40: متنِ تایپ‌شدهٔ بیرونِ حباب (زیرنویس/بنر/کاغذ) — RT-DETR
+        # فقط حباب می‌بیند؛ این پاس متنِ رویِ عکس را هم پیدا می‌کند تا
+        # «متنِ قبلی می‌ماند» حذف شود. MANGA_FREE_TEXT=0 → خاموش
+        if unique_regions and os.environ.get("MANGA_FREE_TEXT", "1") != "0":
+            _raise_if_stop()
+            try:
+                _ft = self._discover_free_text_regions(image, unique_regions)
+                if _ft:
+                    unique_regions.extend(_ft)
             except Exception:
                 pass
         _raise_if_stop()
@@ -12839,6 +13129,40 @@ class MangaTranslator:
         dbg = None
         if self.debug and unique_regions:
             dbg = self._draw_debug_regions(image, unique_regions)
+            # دیباگِ متنیِ کامل — متنِ استخراجی + مکان + زاویه + فاصلهٔ خط‌ها
+            try:
+                _vh, _vw = image.shape[:2]
+                _ob = getattr(self, "_ocr_backend_name", "") or "?"
+                print(f"    [🔍] دیباگِ استخراج — {len(unique_regions)} ناحیه | "
+                      f"تصویر {_vw}×{_vh} | ترتیب: {self.reading_order} | OCR: {_ob}")
+                for r in unique_regions:
+                    try:
+                        x, y, rw, rh = [int(v) for v in r.rect]
+                        polys = getattr(r, "ocr_polys", None) or []
+                        _lys = []
+                        for _p in polys:
+                            try:
+                                _pa = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                                _lys.append((float(_pa[:, 1].min()),
+                                             float(_pa[:, 1].max())))
+                            except Exception:
+                                pass
+                        _lys.sort()
+                        _hs = [int(_b - _a) for _a, _b in _lys]
+                        _gs = [int(_lys[_i + 1][0] - _lys[_i][1])
+                               for _i in range(len(_lys) - 1)]
+                        _txt = (r.source_text or "").replace("\n", " ⏎ ")
+                        print(f"      #{r.id:02d} {r.kind}/{r.bubble_style} | "
+                              f"rect=({x},{y},{rw},{rh}) | "
+                              f"زاویه={float(getattr(r, 'angle', 0.0) or 0.0):+.1f}° | "
+                              f"خط={len(_lys)} بلندی={_hs} فاصله={_gs}")
+                        if _txt:
+                            print(f"          متن: {_txt[:200]}"
+                                  f"{'…' if len(_txt) > 200 else ''}")
+                    except Exception:
+                        continue
+            except Exception:
+                pass
 
         if unique_regions:
             dialogue_n = sum(1 for r in unique_regions if r.kind == "dialogue")
