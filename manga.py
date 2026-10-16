@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.43"
+APP_VER = "1.14.44"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -6700,10 +6700,14 @@ class MangaTranslator:
         return lv if lv in ("quality", "fast") else "quality"
 
     def _lama_workers_auto(self) -> int:
+        # v1.14.44: سرعتِ LaMa — درخواستِ کاربر «سرعتِ پاکسازیِ lama سریع‌تر کن».
+        # روی گوشیِ ۸ هسته‌ای قبلاً فقط ۶ پچِ موازی اجرا می‌شد (۲ هسته بیکار)
+        # → حالا تا ۸ پچِ موازی (همهٔ هسته‌ها)؛ دینامیکِ لاما در سقفِ ۳۸۴px
+        # حافظهٔ هر رشته کم است و fallbackِ OpenCV در رمِ واقعاً کم سرِ جاست.
         try:
             _wa = int(os.environ.get("MANGA_LAMA_WORKERS", "0") or 0)
             if _wa > 0:
-                return max(1, min(_wa, 6))
+                return max(1, min(_wa, 8))
             try:
                 _av = float(self._available_ram_gb())
             except Exception:
@@ -6713,9 +6717,9 @@ class MangaTranslator:
             except Exception:
                 _cores = 0
             if _cores >= 8:
-                return 6 if _av >= 0.25 else 4
+                return 8 if _av >= 0.25 else 4
             if _cores >= 6:
-                return 4 if _av >= 0.25 else 3
+                return 5 if _av >= 0.25 else 3
             return 2 if _av >= 0.5 else 1
         except Exception:
             return 1
@@ -6912,27 +6916,10 @@ class MangaTranslator:
                     print(f"  [*] LaMa {_mode}: {len(pending)} clusters → "
                           f"{len(groups)} patches on {_img_w}x{_img_h}")
                     t0 = time.time()
-                    _workers = 1
-                    _av = 0.0
+                    # v1.14.44: یک منبعِ حقیقت — همان _lama_workers_auto
+                    # (قبلاً یک جدولِ تکراریِ همین‌جا بود که با آن فرق داشت)
                     try:
-                        _av = float(self._available_ram_gb())
-                    except Exception:
-                        _av = 0.0
-                    try:
-                        _wa = int(os.environ.get("MANGA_LAMA_WORKERS", "0") or 0)
-                        if _wa > 0:
-                            _workers = max(1, min(_wa, 6))
-                        else:
-                            try:
-                                _cores_a = self._cpu_core_count()
-                            except Exception:
-                                _cores_a = 0
-                            if _cores_a >= 8:
-                                _workers = 6 if _av >= 0.25 else 4
-                            elif _cores_a >= 6:
-                                _workers = 4 if _av >= 0.25 else 3
-                            else:
-                                _workers = 2 if _av >= 0.5 else 1
+                        _workers = self._lama_workers_auto()
                     except Exception:
                         _workers = 1
                     _workers = max(1, min(_workers, len(groups)))
@@ -6942,7 +6929,7 @@ class MangaTranslator:
                         except Exception:
                             _cores = "?"
                         print(f"  [🔥] {_workers} parallel patches × 1 thread "
-                              f"(free RAM {_av:.1f}GB, {_cores} cores) → full CPU")
+                              f"({_cores} cores → full CPU)")
                         _pex = ThreadPoolExecutor(max_workers=_workers)
                         _futs = []
                         try:
@@ -7177,16 +7164,17 @@ class MangaTranslator:
             print("  [!] Residue sweep error:")
             _tb.print_exc()
 
-        # v1.14.41: پاسِ هندسیِ K3 — تضمینِ نهاییِ پاکسازی با هندسهٔ OCR.
-        # روشِ K3 Manga AutoTranslate (دیکدِ APK رسمی): دورِ هر خطِ متنِ
-        # OCR چندضلعیِ محدب؛ رنگِ پس‌زمینه از رینگِ بیرونِ چندضلعی
-        # نمونه‌گیری می‌شود؛ اگر یکدست بود چندضلعی با رنگِ میانگین پر
-        # می‌شود وگرنه داخلش با درون‌یابیِ وزن‌دارِ وارونِ مجذورِ فاصله
-        # (کرنل ۷×۷ — 1/(d²+0.001)) بازسازی می‌شود. این پاس فقط جایی
-        # فعال می‌شود که هنوز جوهرِ متن داخلِ چندضلعی مانده باشد —
-        # کارِ LaMa/flat سالم می‌ماند و هر «لگه» تضمینی پوشانده می‌شود.
+        # v1.14.44: پاسِ K3 حذف شد — درخواستِ کاربر: «این خط خط چیه؛
+        # mm خوب می‌پاکه». پاسِ هندسی K3 (v1.14.41) بعد از همهٔ پاس‌ها
+        # روی هر خطِ OCR هیل/پرکردن انجام می‌داد و روی زمینه‌های روشن
+        # نوارهای افقیِ هم‌راستا با خطوطِ متن می‌ساخت (خط‌خطیِ
+        # اسکرین‌شاتِ کاربر: ۲۴/۲۴ خطِ heal). شاخهٔ mm این پاس را
+        # ندارد و کاربر تأیید کرده پاکسازیِ mm تمیز است → حذفِ کاملِ
+        # پاس تا خطِ لوله‌ایِ پاکسازی دقیقاً برابرِ mm بشود. خودِ تابع
+        # نگه داشته شده (بدونِ فراخوانی) برای استفادهٔ آزمایشی با
+        # MANGA_K3=1 در CLI.
         try:
-            if os.environ.get("MANGA_NO_K3", "0") != "1":
+            if os.environ.get("MANGA_K3", "0") == "1":
                 _n_k3, _k3_how = self._k3_polygon_clean(cleaned, image,
                                                         regions)
                 if _n_k3:

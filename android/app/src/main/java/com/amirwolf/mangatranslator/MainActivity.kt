@@ -1596,7 +1596,6 @@ class MainActivity : AppCompatActivity() {
 
         val dbgFile = st.optString("debug_out_file", "")
         val hasDbgFile = dbgFile.isNotBlank() && File(dbgFile).isFile()
-        val dbgOn = st.optBoolean("debug_on", false)
 
         // v1.14.31: فقط «یک» نمایش — همان نمایشِ زنده ادامه می‌دهد؛ دیباگ با
         // دکمهٔ 🔍 داخل خودِ نمایش عوض می‌شود. نمایش جدا و نمایش دیباگ حذف شدند.
@@ -1613,11 +1612,15 @@ class MainActivity : AppCompatActivity() {
             resultsBox.addView(resBtn("📖  نمایش خروجی (PDF)", true) {
                 Thread {
                     val imgs = pdfToImages(outFile, "main")
+                    // v1.14.44: دیباگِ PDF هم رندر می‌شود تا سوییچِ 🔍 داخلِ
+                    // نمایشگر در حالتِ PDF کار کند (قبلاً debug_images در
+                    // حالتِ PDF خالی بود و دکمهٔ 🔍 هرگز ظاهر نمی‌شد)
+                    val dbgImgs = if (debug.isNotEmpty()) debug
+                                  else if (hasDbgFile) pdfToImages(dbgFile, "dbg")
+                                  else emptyList()
                     ui.post {
                         if (imgs.isNotEmpty()) {
-                            // v1.14.43: دیباگ به نمایشگر PDF هم وصل شد — قبلاً
-                            // dbgPaths خالی بود و دکمهٔ 🔍 داخل نمایشگر نمی‌آمد
-                            viewer(imgs, dbgPaths = debug,
+                            viewer(imgs, dbgPaths = dbgImgs,
                                    total = imgs.size)
                         } else {
                             Toast.makeText(this,
@@ -1628,40 +1631,9 @@ class MainActivity : AppCompatActivity() {
                 }.start()
             })
         }
-        // v1.14.43: دیباگ غیرقابل‌دیدِ شد — همیشه دکمهٔ بزرگ «🔍 نمایش دیباگ»
-        // در جعبهٔ نتیجه هست (تصویرِ دیباگ یا PDF دیباگ)، نه فقط دکمهٔ کوچک
-        // 🔍 داخل نوارِ نمایشگر. اگر دیباگ روشن بود ولی صفحه‌ای متن نداشت،
-        // پیامِ واضح می‌آید.
-        if (debug.isNotEmpty() || hasDbgFile || dbgOn) {
-            val dbgLbl = when {
-                debug.isNotEmpty() -> "🔍  نمایش دیباگ (${debug.size})"
-                hasDbgFile -> "🔍  نمایش دیباگ"
-                else -> "🔍  نمایش دیباگ (خالی)"
-            }
-            resultsBox.addView(resBtn(dbgLbl, false) {
-                when {
-                    debug.isNotEmpty() ->
-                        viewer(debug, dbg = true, dbgPaths = debug,
-                               total = debug.size)
-                    hasDbgFile -> Thread {
-                        val imgs = pdfToImages(dbgFile, "dbg")
-                        ui.post {
-                            if (imgs.isNotEmpty()) {
-                                viewer(imgs, dbg = true, dbgPaths = emptyList(),
-                                       total = imgs.size)
-                            } else {
-                                Toast.makeText(this,
-                                    "نمایش PDF دیباگ ممکن نشد — از «دانلود دیباگ» استفاده کن",
-                                    Toast.LENGTH_LONG).show()
-                            }
-                        }
-                    }.start()
-                    else -> Toast.makeText(this,
-                        "تصویر دیباگی ساخته نشد — صفحه‌هایی که متن/حباب ندارند دیباگ ندارند",
-                        Toast.LENGTH_LONG).show()
-                }
-            })
-        }
+        // v1.14.44: دکمهٔ «نمایش دیباگ» از صفحهٔ اصلی حذف شد — درخواستِ کاربر:
+        // «کی بهت گفتم نمایش دیباگ تو صفحه اصلی بزاری؟». دیباگ فقط با دکمهٔ
+        // 🔍 داخلِ خودِ نمایشگر عوض می‌شود (نهایی ↔ دیباگ).
         if (hasOutFile) {
             resultsBox.addView(resBtn("⬇  دانلود خروجی", false) { saveToDownloads(outFile) })
         }
@@ -1832,11 +1804,18 @@ class MainActivity : AppCompatActivity() {
             .replace("__TITLE__", title)
             .replace("__IMGS__", imgs)
             .replace("data-act=\"close\"", "data-act=\"close\" hidden")
-        if (dpaths.isNotEmpty()) {
-            // v1.14.43: دکمهٔ 🔍 دیباگ وقتی صفحهٔ دیباگ هست قرمز و پررنگ می‌شود
-            html = html.replace(
+        // v1.14.44: تعدادِ صفحه‌های دیباگ با data-ndbg به JS تزریق می‌شود —
+        // در نمایشِ غیرِزنده __mangaLive هرگز صدا نمی‌خورد و قبلاً JS تعدادِ
+        // دیباگ را صفر فرض می‌کرد → سوییچِ 🔍 صفحهٔ خالی می‌ساخت
+        html = if (dpaths.isNotEmpty()) {
+            // دکمهٔ 🔍 دیباگ وقتی صفحهٔ دیباگ هست قرمز و پررنگ می‌شود
+            html.replace(
                 "data-act=\"dbg\" hidden",
-                "data-act=\"dbg\" style=\"background:#b3261e;border-color:#d64545;color:#fff;font-weight:700\"")
+                "data-act=\"dbg\" data-ndbg=\"${dpaths.size}\" style=\"background:#b3261e;border-color:#d64545;color:#fff;font-weight:700\"")
+        } else {
+            html.replace(
+                "data-act=\"dbg\" hidden",
+                "data-act=\"dbg\" data-ndbg=\"0\" hidden")
         }
 
         wv.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
