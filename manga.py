@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.41"
+APP_VER = "1.14.42"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5831,6 +5831,9 @@ class MangaTranslator:
 
         n_ok = 0
         n_skip = 0
+        _dbg_b = os.environ.get("MANGA_DEBUG_MASK", "")
+        _br_tally = {"vert": 0, "dense": 0, "poly": 0, "rect": 0,
+                     "dense_tight": 0, "dense_keep": 0}
         for region in regions:
             # متنِ آزادِ بیرونِ حباب این‌جا ماسک نمی‌شود — مسیرِ کلاسیک
             # (گاردِ حباب ماسکش را رد می‌کرد و متنِ رویِ عکس می‌ماند)
@@ -5924,6 +5927,22 @@ class MangaTranslator:
                                         _rm = cv2.bitwise_or(_rm, _inkB)
                                 except Exception:
                                     pass
+                                # v1.14.42: بلوبِ چاقِ چندخطی روی میز/دیوار/عکس
+                                # با LaMa «نوارِ مالش‌دار» می‌سازد (شکایتِ کاربر)
+                                # → ماسک به جوهرِ گلیف محدود می‌شود؛ حلقه‌های
+                                # بعدی (Residue/K3/leftover) ته‌مانده را می‌گیرند
+                                if self._clean_level() != "fast":
+                                    _rm2 = self._glyph_limit_fat(
+                                        image, _rm, region, _polys_raw)
+                                    if _rm2 is not None and np.any(_rm2):
+                                        _rm = _rm2
+                                        _br_tally["dense_tight"] += 1
+                                _br_tally["dense"] += 1
+                                if _dbg_b:
+                                    print(f"    [maskdbg] dense rect={region.rect} "
+                                          f"polys={len(_polys_raw)} "
+                                          f"px={int(np.count_nonzero(_rm))}",
+                                          flush=True)
                                 m = cv2.bitwise_or(m, _rm)
                                 n_ok += 1
                                 continue
@@ -5970,10 +5989,20 @@ class MangaTranslator:
                                 image, _rm, region, False):
                             n_skip += 1
                             continue
+                        _br_tally["rect"] += 1
+                        if _dbg_b:
+                            print(f"    [maskdbg] NO-POLY rect={region.rect} "
+                                  f"px={int(np.count_nonzero(_rm))}", flush=True)
                         m = cv2.bitwise_or(m, _rm)
                         n_ok += 1
                 except Exception:
                     continue
+        if _dbg_b:
+            try:
+                print(f"    [maskdbg] branches={_br_tally} ok={n_ok} skip={n_skip}",
+                      flush=True)
+            except Exception:
+                pass
         if n_ok <= 0 and n_skip <= 0:
             return None
         if padding > 0:
@@ -6187,6 +6216,17 @@ class MangaTranslator:
         except Exception:
             return 0
         for region in regions:
+            # v1.14.42: پرکردنِ فوری فقط برای خط‌های داخلِ حبابِ واقعی —
+            # RT-DETR متنِ روی دیوار/میز/کاغذ را هم «حباب» کلاس‌بندی می‌کند؛
+            # گیتِ واقعی = دامنهٔ flood-fill حباب (لبهٔ کنتراستِ بسته).
+            # متنِ بیرونِ حباب باید با LaMa بافتِ واقعی بگیرد (کاربر).
+            if ((getattr(region, "det_class", "") or "")
+                    not in ("bubble", "text_bubble")):
+                continue
+            _dom_chk = getattr(self, "_page_bubble_dom", None)
+            if _dom_chk is None and not bool(
+                    getattr(self, "erase_bubble_interior", False)):
+                continue
             for poly in (getattr(region, "ocr_polys", None) or []):
                 try:
                     pp = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
@@ -6196,6 +6236,13 @@ class MangaTranslator:
                     continue
                 try:
                     c = pp.mean(axis=0)
+                    if _dom_chk is not None:
+                        _cx = int(min(max(round(float(c[0])), 0),
+                                      _dom_chk.shape[1] - 1))
+                        _cy = int(min(max(round(float(c[1])), 0),
+                                      _dom_chk.shape[0] - 1))
+                        if int(_dom_chk[_cy, _cx]) == 0:
+                            continue
                     ring_pts = []
                     n_pts = pp.shape[0]
                     for i in range(n_pts):
@@ -6296,6 +6343,7 @@ class MangaTranslator:
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         padding = max(0, int(getattr(self, "mask_padding", 3)))
         kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * padding + 1,) * 2)
+        _dbg_c = os.environ.get("MANGA_DEBUG_MASK", "")
 
         for region in regions:
             # v1.14.32: خطِ پنجرهٔ سیستم → مستطیلِ کاملِ خط با پهنای پنجره
@@ -6368,6 +6416,13 @@ class MangaTranslator:
             ch, cw = y1 - y0, x1 - x0
             det_class = (getattr(region, "det_class", "") or "")
             ink = zone
+            _ink_glyph = False
+            if _dbg_c:
+                print(f"    [cmaskdbg] rect={region.rect} det={det_class!r} "
+                      f"zone={'Y' if zone is not None else 'N'} "
+                      f"polys={len(list(getattr(region, 'ocr_polys', None) or []))} "
+                      f"boxes={len(list(getattr(region, 'boxes', None) or []))}",
+                      flush=True)
             if ink is not None and det_class not in ("bubble", "text_bubble"):
                 try:
                     _gz = self._glyph_mask_in_zone(gray[y0:y1, x0:x1], ink)
@@ -6395,6 +6450,21 @@ class MangaTranslator:
                         ink = cv2.bitwise_or(ink, extra)
                 except Exception:
                     pass
+                # v1.14.42: zone/absorbِ حباب = بلوبِ چاقِ چندخطی → روی
+                # میز/دیوار/عکس LaMa «نوار» می‌سازد (شکایتِ کاربر). در حالتِ
+                # quality ماسک به جوهرِ گلیف محدود می‌شود؛ ته‌مانده‌ها را
+                # Residue/K3/leftover می‌گیرند. (fast دست‌نخورده)
+                if (ink is not None
+                        and not getattr(self, "erase_bubble_interior", False)
+                        and self._clean_level() != "fast"):
+                    try:
+                        _gz = self._glyph_mask_in_zone(
+                            gray[y0:y1, x0:x1], ink)
+                        if _gz is not None and int(np.count_nonzero(_gz)) >= 60:
+                            ink = _gz
+                            _ink_glyph = True
+                    except Exception:
+                        _ink_glyph = False
             if ink is None:
 
                 ink = self._ink_mask_inside_bubble(gray, x0, y0, x1, y1)
@@ -6434,7 +6504,13 @@ class MangaTranslator:
                         pass
                 ink = cv2.bitwise_or(ink, _fill) if ink is not None else _fill
             if padding:
-                ink = cv2.dilate(ink, kernel)
+                # v1.14.42: ماسکِ گلیفِ تنگ + کرنلِ ۷px = خط‌های متراکم دوباره
+                # به هم می‌چسبند و بلوبِ توپُر می‌سازند → برای ماسکِ تنگ فقط
+                # ۱px بازشده (هالهٔ AA پوشش داده می‌شود؛ Residue/K3 بقیه را)
+                if _ink_glyph:
+                    ink = cv2.dilate(ink, np.ones((3, 3), np.uint8))
+                else:
+                    ink = cv2.dilate(ink, kernel)
             text_mask[y0:y1, x0:x1] = cv2.bitwise_or(text_mask[y0:y1, x0:x1], ink)
 
         text_mask = self._clip_mask_to_bubbles(image, text_mask, regions)
@@ -6463,6 +6539,15 @@ class MangaTranslator:
         except Exception:
             return mask
         n_clip = 0
+        # v1.14.42: نقشهٔ صفحه‌ایِ «داخلِ حباب» — برای گیتِ flat در
+        # clean_image (flat فقط داخلِ حبابِ واقعی — درخواستِ کاربر).
+        # _bubble_domain_local به لبهٔ کنتراستِ بسته نیاز دارد؛ متنِ روی
+        # نرده/آسمان/عکس دامنه ندارد → بیرونِ حباب حساب می‌شود → راهِ LaMa.
+        _dom_union = None
+        try:
+            _dom_union = np.zeros((h, w), dtype=np.uint8)
+        except Exception:
+            _dom_union = None
         for region in regions:
             # v1.14.32: خط‌های پنجرهٔ سیستم را کوتاه نکن — ماسکشان عمداً
             # مستطیلِ کاملِ خط است؛ flood-fill روی زمینهٔ بافت‌دار پنجره زود
@@ -6516,6 +6601,14 @@ class MangaTranslator:
                 continue
             # ±۲ پیکسل رواداری برای لبه‌های ضدالیه
             dom_d = cv2.dilate(dom, np.ones((3, 3), np.uint8), iterations=1)
+            if _dom_union is not None:
+                try:
+                    _du = _dom_union[cy0:cy1, cx0:cx1]
+                    if _du.shape == dom_d.shape:
+                        _dom_union[cy0:cy1, cx0:cx1] = np.maximum(
+                            _du, dom_d.astype(np.uint8))
+                except Exception:
+                    pass
             before = int(cv2.countNonZero(sub))
             outside = int(np.count_nonzero((sub > 0) & (dom_d == 0)))
             if outside <= 0 or before <= 0:
@@ -6532,6 +6625,11 @@ class MangaTranslator:
                       "بیرون حباب دست‌نخورده می‌ماند")
             except Exception:
                 pass
+        try:
+            if _dom_union is not None and int(np.count_nonzero(_dom_union)) > 0:
+                self._page_bubble_dom = _dom_union
+        except Exception:
+            pass
         return mask
 
     def _tilted_ink_mask(self, gray: np.ndarray, x0: int, y0: int, x1: int, y1: int,
@@ -7705,6 +7803,8 @@ class MangaTranslator:
         return n
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+        # v1.14.42: نقشهٔ حبابِ صفحهٔ قبلی نباید برای صفحهٔ جدید بماند
+        self._page_bubble_dom = None
         mask = self._build_text_mask(image, regions)
         try:
             _dmp = os.environ.get("MANGA_DEBUG_MASK", "")
@@ -7908,7 +8008,13 @@ class MangaTranslator:
 
         counts = {"flat": 0, "LaMa": 0, "OpenCV": 0}
         try:
-            _n_inst = self._line_instant_fill(image, cleaned, regions, mask)
+            # v1.14.42: در حالتِ quality پرکردنِ فوری ممنوع — کاربر: حتی
+            # حبابِ یک‌رنگ هم بیشتر با lama پاک شود. fast (یا وقتی lama
+            # در دسترس نیست) پرکردنِ فوری سرعت را نگه می‌دارد.
+            _n_inst = 0
+            if (self._clean_level() == "fast"
+                    or not getattr(self, "use_lama", False)):
+                _n_inst = self._line_instant_fill(image, cleaned, regions, mask)
             if _n_inst:
                 print(f"  [⚡] {_n_inst} lines instantly filled — no LaMa")
         except Exception:
@@ -7933,10 +8039,18 @@ class MangaTranslator:
         _q_lama = (bool(getattr(self, "use_lama", False))
                    and self._clean_level() != "fast")
         if _q_lama:
-            print("  [*] Clean level: quality — LaMa first (flat only for small uniform clusters)")
+            print("  [*] Clean level: quality — LaMa first "
+                  "(flat only inside real bubbles, small & truly uniform)")
         _pg_h, _pg_w = image.shape[:2]
         _pg_area = float(max(1, _pg_h * _pg_w))
         _webtoon = (min(_pg_h, _pg_w) * 2.5 < max(_pg_h, _pg_w))
+        # v1.14.42: گیتِ «داخلِ حباب» برای خانوادهٔ flat — درخواستِ صریحِ
+        # کاربر: «flat فقط تو حباب کار کنه، اونم کمتر اگه نیاز بود؛
+        # حبابِ یک‌رنگ رو بیشتر با lama بپا». نقشهٔ حباب از دامنهٔ
+        # flood-fill حباب‌های واقعی می‌آید (لبهٔ کنتراستِ بسته)؛ متنِ روی
+        # نرده/آسمان/عکس/کاغذ دامنهٔ حباب ندارد → همیشه راهِ LaMa.
+        _dom_page = getattr(self, "_page_bubble_dom", None)
+        _erase_mode = bool(getattr(self, "erase_bubble_interior", False))
         for bx0, by0, bx1, by1 in self._mask_clusters(mask, pad=3):
             cx0, cy0 = max(0, bx0 - 29), max(0, by0 - 29)
             cx1, cy1 = min(image.shape[1], bx1 + 29), min(image.shape[0], by1 + 29)
@@ -7945,37 +8059,35 @@ class MangaTranslator:
             ex1, ey1 = min(bx1, image.shape[1]), min(by1, image.shape[0])
             crop_msk[by0-cy0:ey1-cy0, bx0-cx0:ex1-cx0] = mask[by0:ey1, bx0:ex1]
             _ok_flat = True
+            _in_bub = True
             if _q_lama:
                 _cb_area = float(max(1, (bx1 - bx0) * (by1 - by0)))
-                _ok_flat = (_cb_area <= 0.0035 * _pg_area
-                            and (bx1 - bx0) <= 0.30 * _pg_w
-                            and (by1 - by0) <= 0.22 * _pg_h)
-            # flat برای همهٔ خوشه‌ها امتحان می‌شود (هزینه‌اش میلی‌ثانیه است)؛
-            # اگر حلقهٔ دور ماسک یکدست باشد → همان لحظه پر می‌شود و LaMa لازم نمی‌شود.
-            # فقط برای خوشه‌های بزرگ، پرکردگی باید روشن باشد (حباب/کاغذ)؛
-            # نواحی تیره/رنگی بزرگ راهی LaMa می‌شوند که بافت واقعی بسازد.
-            result = self._flat_fill_uniform(crop_img, crop_msk)
-            if result is not None and not _ok_flat:
-                try:
-                    _msel = crop_msk > 0
-                    _lv = result[_msel].astype(np.float32)
-                    _lum = float(np.median(
-                        _lv[:, 0] * 0.114 + _lv[:, 1] * 0.587 + _lv[:, 2] * 0.299))
-                    if _lum < 170.0:
-                        result = None
-                except Exception:
-                    result = None
+                _in_bub = _erase_mode
+                if _dom_page is not None:
+                    try:
+                        _subd = _dom_page[cy0:cy1, cx0:cx1]
+                        if _subd.shape == crop_msk.shape:
+                            _mm = crop_msk > 0
+                            _nm = int(np.count_nonzero(_mm))
+                            _in_bub = (_nm > 0) and (
+                                float(np.count_nonzero(
+                                    _mm & (_subd > 0))) >= 0.5 * _nm)
+                    except Exception:
+                        pass
+                _ok_flat = (_in_bub
+                            and _cb_area <= 0.0028 * _pg_area
+                            and (bx1 - bx0) <= 0.26 * _pg_w
+                            and (by1 - by0) <= 0.20 * _pg_h)
+            # v1.14.42: flat فقط برای خوشهٔ کوچکِ داخلِ حبابِ واقعی؛
+            # بقیه مستقیم LaMa — بلوکِ تختِ خاکستری روی نرده/آسمان/عکس ممنوع.
+            result = (self._flat_fill_uniform(crop_img, crop_msk)
+                      if _ok_flat else None)
             method = "flat"
             _pf_ok = False
             _bright_ok = False
-            if result is None:
-                # v1.14.38: «color» حذف شد — فقط flat + LaMa/OpenCV.
-                # جایگزین: پرکردنِ محافظت‌شدهٔ حبابِ روشن (خانوادهٔ flat) —
-                # حبابِ سفید/روشن با رنگِ دیوارِ خودش پر می‌شود؛ حبابِ
-                # تیره/گرادیانی راهی LaMa/OpenCV می‌رود که گرادیان را
-                # واقعاً بازسازی می‌کند (پرکردنِ تختِ «color» لکهٔ
-                # مستطیلی روی گرادیان می‌گذاشت و حروفِ جامانده را
-                # به‌عنوان «ساختار» حفظ می‌کرد → متنِ قبلی می‌ماند).
+            if result is None and _in_bub:
+                # v1.14.38: پرکردنِ محافظت‌شدهٔ حبابِ روشن (خانوادهٔ flat) —
+                # v1.14.42: فقط داخلِ حبابِ واقعی (گیتِ بالا).
                 _cr = self._bright_bubble_fill(crop_img, crop_msk)
                 if _cr is not None:
                     crop_msk, result = _cr
@@ -7989,8 +8101,9 @@ class MangaTranslator:
             if result is None and not _q_lama:
                 result = self._flat_fill_cluster(crop_img, crop_msk)
             if (result is not None and method == "flat" and not _pf_ok
-                    and not _bright_ok
                     and self._bg_is_textured(crop_img, crop_msk, strong=True)):
+                # v1.14.42: چکِ textured حالا روی bright_fill هم اعمال
+                # می‌شود (قبلاً معاف بود → بلوک روی نرده/پس‌زمینه).
                 result = None
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method])
 
