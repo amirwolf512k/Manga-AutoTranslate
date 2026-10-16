@@ -6443,11 +6443,15 @@ class MangaTranslator:
             _n_kept = 0
             _acap = min(max(0.35 * ink.size, 2.5 * float(seed.sum())),
                         0.8 * ink.size)
-            # v1.14.48: «راهرویِ متن» — جذب فقط در همسایگیِ پالی‌هایِ OCR.
+            # v1.14.48: «راهرویِ متن» — جذب فقط در همسایگیِ ناحیهٔ متن.
+            # راهرو = مستطیلِ ناحیه (بلوکِ متنِ detector/OCR) ∪ پالی‌ها.
             # بدونِ این، جذبِ ۳ سطحی تا ~۴۲px از seed خز می‌کند و هنرِ
-            # نزدیک (موی/ابرویِ شخصیت کنارِ حباب) را می‌بلعد → پرکننده
-            # با رنگِ زمینه روی هنر نقاشی می‌کند (لکهٔ خاکستریِ کنارِ
-            # «BUT I LIKE IT HERE.»)
+            # نزدیک (موی/گونهٔ شخصیت کنارِ حباب) را می‌بلعد → پرکننده با
+            # رنگِ زمینه روی هنر نقاشی می‌کند.
+            # اما راهروِ «فقط پالی‌ها» هم غلط بود: وقتی OCR ناقص است (متنِ
+            # عمودیِ سفیدِ test2 — فقط ۱ گلیف شناسایی شد) خزشِ قانونیِ
+            # گلیف‌به‌گلیفِ داخلِ بلوکِ متن باید بماند → مستطیلِ ناحیه
+            # هم بخشی از راهرو است؛ هنرِ بیرونِ ناحیه محافظت می‌شود.
             _cor = None
             try:
                 _co = np.zeros_like(g, dtype=np.uint8)
@@ -6462,8 +6466,20 @@ class MangaTranslator:
                     if q.shape[0] >= 3:
                         cv2.fillPoly(_co, [q], 255)
                         _made = True
+                if box is not None:
+                    try:
+                        _bx0, _by0, _bw0, _bh0 = [int(v) for v in box]
+                        _rx0, _ry0 = max(0, _bx0 - wx0), max(0, _by0 - wy0)
+                        _rx1 = min(g.shape[1], _bx0 + _bw0 - wx0)
+                        _ry1 = min(g.shape[0], _by0 + _bh0 - wy0)
+                        if _rx1 > _rx0 and _ry1 > _ry0:
+                            _co[_ry0:_ry1, _rx0:_rx1] = 255
+                            _made = True
+                    except Exception:
+                        pass
                 if _made:
-                    _co = cv2.dilate(_co, kb)
+                    _co = cv2.dilate(_co, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (15, 15)))
                     _cor = _co > 0
             except Exception:
                 _cor = None
@@ -7533,14 +7549,34 @@ class MangaTranslator:
                 continue
         return n_fill
 
+    @staticmethod
+    def _mem_trim() -> None:
+        """v1.14.48c — آزادسازیِ حافظهٔ کش‌شده به OS بینِ فازهایِ سنگین.
+        روی نوارِ بلندِ وب‌تون، ماسک‌سازی و LaMa پیکِ رم را بالا می‌برند و
+        آللوکاتور حافظه را نگه می‌دارد؛ در گوشیِ کم‌رم (POCO F4 با ۰.۶GB
+        آزاد) همین نگه‌داشتن OOM می‌آورد. gc + malloc_trim (glibc)."""
+        try:
+            import gc as _gc
+            _gc.collect()
+        except Exception:
+            pass
+        try:
+            import ctypes as _ct
+            _libc = _ct.CDLL("libc.so.6")
+            _libc.malloc_trim(0)
+        except Exception:
+            pass
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
             return image.copy()
+        self._mem_trim()  # v1.14.48c: پیکِ ماسک‌سازی به OS برگردد
 
         # v1.14.48: دیوارِ حباب/کادرِ پنل را از ماسکِ فعال جدا کن —
         # پرکننده‌ها ماسک را گشاد می‌کنند و دیوار را می‌بلعند
-        self._page_raw_text_mask = mask.copy()
+        # (بدونِ copy — bitwise_and خروجیِ جدید می‌سازد و raw می‌ماند)
+        self._page_raw_text_mask = mask
         _protect = self._structural_protect_mask(image, regions)
         self._page_protect = _protect
         if _protect is not None:
@@ -7730,6 +7766,7 @@ class MangaTranslator:
                     if _done:
                         print(f"  [*] LaMa clustered: {dt:.1f}s "
                               f"({_done}/{len(pending)} clusters in {len(groups)} patches)")
+                    self._mem_trim()  # v1.14.48c: رمِ فازِ LaMa آزاد شود
                 else:
                     try:
                         page_mask = cv2.dilate(mask, page_kernel)
@@ -7937,6 +7974,13 @@ class MangaTranslator:
                     mm = mm & _mm_cap
                 cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
             counts[method] += 1
+        # v1.14.48c: ماسک‌ها/نتیجه‌هایِ کراپ‌ها بعد از ترکیب آزاد شوند —
+        # روی نوارِ بلند ~۵۰-۱۵۰MB است که در سویپ‌ها و ذخیره لازم می‌آید
+        try:
+            del crops, pending, groups
+        except Exception:
+            pass
+        self._mem_trim()  # v1.14.48c: قبل از سویپ‌ها رم آزاد شود
 
         _lama_fix = 0
         _kern_r = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
@@ -8883,10 +8927,12 @@ class MangaTranslator:
                 bh_ = int(st[i, cv2.CC_STAT_HEIGHT])
                 if not (bw_ >= 60 or bh_ >= 60):
                     continue
-                comp = np.zeros((h, w), dtype=bool)
-                comp[by:by + bh_, bx:bx + bw_][
-                    lab[by:by + bh_, bx:bx + bw_] == i] = True
-                on_poly = float(np.count_nonzero(comp & (poly_all > 0)))
+                # v1.14.48b: فقط در bbox کار کن — آرایهٔ کاملِ صفحه در هر
+                # کامپوننت (مخصوصاً distanceTransformِ float32) روی نوارِ
+                # بلند رم را می‌بلعد و OOM می‌آورد
+                comp = (lab[by:by + bh_, bx:bx + bw_] == i)
+                on_poly = float(np.count_nonzero(
+                    comp & (poly_all[by:by + bh_, bx:bx + bw_] > 0)))
                 if on_poly > 0.30 * float(a):
                     continue  # بیشترِ آن متن است (زیرخط/حرفِ چسبیده)
                 try:
@@ -8897,7 +8943,7 @@ class MangaTranslator:
                     _thick = 16.0
                 if _thick > 14.0:
                     continue
-                out[comp] = 255
+                out[by:by + bh_, bx:bx + bw_][comp] = 255
             if not np.any(out):
                 return None
             return cv2.dilate(out, np.ones((3, 3), np.uint8))
@@ -8932,6 +8978,12 @@ class MangaTranslator:
             x0, y0 = max(0, x - M), max(0, y - M)
             x1, y1 = min(w, x + rw + M), min(h, y + rh + M)
             if x1 - x0 < 32 or y1 - y0 < 32:
+                continue
+            # v1.14.48c: ناحیهٔ عظیم (بنر/پروموی تمام‌صفحه در نوارِ بلند)
+            # → کراپِ چند ده مگاپیکسلی و انفجارِ رم (OOM) → رد.
+            # سقفِ ۱۵۰K px حباب‌هایِ معمولی را پوشش می‌دهد؛ نوارهایِ عریضِ
+            # پرومو/راوی که حبابِ سفیدِ یکدست نیستند رد می‌شوند
+            if (x1 - x0) * (y1 - y0) > 150_000:
                 continue
             oc = image[y0:y1, x0:x1]
             cc = cleaned[y0:y1, x0:x1]
