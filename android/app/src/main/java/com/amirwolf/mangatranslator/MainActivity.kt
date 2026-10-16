@@ -1596,6 +1596,7 @@ class MainActivity : AppCompatActivity() {
 
         val dbgFile = st.optString("debug_out_file", "")
         val hasDbgFile = dbgFile.isNotBlank() && File(dbgFile).isFile()
+        val dbgOn = st.optBoolean("debug_on", false)
 
         // v1.14.31: فقط «یک» نمایش — همان نمایشِ زنده ادامه می‌دهد؛ دیباگ با
         // دکمهٔ 🔍 داخل خودِ نمایش عوض می‌شود. نمایش جدا و نمایش دیباگ حذف شدند.
@@ -1614,7 +1615,9 @@ class MainActivity : AppCompatActivity() {
                     val imgs = pdfToImages(outFile, "main")
                     ui.post {
                         if (imgs.isNotEmpty()) {
-                            viewer(imgs, dbgPaths = emptyList(),
+                            // v1.14.43: دیباگ به نمایشگر PDF هم وصل شد — قبلاً
+                            // dbgPaths خالی بود و دکمهٔ 🔍 داخل نمایشگر نمی‌آمد
+                            viewer(imgs, dbgPaths = debug,
                                    total = imgs.size)
                         } else {
                             Toast.makeText(this,
@@ -1625,21 +1628,38 @@ class MainActivity : AppCompatActivity() {
                 }.start()
             })
         }
-        if (hasDbgFile && dbgFile.lowercase().endsWith(".pdf")) {
-            resultsBox.addView(resBtn("🔍  نمایش دیباگ", false) {
-                Thread {
-                    val imgs = pdfToImages(dbgFile, "dbg")
-                    ui.post {
-                        if (imgs.isNotEmpty()) {
-                            viewer(imgs, dbg = true, dbgPaths = emptyList(),
-                                   total = imgs.size)
-                        } else {
-                            Toast.makeText(this,
-                                "نمایش PDF دیباگ ممکن نشد — از «دانلود دیباگ» استفاده کن",
-                                Toast.LENGTH_LONG).show()
+        // v1.14.43: دیباگ غیرقابل‌دیدِ شد — همیشه دکمهٔ بزرگ «🔍 نمایش دیباگ»
+        // در جعبهٔ نتیجه هست (تصویرِ دیباگ یا PDF دیباگ)، نه فقط دکمهٔ کوچک
+        // 🔍 داخل نوارِ نمایشگر. اگر دیباگ روشن بود ولی صفحه‌ای متن نداشت،
+        // پیامِ واضح می‌آید.
+        if (debug.isNotEmpty() || hasDbgFile || dbgOn) {
+            val dbgLbl = when {
+                debug.isNotEmpty() -> "🔍  نمایش دیباگ (${debug.size})"
+                hasDbgFile -> "🔍  نمایش دیباگ"
+                else -> "🔍  نمایش دیباگ (خالی)"
+            }
+            resultsBox.addView(resBtn(dbgLbl, false) {
+                when {
+                    debug.isNotEmpty() ->
+                        viewer(debug, dbg = true, dbgPaths = debug,
+                               total = debug.size)
+                    hasDbgFile -> Thread {
+                        val imgs = pdfToImages(dbgFile, "dbg")
+                        ui.post {
+                            if (imgs.isNotEmpty()) {
+                                viewer(imgs, dbg = true, dbgPaths = emptyList(),
+                                       total = imgs.size)
+                            } else {
+                                Toast.makeText(this,
+                                    "نمایش PDF دیباگ ممکن نشد — از «دانلود دیباگ» استفاده کن",
+                                    Toast.LENGTH_LONG).show()
+                            }
                         }
-                    }
-                }.start()
+                    }.start()
+                    else -> Toast.makeText(this,
+                        "تصویر دیباگی ساخته نشد — صفحه‌هایی که متن/حباب ندارند دیباگ ندارند",
+                        Toast.LENGTH_LONG).show()
+                }
             })
         }
         if (hasOutFile) {
@@ -1692,8 +1712,11 @@ class MainActivity : AppCompatActivity() {
         shownLiveDbgTotal = liveDbgTotal
         resultsBox.removeAllViews()
         if (liveImages.isNotEmpty() || liveTotal > 0) {
-            val lbl = if (liveTotal > 0) "📖  نمایش (${liveImages.size}/$liveTotal صفحه)"
+            var lbl = if (liveTotal > 0) "📖  نمایش (${liveImages.size}/$liveTotal صفحه)"
                       else "📖  نمایش (${liveImages.size} صفحه)"
+            // v1.14.43: تعدادِ صفحه‌های دیباگِ زنده روی خودِ دکمه — کاربر ببیند
+            // که دیباگ واقعاً در حال ساخته‌شدن است
+            if (liveDbgImages.isNotEmpty()) lbl += " · 🔍${liveDbgImages.size}"
             resultsBox.addView(resBtn(lbl, true) {
                 viewer(liveImages, live = true, dbgPaths = liveDbgImages,
                        total = maxOf(liveTotal, liveImages.size))
@@ -1810,7 +1833,10 @@ class MainActivity : AppCompatActivity() {
             .replace("__IMGS__", imgs)
             .replace("data-act=\"close\"", "data-act=\"close\" hidden")
         if (dpaths.isNotEmpty()) {
-            html = html.replace("data-act=\"dbg\" hidden", "data-act=\"dbg\"")
+            // v1.14.43: دکمهٔ 🔍 دیباگ وقتی صفحهٔ دیباگ هست قرمز و پررنگ می‌شود
+            html = html.replace(
+                "data-act=\"dbg\" hidden",
+                "data-act=\"dbg\" style=\"background:#b3261e;border-color:#d64545;color:#fff;font-weight:700\"")
         }
 
         wv.loadDataWithBaseURL("https://localhost/", html, "text/html", "utf-8", null)
