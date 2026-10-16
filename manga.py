@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.40"
+APP_VER = "1.14.41"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -8405,8 +8405,266 @@ class MangaTranslator:
         except Exception:
             pass
 
+        # v1.14.41: پاسِ هندسیِ K3 — تضمینِ نهاییِ پاکسازی با هندسهٔ OCR.
+        # روشِ K3 Manga AutoTranslate (دیکدِ APK رسمی): دورِ هر خطِ متنِ
+        # OCR چندضلعیِ محدب؛ رنگِ پس‌زمینه از رینگِ بیرونِ چندضلعی
+        # نمونه‌گیری می‌شود؛ اگر یکدست بود چندضلعی با رنگِ میانگین پر
+        # می‌شود وگرنه داخلش با درون‌یابیِ وزن‌دارِ وارونِ مجذورِ فاصله
+        # (کرنل ۷×۷ — 1/(d²+0.001)) بازسازی می‌شود. این پاس فقط جایی
+        # فعال می‌شود که هنوز جوهرِ متن داخلِ چندضلعی مانده باشد —
+        # کارِ LaMa/flat سالم می‌ماند و هر «لگه» تضمینی پوشانده می‌شود.
+        try:
+            if os.environ.get("MANGA_NO_K3", "0") != "1":
+                _n_k3, _k3_how = self._k3_polygon_clean(cleaned, image,
+                                                        regions)
+                if _n_k3:
+                    print(f"  [🔷] K3 polygon clean: {_n_k3} خط "
+                          f"({_k3_how})")
+        except Exception:
+            import traceback as _tb
+            print("  [!] K3 polygon clean error:")
+            _tb.print_exc()
+
         print(f"  - Cleanup: {counts}")
         return cleaned
+
+    # ─────────────────────────────────────────────────────────────
+    # v1.14.41 — روش پاکسازی K3 (پورت از K3Manga.AutoTranslate v4.0.0)
+    # DrawSmartPolygonsDirectly + HealPolygonRegionCalibrated + PrecomputeTeleaLUT
+    # ─────────────────────────────────────────────────────────────
+    def _k3_ring_samples(self, img: np.ndarray, hull: np.ndarray,
+                         out_px: int):
+        """نمونه‌گیری رنگ پس‌زمینه از بیرونِ چندضلعی — رئوس + میانه‌های
+        یال، همه به اندازهٔ out_px بیرون‌زده از مرکز (الگوی K3:
+        ×1.025 روی رئوس — اینجا فاصلهٔ پیکسلیِ صریح برای اطمینان)."""
+        c = hull.mean(axis=0)
+        samples = []
+        n = len(hull)
+        for i in range(n):
+            for pt in (hull[i],
+                       (hull[i] + hull[(i + 1) % n]) * 0.5):
+                d = pt - c
+                nd = float(np.hypot(d[0], d[1]))
+                if nd < 1e-3:
+                    continue
+                sp = c + d * (1.0 + out_px / nd)
+                sx, sy = int(round(sp[0])), int(round(sp[1]))
+                if 0 <= sx < img.shape[1] and 0 <= sy < img.shape[0]:
+                    samples.append(img[sy, sx])
+        if not samples:
+            return np.empty((0, 3), np.float32)
+        return np.asarray(samples, dtype=np.float32)
+
+    def _k3_polygon_clean(self, cleaned: np.ndarray, image: np.ndarray,
+                          regions: List[TextRegion]) -> Tuple[int, str]:
+        n_fill = 0
+        n_heal = 0
+        try:
+            H, W = cleaned.shape[:2]
+        except Exception:
+            return 0, ""
+        _dbg_path = os.environ.get("MANGA_DEBUG_K3", "")
+        _dbg_img = image.copy() if _dbg_path else None
+        try:
+            if _dbg_img is not None:
+                for r in regions:
+                    for p in (getattr(r, "ocr_polys", None) or []):
+                        _pp = np.asarray(p, np.int32).reshape(-1, 2)
+                        if len(_pp) >= 3:
+                            cv2.polylines(_dbg_img, [_pp], True,
+                                          (0, 165, 255), 1)
+        except Exception:
+            pass
+        for r in regions:
+            polys = [p for p in (getattr(r, "ocr_polys", None) or [])
+                     if p is not None and len(np.asarray(p).reshape(-1, 2)) >= 3]
+            if not polys:
+                bs = getattr(r, "boxes", None) or []
+                polys = [np.asarray(b, dtype=np.float32).reshape(-1, 2)
+                         for b in bs
+                         if b is not None and len(np.asarray(b).reshape(-1, 2)) >= 3]
+            for poly in polys:
+                try:
+                    pts = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
+                    if len(pts) < 3:
+                        continue
+                    # فاصلهٔ امن بیرونِ متن: متن + هالهٔ JPEG را می‌پوشاند
+                    px0, py0 = pts[:, 0].min(), pts[:, 1].min()
+                    px1, py1 = pts[:, 0].max(), pts[:, 1].max()
+                    pw, ph = float(px1 - px0), float(py1 - py0)
+                    if pw < 5 or ph < 5:
+                        continue
+                    margin = int(max(3, min(12, round(ph * 0.25))))
+                    hull = cv2.convexHull(
+                        pts.astype(np.int32)).reshape(-1, 2).astype(np.float32)
+                    cx, cy = float(hull[:, 0].mean()), float(hull[:, 1].mean())
+                    # چندضلعیِ منبسط (حاوی هاله) — رئوس از مرکز به بیرون
+                    exp = hull.copy()
+                    _d = hull - np.array([cx, cy], np.float32)
+                    _nd = np.hypot(_d[:, 0], _d[:, 1])
+                    _nd = np.maximum(_nd, 1e-3)
+                    _push = (_nd + margin) / _nd
+                    exp = (np.array([cx, cy], np.float32)[None, :]
+                           + _d * _push[:, None])
+                    exp[:, 0] = np.clip(exp[:, 0], 0, W - 1)
+                    exp[:, 1] = np.clip(exp[:, 1], 0, H - 1)
+                    # آیا جوهری داخل چندضلعی مانده؟ (در وضعیت فعلی)
+                    # ⚠️ برش باید پدینگ داشته باشد وگرنه رینگِ بیرونیِ ماسک
+                    # داخلِ crop نمی‌افتد (باگِ رینگِ خالی) و هیچ ترمیمی رخ نمی‌دهد
+                    _pad = margin + 16
+                    ex0, ey0 = int(exp[:, 0].min()) - _pad, int(exp[:, 1].min()) - _pad
+                    ex1, ey1 = int(exp[:, 0].max()) + 1 + _pad, int(exp[:, 1].max()) + 1 + _pad
+                    ex0, ey0 = max(0, ex0), max(0, ey0)
+                    ex1, ey1 = min(W, ex1), min(H, ey1)
+                    if ex1 - ex0 < 4 or ey1 - ey0 < 4:
+                        continue
+                    sub = cleaned[ey0:ey1, ex0:ex1]
+                    emask = np.zeros(sub.shape[:2], np.uint8)
+                    cv2.fillPoly(emask, [exp.astype(np.int32)
+                                         - np.array([ex0, ey0], np.int32)],
+                                 255)
+                    if not emask.any():
+                        continue
+                    # رنگ مرجع — اول از نمونه‌های رأسِ K3 (گوشه‌های خط =
+                    # انتهای متن = پس‌زمینهٔ واقعی)، بعد رینگِ بیرونی
+                    _sub_f = sub.astype(np.float32)
+                    samp = self._k3_ring_samples(cleaned, exp, margin + 2)
+                    bg_med = None
+                    if len(samp) >= 3:
+                        _v_med = np.median(samp, axis=0)
+                        _dv = np.linalg.norm(samp - _v_med, axis=1)
+                        _kv = samp[_dv <= 45.0]
+                        if len(_kv) >= max(3, int(0.5 * len(samp))):
+                            bg_med = np.median(_kv, axis=0)
+                    ring = (cv2.dilate(emask, np.ones((13, 13), np.uint8)) > 0) \
+                        & (emask == 0)
+                    if bg_med is None:
+                        if int(ring.sum()) < 24:
+                            continue
+                        ring_cols = _sub_f[ring]
+                        _bg0 = np.median(ring_cols, axis=0)
+                        _d_ring = np.linalg.norm(ring_cols - _bg0, axis=1)
+                        _okr = ring_cols[_d_ring <= 45.0]
+                        if len(_okr) < 24:
+                            continue
+                        bg_med = np.median(_okr, axis=0)
+                    # جوهرِ جامانده داخل چندضلعی؟
+                    in_d = np.linalg.norm(_sub_f - bg_med[None, None, :],
+                                          axis=2)
+                    ink = (in_d > 30.0) & (emask > 0)
+                    ink_frac = float(ink.sum()) / float((emask > 0).sum())
+                    if ink_frac < 0.010:
+                        continue  # تمیز است — دست نمی‌زنیم (کارِ LaMa می‌ماند)
+                    # رینگِ پاکِ IDW — نمونه‌های جوهرگونه حذف می‌شوند
+                    ring_ok = ring & (in_d <= 45.0)
+                    if _dbg_img is not None:
+                        _pe = exp.astype(np.int32).reshape(-1, 1, 2)
+                        cv2.polylines(_dbg_img, [_pe], True, (0, 255, 0), 2)
+                    # رنگِ پرکردن: نمونه‌های رأسِ نزدیکِ رنگِ پس‌زمینه
+                    _sf = samp[np.linalg.norm(samp - bg_med, axis=1) <= 45.0] \
+                        if len(samp) >= 3 else samp
+                    fill_color = (np.median(_sf, axis=0) if len(_sf) >= 3
+                                  else bg_med)
+                    # گیتِ یکنواختی K3: فاصلهٔ اقلیدسیِ RGB ≤ ۲۵
+                    _unif = samp[np.linalg.norm(samp - fill_color,
+                                                axis=1) <= 25.0]
+                    uniform = (len(samp) >= 3
+                               and len(_unif) >= max(3, int(0.90 * len(samp))))
+                    if uniform:
+                        # پرکردنِ جامد با گوشهٔ نرم (CreateCorner معادل:
+                        # بلورِ ملایمِ ماسک روی مرز)
+                        fm = emask.copy()
+                        _soft = cv2.GaussianBlur(fm, (3, 3), 0.8)
+                        _a = np.clip(_soft.astype(np.float32) / 255.0,
+                                     0, 1)[..., None]
+                        _fill = np.zeros_like(_sub_f)
+                        _fill[:] = fill_color[None, None, :]
+                        _bl = _sub_f * (1.0 - _a) + _fill * _a
+                        sub[:] = np.clip(_bl, 0, 255).astype(np.uint8)
+                        n_fill += 1
+                    else:
+                        # HealPolygonRegionCalibrated — درون‌یابی IDW
+                        # از پیکسل‌های رینگ با وزن 1/(d²+0.001)
+                        _rpts = np.argwhere(ring_ok)
+                        if len(_rpts) < 40:
+                            _rpts = np.argwhere(ring)
+                        if len(_rpts) > 220:
+                            _step = max(1, len(_rpts) // 220)
+                            _rpts = _rpts[::_step]
+                        _rcol = _sub_f[_rpts[:, 0], _rpts[:, 1]]
+                        _ipts = np.argwhere(emask > 0)
+                        if len(_ipts) and len(_rpts):
+                            # به‌جای حلقهٔ کامل، درون‌یابی روی گریدِ
+                            # نصف + بزرگ‌نمایی (سرعت روی نوارهای بلند)
+                            _half = (int(emask.sum()) > 60000)
+                            if _half:
+                                _sm = cv2.resize(
+                                    _sub_f, None, fx=0.5, fy=0.5,
+                                    interpolation=cv2.INTER_AREA)
+                                _m2 = cv2.resize(
+                                    emask, (_sm.shape[1], _sm.shape[0]),
+                                    interpolation=cv2.INTER_NEAREST) > 0
+                                _rp2 = np.argwhere(
+                                    (cv2.dilate(
+                                        (_m2 * 255).astype(np.uint8),
+                                        np.ones((5, 5), np.uint8)) > 0)
+                                    & (~_m2))
+                                if len(_rp2) > 160:
+                                    _st2 = max(1, len(_rp2) // 160)
+                                    _rp2 = _rp2[::_st2]
+                                _rc2 = _sm[_rp2[:, 0], _rp2[:, 1]]
+                                _dk2 = np.linalg.norm(_rc2 - bg_med, axis=1)
+                                if int((_dk2 <= 45.0).sum()) >= 24:
+                                    _kp = _dk2 <= 45.0
+                                    _rp2 = _rp2[_kp]
+                                    _rc2 = _rc2[_kp]
+                                _ip2 = np.argwhere(_m2)
+                                _d2 = ((_ip2[:, 0][:, None]
+                                        - _rp2[:, 0][None, :]) ** 2
+                                       + (_ip2[:, 1][:, None]
+                                          - _rp2[:, 1][None, :]) ** 2
+                                       ).astype(np.float32)
+                                _w2 = 1.0 / (_d2 + 0.001)
+                                _w2 /= _w2.sum(axis=1, keepdims=True)
+                                _heal2 = _w2 @ _rc2
+                                _hm = np.zeros_like(_sm)
+                                _hm[_m2] = _heal2
+                                _healf = cv2.resize(_hm, (sub.shape[1],
+                                                          sub.shape[0]),
+                                                    interpolation=cv2.INTER_LINEAR)
+                                _res_f = _healf
+                            else:
+                                _dd = ((_ipts[:, 0][:, None]
+                                        - _rpts[:, 0][None, :]) ** 2
+                                       + (_ipts[:, 1][:, None]
+                                          - _rpts[:, 1][None, :]) ** 2
+                                       ).astype(np.float32)
+                                _ww = 1.0 / (_dd + 0.001)
+                                _ww /= _ww.sum(axis=1, keepdims=True)
+                                _heal = _ww @ _rcol
+                                _res_f = _sub_f.copy()
+                                _res_f[_ipts[:, 0], _ipts[:, 1]] = _heal
+                            # فقط داخلِ چندضلعی + فِدرِ ملایمِ مرز
+                            _core = cv2.erode(emask,
+                                              np.ones((3, 3), np.uint8))
+                            _alpha = cv2.GaussianBlur(emask, (5, 5), 1.4)
+                            _alpha = np.minimum(_alpha, emask)
+                            _alpha[_core > 0] = 255
+                            _a3 = (_alpha.astype(np.float32)
+                                   / 255.0)[..., None]
+                            _bl = _sub_f * (1.0 - _a3) + _res_f * _a3
+                            sub[:] = np.clip(_bl, 0, 255).astype(np.uint8)
+                            n_heal += 1
+                except Exception:
+                    continue
+        if _dbg_path and _dbg_img is not None:
+            try:
+                cv2.imwrite(_dbg_path, _dbg_img)
+            except Exception:
+                pass
+        if not (n_fill + n_heal):
+            return 0, ""
+        return n_fill + n_heal, f"{n_fill} fill, {n_heal} heal"
 
     def _residue_sweep(self, image: np.ndarray, cleaned: np.ndarray,
                        regions: List[TextRegion],

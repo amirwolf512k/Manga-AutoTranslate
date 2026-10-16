@@ -3,6 +3,7 @@ package com.amirwolf.mangatranslator
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
@@ -10,6 +11,7 @@ import android.graphics.drawable.GradientDrawable
 import android.net.Uri
 import android.os.Bundle
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.os.Handler
 import android.os.Looper
@@ -1513,6 +1515,57 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** v1.14.41: رندر PDF به تصویر برای نمایشِ درون‌برنامه‌ای — خروجی
+     *  PDF/دیباگ تا حالا فقط «دانلود» داشتند و کاربر دیباگ را نمی‌دید.
+     *  صفحاتِ نوارِ بلند با سقفِ ابعاد رندر می‌شوند تا رم نترکد. */
+    private fun pdfToImages(pdfPath: String, tag: String, maxPages: Int = 40,
+                            maxDim: Int = 3400): List<String> {
+        val out = mutableListOf<String>()
+        try {
+            val dir = java.io.File(cacheDir, "pdfview_$tag")
+            dir.deleteRecursively()
+            dir.mkdirs()
+            val pfd = ParcelFileDescriptor.open(java.io.File(pdfPath),
+                ParcelFileDescriptor.MODE_READ_ONLY)
+            val renderer = android.graphics.pdf.PdfRenderer(pfd)
+            try {
+                val n = minOf(renderer.pageCount, maxPages)
+                for (i in 0 until n) {
+                    if (isFinishing || isDestroyed) break
+                    val pg = renderer.openPage(i)
+                    try {
+                        val pw = pg.width.coerceAtLeast(1)
+                        val ph = pg.height.coerceAtLeast(1)
+                        val sc = (maxDim.toFloat() /
+                                maxOf(pw, ph).toFloat()).coerceIn(0.05f, 3.0f)
+                        val w = (pw * sc).toInt().coerceAtLeast(48)
+                        val h = (ph * sc).toInt().coerceAtLeast(48)
+                        val bmp = Bitmap.createBitmap(w, h,
+                            Bitmap.Config.ARGB_8888)
+                        bmp.eraseColor(Color.WHITE)
+                        pg.render(bmp, null, null,
+                            android.graphics.pdf.PdfRenderer.Page
+                                .RENDER_MODE_FOR_DISPLAY)
+                        val f = java.io.File(dir, "pg_%03d.png".format(i))
+                        java.io.FileOutputStream(f).use { fo ->
+                            bmp.compress(Bitmap.CompressFormat.PNG, 92, fo)
+                        }
+                        bmp.recycle()
+                        out.add(f.absolutePath)
+                    } finally {
+                        pg.close()
+                    }
+                }
+            } finally {
+                try { renderer.close() } catch (_: Exception) {}
+                try { pfd.close() } catch (_: Exception) {}
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("MangaView", "pdfToImages failed", e)
+        }
+        return out
+    }
+
     private fun resBtn(text: String, primary: Boolean, onClick: () -> Unit): Button =
         Button(this).apply {
             this.text = text
@@ -1549,6 +1602,44 @@ class MainActivity : AppCompatActivity() {
         if (images.isNotEmpty()) {
             resultsBox.addView(resBtn("📖  نمایش (${images.size} صفحه)", true) {
                 viewer(images, live = true, dbgPaths = debug, total = images.size)
+            })
+        }
+        // v1.14.41: خروجی PDF — تا حالا فقط «دانلود» بود و کاربر خروجی و
+        // دیباگ را داخلِ برنامه نمی‌دید. حالا PDF با PdfRenderer رندر و
+        // در همان نمایشگر باز می‌شود (خروجی اصلی + خروجی دیباگ).
+        if (images.isEmpty() && hasOutFile &&
+            outFile.lowercase().endsWith(".pdf")) {
+            resultsBox.addView(resBtn("📖  نمایش خروجی (PDF)", true) {
+                Thread {
+                    val imgs = pdfToImages(outFile, "main")
+                    ui.post {
+                        if (imgs.isNotEmpty()) {
+                            viewer(imgs, dbgPaths = emptyList(),
+                                   total = imgs.size)
+                        } else {
+                            Toast.makeText(this,
+                                "نمایش PDF ممکن نشد — از «دانلود خروجی» استفاده کن",
+                                Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
+            })
+        }
+        if (hasDbgFile && dbgFile.lowercase().endsWith(".pdf")) {
+            resultsBox.addView(resBtn("🔍  نمایش دیباگ", false) {
+                Thread {
+                    val imgs = pdfToImages(dbgFile, "dbg")
+                    ui.post {
+                        if (imgs.isNotEmpty()) {
+                            viewer(imgs, dbg = true, dbgPaths = emptyList(),
+                                   total = imgs.size)
+                        } else {
+                            Toast.makeText(this,
+                                "نمایش PDF دیباگ ممکن نشد — از «دانلود دیباگ» استفاده کن",
+                                Toast.LENGTH_LONG).show()
+                        }
+                    }
+                }.start()
             })
         }
         if (hasOutFile) {
