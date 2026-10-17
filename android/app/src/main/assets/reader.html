@@ -1,19 +1,26 @@
 <!DOCTYPE html>
-<!-- v1.14.44: اسکرولِ داخلِ .rdrS (overflow:auto) — باگِ «زوم می‌کنم چپ/راست نمی‌رود» ریشه‌اش
-     تکیه بر scroll سند بود: در WebView سند همیشه عرضِ صفحه می‌ماند و سرریزِ افقیِ
-     محتوایِ زوم‌شده پنِ افقی نمی‌شد (حتی با dir=ltr). حالا .rdrS خودش اسکرولرِ
-     مستقل است — درگِ تک‌انگشتیِ طبیعیِ WebView پنِ افقی/عمودی (با مومنتوم) را
-     در هر زومی انجام می‌دهد و زومِ پینچ نقطه‌کانونی نسبت به خودِ اسکرولر است.
+<!-- v1.14.58: دو فیکسِ نمایشگر — ① «دیباگ میزنم از نمایش زنده در میاد»: سوئیچِ 🔍
+     قبلاً همهٔ DOM را نابود و از نو می‌ساخت (c.innerHTML='') → همهٔ تصویرها دوباره
+     لود می‌شدند (فلیکرِ سیاه)، اسکرول به‌خاطرِ کوتاه‌شدنِ موقتیِ محتوا گیر می‌کرد و
+     کاربر حس می‌کرد از نمایشِ زنده بیرون افتاده. حالا دو لیستِ موازی (نهایی/دیباگ)
+     همیشه در DOM می‌مانند؛ سوئیچ فقط نمایش/مخفی است، هر حالت اسکرولِ خودش را به‌خاطر
+     می‌سپارد، تصویرها هرگز دوباره لود نمی‌شوند و به‌روزرسانیِ زنده به هر دو لیست
+     (حتی لیستِ مخفی) ادامه می‌دهد.
+     ② «زوم می‌کنم میره پایین بالا»: content-visibility:auto روی تصویرها عناصرِ
+     خارج از دید را در «اندازهٔ به‌خاطرسپاری‌شده» فریز می‌کرد → بعد از زوم بعضی
+     تصویرها با عرضِ جدید و بعضی با اندازهٔ قدیمی → چیدمانِ دروغ → پرشِ اسکرول.
+     حذف شد؛ loading=lazy می‌ماند و چون تصویرهایِ بالایِ دید همیشه اندازهٔ واقعی
+     دارند، زومِ کانونی دقیق می‌ماند.
+     v1.14.44: اسکرول داخل .rdrS (overflow:auto) — پنِ افقی/عمودیِ طبیعی WebView.
      دیباگ: data-ndbg از سمتِ اندروید تزریق می‌شود تا سوییچِ 🔍 در نمایشِ
-     غیرِزنده هم تعدادِ صفحه‌های دیباگ را از اول بداند (قبلاً 0 می‌ماند و
-     زدنِ دکمه صفحهٔ خالی می‌ساخت = «کار نمی‌کند»). -->
+     غیرِزنده هم تعدادِ صفحه‌های دیباگ را از اول بداند. -->
 <html lang="fa" dir="ltr">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>خواندن</title>
-<style>*{box-sizing:border-box;margin:0;padding:0}html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none;height:100%;overflow:hidden}.rdr{background:#000;direction:ltr;height:100%;display:flex;flex-direction:column}.rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2;flex:0 0 auto}.rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}.rdr-btn:active{background:#2a2a30}.rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}.rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}.rdrS{flex:1 1 auto;overflow:auto;position:relative;background:#000;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}.rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}.rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;-webkit-user-drag:none;pointer-events:none;content-visibility:auto;contain-intrinsic-size:auto 1200px}.rdr-progress{position:fixed;bottom:0;left:0;right:0;height:3px;background:#1a1a1c;z-index:3}.rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}.zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}.ph{width:100%;direction:rtl;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:shph 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}@keyframes shph{0%{background-position:120% 0}100%{background-position:-80% 0}}.sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spinph 1s linear infinite}@keyframes spinph{to{transform:rotate(360deg)}}@media (max-width:480px){.rdr-bar{gap:4px;padding:6px 8px}.rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}.rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}}</style>
+<style>*{box-sizing:border-box;margin:0;padding:0}html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none;height:100%;overflow:hidden}.rdr{background:#000;direction:ltr;height:100%;display:flex;flex-direction:column}.rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2;flex:0 0 auto}.rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}.rdr-btn:active{background:#2a2a30}.rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}.rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}.rdrS{flex:1 1 auto;overflow:auto;position:relative;background:#000;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}.rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}.rdrC .lg{width:100%}.rdrC .lg[hidden]{display:none}.rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;-webkit-user-drag:none;pointer-events:none}.rdr-progress{position:fixed;bottom:0;left:0;right:0;height:3px;background:#1a1a1c;z-index:3}.rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}.zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}.ph{width:100%;direction:rtl;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:shph 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}@keyframes shph{0%{background-position:120% 0}100%{background-position:-80% 0}}.sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spinph 1s linear infinite}@keyframes spinph{to{transform:rotate(360deg)}}@media (max-width:480px){.rdr-bar{gap:4px;padding:6px 8px}.rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}.rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}}</style>
 </head>
 <body>
 <div class="rdr" id="manga_rdr" data-zoom="1">
@@ -78,7 +85,7 @@
       dbgMode = !dbgMode;
       btn.textContent = dbgMode ? '\ud83d\udcd6 نهایی' : '🔍 دیباگ';
       btn.classList.toggle('fs', dbgMode);
-      rebuild();
+      applyMode();
       return;
     }
     else if (act === 'zoom-in') zoomBy(1.25);
@@ -113,8 +120,7 @@
     else zoomBy(2.2, e.clientX, e.clientY);
   });
   // v1.14.44: پنِ تک‌انگشتی به WebView سپرده شد — درگ روی .rdrS (overflow:auto)
-  // به‌طور طبیعی افقی/عمودی با مومنتوم اسکرول می‌کند (قبلاً scrollToِ سند بود
-  // که در WebView افقی‌اش هرگز باز نمی‌شد). JS فقط پینچ را می‌گیرد.
+  // به‌طور طبیعی افقی/عمودی با مومنتوم اسکرول می‌کند. JS فقط پینچ را می‌گیرد.
   let pinch = null;
   const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
@@ -157,18 +163,27 @@
       if (btn) btn.click();
     }
   });
-  // ——— نمایش زنده داخل خواننده (اسلات لودینگ) + سوئیچ دیباگ ———
-  // v1.14.44: ndbg از data-ndbg (تزریق‌شده از اندروید) خوانده می‌شود — در
-  // نمایشِ غیرِزنده window.__mangaLive هرگز صدا نمی‌خورد و قبلاً ndbg صفر
-  // می‌ماند → زدنِ 🔍 صفحهٔ خالی می‌ساخت («کار نمی‌کند») و در نمایشگری که
-  // از دکمهٔ دیباگ باز شده بود «نهایی» هم دیباگ نشان می‌داد (جابه‌جایی).
-  // v1.14.45: دیباگ هم زنده — درخواستِ کاربر (POCO F4): «دیباگ میزنم حالت
-  // زنده میره عادی میشه» → در حالتِ دیباگ: ① arrived همیشه به‌روز می‌شود
-  // (برگشت به «نهایی» هیچ صفحه‌ای را از دست نمی‌دهد) ② تا وقتی نشست زنده است
-  // یک اسلاتِ «در حال ترجمه…» آخرِ لیستِ دیباگ می‌ماند (پایانِ نشست از
-  // آرگومانِ چهارمِ __mangaLive) ③ rebuild اسکرول را نگه می‌دارد.
-  let dbgMode = false, arrived = c.querySelectorAll('img').length, total = 0, ndbg = 0;
+  // ——— نمایش زنده داخل خواننده + سوئیچ دیباگ (v1.14.58: دو لیستِ موازی) ———
+  // v1.14.45: دیباگ هم زنده. v1.14.58: لیستِ نهایی و لیستِ دیباگ هر دو همیشه در
+  // DOM می‌مانند (لیستِ غیرفعال فقط مخفی است) → سوئیچ هیچ‌چیز را نابود/بازسازی
+  // نمی‌کند، تصویرها دوباره لود نمی‌شوند، اسکرولِ هر حالت جدا به‌خاطر سپرده
+  // می‌شود و به‌روزرسانیِ زنده به لیستِ مخفی هم اعمال می‌شود = «از نمایش زنده
+  // در نمی‌افتد».
+  let dbgMode = false, arrived = 0, total = 0, ndbg = 0;
   let isLive = false, sessionDone = false;
+  // ——— دو لیستِ موازی: lgF = نهایی، lgD = دیباگ ———
+  // تصویرها/اسلات‌های استاتیکِ تزریقیِ اندروید مستقیماً داخل .rdrC هستند →
+  // همه به لیستِ نهایی منتقل می‌شوند و لیستِ دیباگ کنارشان ساخته می‌شود.
+  const lgF = document.createElement('div');
+  lgF.className = 'lg lgF';
+  const lgD = document.createElement('div');
+  lgD.className = 'lg lgD';
+  lgD.hidden = true;
+  while (c.firstChild) lgF.appendChild(c.firstChild);
+  c.appendChild(lgF);
+  c.appendChild(lgD);
+  arrived = lgF.querySelectorAll('img').length;
+  const scrollMem = { final: 0, dbg: 0 };
   try {
     const tb0 = root.querySelector('[data-act="dbg"]');
     ndbg = tb0 ? (parseInt(tb0.getAttribute('data-ndbg') || '0', 10) || 0) : 0;
@@ -179,57 +194,73 @@
     d.innerHTML = '<span class="sp"></span>در حال ترجمه…';
     return d;
   };
-  const mkImg = (i) => {
+  const mkImg = (i, dbg) => {
     const im = document.createElement('img');
-    im.src = (dbgMode ? 'd/' : 'i/') + i;
+    im.src = (dbg ? 'd/' : 'i/') + i;
     im.loading = 'lazy';
     im.decoding = 'async';
     im.alt = '';
     im.draggable = false;
     return im;
   };
-  function rebuild() {
-    // v1.14.45: اسکرول هنگامِ سوئیچِ دیباگ/نهایی حفظ می‌شود (قبلاً innerHTML
-    // خالی می‌شد و کاربر به بالای صفحه می‌پرید = «حالت زنده میره»)
-    const st = s.scrollTop, sl = s.scrollLeft;
-    const a = dbgMode ? ndbg : arrived;
-    let w = dbgMode ? ndbg : Math.max(total, a);
-    if (dbgMode && isLive && !sessionDone) w += 1; // اسلاتِ زندهٔ آخرِ لیست
-    if (!dbgMode && total <= 0) w = Math.max(w, arrived + countPh());
-    c.innerHTML = '';
-    for (let i = 0; i < w; i++) c.appendChild(i < a ? mkImg(i) : mkPh());
-    try { s.scrollTop = st; s.scrollLeft = sl; } catch (err) {}
-    updateProgress();
+  // تعدادِ اسلاتِ «در حال ترجمه» که در اولین رندر تزریق شده — بعد از اولین
+  // __mangaLive این عدد با total جایگزین می‌شود (v1.14.45 هم همین بود)
+  let staticPh = lgF.querySelectorAll('.ph').length;
+  function renderFinal() {
+    let want = arrived + (total > 0 ? Math.max(0, total - arrived) : staticPh);
+    if (total > 0) want = Math.max(total, arrived);
+    while (lgF.children.length < want) lgF.appendChild(mkPh());
+    // v1.14.58: اسلاتِ اضافه جمع شود — اگر اندروید بیشتر از totalِ واقعی اسلات
+    // تزریق کرده باشد، placeholderِ سرگردانِ «در حال ترجمه…» برای همیشه آخرِ
+    // لیست می‌ماند (تصویرها هرگز حذف نمی‌شوند؛ فقط placeholderِ انتهایی)
+    if (total > 0) {
+      while (lgF.children.length > want &&
+             lgF.children[lgF.children.length - 1].className === 'ph') {
+        lgF.removeChild(lgF.lastChild);
+      }
+    }
+    for (let i = 0; i < arrived && i < lgF.children.length; i++) {
+      const el = lgF.children[i];
+      if (el && el.tagName !== 'IMG') lgF.replaceChild(mkImg(i, false), el);
+    }
   }
-  function countPh() {
-    let n = 0;
-    for (const el of c.children) if (el && el.className === 'ph') n++;
-    return n;
+  function renderDbg() {
+    let w = ndbg;
+    if (isLive && !sessionDone) w += 1; // اسلاتِ زندهٔ آخرِ لیست
+    while (lgD.children.length < w) lgD.appendChild(mkPh());
+    // با پایانِ نشست، اسلاتِ اضافه فقط وقتی جمع می‌شود که واقعاً placeholder است
+    if (!isLive || sessionDone) {
+      while (lgD.children.length > ndbg &&
+             lgD.children[lgD.children.length - 1].className === 'ph') {
+        lgD.removeChild(lgD.lastChild);
+      }
+    }
+    for (let i = 0; i < ndbg && i < lgD.children.length; i++) {
+      const el = lgD.children[i];
+      if (el && el.tagName !== 'IMG') lgD.replaceChild(mkImg(i, true), el);
+    }
   }
   function renderLive() {
-    const a = dbgMode ? ndbg : arrived;
-    let w = dbgMode ? ndbg : Math.max(total, a);
-    if (dbgMode && isLive && !sessionDone) w += 1; // اسلاتِ زندهٔ آخرِ لیست
-    if (dbgMode) {
-      // حالتِ دیباگ فقط صفحه‌های دیباگ + اسلاتِ زنده — با پایانِ نشست کوچک می‌شود
-      while (c.children.length < w) c.appendChild(mkPh());
-      while (c.children.length > w) c.removeChild(c.lastChild);
-    } else {
-      // حالتِ نهایی هرگز اسلات‌های موجود را حذف نمی‌کند (اسلاتِ استاتیکِ
-      // تزریقیِ اندروید قبل از اولین __mangaLive هست — total هنوز 0 است)
-      w = Math.max(w, c.children.length);
-      while (c.children.length < w) c.appendChild(mkPh());
-    }
-    for (let i = 0; i < Math.min(a, w); i++) {
-      const el = c.children[i];
-      if (el && el.tagName !== 'IMG') c.replaceChild(mkImg(i), el);
-    }
+    renderFinal();
+    renderDbg();
+    updateProgress();
+  }
+  function applyMode() {
+    // v1.14.58: فقط نمایش/مخفی + بازیابیِ اسکرولِ همان حالت — بدونِ بازسازی
+    scrollMem[dbgMode ? 'final' : 'dbg'] = s.scrollTop; // اسکرولِ حالتِ قبلی
+    lgF.hidden = dbgMode;
+    lgD.hidden = !dbgMode;
+    s.scrollTop = Math.min(scrollMem[dbgMode ? 'dbg' : 'final'],
+                           Math.max(0, s.scrollHeight - s.clientHeight));
     updateProgress();
   }
   window.__mangaLive = function(n, tot, nd, fin) {
     try {
       isLive = true;
-      if (typeof tot === 'number' && tot > 0) total = tot;
+      if (typeof tot === 'number' && tot > 0) {
+        total = tot;
+        staticPh = 0; // از این‌جا به بعد total مرجع است
+      }
       if (typeof nd === 'number' && nd > 0) {
         ndbg = nd;
         const tb = root.querySelector('[data-act="dbg"]');
@@ -241,14 +272,14 @@
           tb.style.fontWeight = '700';
         }
       }
-      // v1.14.45: arrived در هر دو حالت به‌روز می‌شود — قبلاً در حالتِ دیباگ
-      // منجمد می‌شد و برگشت به «نهایی» صفحه‌های رسیده را نشان نمی‌داد
+      // arrived در هر دو حالت به‌روز می‌شود (v1.14.45) — لیستِ نهایی حتی وقتی
+      // مخفی است پر می‌شود تا برگشت به «نهایی» هیچ صفحه‌ای را از دست ندهد
       arrived = Math.max(arrived, n | 0);
       if (fin === true) sessionDone = true;
       renderLive();
     } catch (err) {}
   };
-  if (arrived > 0) renderLive();
+  if (arrived > 0 || staticPh > 0) renderLive();
   updateProgress();
 })();
 </script>

@@ -163,11 +163,26 @@ def apply_updates(files_dir):
             cur = _file_ver(upd_dir, name)
             if cur == "0":
                 cur = _local_ver(files_dir, name)
-            if remote_ver != "0" and _cmp_ver(remote_ver, cur) > 0:
-                os.replace(new_p, os.path.join(upd_dir, name))
+            # 🩹 v1.14.58: اگر APP_VER از قلم bump نشده بود ولی محتوای فایل
+            # عوض شده باشد (هشِ متفاوت)، باز هم نصب کن — وگرنه موتورِ گوشی
+            # برای همیشه روی نسخهٔ قدیمی گیر می‌کند (باگِ «آپدیت خودکار عمل
+            # نمی‌کند»: v1.14.56/57 با APP_VER=1.14.55 منتشر شدند و گوشی
+            # هرگز آن‌ها را نکشید).
+            installed_p = os.path.join(upd_dir, name)
+            try:
+                with open(installed_p, "rb") as f:
+                    same_bytes = (f.read() == data)
+            except Exception:
+                same_bytes = False  # فایلِ نصب‌شده نیست → نصب کن
+            newer = remote_ver != "0" and _cmp_ver(remote_ver, cur) > 0
+            changed = not same_bytes
+            not_older = remote_ver != "0" and _cmp_ver(remote_ver, cur) >= 0
+            if newer or (changed and not_older):
+                os.replace(new_p, installed_p)
                 _stamp(upd_dir, name, remote_ver)
-                _log("آپدیت نصب شد: %s v%s (قبلی v%s) — از اجرای بعدی فعال می‌شود."
-                     % (name, remote_ver, cur))
+                _log("آپدیت نصب شد: %s v%s (قبلی v%s%s) — از اجرای بعدی فعال می‌شود."
+                     % (name, remote_ver, cur,
+                        "" if newer else " — هش عوض شده بود"))
             else:
                 try:
                     os.remove(new_p)
