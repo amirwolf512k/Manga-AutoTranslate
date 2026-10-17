@@ -2148,11 +2148,11 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 if _cm0 not in ("lama-manga", "lama-big", "opencv"):
                     _cm0 = "lama-manga"
                 clean_method = gr.Radio(
-                    choices=[["lama.onnx + flat — پیش‌فرض (همان روش گوشی، سبک و سریع)", "lama-manga"],
-                             ["lama-big + flat — فقط PC/وب (تمیزتر، کندتر)", "lama-big"],
-                             ["opencv + flat — سریع‌ترین حالت", "opencv"]],
+                    choices=[["lama.onnx", "lama-manga"],
+                             ["big-lama", "lama-big"],
+                             ["opencv", "opencv"]],
                     value=_cm0,
-                    label="روش پاکسازی (سه حالت)")
+                    label="روش پاکسازی")
             with gr.Row():
                 two_pass = gr.Checkbox(label="OCR دومرحله‌ای", value=True)
                 fake_test = gr.Checkbox(label="حالت تست — متن فارسی الکی (بدون API)",
