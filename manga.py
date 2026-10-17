@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.54"
+APP_VER = "1.14.55"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -870,7 +870,7 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
             continue
         if (time.time() - t_all0) > budget:
             try:
-                print(f"    [⚖] {short}: رد شد (اتمام بودجهٔ {budget:.0f}s پروب)")
+                print(f"    [*] {short}: رد شد (اتمام بودجهٔ {budget:.0f}s پروب)")
             except Exception:
                 pass
             continue
@@ -890,20 +890,20 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
             t_make = time.time() - t0
             if not _ort_probe_ok(s_c, threads if threads > 0 else 0):
                 try:
-                    print(f"    [⚖] {short}: مردود (پروب سلامت/سریالی)")
+                    print(f"    [*] {short}: مردود (پروب سلامت/سریالی)")
                 except Exception:
                     pass
                 s_c = None
                 continue
             t_c = _ep_ab_time(s_c)
             try:
-                print(f"    [⚖] پروب {short}: {t_c:.2f}s (ساخت {t_make:.1f}s)")
+                print(f"    [*] پروب {short}: {t_c:.2f}s (ساخت {t_make:.1f}s)")
             except Exception:
                 pass
             rows.append((t_c, short, s_c))
         except Exception as e:
             try:
-                print(f"    [⚖] {short}: ناموفق ({str(e)[:90]})")
+                print(f"    [*] {short}: ناموفق ({str(e)[:90]})")
             except Exception:
                 pass
             s_c = None
@@ -915,7 +915,7 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
                                      providers=["CPUExecutionProvider"])
         t_cpu = _ep_ab_time(s_cpu)
         try:
-            print(f"    [⚖] پروب CPU: {t_cpu:.2f}s")
+            print(f"    [*] پروب CPU: {t_cpu:.2f}s")
         except Exception:
             pass
     except Exception:
@@ -924,7 +924,7 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
     winner = rows[0] if (rows and rows[0][0] < t_cpu) else None
     try:
         summary = " | ".join(f"{r[1]} {r[0]:.2f}s" for r in rows) or "—"
-        print(f"[⚖] پروب EP ({os.path.basename(model_path)}): "
+        print(f"[*] پروب EP ({os.path.basename(model_path)}): "
               f"{summary} | CPU {t_cpu:.2f}s → برنده: "
               f"{winner[1] if winner else 'CPU'}")
     except Exception:
@@ -932,7 +932,7 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
     if winner is not None:
         _lama_ep_store(model_path, winner[1])
         try:
-            print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {winner[1]} "
+            print(f"[+] شتاب سخت‌افزاری ORT فعال شد: {winner[1]} "
                   f"(پروب A/B — سریع‌تر از CPU)")
         except Exception:
             pass
@@ -960,16 +960,8 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
     if ep and ep_ab:
         _cached = _lama_ep_cached(model_path)
         if _cached == "cpu":
-            try:
-                print("    [*] EP: cpu (کش)")
-            except Exception:
-                pass
             ep, ep_ab = None, False
         elif _cached in _EP_SHORT2FULL:
-            try:
-                print(f"    [*] EP: {_cached} (کش)")
-            except Exception:
-                pass
             ep, ep_ab = _EP_SHORT2FULL[_cached], False
 
     if ep:
@@ -1001,7 +993,7 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
                                             providers=[ep, "CPUExecutionProvider"])
                 if _ort_probe_ok(s_ep, threads if threads > 0 else 0):
                     try:
-                        print(f"[⚡] شتاب سخت‌افزاری ORT فعال شد: {ep} "
+                        print(f"[+] شتاب سخت‌افزاری ORT فعال شد: {ep} "
                               f"(MANGA_ORT_EP — اجباری)")
                     except Exception:
                         pass
@@ -1298,10 +1290,8 @@ class LamaMangaONNX:
         except Exception:
             pass
         print(
-            f"[+] LaMa-Manga ONNX آماده | providers={self.session.get_providers()} | "
-            f"threads={use_threads} | size={self.SIZE}" +
-            (f" | ⚡سقفِ ورودیِ پچ: {self._input_cap}" if self._input_cap != self.SIZE else "") +
-            f" | {'fixed' if self._fixed_size else 'dynamic (پچ در رزولوشن اصلی)'}"
+            f"[+] مدل پاکسازی آماده | threads={use_threads} | size={self.SIZE}" +
+            (f" | سقفِ پچ: {self._input_cap}" if self._input_cap != self.SIZE else "")
         )
 
     @classmethod
@@ -1323,7 +1313,7 @@ class LamaMangaONNX:
         for url in urls:
             try:
                 host = url.split("/")[2]
-                print(f"    ⬇ از {host} ...")
+                print(f"    دانلود از {host} ...")
                 _dl_to(url, str(dst), name="lama_fp32.onnx")
                 print(f"[+] مدل LaMa-Manga ذخیره شد: {dst}")
                 return str(dst)
@@ -1694,10 +1684,6 @@ class RTDetrV2ONNXDetector:
         self._in_sizes = "orig_target_sizes" if "orig_target_sizes" in in_names else (
             in_names[1] if len(in_names) > 1 else None
         )
-        print(
-            f"[+] RT-DETR-v2 ONNX آماده | size={self.INPUT_SIZE} | "
-            f"inputs={in_names} | providers={self.session.get_providers()}"
-        )
 
     def _preprocess(self, image_bgr: np.ndarray):
         h0, w0 = image_bgr.shape[:2]
@@ -1940,13 +1926,13 @@ def _dl_progress(name: str, done: int, total: int, _last: list = [0.0, 0]) -> No
         if now - _last[0] < 0.8 and pct - _last[1] < 5 and pct < 100:
             return
         _last[0], _last[1] = now, pct
-        print(f"\r    ⬇ {name}: {pct}% ({_fmt_mb(done)}/{_fmt_mb(total)})"
+        print(f"\r    دانلود {name}: {pct}% ({_fmt_mb(done)}/{_fmt_mb(total)})"
               + (" " * 4), end="", flush=True)
     else:
         if now - _last[0] < 1.5:
             return
         _last[0] = now
-        print(f"\r    ⬇ {name}: {_fmt_mb(done)}", end="", flush=True)
+        print(f"\r    دانلود {name}: {_fmt_mb(done)}", end="", flush=True)
 
 
 def _dl_to(url, dst, name: str = ""):
@@ -2015,7 +2001,7 @@ def _ensure_rapidocr_models(mdir, files=None):
             if not url:
                 continue
             try:
-                print(f"  ⬇ {fname} ...")
+                print(f"  دانلود {fname} ...")
                 _dl_to(url, dst, name=fname)
                 done = True
                 break
@@ -2213,7 +2199,7 @@ class MlKitBackend:
             raise ImportError("MlKitBackend فقط روی اندروید (Chaquopy) کار می‌کند") from e
         self._bridge = jclass("com.amirwolf.mangatranslator.MlKitBridge")
         self.lang = self.LANG_MAP.get(str(lang).lower(), "latin")
-        print(f"[+] ML Kit OCR آماده (سبک — بدون مدل ONNX سنگین) | lang={self.lang}")
+        print(f"[+] OCR گوشی: ML Kit | lang={self.lang}")
 
     @staticmethod
     def _clean(txt: str, latin: bool) -> str:
@@ -3053,7 +3039,7 @@ def _live_dump(src, dbg: bool = False) -> None:
         with open(_sent, "w", encoding="utf-8") as f:
             f.write(str(n))
         if not dbg:
-            print(f"[🖼] صفحهٔ {n} آماده شد", flush=True)
+            print(f"[*] صفحهٔ {n} آماده شد", flush=True)
     except Exception:
         pass
 
@@ -3162,19 +3148,19 @@ class MangaTranslator:
 
         cm = (clean_method or "").strip().lower()
         if cm == "opencv":
-            print("[*] روش پاکسازی: opencv + flat (سریع و سبک).")
+            print("[*] روش پاکسازی: opencv.")
             return False
         if cm == "lama-manga":
-            print("[*] روش پاکسازی: lama.onnx + flat (همان روش گوشی — پیش‌فرض).")
+            print("[*] روش پاکسازی: lama.onnx (پیش‌فرض).")
             return True
         if cm == "lama-big":
             if not has_torch:
                 # v1.14.29: torch فقط با انتخاب lama-big نصب می‌شود (بار اول)
                 has_torch = _ensure_torch_cpu()
             if not has_torch:
-                print("[*] lama-big این‌جا torch ندارد → lama.onnx + flat.")
+                print("[*] lama-big این‌جا torch ندارد → lama.onnx.")
                 return True
-            print("[*] روش پاکسازی: lama-big + flat (تمیزتر، کندتر).")
+            print("[*] روش پاکسازی: big-lama.")
             return True
 
         if force_gpu is False and not force_lama:
@@ -3187,13 +3173,12 @@ class MangaTranslator:
 
         if _on_android() and not force_lama:
             if os.environ.get("MANGA_ANDROID_LAMA", "1") == "0":
-                print("[📱] اندروید: پاک‌سازی سریع OpenCV (MANGA_ANDROID_LAMA=0) — "
-                      "LaMa با سوییچ تنظیمات قابل فعال‌کردن است.")
+                if self.debug:
+                    print("[*] اندروید: پاک‌سازی سریع OpenCV (MANGA_ANDROID_LAMA=0)")
                 return False
-            print("[📱] اندروید: پاک‌سازی LaMa پچ‌به‌پچ «موازی»: ۶ پچِ همزمان × "
-                  "۱ نخ + پیش‌بارگذاری مدل در پس‌زمینه. همهٔ EPها "
-                  "(XNNPACK+NNAPI+WebGPU) برای پاکسازی و تشخیص محک زده می‌شوند "
-                  "و سریع‌ترین روی همین گوشی خودکار انتخاب می‌شود.")
+            if self.debug:
+                print("[*] اندروید: پاک‌سازی LaMa پچ‌به‌پچ — سریع‌ترین EP "
+                      "روی همین گوشی خودکار انتخاب می‌شود.")
             return True
 
         if force_gpu is True:
@@ -3460,8 +3445,7 @@ class MangaTranslator:
             if ocr_gpu:
                 print("[*] GPU شناسایی شد؛ OCR روی GPU اجرا می‌شه (برای اجبار به CPU از --cpu استفاده کن).")
             else:
-                print("[*] GPU پیدا نشد؛ OCR روی CPU اجرا می‌شه. "
-                      "اگه توی Colab هستی و GPU داری، Runtime > Change runtime type رو روی GPU بذار.")
+                print("[*] GPU پیدا نشد؛ OCR روی CPU اجرا می‌شه.")
         else:
             ocr_gpu = bool(gpu)
             if ocr_gpu:
@@ -3577,8 +3561,6 @@ class MangaTranslator:
                 try:
                     self.ocr = MlKitBackend(lang=main_lang)
                     self._ocr_backend_name = "mlkit"
-                    print("[📱] اندروید: OCR نیتیو ML Kit فعال شد — "
-                          "استخراج سریع روی سخت‌افزار گوشی (مثل اپ‌های نیتیو).")
                 except Exception as e:
                     print(f"[!] ML Kit لود نشد ({e}) → RapidOCR ONNX")
                     try:
@@ -3599,13 +3581,13 @@ class MangaTranslator:
                     "  یا: pip install rapidocr  (یا rapidocr-onnxruntime)"
                 ) from e
 
-        print(f"[*] موتور OCR فعال: {self._ocr_backend_name} | workers={self.max_workers}")
+        print(f"[*] OCR: {self._ocr_backend_name} | workers={self.max_workers}")
 
 
         self.det = None
         self.det_confidence = float(getattr(self, "det_confidence", 0.28) or 0.28)
         try:
-            print("[*] بارگذاری RT-DETR ONNX (تشخیص حباب — detector-v4-s_int8) ...")
+            print("[*] بارگذاری مدل تشخیص حباب…")
             self.det = RTDetrV2ONNXDetector(
                 prefer_gpu=self.use_gpu,
                 conf_thresh=self.det_confidence,
@@ -3634,14 +3616,10 @@ class MangaTranslator:
             self._apply_api_key(self._api_keys[0])
             self._model_cascade = self._build_model_cascade(self.model_name, self.client)
             self.model_name = self._model_cascade[0]
-            cascade_info = f" | cascade: {' → '.join(self._model_cascade[:5])}" + (
-                "…" if len(self._model_cascade) > 5 else ""
-            )
             if len(self._api_keys) > 1:
-                print(f"[*] ارائه‌دهنده: Gemini | مدل: {self.model_name}{cascade_info} | "
-                      f"{len(self._api_keys)} کلید API")
+                print(f"[*] مترجم: {self.model_name} | {len(self._api_keys)} کلید")
             else:
-                print(f"[*] ارائه‌دهنده: Gemini | مدل: {self.model_name}{cascade_info}")
+                print(f"[*] مترجم: {self.model_name}")
         else:
 
             if not _HAS_OPENAI:
@@ -3652,10 +3630,9 @@ class MangaTranslator:
             self._key_index = 0
             self._apply_api_key(self._api_keys[0])
             self._model_cascade = [self.model_name]
-            print(f"[*] ارائه‌دهنده: {self.provider} | مدل: {self.model_name} | "
-                  f"base: {self.api_base}")
+            print(f"[*] مترجم: {self.model_name} ({self.provider})")
             if len(self._api_keys) > 1:
-                print(f"    {len(self._api_keys)} کلید API (جابه‌جایی خودکار)")
+                print(f"    {len(self._api_keys)} کلید (جابه‌جایی خودکار)")
 
     @staticmethod
     def _total_ram_gb() -> float:
@@ -3678,8 +3655,7 @@ class MangaTranslator:
                 _l = self._get_lama()
                 if _l is not None:
                     try:
-                        print("[🔥] LaMa پیش‌بارگذاری شد (پس‌زمینه) → "
-                              "پاکسازی بدون انتظارِ لود مدل شروع می‌شود")
+                        print("[*] LaMa پیش‌بارگذاری شد (پس‌زمینه)")
                     except Exception:
                         pass
             except Exception:
@@ -3740,7 +3716,7 @@ class MangaTranslator:
                     self._lama = _new
                     self._lama_threads = int(threads)
                     try:
-                        print(f"    [🔥] سشنِ LaMa → {threads} نخ "
+                        print(f"    [*] سشنِ LaMa → {threads} نخ "
                               "(پچِ کم → هسته‌های بیکار پر می‌شود)", flush=True)
                     except Exception:
                         pass
@@ -4078,7 +4054,8 @@ class MangaTranslator:
                     continue
                 names.append(short)
         except Exception as e:
-            print(f"    [!] کشف مدل از API ناموفق: {e}")
+            _msg = str(e).split(chr(10))[0][:120]
+            print(f"    [!] کشف مدل از API ناموفق: {_msg}")
             return []
 
         uniq = sorted(set(names), key=self._model_sort_key)
@@ -8394,13 +8371,18 @@ class MangaTranslator:
             _out = np.ascontiguousarray(
                 np.where(_cmp[..., None], donor, original))
             try:
-                print(f"  [🧩] دو-عکسی: خروجی = عکسِ اصلی + "
+                print(f"  [*] دو-عکسی: خروجی = عکسِ اصلی + "
                       f"{int(_cmp.sum())}px نوارِ متنِ پاک‌شده")
             except Exception:
                 pass
             return _out
         except Exception:
             return donor
+
+    def _clean_label(self) -> str:
+        # نامِ کوتاهِ روشِ پاکسازی برای لاگ
+        return {"lama-manga": "lama.onnx", "lama-big": "big-lama"}.get(
+            str(getattr(self, "clean_method", "") or "").lower(), "opencv")
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
@@ -8423,18 +8405,19 @@ class MangaTranslator:
         counts = {"flat": 0, "color": 0, "LaMa": 0, "OpenCV": 0}
         try:
             _n_enc = self._enclosure_instant_fill(image, cleaned, regions, mask)
-            if _n_enc:
-                print(f"  [▣] {_n_enc} enclosure texts filled with own background")
+            if _n_enc and self.debug:
+                print(f"  [*] {_n_enc} enclosure filled with own background")
         except Exception:
             pass
         try:
             _n_inst = self._line_instant_fill(image, cleaned, regions, mask)
-            if _n_inst:
-                print(f"  [⚡] {_n_inst} lines instantly filled — no LaMa")
+            if _n_inst and self.debug:
+                print(f"  [*] {_n_inst} lines instantly filled")
         except Exception:
             pass
         if not np.any(mask):
-            print("  [⚡] Everything cleaned by instant fill — done in milliseconds")
+            if self.debug:
+                print("  [*] everything cleaned by instant fill")
             # v1.14.54: در این مسیر هم خروجی = عکسِ اصلی + فقط نوارِ تغییرکرده
             try:
                 _chg = np.any(cleaned != image, axis=2)
@@ -8459,8 +8442,6 @@ class MangaTranslator:
         _raise_if_stop()
         _q_lama = (bool(getattr(self, "use_lama", False))
                    and self._clean_level() != "fast")
-        if _q_lama:
-            print("  [*] Clean level: quality — LaMa first (flat only for small uniform clusters)")
         _pg_h, _pg_w = image.shape[:2]
         _pg_area = float(max(1, _pg_h * _pg_w))
         _webtoon = (min(_pg_h, _pg_w) * 2.5 < max(_pg_h, _pg_w))
@@ -8534,8 +8515,9 @@ class MangaTranslator:
                             pending, gap=_gap, max_members=_mm)
                     if _short * 2.5 < _long:
                         _mode += " — long strip"
-                    print(f"  [*] LaMa {_mode}: {len(pending)} clusters → "
-                          f"{len(groups)} patches on {_img_w}x{_img_h}")
+                    if self.debug:
+                        print(f"  [*] LaMa {_mode}: {len(pending)} clusters → "
+                              f"{len(groups)} patches on {_img_w}x{_img_h}")
                     t0 = time.time()
                     # v1.14.44: یک منبعِ حقیقت — همان _lama_workers_auto
                     # (قبلاً یک جدولِ تکراریِ همین‌جا بود که با آن فرق داشت)
@@ -8597,8 +8579,9 @@ class MangaTranslator:
                             _cores = self._cpu_core_count()
                         except Exception:
                             _cores = "?"
-                        print(f"  [🔥] {_workers} parallel patches × "
-                              f"{_thr_eff} thread(s) ({_cores} cores → full CPU)")
+                        if self.debug:
+                            print(f"  [*] {_workers} parallel patches × "
+                                  f"{_thr_eff} thread(s)")
                         _pex = ThreadPoolExecutor(max_workers=_workers)
                         _futs = []
                         try:
@@ -8630,7 +8613,7 @@ class MangaTranslator:
                                 continue
                     dt = time.time() - t0
                     _done = sum(1 for c in pending if c[6] == "LaMa")
-                    if _done:
+                    if _done and self.debug:
                         print(f"  [*] LaMa clustered: {dt:.1f}s "
                               f"({_done}/{len(pending)} clusters in {len(groups)} patches)")
                     self._mem_trim()  # v1.14.48c: رمِ فازِ LaMa آزاد شود
@@ -8656,8 +8639,9 @@ class MangaTranslator:
                             page_bgr = cv2.cvtColor(page_bgr, cv2.COLOR_RGB2BGR)
                         if page_bgr.shape[:2] != image.shape[:2]:
                             raise ValueError("LaMa returned an unexpected image shape")
-                        print(f"  [*] LaMa full-page: {dt:.1f}s "
-                              f"({len(pending)} clusters)")
+                        if self.debug:
+                            print(f"  [*] LaMa full-page: {dt:.1f}s "
+                                  f"({len(pending)} clusters)")
                         for c in pending:
                             cx0, cy0, cx1, cy1, crop_msk = c[:5]
                             result = page_bgr[cy0:cy1, cx0:cx1]
@@ -8882,11 +8866,11 @@ class MangaTranslator:
                 _n_res += _n
                 if not _n:
                     break
-            if _n_res:
+            if _n_res and self.debug:
                 _how = (f"{_lama_fix} LaMa patch + "
                         f"{_n_res - _lama_fix} TELEA" if _lama_fix
                         else "TELEA rescue")
-                print(f"  [🩹] Residue sweep: {_n_res} fixes in "
+                print(f"  [*] residue sweep: {_n_res} fixes in "
                       f"{_pass + 1} passes ({_how})")
         except Exception:
             import traceback as _tb
@@ -8897,8 +8881,8 @@ class MangaTranslator:
         # نمونهٔ کاربر: لکهٔ وسطِ «BUT I LIKE IT HERE.» / نقطهٔ «MR. JUN~»
         try:
             _n_int = self._bubble_interior_sweep(image, cleaned, regions)
-            if _n_int:
-                print(f"  [🫧] حباب‌سویپ: {_n_int} حبابِ لکه‌دار تمیز شد")
+            if _n_int and self.debug:
+                print(f"  [*] bubble sweep: {_n_int} fixed")
         except Exception:
             import traceback as _tb
             print("  [!] Bubble interior sweep error:")
@@ -8917,8 +8901,8 @@ class MangaTranslator:
             if os.environ.get("MANGA_K3", "0") == "1":
                 _n_k3, _k3_how = self._k3_polygon_clean(cleaned, image,
                                                         regions)
-                if _n_k3:
-                    print(f"  [🔷] K3 polygon clean: {_n_k3} خط "
+                if _n_k3 and self.debug:
+                    print(f"  [*] K3 polygon clean: {_n_k3} lines "
                           f"({_k3_how})")
         except Exception:
             import traceback as _tb
@@ -8926,7 +8910,8 @@ class MangaTranslator:
             _tb.print_exc()
 
 
-        print(f"  - Cleanup: {counts}")
+        if self.debug:
+            print(f"  - Cleanup: {counts}")
         return cleaned
 
     def _residue_sweep(self, image: np.ndarray, cleaned: np.ndarray,
@@ -12880,8 +12865,6 @@ class MangaTranslator:
                     n_merged += 1
                     changed = True
             merged.append(cur)
-        if n_merged:
-            print(f"    [*] {n_merged} باکس هم‌پوشان/تودرتو ادغام شد.")
         return merged
 
     @staticmethod
@@ -13125,7 +13108,7 @@ class MangaTranslator:
             return []
         n0 = len(boxes)
         boxes = self._drop_contained_boxes(boxes, contain_thresh=0.72)
-        if len(boxes) < n0:
+        if len(boxes) < n0 and self.debug:
             print(f"    [*] {n0 - len(boxes)} باکس تودرتو/تکراری حذف شد (از {n0})")
 
         expanded: List[dict] = []
@@ -13192,7 +13175,8 @@ class MangaTranslator:
                 full_txt, full_polys, full_angs, _full_lts = self._ocr_crop(image, full_rect)
                 if not str(full_txt or "").strip():
                     continue
-                print(f"    [*] اجزای شکسته خالی بودند → OCR باکس کامل {full_rect}")
+                if self.debug:
+                    print(f"    [*] اجزای شکسته خالی بودند → OCR باکس کامل {full_rect}")
                 fx1, fy1, fx2, fy2 = full_rect
                 cand.append((len(cand), {
                     "class_name": "text_bubble", "confidence": 0.40,
@@ -13229,8 +13213,9 @@ class MangaTranslator:
                         det_class=b.get("class_name", "") or "",
                     ))
                     regions[-1].ocr_empty = True
-                    print(f"    [!] Region [{i}] had no OCR text but has "
-                          f"text-like ink → cleaning only")
+                    if self.debug:
+                        print(f"    [!] Region [{i}] had no OCR text but has "
+                              f"text-like ink → cleaning only")
                 continue
 
 
@@ -13308,8 +13293,8 @@ class MangaTranslator:
                     regions.append(_sr)
                     _made += 1
                 if _made:
-                    print(f"    [*] پنجرهٔ سیستم شناخته شد → {_made} خط جداگانه "
-                          f"(ترجمهٔ جدا + فونت سیستم)")
+                    if self.debug:
+                        print(f"    [*] پنجرهٔ سیستم → {_made} خط جداگانه")
                     continue
 
             kind = self._classify_text(text)
@@ -13403,7 +13388,8 @@ class MangaTranslator:
                 # تک‌خطی/تگ براکت‌دار مثل [ Daily Quest ] — فونت سیستم
                 regions[-1].bubble_style = "system"
                 regions[-1].style_locked = True
-                print(f"    [*] برچسب/پنجرهٔ سیستم (تک‌قطعه) → فونت سیستم")
+                if self.debug:
+                    print(f"    [*] برچسب/پنجرهٔ سیستم (تک‌قطعه) → فونت سیستم")
 
         # v1.14.31: خط‌های تکراریِ پنجرهٔ سیستم (والدهای هم‌پوشان detector) → یکی
         try:
@@ -13427,7 +13413,8 @@ class MangaTranslator:
                 if len(_keep) < len(_sreg):
                     _drop_ids = {id(r) for r in _sreg if r not in _keep}
                     regions = [r for r in regions if id(r) not in _drop_ids]
-                    print(f"    [*] {_drop_ids and len(_drop_ids)} خط تکراری پنجرهٔ سیستم حذف شد")
+                    if self.debug:
+                        print(f"    [*] {len(_drop_ids)} خط تکراری پنجرهٔ سیستم حذف شد")
         except Exception:
             pass
 
@@ -13464,7 +13451,8 @@ class MangaTranslator:
 
         before = len(regions)
         regions = self._merge_overlapping_regions(regions, iou_thresh=0.35, contain_thresh=0.65)
-        print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
+        if self.debug:
+            print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
         return regions
 
     def _verify_angle_signs(self, image: np.ndarray,
@@ -13736,9 +13724,9 @@ class MangaTranslator:
                 self.two_pass_ocr = _saved_tp
             except Exception:
                 pass
-        if extra:
+        if extra and self.debug:
             print(f"    [+] Gap-OCR: {len(extra)} ناحیهٔ اضافی "
-                  f"({time.time() - t0:.1f}s) → پاک/ترجمه می‌شوند")
+                  f"({time.time() - t0:.1f}s)")
         return extra
 
     def _discover_free_text_regions(self, image: np.ndarray,
@@ -13936,10 +13924,9 @@ class MangaTranslator:
                 ))
             except Exception:
                 continue
-        if out:
+        if out and self.debug:
             print(f"    [+] متنِ بیرونِ حباب: {len(out)} ناحیهٔ اضافی "
-                  f"({len(boxes)} خطِ کاندید، {time.time() - t0:.1f}s) "
-                  "→ پاک/ترجمه می‌شوند")
+                  f"({time.time() - t0:.1f}s)")
         return out
 
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
@@ -13949,7 +13936,6 @@ class MangaTranslator:
 
         _raise_if_stop()
         if self.det is not None:
-            print("[فاز ۱ - تشخیص حباب + OCR] شروع...")
             unique_regions = self._extract_regions_from_bubbles(image)
         _raise_if_stop()
 
@@ -14050,11 +14036,9 @@ class MangaTranslator:
                 pass
 
         if unique_regions:
-            dialogue_n = sum(1 for r in unique_regions if r.kind == "dialogue")
-            print(f"[فاز ۱ ✓] استخراج تمام — {len(unique_regions)} حباب "
-                  f"(دیالوگ={dialogue_n}) → صفحه بعدی می‌تواند شروع شود")
+            print(f"[+] متن استخراج شد: {len(unique_regions)} ناحیه")
         else:
-            print("    [!] هیچ متن/حبابی یافت نشد.")
+            print("[!] هیچ متن/حبابی یافت نشد.")
         return unique_regions, dbg
 
     def finish_page_phase(self, image: np.ndarray, regions: List[TextRegion],
@@ -14074,31 +14058,22 @@ class MangaTranslator:
         raw_image_copy = image.copy()
 
         if getattr(self, "clean_only", False):
-            print("[Phase 3 - clean without translate] No API calls.")
             clean_targets = [r for r in regions if r.kind in ("dialogue", "promo", "sfx", "junk")]
-            if promo_regions:
-                print(f"  [*] {len(promo_regions)} promo bubbles are also cleaned")
-            if sfx_regions:
-                print(f"  [*] {len(sfx_regions)} SFX are also cleaned")
             if self.debug and regions:
                 page_debug = self._draw_debug_regions(image, regions)
-            print("[Phase 4 - clean text only] ...")
             if clean_targets:
+                _t0 = time.time()
                 final_image = self.clean_image(image, clean_targets)
-                print(f"  - Cleaned {len(clean_targets)} regions (no translation render).")
+                print(f"[+] پاکسازی: {time.time() - _t0:.1f} ثانیه با {self._clean_label()}")
             else:
                 final_image = image.copy()
-                print("  - Nothing to clean.")
             return final_image, page_debug
 
         if skip_translate:
-
             pass
         elif dialogue_regions:
-            print(f"[فاز ۳ - ترجمه] {len(dialogue_regions)} دیالوگ → {self.provider}/{self.model_name} ...")
+            print(f"[*] ترجمه: {len(dialogue_regions)} حباب…")
             self.translate_regions(dialogue_regions)
-        else:
-            print("[فاز ۳ - ترجمه] دیالوگ معتبری نبود.")
 
         translated_regions = [r for r in dialogue_regions if r.translated_text]
         _ocr_empty_regions = [r for r in dialogue_regions
@@ -14109,27 +14084,34 @@ class MangaTranslator:
                         if not r.translated_text
                         and not getattr(r, "ocr_empty", False))
         if missing_n:
-            print(f"  [!] {missing_n} بالن بدون پاسخ AI")
-        if promo_regions:
-            print(f"  [*] {len(promo_regions)} تبلیغ → دست‌نخورده")
-        if sfx_regions:
-            print(f"  [*] {len(sfx_regions)} SFX → دست‌نخورده")
-        if junk_regions:
-            print(f"  [*] {len(junk_regions)} junk → دست‌نخورده")
+            print(f"[!] {missing_n} حباب ترجمه نشد")
+        if self.debug:
+            if promo_regions:
+                print(f"  [*] {len(promo_regions)} تبلیغ → دست‌نخورده")
+            if sfx_regions:
+                print(f"  [*] {len(sfx_regions)} SFX → دست‌نخورده")
+            if junk_regions:
+                print(f"  [*] {len(junk_regions)} junk → دست‌نخورده")
 
 
         if self.debug and regions:
             page_debug = self._draw_debug_regions(image, regions)
 
-        print("[Phase 4 - clean text + render] ...")
         if _clean_regions:
-            cleaned_image = precleaned if precleaned is not None else self.clean_image(
-                image, _clean_regions)
+            if precleaned is not None:
+                cleaned_image = precleaned
+            else:
+                _t0 = time.time()
+                cleaned_image = self.clean_image(image, _clean_regions)
+                print(f"[+] پاکسازی: {time.time() - _t0:.1f} ثانیه با {self._clean_label()}")
             final_image = self.render_translations(cleaned_image, translated_regions, raw_image_copy)
-            print("  - Text cleaning + Persian render finished.")
+            if not self.debug:
+                for _r in translated_regions:
+                    _txt = (_r.translated_text or "").strip().replace("\n", " / ")
+                    if _txt:
+                        print(f"    {_txt[:150]}")
         else:
             final_image = precleaned.copy() if precleaned is not None else image.copy()
-            print("  - ترجمه‌ای نبود؛ تصویر بدون تغییر.")
         return final_image, page_debug
 
     def process_core(self, image: np.ndarray) -> np.ndarray:
@@ -14198,12 +14180,10 @@ class MangaTranslator:
         if image is None:
             raise ValueError(f"تصویر قابل خواندن نیست: {in_path}")
         basename = os.path.basename(in_path)
-        print(f"-------------------- شروع عملیات جدید --------------------")
         if self._is_mostly_blank(image):
-            print(f"- رد شد (صفحه تقریباً خالی/کارت پایان): '{basename}'")
+            print(f"[!] رد شد (صفحه تقریباً خالی/کارت پایان): {basename}")
             return None
-        print(f"[فاز ۱ - تشخیص حباب + OCR] شروع...")
-        print(f"- پردازش '{basename}'...")
+        print(f"[*] {basename}")
         return self.process_core(image)
 
     @staticmethod
@@ -14465,6 +14445,29 @@ class MangaTranslator:
         return urls
 
     @staticmethod
+    def _decode_image_bytes(content: bytes):
+        """بایت‌ها → تصویر. opencv هرچه بلد است باز می‌کند؛ اگر نشد
+        (مثلاً وب‌پی روی بعضی گوشی‌ها) با Pillow باز می‌کنیم و بایتِ jpg
+        برمی‌گردانیم تا فایل بعداً با opencv خوانده شود."""
+        arr = np.frombuffer(content, dtype=np.uint8)
+        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+        if img is not None:
+            return img, None
+        try:
+            from io import BytesIO
+            from PIL import Image
+            with Image.open(BytesIO(content)) as _im:
+                _im.load()
+                _rgb = np.asarray(_im.convert("RGB"), dtype=np.uint8)
+        except Exception:
+            return None, None
+        img = cv2.cvtColor(_rgb, cv2.COLOR_RGB2BGR)
+        ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+        if not ok:
+            return None, None
+        return img, buf.tobytes()
+
+    @staticmethod
     def _download_images_from_url(url: str, dest_dir: str) -> List[str]:
         import requests
         from bs4 import BeautifulSoup
@@ -14495,6 +14498,16 @@ class MangaTranslator:
                 else:
                     ext = ".jpg"
 
+            img, _reblob = MangaTranslator._decode_image_bytes(content)
+            if img is None:
+                return None
+            if _reblob is not None:
+                # opencv وب‌پی را دوباره نمی‌خواند → همان لحظه jpg شد
+                content, ext = _reblob, ".jpg"
+            h, w = img.shape[:2]
+            if min(h, w) < 80 or max(h, w) < 200:
+                return None
+
             _base = os.path.splitext(os.path.basename(urlparse(hint_url or url).path))[0]
             _base = re.sub(r'[\\/:*?"<>|]+', "_", _base).strip("._ ")[:80]
             _stem = _base or f"page_{index:03d}"
@@ -14505,21 +14518,6 @@ class MangaTranslator:
                 _k += 1
             with open(out_file, "wb") as f:
                 f.write(content)
-            arr = np.frombuffer(content, dtype=np.uint8)
-            test_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-            if test_img is None:
-                try:
-                    os.remove(out_file)
-                except OSError:
-                    pass
-                return None
-            h, w = test_img.shape[:2]
-            if min(h, w) < 80 or max(h, w) < 200:
-                try:
-                    os.remove(out_file)
-                except OSError:
-                    pass
-                return None
             return out_file
 
         path_ext = os.path.splitext(urlparse(url).path)[1].lower()
@@ -15927,6 +15925,12 @@ html, body { background: #0a0a0b; }
                                 ext = ".webp"
                             else:
                                 ext = ".jpg"
+                        test_img, _reblob = MangaTranslator._decode_image_bytes(content)
+                        if test_img is None:
+                            print(f"    [!] تصویر نامعتبر: {u[:90]}")
+                            continue
+                        if _reblob is not None:
+                            content, ext = _reblob, ".jpg"
                         _ub = os.path.splitext(os.path.basename(u.split("?")[0]))[0]
                         _ub = re.sub(r'[\\/:*?"<>|]+', "_", _ub).strip("._ ")[:80]
                         # v1.14.33: اسمِ بدونِ رقم (مثل «images» در گوگل‌تیتر) →
@@ -15941,15 +15945,6 @@ html, body { background: #0a0a0b; }
                             _kk += 1
                         with open(out_file, "wb") as f:
                             f.write(content)
-                        arr = np.frombuffer(content, dtype=np.uint8)
-                        test_img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-                        if test_img is None:
-                            try:
-                                os.remove(out_file)
-                            except OSError:
-                                pass
-                            print(f"    [!] تصویر نامعتبر: {u[:90]}")
-                            continue
                         image_files.append(out_file)
                         print(f"    [+] {i}/{len(urls)} ذخیره شد")
                     except Exception as e:
@@ -16152,11 +16147,10 @@ html, body { background: #0a0a0b; }
                 if image is None:
                     raise ValueError(f"تصویر قابل خواندن نیست: {f}")
                 basename = os.path.basename(f)
-                print("-------------------- شروع عملیات جدید --------------------")
                 if self._is_mostly_blank(image):
-                    print(f"- رد شد (صفحه خالی): '{basename}'")
+                    print(f"[!] رد شد (صفحه خالی): {basename}")
                     return page_i, out_file, None, None, None
-                print(f"[فاز ۱ - تشخیص حباب + OCR] '{basename}'...")
+                print(f"[*] {basename}")
                 regions, dbg = self.extract_regions_phase(image)
                 return page_i, out_file, image, regions, dbg
             except GeminiQuotaExhausted:
@@ -16263,10 +16257,7 @@ html, body { background: #0a0a0b; }
             if not force and len(dialogue_buffer) < min_batch:
                 return
             n = len(dialogue_buffer)
-            print(
-                f"[فاز ۳ - ترجمهٔ بافر] {n} دیالوگ "
-                f"(حداقل={min_batch}) → {self.provider}/{self.model_name} ..."
-            )
+            print(f"[*] ترجمهٔ بافر: {n} دیالوگ…")
             chunk = dialogue_buffer
             dialogue_buffer = []
             _translate_chunk_bg(chunk)
@@ -16294,11 +16285,7 @@ html, body { background: #0a0a0b; }
                 cap = max(min_batch, int(getattr(self, "bubbles_per_request", 15) or 15))
                 chunk = dialogue_buffer[:cap]
                 dialogue_buffer = dialogue_buffer[cap:]
-                print(
-                    f"[فاز ۳ - ترجمهٔ بافر] {len(chunk)} دیالوگ "
-                    f"(مانده در بافر={len(dialogue_buffer)}) → "
-                    f"{self.provider}/{self.model_name} ..."
-                )
+                print(f"[*] ترجمهٔ بافر: {len(chunk)} دیالوگ…")
                 _translate_chunk_bg(chunk)
 
         if getattr(self, "clean_only", False):
@@ -16858,7 +16845,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="حتی روی CPU هم پاک‌سازی big-lama.pt را فعال کن (کندتر، تمیزتر)")
     p.add_argument("--clean-method", dest="clean_method",
                    choices=["lama-manga", "lama-big", "opencv"], default=None,
-                   help="روش پاکسازی: lama-manga (پیش‌فرض — مدل گوشی) | lama-big | opencv")
+                   help="روش پاکسازی: lama-manga (پیش‌فرض) | lama-big | opencv")
     p.add_argument("--no-resume", action="store_true")
     p.add_argument("--keep-old", action="store_true")
     p.add_argument("--request-delay", type=float, default=0.0)
@@ -17066,8 +17053,6 @@ def main():
 
     if not getattr(args, "font_free", None) and getattr(args, "font_free_text", None):
         args.font_free = args.font_free_text
-    print(f"[*] بافر ترجمه: حداقل {translator.min_translate_batch} دیالوگ در هر درخواست "
-          f"(bubbles_per_request={translator.bubbles_per_request})")
 
     _font_map = (
         ("normal", "font_normal"),
@@ -17125,11 +17110,9 @@ def main():
             auto_tones.add("comedy_shout")
         translator.active_tones = auto_tones
         dropped = sorted(set(translator.TONE_NAMES) - auto_tones)
-        if dropped:
+        if dropped and args.debug:
             print("[*] برای این لحن‌ها فونت جدا تخصیص نیافته → از دستور ترجمه حذف شدند: "
                   + ", ".join(dropped))
-        else:
-            print(f"[*] لحن‌های فعال (بر اساس فونت): {', '.join(sorted(auto_tones))}")
 
     translator.run(
         args.input,
