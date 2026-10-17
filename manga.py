@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.50"
+APP_VER = "1.14.51"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3678,19 +3678,24 @@ class MangaTranslator:
         except Exception:
             self._lama_preload_started = False
 
-    def _get_lama(self, threads: int = 0):
+    def _get_lama(self, threads: int = 0, force: bool = False):
         with self._lama_lock:
             _l = self._get_lama_locked()
             # v1.14.45: سرعتِ LaMa — دورِ دوم. وقتی پچِ موازی کم است، تک‌نخی
             # بودنِ هر پچ یعنی بیشترِ هسته‌ها بیکار (لاگِ POCO F4 کاربر:
             # ۲ پچ × ۱ نخ = 17.8s). سشن با نخِ بیشتر بازسازی می‌شود تا هر
             # پچ چندنخی شود؛ محدودیت در _lama_switch_ok.
+            # v1.14.51: force=True — سوئیچِ نخ در لحظهٔ زمان‌بندیِ پچ‌ها یک
+            # بارِ آگاهانه است، نه رگبار؛ خنک‌کاریِ ۲ثانیه‌ای باعث می‌شد اولین
+            # سوئیچ (بعدِ لودِ پس‌زمینه‌ایِ مدل) رد شود و زمان‌بند با
+            # «۲ پچ × ۴ نخ» (کند روی big.LITTLE) کار می‌کرد به‌جای
+            # «۴ پچ × ۲ نخ» (تنظیمِ سریعِ v47 روی POCO F4).
             if (threads and _l is not None and self.use_lama
                     and int(threads) != int(getattr(self, "_lama_threads", 0) or 0)
                     and isinstance(_l, LamaMangaONNX)
                     and str(getattr(_l, "ep_used", "") or "cpu").lower()
                         in ("", "cpu", "none")
-                    and self._lama_switch_ok(int(threads))):
+                    and self._lama_switch_ok(int(threads), force=force)):
                 self._lama_switch_at = time.time()
                 _new = self._build_lama_cpu(int(threads))
                 if _new is not None:
@@ -3703,14 +3708,16 @@ class MangaTranslator:
                         pass
             return self._lama
 
-    def _lama_switch_ok(self, threads: int) -> bool:
+    def _lama_switch_ok(self, threads: int, force: bool = False) -> bool:
         """محدودِ تغییرِ نخِ سشنِ LaMa — از رگبارِ بازسازی جلوگیری می‌کند.
         v1.14.48: گاردِ رم ۰.۳۵→۰.۲۸GB (نخِ بیشتر فقط arena کمی بزرگ‌تر
         می‌کند، وزن‌ها همان است) + تفاوتِ کمِ نخ (±۱) سوئیچ نمی‌کند تا
-        بازسازیِ پیاپی رخ ندهد."""
+        بازسازیِ پیاپی رخ ندهد. v1.14.51: force=True فقط خنک‌کاریِ ۲s را
+        رد می‌کند (گاردِ رم و ±۱ و سقفِ ۴ برقرار می‌ماند)."""
         try:
             _now = time.time()
-            if _now - float(getattr(self, "_lama_switch_at", 0.0) or 0.0) < 2.0:
+            if not force and (_now - float(
+                    getattr(self, "_lama_switch_at", 0.0) or 0.0) < 2.0):
                 return False
             _old = int(getattr(self, "_lama_threads", 0) or 0)
             if _old and abs(int(threads) - _old) < 2:
@@ -3718,7 +3725,11 @@ class MangaTranslator:
             if not (1 <= int(threads) <= 4):
                 return False
             _av = self._available_ram_gb()
-            if _av and _av < 0.28:
+            # v1.14.51: سوئیچِ روبه‌پایین (۴→۲) arena را «کوچک‌تر» می‌کند —
+            # گاردِ رم برایش سخت‌گیریِ بی‌مورد است (لاگِ POCO F4: همین گارد
+            # سوئیچ را می‌خورد و زمان‌بند روی «۲ پچ × ۴ نخ»یِ کند می‌ماند).
+            _thr_min = 0.12 if int(threads) < _old else 0.28
+            if _av and _av < _thr_min:
                 return False
             return True
         except Exception:
@@ -7498,6 +7509,7 @@ class MangaTranslator:
             _g_org = cv2.cvtColor(sub_img, cv2.COLOR_BGR2GRAY)
             _g_out = cv2.cvtColor(sub_bgr, cv2.COLOR_BGR2GRAY)
             _n_rej = 0
+            _dbg = bool(os.environ.get("MANGA_GUARD_DBG"))
             for c in members:
                 cx0, cy0, cx1, cy1, crop_msk = c[:5]
                 cx1, cy1 = min(cx1, img_w), min(cy1, img_h)
@@ -7514,17 +7526,37 @@ class MangaTranslator:
                 mm = dm > 0
                 _n_mm = int(mm.sum())
                 if _n_mm < 400:
+                    if _dbg:
+                        print(f"      [🛡dbg] skip tiny mask {_n_mm}px", flush=True)
                     continue
                 _gcr = _g_org[oy:oy + dm.shape[0], ox:ox + dm.shape[1]]
                 _intm = self._bubble_interior_mask(_gcr, dm, erode_iters=1)
+                try:
+                    _dumpd = os.environ.get("MANGA_GUARD_DUMP")
+                    if _dumpd:
+                        _di = int(c[0]) if len(c) > 0 else 0
+                        _dj = int(c[1]) if len(c) > 1 else 0
+                        cv2.imwrite(os.path.join(
+                            _dumpd, f"g_{_di}_{_dj}_gcr.png"), _gcr)
+                        cv2.imwrite(os.path.join(
+                            _dumpd, f"g_{_di}_{_dj}_dm.png"), dm)
+                        if _intm is not None:
+                            cv2.imwrite(os.path.join(
+                                _dumpd, f"g_{_di}_{_dj}_intm.png"), _intm)
+                except Exception:
+                    pass
                 if _intm is None or int(cv2.countNonZero(_intm)) < 400:
+                    if _dbg:
+                        print(f"      [🛡dbg] ({cx0},{cy0}) interior invalid/"
+                              f"small", flush=True)
                     continue
                 _fa_in = float(cv2.countNonZero(_intm))
-                if float(np.median(_gcr[_intm > 0])) < 185.0:
-                    continue  # حبابِ سفید نیست
+                _med_i = float(np.median(_gcr[_intm > 0]))
                 _cov = float(np.count_nonzero(mm & (_intm > 0))) / _fa_in
-                if _cov < 0.45:
-                    continue  # حفرهٔ کوچک → LaMa امن است
+                if _dbg:
+                    print(f"      [🛡dbg] ({cx0},{cy0}) msk={_n_mm} "
+                          f"int={_fa_in:.0f} med_i={_med_i:.0f} "
+                          f"cov={_cov:.2f}", flush=True)
                 # v1.14.50: فقط «حبابِ واقعی» — رویِ عکس (پاراگرافِ روی حصار در
                 # 9.jpg) ناحیهٔ روشنِ دیوار «حبابِ سفید» خوانده می‌شد و
                 # بازسازیِ درستِ LaMa (حصار/درخت) با پرِ تخت جایگزین می‌شد
@@ -7533,30 +7565,117 @@ class MangaTranslator:
                 # یکنواختِ روشن + اینتریورِ یکنواخت + بدونِ نشتِ ۴لبه.
                 # اندازه‌گیریِ واقعی: حصار=ring_std ۴۳.۶/uniform ۰.۶۰ —
                 # حباب=ring_std ۲۱.۱/uniform ۰.۸۶
+                _wall_ok = False
+                _uni = 0.0
+                _t4 = 4
+                _ring_blk = False
                 try:
                     _ring_in = (cv2.dilate(_intm, np.ones((5, 5),
                                 np.uint8)) > 0) & (_intm == 0)
                     _n_ring = int(cv2.countNonZero(_ring_in))
                     if _n_ring < 30:
-                        continue
-                    _med_i = float(np.median(_gcr[_intm > 0]))
-                    _ring_med = float(np.median(_gcr[_ring_in]))
-                    _ring_std = float(np.std(_gcr[_ring_in]))
-                    _wall_ok = (_ring_med <= _med_i - 40.0) or (
-                        _ring_std <= 30.0 and _ring_med >= _med_i - 60.0)
-                    if not _wall_ok:
-                        continue  # دورِ ماسک عکسِ شلوغ است، نه دیوارِ حباب
-                    if float((_gcr[_intm > 0] >= _med_i - 30.0).mean()) < 0.80:
-                        continue  # اینتریورِ ناهمگون (بافت/سایه) → حباب نیست
-                    _t4 = 0
-                    for _ln in (_intm[0, :], _intm[-1, :], _intm[:, 0],
-                                _intm[:, -1]):
-                        if int(np.count_nonzero(_ln)) >= 6:
-                            _t4 += 1
-                    if _t4 >= 4:
-                        continue  # ناحیهٔ بازِ عکس (هر ۴ لبه) → حباب نیست
+                        if _dbg:
+                            print(f"      [🛡dbg] ring tiny {_n_ring}", flush=True)
+                        _ring_blk = True
+                    else:
+                        _med_i = float(np.median(_gcr[_intm > 0]))
+                        _ring_med = float(np.median(_gcr[_ring_in]))
+                        _ring_std = float(np.std(_gcr[_ring_in]))
+                        _wall_ok = (_ring_med <= _med_i - 40.0) or (
+                            _ring_std <= 30.0 and _ring_med >= _med_i - 60.0)
+                        _uni = float((_gcr[_intm > 0] >= _med_i - 30.0).mean())
+                        _t4 = 0
+                        for _ln in (_intm[0, :], _intm[-1, :], _intm[:, 0],
+                                    _intm[:, -1]):
+                            if int(np.count_nonzero(_ln)) >= 6:
+                                _t4 += 1
+                        if _dbg:
+                            print(f"      [🛡dbg] ring_med={_ring_med:.0f} "
+                                  f"ring_std={_ring_std:.0f} "
+                                  f"wall_ok={_wall_ok} "
+                                  f"uni={_uni:.2f} t4={_t4}", flush=True)
                 except Exception:
-                    continue
+                    _ring_blk = True
+                # v1.14.51 — نشتِ اینتریور (دو صورتِ مختلف):
+                # ۱) حبابِ لبهٔ صفحه/دیوارِ شکافته روی زمینهٔ سفید — لاگِ گوشیِ
+                # v1.14.50: حبابِ «YOU'RE LEAVING…» → اینتریور از شکافِ دیوار
+                # به پنلِ بیرون نشت می‌کند (int≈۴۱Kpx، t4=4، wall_ok=False)
+                # → حبابِ واقعی «ناحیهٔ باز» خوانده شد → توهمِ LaMa (صورتِ
+                # خاکستری + لکهٔ سیاه) قبول شد.
+                # ۲) حبابِ روی هنرِ تیره — «OH BOY…» روی نیمکت: نشت به
+                # نیمکتِ قهوه‌ای med_i را به ~۱۴۰ می‌کاهد → «حبابِ سفید
+                # نیست» → اعتبارسنجی رد → LaMa نیمکت را داخلِ حباب کامل
+                # می‌کند → حباب کلاً پاک می‌شود (بازتولیدِ سندباکس).
+                # فال‌بکِ محلیِ مشترک: کامپوننتِ «روشنِ» چسبیده به خودِ ماسک
+                # (درونِ کراپ) = زمینهٔ سفیدِ محلی. اگر بزرگ (≥۵۵٪ ماسک)،
+                # روشن (med≥۲۲۵)، یکنواخت (≥۷۵٪) و ماسک ≥۴۵٪ آن را بپوشاند
+                # → «زمینهٔ سفید» معتبر است؛ تصمیمِ نهایی را چکِ badf
+                # (توهمِ تیره) می‌گیرد. عکس/هنر (بافتِ تیره/مخلوط) رد می‌شود
+                # (اندازه‌گیری: همهٔ نواحیِ عکسِ 9.jpg رد ✓ بدونِ رگرسیون).
+                _ok49 = (_med_i >= 185.0 and _cov >= 0.45 and not _ring_blk
+                         and _wall_ok and _uni >= 0.80 and _t4 < 4)
+                _fb_comp = None
+                if not _ok49:
+                    try:
+                        _bmk = (_gcr >= 180.0).astype(np.uint8) * 255
+                        _bmk = cv2.morphologyEx(
+                            _bmk, cv2.MORPH_CLOSE,
+                            np.ones((5, 5), np.uint8))
+                        _n8, _l8 = cv2.connectedComponents(
+                            _bmk, connectivity=4)
+                        _sdm = (cv2.dilate(dm, np.ones((3, 3),
+                                               np.uint8)) > 0) & (_bmk > 0)
+                        _lbs = _l8[_sdm]
+                        _vls, _cns = np.unique(_lbs[_lbs > 0],
+                                               return_counts=True)
+                        if not len(_vls):
+                            if _dbg:
+                                print(f"      [🛡dbg] leak-fallback: "
+                                      f"no bright seed → skip", flush=True)
+                            continue
+                        _fb_comp = (_l8 == _vls[int(np.argmax(_cns))])
+                        # v1.14.51b: کامپوننتِ روشن گاهی از شکافِ دیوار به
+                        # هایلایتِ روشنِ هنرِ اطراف هم می‌رسد (OH BOY: نیمکتِ
+                        # روشن) → پر تا آن‌جا می‌رود و بلاب می‌سازد. پلِ باریک
+                        # را با فرسایش ببر و بزرگ‌ترین جزء را نگه دار.
+                        try:
+                            _fe = cv2.erode(_fb_comp.astype(np.uint8),
+                                            np.ones((3, 3), np.uint8),
+                                            iterations=2)
+                            if int(cv2.countNonZero(_fe)) >= 200:
+                                _n9, _l9 = cv2.connectedComponents(
+                                    _fe, connectivity=4)
+                                if _n9 > 1:
+                                    _sz = np.bincount(_l9.ravel())
+                                    _sz[0] = 0
+                                    _fb_comp = cv2.dilate(
+                                        (_l9 == int(np.argmax(_sz)))
+                                        .astype(np.uint8),
+                                        np.ones((3, 3), np.uint8),
+                                        iterations=2) > 0
+                        except Exception:
+                            pass
+                        _ca = int(_fb_comp.sum())
+                        _cm = float(np.median(_gcr[_fb_comp]))
+                        _cu = float((_gcr[_fb_comp] >= _cm - 30.0).mean())
+                        _fcov = float(np.count_nonzero(
+                            mm & _fb_comp)) / max(1, _ca)
+                        _lr_ok = (_ca >= max(600, 0.55 * _n_mm)
+                                  and _cm >= 225.0 and _cu >= 0.75
+                                  and _fcov >= 0.45)
+                        if _dbg:
+                            print(f"      [🛡dbg] leak-fallback "
+                                  f"comp={_ca} med={_cm:.0f} "
+                                  f"uni={_cu:.2f} fcov={_fcov:.2f} "
+                                  f"ok={_lr_ok}", flush=True)
+                        if not _lr_ok:
+                            _fb_comp = None
+                            continue
+                    except Exception:
+                        _fb_comp = None
+                        continue
+                elif _cov < 0.45:
+                    continue  # حفرهٔ کوچک → LaMa امن است
                 ring = (cv2.dilate(dm, _k49) > 0) & (~mm)
                 if int(ring.sum()) < 80:
                     continue
@@ -7564,27 +7683,100 @@ class MangaTranslator:
                 if rg.size < 80:
                     continue
                 _rb = rg >= 170.0
-                if float(_rb.mean()) < 0.50:
+                _rbm = float(_rb.mean())
+                # v1.14.51: عضوِ فال‌بک‌تأییدشده (اینتریورِ سفیدِ چسبیده به
+                # ماسک) گیتِ «حلقه عمدتاً سفید» را رد می‌کند — حبابِ روی
+                # هنرِ تیره (OH BOY روی نیمکت) حلقهٔ تیره دارد ولی داخلش
+                # سفید است؛ bg_med از پیکسل‌هایِ روشنِ حلقه هنوز درست درمی‌آید.
+                if _fb_comp is None and _rbm < 0.50:
+                    if _dbg:
+                        print(f"      [🛡dbg] ring bright frac {_rbm:.2f} "
+                              f"< 0.50 → no validate", flush=True)
                     continue  # دورِ ماسک عمدتاً سفید نیست → اعتبارسنجی نه
+                if int(_rb.sum()) < 80:
+                    continue
                 _bg_med = float(np.median(rg[_rb]))
                 fg = _g_out[oy:oy + dm.shape[0], ox:ox + dm.shape[1]][mm]
                 _bad = (fg < (_bg_med - 42.0))
                 _badf = float(_bad.mean())
-                if _badf < 0.10:
-                    continue
                 _bm = np.zeros(dm.shape, dtype=np.uint8)
                 _bm[mm] = np.where(_bad, 255, 0).astype(np.uint8)
                 _bm = cv2.morphologyEx(_bm, cv2.MORPH_OPEN,
                                        np.ones((3, 3), np.uint8))
                 _ba = int(cv2.countNonZero(_bm))
+                if _dbg:
+                    print(f"      [🛡dbg] bg_med={_bg_med:.0f} "
+                          f"badf={_badf:.2f} ba={_ba}", flush=True)
+                if _badf < 0.10:
+                    continue
                 if _ba < 40 or _ba < 0.45 * int(_bad.sum()):
                     continue  # نقطه‌هایِ ریز (اسکرین‌تونِ روشن) → توهم نیست
-                _fill_col = np.median(
-                    sub_img[oy:oy + dm.shape[0], ox:ox + dm.shape[1]][ring][
-                        _rb].astype(np.float32), axis=0)
+                # v1.14.51: پرِ تختِ «اینتریور» — کراپ اول به تصویرِ اصل
+                # برمی‌گردد (خروجیِ توهم‌زدهِ LaMa کامل حذف می‌شود)، بعد فقط
+                # mm ∩ همسایگیِ کامپوننتِ روشن (اینتریورِ سفیدِ واقعی + ۵px)
+                # با رنگِ همان کامپوننت پر می‌شود → دیوار/نیمکت/هنرِ اطراف
+                # دست‌نخورده می‌ماند (بازتولید: b03 و OH BOY تمیز).
                 _rc = sub_bgr[oy:oy + dm.shape[0], ox:ox + dm.shape[1]]
-                _rc[mm] = _fill_col
+                _sic = sub_img[oy:oy + dm.shape[0], ox:ox + dm.shape[1]]
+                _pp49 = getattr(self, "_page_protect", None)
+                _ppc = None
+                if _pp49 is not None:
+                    try:
+                        _pt = _pp49[cy0:cy1, cx0:cx1]
+                        if _pt.shape[:2] == _rc.shape[:2]:
+                            _ppc = _pt
+                    except Exception:
+                        _ppc = None
+                if _fb_comp is not None:
+                    _fill_col = np.median(
+                        _sic[_fb_comp].astype(np.float32), axis=0)
+                    # v1.14.51b: پر فقط روی «پوستهٔ اینتریور» — comp ± ۱px +
+                    # جوهرِ تنگِ ≥۲px داخلِ comp (استوک‌ها/هالهٔ تیره). خطِ
+                    # دیوار (تیره، چسبیده به لبهٔ comp) داخلِ پر نمی‌آید تا
+                    # حلقهٔ حباب زنده بماند (بازتولید: OH BOY).
+                    _cm49 = float(np.median(_gcr[_fb_comp]))
+                    _ink8 = ((_gcr < _cm49 - 40.0) & (dm > 0))
+                    _ink8 = _ink8.astype(np.uint8) * 255
+                    _cd_e = cv2.erode(
+                        cv2.dilate(_fb_comp.astype(np.uint8),
+                                   np.ones((3, 3), np.uint8)),
+                        np.ones((5, 5), np.uint8))
+                    _ink8[_cd_e == 0] = 0
+                    _ink8 = cv2.morphologyEx(_ink8, cv2.MORPH_CLOSE,
+                                             np.ones((5, 5), np.uint8))
+                    _ink8 = cv2.dilate(_ink8, np.ones((5, 5), np.uint8))
+                    _pnt = mm & ((cv2.dilate(
+                        _fb_comp.astype(np.uint8),
+                        np.ones((3, 3), np.uint8)) > 0) | (_ink8 > 0))
+                else:
+                    _fill_col = np.median(
+                        _sic[ring][_rb].astype(np.float32), axis=0)
+                    _pnt = mm
+                if _ppc is not None:
+                    _pnt = _pnt & (_ppc == 0)
+                _rc[:] = _sic
+                if _pnt.any():
+                    _rc[_pnt] = _fill_col
                 _n_rej += 1
+                try:
+                    _dumpd2 = os.environ.get("MANGA_GUARD_DUMP")
+                    if _dumpd2:
+                        cv2.imwrite(os.path.join(
+                            _dumpd2, f"rj_{cx0}_{cy0}_sic.jpg"), _sic)
+                        cv2.imwrite(os.path.join(
+                            _dumpd2, f"rj_{cx0}_{cy0}_rc.jpg"), _rc)
+                        cv2.imwrite(os.path.join(
+                            _dumpd2, f"rj_{cx0}_{cy0}_pnt.png"),
+                            (_pnt.astype(np.uint8) * 255))
+                        cv2.imwrite(os.path.join(
+                            _dumpd2, f"rj_{cx0}_{cy0}_dm.png"),
+                            (mm.astype(np.uint8) * 255))
+                        if _fb_comp is not None:
+                            cv2.imwrite(os.path.join(
+                                _dumpd2, f"rj_{cx0}_{cy0}_comp.png"),
+                                (_fb_comp.astype(np.uint8) * 255))
+                except Exception:
+                    pass
             if _n_rej:
                 try:
                     print(f"    [🛡] {_n_rej} LaMa fill(s) → flat white "
@@ -7997,7 +8189,20 @@ class MangaTranslator:
                     except Exception:
                         pass
                     _thr_eff = max(1, int(getattr(lama, "thr_used", 1) or 1))
-                    # v1.14.50: ضدِ اشباعِ نخ — لاگِ POCO F4 (۸ هسته) نشان داد
+                    # v1.14.51: اگر سشن با نخِ متفاوت باز است، همین‌جا یک‌بار
+                    # با force سوئیچ کن — خنک‌کاریِ ۲s بعدِ لودِ پس‌زمینه‌ای
+                    # اولین سوئیچ را می‌خورد و زمان‌بند روی ۲×۴ (کند روی
+                    # big.LITTLE) می‌ماند. بعدِ سوئیچ: پچِ موازیِ بیشتر ×
+                    # نخِ کمتر (تنظیمِ سریعِ v47 روی POCO F4).
+                    if _thr_eff != _thr_want and _workers >= 2:
+                        try:
+                            lama = self._get_lama(threads=_thr_want,
+                                                  force=True) or lama
+                        except Exception:
+                            pass
+                        _thr_eff = max(1, int(getattr(lama, "thr_used", 1)
+                                              or 1))
+                    # v1.14.50: ضدِ اشباعِ نخ — لاگِ POCO F4 (۸ هسته) نشان کرد
                     # سشنِ اولیه با ۴ نخ باز می‌ماند (سوئیچِ ۴→۲ با گاردِ رم
                     # رد می‌شود) و زمان‌بند ۴ پچِ موازی × ۴ نخ = ۱۶ نخ روی
                     # ۸ هسته می‌سازد → Over-subscription و کندی (۶۵s به‌جای
