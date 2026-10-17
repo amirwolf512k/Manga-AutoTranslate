@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.53"
+APP_VER = "1.14.54"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -8362,6 +8362,46 @@ class MangaTranslator:
         except Exception:
             pass
 
+    def _compose_kernel9(self):
+        _k = getattr(self, "_compose_k9", None)
+        if _k is None:
+            _k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+            self._compose_k9 = _k
+        return _k
+
+    def _compose_two_image(self, donor: np.ndarray, original: np.ndarray,
+                           mask: np.ndarray) -> np.ndarray:
+        """v1.14.54 — ترکیبِ «دو عکس» — عینِ ایدهٔ خودِ کاربر:
+        «عکسِ اول متن‌هاش کامل بپاکه؛ اشکال نداره حباب خراب شه یا بیشتر پاک
+        شه. بعد این ک کامل پاکیده شده به اندازهٔ همون متن خط به خط برش
+        بخوره، به عکسِ دوم بچسونه جایِ متن‌هایِ اصلی‌شون. عکسِ دوم باید
+        خروجی بشه.»
+
+        یعنی: خروجی از رویِ «عکسِ اصلی» ساخته می‌شود و فقط پیکسل‌هایِ
+        «نوارِ متن» — همان ماسکی که واقعاً متن بود — از عکسِ پاک‌شده
+        (عکسِ اول) برش می‌خورند و روی عکسِ اصلی می‌نشینند. هرچیزِ بیرونِ
+        ماسک — دیوارِ حباب، فضایِ بینِ خط‌ها، هنرِ اطراف — پیکسل‌به‌پیکسل
+        از عکسِ اصلی برمی‌گردد؛ اگر پاک‌کننده‌ای (LaMa/گارد/سویپ) حباب را
+        بلعیده باشد، آن خرابی «هرگز» به خروجی نمی‌رسد."""
+        try:
+            if donor is None or original is None or mask is None:
+                return donor
+            if donor.shape[:2] != original.shape[:2]:
+                return donor
+            _cmp = cv2.dilate(mask, self._compose_kernel9()) > 0
+            if not _cmp.any():
+                return donor
+            _out = np.ascontiguousarray(
+                np.where(_cmp[..., None], donor, original))
+            try:
+                print(f"  [🧩] دو-عکسی: خروجی = عکسِ اصلی + "
+                      f"{int(_cmp.sum())}px نوارِ متنِ پاک‌شده")
+            except Exception:
+                pass
+            return _out
+        except Exception:
+            return donor
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
@@ -8395,6 +8435,13 @@ class MangaTranslator:
             pass
         if not np.any(mask):
             print("  [⚡] Everything cleaned by instant fill — done in milliseconds")
+            # v1.14.54: در این مسیر هم خروجی = عکسِ اصلی + فقط نوارِ تغییرکرده
+            try:
+                _chg = np.any(cleaned != image, axis=2)
+                _cmp = ((mask > 0) | _chg).astype(np.uint8) * 255
+                cleaned = self._compose_two_image(cleaned, image, _cmp)
+            except Exception:
+                pass
             return cleaned
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         _wall_cache = {"tried": False, "val": None}
@@ -8801,6 +8848,16 @@ class MangaTranslator:
         except Exception:
             pass
         self._mem_trim()  # v1.14.48c: قبل از سویپ‌ها رم آزاد شود
+
+        # v1.14.54 — روشِ «دو عکس» کاربر: عکسِ اول = پاک‌شدهٔ کامل (حتی اگر
+        # حباب در آن خراب یا بیشتر پاک شده باشد — مهم نیست)، عکسِ دوم =
+        # عکسِ اصلی که «خروجی» روی آن ساخته می‌شود. فقط نوارهایِ متن از
+        # عکسِ اول برش می‌خورند؛ هر آسیبی که پاک‌سازی بیرونِ نوارها زده
+        # باشد (دیوارِ حباب، بینِ خط‌ها، هنر) اینجا دور ریخته می‌شود.
+        # سویپ‌هایِ بعدی روی همین تصویرِ ترکیب‌شده کار می‌کنند تا اگر جوهرِ
+        # بیرونِ نوار مانده باشد، همان‌جا پاک شود.
+        if os.environ.get("MANGA_TWO_IMAGE", "1") != "0":
+            cleaned = self._compose_two_image(cleaned, image, mask)
 
         _lama_fix = 0
         _kern_r = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
