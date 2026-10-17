@@ -2837,7 +2837,7 @@ class BalloonToneClassifier:
         return [self.classify(c) for c in crops]
 
 
-IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".avif", ".heic", ".heif"}
 PUNCTUATION_SET = set(string.punctuation + "؟«»٪٫،؛…")
 
 WATERMARK_PATTERNS = (
@@ -14176,7 +14176,7 @@ class MangaTranslator:
         return False
 
     def process_image_file(self, in_path: str) -> Optional[np.ndarray]:
-        image = cv2.imread(in_path)
+        image = MangaTranslator._imread_any(in_path)
         if image is None:
             raise ValueError(f"تصویر قابل خواندن نیست: {in_path}")
         basename = os.path.basename(in_path)
@@ -14445,14 +14445,99 @@ class MangaTranslator:
         return urls
 
     @staticmethod
+    def _content_signature(content: bytes) -> str:
+        """امضایِ بایت‌هایِ پاسخ برای پیامِ خطایِ دقیق (وب‌پی/avif/heic/html…)."""
+        try:
+            head = bytes(content[:16])
+        except Exception:
+            return "؟"
+        if head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+            return "webp"
+        if head[4:8] == b"ftyp":
+            brand = head[8:12].decode("ascii", "ignore").strip() or "؟"
+            _bl = brand.lower()
+            if _bl in ("avif", "avis"):
+                return "avif"
+            if _bl in ("heic", "heix", "heim", "hevc", "mif1", "msf1"):
+                return f"heic({brand})"
+            return f"mp4({brand})"
+        if head[:3] == b"\xff\xd8\xff":
+            return "jpeg"
+        if head[:8] == b"\x89PNG\r\n\x1a\n":
+            return "png"
+        if head[:3] == b"GIF":
+            return "gif"
+        if head[:2] == b"BM":
+            return "bmp"
+        _low = head.lstrip().lower()
+        if _low.startswith((b"<!doctype", b"<html", b"<body")):
+            return "html"
+        if head[:5] == b"<?xml":
+            return "xml"
+        if _low.startswith((b"{", b"[")):
+            return "json"
+        _txt = "".join(chr(b) if 32 <= b < 127 else "." for b in head[:12])
+        return f"ناشناس[{_txt}]"
+
+    @staticmethod
+    def _android_decode_bytes(content: bytes) -> Optional[bytes]:
+        """فقط گوشی: هر فرمتی که خودِ اندروید بلد است (وب‌پی، avif در
+        اندروید ۱۲+، heic و…) با BitmapFactory باز می‌شود و بایتِ jpg
+        برمی‌گردد. وقتی نه opencv نه Pillow کدکِ وب‌پی دارند، این آخرین
+        راهِ نجات است — همان کاری که bridge.py برایِ فایل می‌کند، ولی
+        درونِ حافظه و داخلِ manga.py."""
+        src = None
+        try:
+            from android.graphics import (
+                BitmapFactory, Bitmap, Canvas, Color,
+            )
+            from java.io import ByteArrayOutputStream
+        except Exception:
+            return None
+        try:
+            src = BitmapFactory.decodeByteArray(content, 0, len(content))
+            if src is None:
+                return None
+            bm = src
+            try:
+                _alpha = bool(bm.hasAlpha())
+            except Exception:
+                _alpha = False
+            if _alpha:
+                # پس‌زمینهٔ سفید تا ناحیهٔ شفافِ وب‌پی سیاه نشود
+                base = Bitmap.createBitmap(
+                    bm.getWidth(), bm.getHeight(), Bitmap.Config.ARGB_8888)
+                _cv = Canvas(base)
+                _cv.drawColor(Color.WHITE)
+                _cv.drawBitmap(bm, 0.0, 0.0, None)
+                bm = base
+            baos = ByteArrayOutputStream()
+            ok = bool(bm.compress(Bitmap.CompressFormat.JPEG, 92, baos))
+            if not ok:
+                return None
+            raw = baos.toByteArray()
+            out = bytes(raw) if not isinstance(raw, bytes) else raw
+            return out or None
+        except Exception:
+            return None
+        finally:
+            try:
+                if src is not None:
+                    src.recycle()
+            except Exception:
+                pass
+
+    @staticmethod
     def _decode_image_bytes(content: bytes):
-        """بایت‌ها → تصویر. opencv هرچه بلد است باز می‌کند؛ اگر نشد
-        (مثلاً وب‌پی روی بعضی گوشی‌ها) با Pillow باز می‌کنیم و بایتِ jpg
-        برمی‌گردانیم تا فایل بعداً با opencv خوانده شود."""
+        """بایت‌ها → تصویر. زنجیرهٔ بازش: opencv → Pillow → کدکِ اندروید.
+        اگر opencv باز نکرد (مثلاً وب‌پی رویِ گوشی) با Pillow باز می‌کنیم؛
+        اگر Pillow هم کدک نداشت (وب‌پیِ گوشی) BitmapFactoryِ اندروید باز
+        می‌کند و بایتِ jpg برمی‌گردد تا ذخیره و خواندنِ بعدیِ cv2 سالم بماند."""
         arr = np.frombuffer(content, dtype=np.uint8)
         img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
         if img is not None:
             return img, None
+        _rgb = None
         try:
             from io import BytesIO
             from PIL import Image
@@ -14460,12 +14545,84 @@ class MangaTranslator:
                 _im.load()
                 _rgb = np.asarray(_im.convert("RGB"), dtype=np.uint8)
         except Exception:
+            _rgb = None
+        if _rgb is None:
+            # آخرین پشتوانه (فقط گوشی): کدکِ خودِ اندروید — وب‌پی/avif/heic
+            _jpg = MangaTranslator._android_decode_bytes(content)
+            if _jpg:
+                _img2 = cv2.imdecode(
+                    np.frombuffer(_jpg, dtype=np.uint8), cv2.IMREAD_COLOR)
+                if _img2 is not None:
+                    return _img2, _jpg
             return None, None
         img = cv2.cvtColor(_rgb, cv2.COLOR_RGB2BGR)
         ok, buf = cv2.imencode(".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
         if not ok:
             return None, None
         return img, buf.tobytes()
+
+    @staticmethod
+    def _imread_any(path: str):
+        """خواندنِ فایلِ تصویر: اول cv2.imread؛ اگر نشد (وب‌پی/avif رویِ
+        گوشی) بایت‌ها با زنجیرهٔ کاملِ بازش (Pillow/اندروید) باز می‌شود."""
+        try:
+            img = cv2.imread(path, cv2.IMREAD_COLOR)
+        except Exception:
+            img = None
+        if img is not None:
+            return img
+        try:
+            with open(path, "rb") as f:
+                img, _reblob = MangaTranslator._decode_image_bytes(f.read())
+        except Exception:
+            return None
+        return img
+
+    @staticmethod
+    def _normalize_input_image_file(path: str, dest_dir: Optional[str] = None) -> str:
+        """اگر opencv فایلِ ورودی را نمی‌خوانَد (وب‌پی/avif رویِ گوشی)، با
+        زنجیرهٔ کاملِ بازش همان‌جا به jpg تبدیل و مسیرِ تازه برمی‌گردد؛
+        فایلِ اصلی دست‌نخورده می‌ماند. اگر فایل قابلِ باز شدن نباشد،
+        مسیرِ اصلی برمی‌گردد تا مرحلهٔ بعد پیامِ دقیق بدهد."""
+        try:
+            if cv2.imread(path, cv2.IMREAD_COLOR) is not None:
+                return path
+        except Exception:
+            pass
+        try:
+            with open(path, "rb") as f:
+                content = f.read()
+        except Exception:
+            return path
+        img, jpg = MangaTranslator._decode_image_bytes(content)
+        if img is None:
+            return path
+        out_dir = dest_dir or os.path.dirname(path) or "."
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except Exception:
+            out_dir = os.path.dirname(path) or "."
+        stem = os.path.splitext(os.path.basename(path))[0].strip() or "page"
+        stem = re.sub(r'[\\/:*?"<>|]+', "_", stem)[:80]
+        out_file = os.path.join(out_dir, f"{stem}.jpg")
+        _k = 2
+        while os.path.exists(out_file):
+            out_file = os.path.join(out_dir, f"{stem}-{_k}.jpg")
+            _k += 1
+        try:
+            if jpg:
+                with open(out_file, "wb") as f:
+                    f.write(jpg)
+            else:
+                ok, buf = cv2.imencode(
+                    ".jpg", img, [int(cv2.IMWRITE_JPEG_QUALITY), 92])
+                if not ok:
+                    return path
+                with open(out_file, "wb") as f:
+                    f.write(buf.tobytes())
+        except Exception:
+            return path
+        return out_file
 
     @staticmethod
     def _download_images_from_url(url: str, dest_dir: str) -> List[str]:
@@ -14535,7 +14692,31 @@ class MangaTranslator:
             if saved_path:
                 print(f"    1 تصویر مستقیم از لینک دانلود شد.")
                 return [saved_path]
-            raise ValueError(f"محتوای لینک تصویر معتبر نبود: {url}")
+            # v1.14.56: یک تلاشِ دیگر با Acceptِ ساده‌تر — بعضی CDNها وقتی
+            # «image/avif» در Accept باشد فرمتِ avif می‌دهند که نه opencv
+            # نه Pillow بلدند باز کردنش؛ بدونِ avif معمولاً همان وب‌پی/jpg
+            # برمی‌گردد.
+            _last = content
+            try:
+                _alt = dict(headers)
+                _alt["Accept"] = "image/jpeg,image/png,image/webp,*/*;q=0.8"
+                _alt.pop("Referer", None)
+                _r2 = requests.get(url, headers=_alt, timeout=60)
+                _r2.raise_for_status()
+                if _r2.content:
+                    _last = _r2.content
+                    saved_path = _save_bytes(_last, 1, url)
+                    if saved_path:
+                        print("    1 تصویر مستقیم از لینک دانلود شد (تلاشِ دوم).")
+                        return [saved_path]
+            except Exception:
+                pass
+            _sig = MangaTranslator._content_signature(_last)
+            _msg = (f"محتوای لینک تصویر معتبر نبود: {url} "
+                    f"[HTTP {resp.status_code}، نوع: {content_type or 'نامشخص'}، "
+                    f"{len(_last)} بایت، امضا: {_sig}]")
+            print(f"[!] {_msg}")
+            raise ValueError(_msg)
 
         soup = BeautifulSoup(resp.content, "html.parser")
         img_urls, seen = [], set()
@@ -15363,7 +15544,7 @@ html, body { background: #0a0a0b; }
             result.append(path)
 
         for path in image_files:
-            image = cv2.imread(path)
+            image = MangaTranslator._imread_any(path)
             if image is None:
                 raise RuntimeError(f"خواندن تصویر برای ترمیم مرز متن ناموفق بود: {path}")
             if not group:
@@ -15439,37 +15620,42 @@ html, body { background: #0a0a0b; }
         current_protected: List[Tuple[int, int]] = []
         if keep_first and len(image_files) > 1:
 
-            first, second = (cv2.imread(f) for f in image_files[:2])
+            first = MangaTranslator._imread_any(image_files[0])
+            second = MangaTranslator._imread_any(image_files[1])
             if first is None or second is None:
-                raise RuntimeError("خواندن دو تصویر اول برای بررسی مرز امن ناموفق بود؛ صفحه حذف نشد.")
-            seam_w = min(first.shape[1], second.shape[1])
-            if self.max_output_width and self.max_output_width > 0:
-                seam_w = min(seam_w, self.max_output_width)
-            first = self._normalize_page_width(first, target_w=seam_w)
-            second = self._normalize_page_width(second, target_w=seam_w)
-            context = max(320, int(round(seam_w * 0.75)))
-            tail, head = first[-context:], second[:context]
-            preview = np.vstack([tail, head])
-            seam_y = len(tail)
-            padding = max(40, int(round(seam_w * 0.05)))
-            try:
-                protected = [
-                    (box["rect"][1] - padding, box["rect"][3] + padding)
-                    for box in self.det.detect(preview)
-                ]
-            except Exception as exc:
-                raise RuntimeError("بررسی مرز صفحهٔ اول ناموفق بود؛ برای جلوگیری از قطع متن "
-                                   "صفحه جدا نشد.") from exc
-            keep_first = self._find_safe_cut_y_smart(
-                preview, seam_y, seam_y, seam_y, protected_ranges=protected,
-            ) is not None
-            if not keep_first:
-                current_protected = [
-                    (top + len(first) - seam_y, bottom + len(first) - seam_y)
-                    for top, bottom in protected
-                ]
-                print("[*] مرز صفحهٔ اول امن نیست؛ برای حفظ متنِ ادامه‌دار به صفحهٔ بعد چسبانده می‌شود.")
-            del first, second, tail, head, preview
+                # v1.14.56: به‌جایِ ریختنِ کلِ کار، حدِ امن را می‌گیریم —
+                # صفحهٔ اول جدا می‌ماند و بدونِ چسباندن ادامه می‌دهیم.
+                print("[!] خواندن دو تصویر اول برای بررسیِ مرز امن نشد؛ "
+                      "صفحهٔ اول جدا نگه داشته می‌شود و ادامه می‌دهیم.")
+            else:
+                seam_w = min(first.shape[1], second.shape[1])
+                if self.max_output_width and self.max_output_width > 0:
+                    seam_w = min(seam_w, self.max_output_width)
+                first = self._normalize_page_width(first, target_w=seam_w)
+                second = self._normalize_page_width(second, target_w=seam_w)
+                context = max(320, int(round(seam_w * 0.75)))
+                tail, head = first[-context:], second[:context]
+                preview = np.vstack([tail, head])
+                seam_y = len(tail)
+                padding = max(40, int(round(seam_w * 0.05)))
+                try:
+                    protected = [
+                        (box["rect"][1] - padding, box["rect"][3] + padding)
+                        for box in self.det.detect(preview)
+                    ]
+                except Exception as exc:
+                    raise RuntimeError("بررسی مرز صفحهٔ اول ناموفق بود؛ برای جلوگیری از قطع متن "
+                                       "صفحه جدا نشد.") from exc
+                keep_first = self._find_safe_cut_y_smart(
+                    preview, seam_y, seam_y, seam_y, protected_ranges=protected,
+                ) is not None
+                if not keep_first:
+                    current_protected = [
+                        (top + len(first) - seam_y, bottom + len(first) - seam_y)
+                        for top, bottom in protected
+                    ]
+                    print("[*] مرز صفحهٔ اول امن نیست؛ برای حفظ متنِ ادامه‌دار به صفحهٔ بعد چسبانده می‌شود.")
+                del first, second, tail, head, preview
 
         if keep_first:
             ext_s = "." + (getattr(self, "img_format", None) or "webp").lstrip(".")
@@ -15484,7 +15670,7 @@ html, body { background: #0a0a0b; }
 
         sample_widths = []
         for f in image_files[start_idx:start_idx + min(8, len(image_files) - start_idx)]:
-            im = cv2.imread(f)
+            im = MangaTranslator._imread_any(f)
             if im is None:
                 raise RuntimeError(f"خواندن تصویر ناموفق بود؛ صفحه حذف نشد: {f}")
             sample_widths.append(im.shape[1])
@@ -15761,7 +15947,7 @@ html, body { background: #0a0a0b; }
                                        "برای جلوگیری از قطع متن، پردازش متوقف شد.")
 
         for _abs_i, f in enumerate(image_files[start_idx:], start=start_idx):
-            im = cv2.imread(f)
+            im = MangaTranslator._imread_any(f)
             if im is None:
                 raise RuntimeError(f"خواندن تصویر ناموفق بود؛ صفحه حذف نشد: {f}")
             h, w = im.shape[:2]
@@ -16043,6 +16229,19 @@ html, body { background: #0a0a0b; }
             print("[!] هیچ تصویری برای پردازش پیدا نشد.", file=sys.stderr)
             return
 
+        # v1.14.56: نرمال‌سازیِ ورودی — فایل‌هایی که opencvِ گوشی نمی‌خوانَد
+        # (وب‌پی/avif؛ کدک‌شان نه در opencv است نه در Pillow) همان‌جا با
+        # زنجیرهٔ کاملِ بازش (Pillow/کدکِ اندروید) به jpg تبدیل می‌شوند تا
+        # هیچ مرحلهٔ بعدی (پهنای هوشمند/دوخت/پاکسازی/خروجی) نریزد.
+        _norm_files: List[str] = []
+        for _f in image_files:
+            _nf = MangaTranslator._normalize_input_image_file(_f, src_dir)
+            if _nf != _f:
+                print(f"    [~] {os.path.basename(_f)} کدکِ گوشی نداشت → "
+                      f"به JPG تبدیل شد: {os.path.basename(_nf)}")
+            _norm_files.append(_nf)
+        image_files = _norm_files
+
 
         if len(image_files) >= 1:
             widths: List[int] = []
@@ -16143,7 +16342,7 @@ html, body { background: #0a0a0b; }
             _raise_if_stop()
             MangaTranslator._title_skip_enabled = (page_i == 0)
             try:
-                image = cv2.imread(f)
+                image = MangaTranslator._imread_any(f)
                 if image is None:
                     raise ValueError(f"تصویر قابل خواندن نیست: {f}")
                 basename = os.path.basename(f)
