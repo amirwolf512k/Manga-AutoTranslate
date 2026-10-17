@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.47"
+APP_VER = "1.14.50"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5950,7 +5950,14 @@ class MangaTranslator:
         دیوار با یک رنگِ تخت پر می‌شود → لکهٔ بژِ واضح. ماسکِ جوهریِ تنگ
         (فقط گلیف‌ها) روی گرادیان تقریباً نامرئی است. شرط‌ها: حبابِ معتبر
         دورِ متن وجود ندارد + جوهر پوششِ کافی روی پالی‌ها دارد + جوهر
-        به‌وضوح تیره‌ترِ زمینهٔ چسبیده است (متنِ تیره روی زمینهٔ روشن)."""
+        به‌وضوح تیره‌ترِ زمینهٔ چسبیده است (متنِ تیره روی زمینهٔ روشن).
+        v1.14.50 — گیتِ بافت: فقط روی زمینهٔ «صاف/گرادیانی» (دیوارِ رنگی،
+        کاغذ) تنگ می‌کنیم. لاگِ 9.jpg کاربر: پاراگراف‌های روی «عکس» (حصار/
+        درخت/چوب/صورت) با ماسکِ تنگ فقط استوکِ تیرهٔ گلیف را می‌گرفتند و
+        هالهٔ خاکستریِ Anti-Alias دورِ حروف (سطح ~med−۵۵ تا med) باقی
+        می‌ماند → «متنِ قبلی جا گذاشته». LaMa روی عکس با مستطیلِ کامل
+        زمینه را عالی بازسازی می‌کند (خروجیِ v1.14.47 تأیید) → زمینهٔ
+        بافت‌دار = مستطیل (مسیرِ قبلی)، زمینهٔ صاف = تنگ."""
         try:
             ys, xs = np.nonzero(rect_mask)
             if xs.size == 0:
@@ -6003,7 +6010,23 @@ class MangaTranslator:
             if int(np.count_nonzero(ring)) < 40:
                 return False
             t_out = float(np.median(gray[ring]))
-            return t_ink <= t_out - 55.0
+            if t_ink > t_out - 55.0:
+                return False
+            # v1.14.50: گیتِ بافتِ زمینه — هالهٔ دورِ گلیف فقط روی زمینهٔ
+            # صاف توسط پرکننده/LaMaِ تنگ پوشش داده می‌شود؛ روی عکس/بافت
+            # مستطیلِ کامل برمی‌گردیم تا LaMa کلِ زمینه را بازسازی کند
+            try:
+                _ring_d = cv2.dilate(polyf, np.ones((21, 21), np.uint8))
+                _ring_band = ((_ring_d > 0) & (polyf == 0))
+                if int(np.count_nonzero(_ring_band)) >= 60:
+                    _rg = gray[_ring_band].astype(np.float32)
+                    _lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+                    _lap_band = float(np.mean(_lap[_ring_band]))
+                    if float(np.std(_rg)) > 17.0 or _lap_band > 5.0:
+                        return False  # زمینهٔ بافت‌دار → مستطیل امن‌تر است
+            except Exception:
+                pass
+            return True
         except Exception:
             return False
 
@@ -6208,6 +6231,28 @@ class MangaTranslator:
             _med_in = float(np.median(gray[interior > 0]))
             if _med_in < 185.0:
                 return rm  # حبابِ سفیدِ یکدست نیست (تیره/اسکرین‌تون) → دست نزن
+            # v1.14.50 — فقط «حبابِ واقعی». لاگِ 9.jpg: پاراگرافِ روی عکسِ
+            # (حصار/درخت/سکویِ بتنی) — ناحیهٔ روشنِ عکس «حبابِ سفید» خوانده
+            # می‌شد (med≥185) و ماسکِ ۱۸۰Kpxِ پاراگراف به جوهرِ ~۴Kpx جمع
+            # می‌شد → هالهٔ خاکستریِ متن می‌ماند. حبابِ واقعی دیوارِ تیرهٔ
+            # دورِ اینتریور دارد و اینتریورش یکنواخت است — همان دو گاردِ
+            # _bubble_interior_sweep؛ بدونِ دیوار (کاغذ/عکس) دست نزن.
+            try:
+                _int_e = cv2.erode(interior, np.ones((5, 5), np.uint8))
+                _ne = int(cv2.countNonZero(_int_e))
+                if _ne < 400:
+                    return rm
+                _med_e = float(np.median(gray[_int_e > 0]))
+                _ring = (cv2.dilate(interior, np.ones((5, 5), np.uint8)) > 0) \
+                    & (interior == 0)
+                if int(cv2.countNonZero(_ring)) < 30:
+                    return rm
+                if float(np.median(gray[_ring])) > _med_e - 40.0:
+                    return rm  # دیوارِ تیره نیست (کاغذ/عکسِ روشنِ باز) → رد
+                if float((gray[_int_e > 0] >= _med_e - 30.0).mean()) < 0.85:
+                    return rm  # اینتریورِ ناهمگون (بافت/سایه) → حباب نیست
+            except Exception:
+                return rm
             cov = float(np.count_nonzero((sub > 0) & (interior > 0))) / _fa
             if cov < 0.45:
                 return rm  # حفره نسبت به حباب کوچک است → LaMa امن است
@@ -6233,6 +6278,28 @@ class MangaTranslator:
                 tight = cv2.bitwise_and(tight, interior)
             if int(cv2.countNonZero(tight)) < 120:
                 return rm
+            # v1.14.50: نوارِ هاله — ماسکِ تنگ فقط استوکِ تیره را می‌گرفت و
+            # Anti-Aliasِ خاکستریِ دورِ حروف (روی کاغذِ سفید ~سطح med−۲۵..۶۰)
+            # باقی می‌ماند → شبحِ متن. پیکسل‌هایِ «کم‌تر از med−۲۵» در
+            # همسایگیِ ~۵px جوهر را هم بگیر (فقط داخلِ اینتریور) و CLOSE کن؛
+            # حفرهٔ بینِ خط‌ها همچنان بزرگ می‌ماند → خطرِ توهمُ تغییر نمی‌کند.
+            try:
+                _halo_t = _med_in - 25.0
+                if _halo_t > 40.0:
+                    _near = cv2.dilate(tight,
+                                       np.ones((11, 11), np.uint8)) > 0
+                    _halo = ((gray < _halo_t) & _near
+                             & (interior > 0)).astype(np.uint8) * 255
+                    _halo = cv2.morphologyEx(_halo, cv2.MORPH_CLOSE,
+                                             np.ones((3, 3), np.uint8))
+                    _tight2 = cv2.bitwise_or(tight, _halo)
+                    _tight2 = cv2.bitwise_and(_tight2, interior)
+                    # اگر نوارِ هاله ماسک را تا ~کلِ اینتریور باد کرد، رد
+                    if (int(cv2.countNonZero(_tight2))
+                            < 0.72 * int(cv2.countNonZero(interior))):
+                        tight = _tight2
+            except Exception:
+                pass
             if int(cv2.countNonZero(tight)) >= int(cv2.countNonZero(sub)):
                 return rm  # کوچک‌تر نشد → بی‌فایده
             out = np.zeros_like(rm)
@@ -7458,6 +7525,38 @@ class MangaTranslator:
                 _cov = float(np.count_nonzero(mm & (_intm > 0))) / _fa_in
                 if _cov < 0.45:
                     continue  # حفرهٔ کوچک → LaMa امن است
+                # v1.14.50: فقط «حبابِ واقعی» — رویِ عکس (پاراگرافِ روی حصار در
+                # 9.jpg) ناحیهٔ روشنِ دیوار «حبابِ سفید» خوانده می‌شد و
+                # بازسازیِ درستِ LaMa (حصار/درخت) با پرِ تخت جایگزین می‌شد
+                # → لکهٔ بژِ بزرگ. ولی حبابِ نیمه‌شفاف (chinese01) دیوارِ
+                # «روشنِ یکنواخت» دارد — پس: دیوارِ تیره «یا» حلقهٔ
+                # یکنواختِ روشن + اینتریورِ یکنواخت + بدونِ نشتِ ۴لبه.
+                # اندازه‌گیریِ واقعی: حصار=ring_std ۴۳.۶/uniform ۰.۶۰ —
+                # حباب=ring_std ۲۱.۱/uniform ۰.۸۶
+                try:
+                    _ring_in = (cv2.dilate(_intm, np.ones((5, 5),
+                                np.uint8)) > 0) & (_intm == 0)
+                    _n_ring = int(cv2.countNonZero(_ring_in))
+                    if _n_ring < 30:
+                        continue
+                    _med_i = float(np.median(_gcr[_intm > 0]))
+                    _ring_med = float(np.median(_gcr[_ring_in]))
+                    _ring_std = float(np.std(_gcr[_ring_in]))
+                    _wall_ok = (_ring_med <= _med_i - 40.0) or (
+                        _ring_std <= 30.0 and _ring_med >= _med_i - 60.0)
+                    if not _wall_ok:
+                        continue  # دورِ ماسک عکسِ شلوغ است، نه دیوارِ حباب
+                    if float((_gcr[_intm > 0] >= _med_i - 30.0).mean()) < 0.80:
+                        continue  # اینتریورِ ناهمگون (بافت/سایه) → حباب نیست
+                    _t4 = 0
+                    for _ln in (_intm[0, :], _intm[-1, :], _intm[:, 0],
+                                _intm[:, -1]):
+                        if int(np.count_nonzero(_ln)) >= 6:
+                            _t4 += 1
+                    if _t4 >= 4:
+                        continue  # ناحیهٔ بازِ عکس (هر ۴ لبه) → حباب نیست
+                except Exception:
+                    continue
                 ring = (cv2.dilate(dm, _k49) > 0) & (~mm)
                 if int(ring.sum()) < 80:
                     continue
@@ -7898,6 +7997,18 @@ class MangaTranslator:
                     except Exception:
                         pass
                     _thr_eff = max(1, int(getattr(lama, "thr_used", 1) or 1))
+                    # v1.14.50: ضدِ اشباعِ نخ — لاگِ POCO F4 (۸ هسته) نشان داد
+                    # سشنِ اولیه با ۴ نخ باز می‌ماند (سوئیچِ ۴→۲ با گاردِ رم
+                    # رد می‌شود) و زمان‌بند ۴ پچِ موازی × ۴ نخ = ۱۶ نخ روی
+                    # ۸ هسته می‌سازد → Over-subscription و کندی (۶۵s به‌جای
+                    # ~۵۰s). اگر سشن نخِ بیشتری از نیاز دارد، تعدادِ پچِ
+                    # موازی را کم کن تا workers × threads ≈ هسته‌ها بماند.
+                    if _thr_eff > _thr_want and _cores_n >= 4:
+                        try:
+                            _workers = max(1, min(
+                                _workers, _cores_n // _thr_eff))
+                        except Exception:
+                            pass
                     if _workers > 1:
                         try:
                             _cores = self._cpu_core_count()
