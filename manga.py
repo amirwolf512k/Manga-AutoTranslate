@@ -6174,6 +6174,73 @@ class MangaTranslator:
         except Exception:
             return None
 
+    def _white_bubble_tighten(self, image: np.ndarray, rm: np.ndarray,
+                              ink: Optional[np.ndarray]) -> np.ndarray:
+        """v1.14.49 — باگِ «حبابِ کلاً عوض شده / سیاه شده» (لاگِ گوشیِ کاربر:
+        حبابِ «YOU'RE LEAVING THE COMPANY?» با مدلِ LaMa-Manga به یک صورتِ
+        خاکستری تبدیل شد). ریشه: وقتی پالی‌هایِ OCR متراکم‌اند یا پالی نیست،
+        ماسکِ مستطیلی + جذبِ جوهر تقریباً «کلِ داخلِ حباب» را می‌گیرد؛
+        حفرهٔ بزرگِ داخلِ حباب به LaMa-Manga مدل را وادار می‌کند به‌جای
+        بازسازیِ زمینهٔ سفید، «محتوای مانگایی» (صورت/بافتِ درخت) توهم بزند —
+        گیتِ QC فعلی فقط fillِ تیره را رد می‌کند و fillِ قهوه‌ای/صورتِ روشن
+        رد می‌شود.
+        قانون: اگر ماسک ≥ ~۴۵٪ اینتریورِ یک حبابِ «سفیدِ یکدست» را بپوشاند،
+        ماسک به جوهرِ تنگِ گلیف‌ها جمع می‌شود (حفرهٔ کوچک = بازسازیِ امنِ
+        سفید بینِ حروف). فقط کوچک می‌کند؛ هرگز بزرگ نمی‌کند."""
+        try:
+            ys, xs = np.nonzero(rm)
+            if xs.size == 0:
+                return rm
+            h, w = image.shape[:2]
+            M = 30
+            x0 = max(0, int(xs.min()) - M)
+            y0 = max(0, int(ys.min()) - M)
+            x1 = min(w, int(xs.max()) + 1 + M)
+            y1 = min(h, int(ys.max()) + 1 + M)
+            if x1 - x0 < 24 or y1 - y0 < 24:
+                return rm
+            sub = rm[y0:y1, x0:x1]
+            gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            interior = self._bubble_interior_mask(gray, sub, erode_iters=1)
+            if interior is None or int(cv2.countNonZero(interior)) < 400:
+                return rm
+            _fa = float(cv2.countNonZero(interior))
+            _med_in = float(np.median(gray[interior > 0]))
+            if _med_in < 185.0:
+                return rm  # حبابِ سفیدِ یکدست نیست (تیره/اسکرین‌تون) → دست نزن
+            cov = float(np.count_nonzero((sub > 0) & (interior > 0))) / _fa
+            if cov < 0.45:
+                return rm  # حفره نسبت به حباب کوچک است → LaMa امن است
+            # ماسکِ تنگ: جوهرِ جذب‌شده (اگر هست) وگرنه پیکسل‌هایِ تیرهٔ داخلِ ناحیه
+            tight = None
+            if ink is not None and ink.shape == rm.shape:
+                ink_c = ink[y0:y1, x0:x1]
+                _nik = int(np.count_nonzero((ink_c > 0) & (interior > 0)))
+                if _nik >= 120:
+                    tight = ((ink_c > 0) & (interior > 0)).astype(np.uint8) * 255
+                    tight = cv2.dilate(tight, np.ones((3, 3), np.uint8))
+                    tight = cv2.bitwise_and(tight, interior)
+            if tight is None or int(cv2.countNonZero(tight)) < 120:
+                _base = cv2.dilate(sub, np.ones((9, 9), np.uint8))
+                _base = (_base > 0) & (interior > 0)
+                if int(np.count_nonzero(_base)) < 100:
+                    return rm
+                _t = _med_in - 60.0
+                tight = ((gray < _t) & _base).astype(np.uint8) * 255
+                tight = cv2.morphologyEx(tight, cv2.MORPH_CLOSE,
+                                         np.ones((5, 5), np.uint8))
+                tight = cv2.dilate(tight, np.ones((3, 3), np.uint8))
+                tight = cv2.bitwise_and(tight, interior)
+            if int(cv2.countNonZero(tight)) < 120:
+                return rm
+            if int(cv2.countNonZero(tight)) >= int(cv2.countNonZero(sub)):
+                return rm  # کوچک‌تر نشد → بی‌فایده
+            out = np.zeros_like(rm)
+            out[y0:y1, x0:x1] = tight
+            return out
+        except Exception:
+            return rm
+
     def _build_text_mask_fast(self, image: np.ndarray,
                               regions: List[TextRegion]) -> Optional[np.ndarray]:
         try:
@@ -6249,6 +6316,13 @@ class MangaTranslator:
                                     pass
                                 _rm = self._limit_mask_to_bubble(
                                     image, _rm, region)
+                                # v1.14.49: ماسکِ تقریباً-کلِ-حبابِ-سفید →
+                                # جوهرِ تنگ (جلوگیریِ توهمِ LaMa-Manga)
+                                try:
+                                    _rm = self._white_bubble_tighten(
+                                        image, _rm, None)
+                                except Exception:
+                                    pass
                                 if _pad_k is not None:
                                     _rm = cv2.dilate(_rm, _pad_k)
                                 m = cv2.bitwise_or(m, _rm)
@@ -6300,6 +6374,13 @@ class MangaTranslator:
                                     pass
                                 _rm = self._limit_mask_to_bubble(
                                     image, _rm, region)
+                                # v1.14.49: ماسکِ تقریباً-کلِ-حبابِ-سفید →
+                                # جوهرِ تنگ (جلوگیریِ توهمِ LaMa-Manga)
+                                try:
+                                    _rm = self._white_bubble_tighten(
+                                        image, _rm, _inkB)
+                                except Exception:
+                                    pass
                                 if _pad_k is not None:
                                     _rm = cv2.dilate(_rm, _pad_k)
                                 m = cv2.bitwise_or(m, _rm)
@@ -6348,6 +6429,11 @@ class MangaTranslator:
                     pass
                 _rm = self._limit_mask_to_bubble(
                     image, _rm, region)
+                # v1.14.49: ماسکِ تقریباً-کلِ-حبابِ-سفید → جوهرِ تنگ
+                try:
+                    _rm = self._white_bubble_tighten(image, _rm, _ink2)
+                except Exception:
+                    pass
                 if _pad_k is not None:
                     _rm = cv2.dilate(_rm, _pad_k)
                 m = cv2.bitwise_or(m, _rm)
@@ -6371,6 +6457,12 @@ class MangaTranslator:
                             pass
                         _rm = self._limit_mask_to_bubble(
                             image, _rm, region)
+                        # v1.14.49: مستطیلِ بدونِ پالی در حبابِ سفید → جوهرِ تنگ
+                        try:
+                            _rm = self._white_bubble_tighten(
+                                image, _rm, None)
+                        except Exception:
+                            pass
                         if _pad_k is not None:
                             _rm = cv2.dilate(_rm, _pad_k)
                         m = cv2.bitwise_or(m, _rm)
@@ -7322,6 +7414,87 @@ class MangaTranslator:
                         return
         except Exception:
             pass
+        # v1.14.49 — اعتبارسنجیِ ضدتوهمِ هر عضو: LaMa-Manga وقتی حفرهٔ بزرگ
+        # داخلِ حبابِ سفید می‌بیند گاهی «محتوا» (صورت/بافتِ درخت/بافتِ
+        # اسکرین‌تونِ درشت) نقاشی می‌کند (لاگِ کاربر: حبابِ «YOU'RE
+        # LEAVING…» سیاه/صورت شد). اگر ماسکِ عضو بخشِ عمدهٔ اینتریورِ یک
+        # حبابِ سفید را بپوشاند و نتیجهٔ LaMa محتوایِ تیرهٔ «درشت» داشته
+        # باشد → همان عضو با رنگِ تختِ زمینه پر می‌شود (کارِ flat).
+        # گاردها: نقطه‌هایِ ریزِ اسکرین‌تون با OPEN حذف می‌شوند؛ ماسکِ
+        # کوچک (متنِ کنارِ عکسِ داخلِ حباب) اعتبارسنجی نمی‌شود تا عکس
+        # قانونی قربانی نشود.
+        try:
+            _k49 = getattr(self, "_qc_kernel31", None)
+            if _k49 is None:
+                _k49 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (31, 31))
+                self._qc_kernel31 = _k49
+            _g_org = cv2.cvtColor(sub_img, cv2.COLOR_BGR2GRAY)
+            _g_out = cv2.cvtColor(sub_bgr, cv2.COLOR_BGR2GRAY)
+            _n_rej = 0
+            for c in members:
+                cx0, cy0, cx1, cy1, crop_msk = c[:5]
+                cx1, cy1 = min(cx1, img_w), min(cy1, img_h)
+                if cx1 <= cx0 or cy1 <= cy0:
+                    continue
+                ox, oy = cx0 - ex0, cy0 - ey0
+                oh2 = min(cy1, ey1) - cy0
+                ow2 = min(cx1, ex1) - cx0
+                if oh2 < 8 or ow2 < 8:
+                    continue
+                dm = cv2.dilate(crop_msk, page_kernel)
+                if dm.shape[0] > oh2 or dm.shape[1] > ow2:
+                    dm = dm[:oh2, :ow2]
+                mm = dm > 0
+                _n_mm = int(mm.sum())
+                if _n_mm < 400:
+                    continue
+                _gcr = _g_org[oy:oy + dm.shape[0], ox:ox + dm.shape[1]]
+                _intm = self._bubble_interior_mask(_gcr, dm, erode_iters=1)
+                if _intm is None or int(cv2.countNonZero(_intm)) < 400:
+                    continue
+                _fa_in = float(cv2.countNonZero(_intm))
+                if float(np.median(_gcr[_intm > 0])) < 185.0:
+                    continue  # حبابِ سفید نیست
+                _cov = float(np.count_nonzero(mm & (_intm > 0))) / _fa_in
+                if _cov < 0.45:
+                    continue  # حفرهٔ کوچک → LaMa امن است
+                ring = (cv2.dilate(dm, _k49) > 0) & (~mm)
+                if int(ring.sum()) < 80:
+                    continue
+                rg = _gcr[ring]
+                if rg.size < 80:
+                    continue
+                _rb = rg >= 170.0
+                if float(_rb.mean()) < 0.50:
+                    continue  # دورِ ماسک عمدتاً سفید نیست → اعتبارسنجی نه
+                _bg_med = float(np.median(rg[_rb]))
+                fg = _g_out[oy:oy + dm.shape[0], ox:ox + dm.shape[1]][mm]
+                _bad = (fg < (_bg_med - 42.0))
+                _badf = float(_bad.mean())
+                if _badf < 0.10:
+                    continue
+                _bm = np.zeros(dm.shape, dtype=np.uint8)
+                _bm[mm] = np.where(_bad, 255, 0).astype(np.uint8)
+                _bm = cv2.morphologyEx(_bm, cv2.MORPH_OPEN,
+                                       np.ones((3, 3), np.uint8))
+                _ba = int(cv2.countNonZero(_bm))
+                if _ba < 40 or _ba < 0.45 * int(_bad.sum()):
+                    continue  # نقطه‌هایِ ریز (اسکرین‌تونِ روشن) → توهم نیست
+                _fill_col = np.median(
+                    sub_img[oy:oy + dm.shape[0], ox:ox + dm.shape[1]][ring][
+                        _rb].astype(np.float32), axis=0)
+                _rc = sub_bgr[oy:oy + dm.shape[0], ox:ox + dm.shape[1]]
+                _rc[mm] = _fill_col
+                _n_rej += 1
+            if _n_rej:
+                try:
+                    print(f"    [🛡] {_n_rej} LaMa fill(s) → flat white "
+                          "(anti-hallucination)", flush=True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
         for c in members:
             cx0, cy0, cx1, cy1, crop_msk = c[:5]
             cx1, cy1 = min(cx1, img_w), min(cy1, img_h)
@@ -9030,6 +9203,19 @@ class MangaTranslator:
                 _fa = float(cv2.countNonZero(interior))
                 if not (0.10 * _area <= _fa <= 0.94 * _area):
                     continue
+                # v1.14.49 — چکِ نشت: اینتریورِ واقعیِ حباب هیچ‌وقت به لبهٔ
+                # کراپ (rect+۳۰px) نمی‌رسد؛ اگر برسد یعنی از شکافِ JPEGِ دیوار
+                # به پنلِ بیرونی نشته (پنلِ سفید همه‌جا متصله) → سویپ دیوار و
+                # هنر را می‌خورد (حبابِ «YOU'RE LEAVING…» که کلاً خراب شد)
+                try:
+                    _touch = (int(np.count_nonzero(interior[0, :]))
+                              + int(np.count_nonzero(interior[-1, :]))
+                              + int(np.count_nonzero(interior[:, 0]))
+                              + int(np.count_nonzero(interior[:, -1])))
+                    if _touch >= 6:
+                        continue
+                except Exception:
+                    pass
                 # دیوارِ معتبر: حلقهٔ دورِ اینتریور باید تیره‌تر باشد
                 _ring = cv2.dilate(interior, np.ones((5, 5), np.uint8))
                 _ring = (_ring > 0) & (interior == 0)
@@ -9045,6 +9231,12 @@ class MangaTranslator:
                 # می‌خورد (دقیقاً همان لکه‌محوییِ باقی‌مانده روی دیوار)
                 _int_e = cv2.erode(interior, np.ones((7, 7), np.uint8))
                 if int(cv2.countNonZero(_int_e)) < 400:
+                    continue
+                # v1.14.49: نوارِ امن — فقط پیکسل‌هایِ حداقل ~۹px داخلِ اینتریور
+                # مجاز به بلاب/پولیش‌اند؛ بلابِ چسبیده‌به-دیوار = دیوارِ
+                # فرسوده/سایهٔ دیوار است نه هالهٔ متن
+                _edge_safe = cv2.erode(interior, np.ones((19, 19), np.uint8))
+                if int(cv2.countNonZero(_edge_safe)) < 200:
                     continue
                 med_c = float(np.median(gc[_int_e > 0]))
                 if med_c < 185.0:
@@ -9092,6 +9284,11 @@ class MangaTranslator:
                         pass
                 if _rb_band is not None:
                     _blobs[~_rb_band] = 0
+                # v1.14.49: بلابِ نزدیکِ دیوار هرگز (TELEA دیوار را می‌خورد)
+                try:
+                    _blobs[_edge_safe == 0] = 0
+                except Exception:
+                    pass
                 _blobs = cv2.morphologyEx(_blobs, cv2.MORPH_OPEN,
                                           np.ones((2, 2), np.uint8))
                 _nb, _lb, _sb, _ = cv2.connectedComponentsWithStats(
@@ -9113,10 +9310,14 @@ class MangaTranslator:
                             _fix_m = None
                 # v1.14.48b: پولیشِ سفید — موتیلینگِ محوِ بازسازیِ LaMa داخلِ
                 # حبابِ یکدست (ارواحِ خاکستریِ چرخانی) به رنگِ زمینه نرم شود
+                # v1.14.49: پولیش فقط در همسایگیِ جوهرِ متنِ قبلی — نه کلِ
+                # داخلِ حباب (سایه/گرادیانِ ملایمِ قانونیِ حباب نباید تخت
+                # شود — «بعضی حباب‌ها یک کم دست خورده»)
                 _polish = None
                 try:
                     _mott = ((_int_e > 0) & (gc < med_c - 7.0)
-                             & (gc >= med_c - 45.0))
+                             & (gc >= med_c - 45.0) & _ink_d
+                             & (_edge_safe > 0))
                     _frac = float(np.count_nonzero(_mott)) / float(
                         max(1, cv2.countNonZero(_int_e)))
                     if 0.02 <= _frac <= 0.50:
