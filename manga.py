@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.51"
+APP_VER = "1.14.52"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -1260,6 +1260,19 @@ class LamaMangaONNX:
                                          ep_ab=_is_auto_ep())
         self.session, use_threads = _cpu_thread_fallback(
             self.session, model_path, use_threads, allow_bump=False)
+        # v1.14.52 — صداقتِ ep_used: رویِ اندروید _resolve_lama_ep مثلاً
+        # Xnnpack/Nnapi برمی‌گرداند ولی _make_ort_session با کشِ «cpu» به
+        # CPUExecutionProvider سقوط می‌کند و ep_used همان EPِ درخواستی
+        # می‌ماند → شرطِ سوئیچِ نخِ _get_lama («فقط رویِ CPU») برای همیشه
+        # رد می‌شد و زمان‌بند روی «۲ پچ × ۴ نخ»یِ کند می‌ماند (لاگِ POCO F4:
+        # strip ۸۲.۳s!). حالا EPِ واقعیِ سشن ملاک است.
+        try:
+            _aps = [str(p) for p in self.session.get_providers()]
+            if _aps and all(p.lower().startswith("cpu") for p in _aps):
+                self.ep_used = None
+        except Exception:
+            pass
+        self.thr_used = int(use_threads)  # fallback ممکن است نخ را عوض کند
         names = [i.name for i in self.session.get_inputs()]
         self._in_image = names[0]
         self._in_mask = names[1] if len(names) > 1 else "mask"
@@ -3690,12 +3703,37 @@ class MangaTranslator:
             # سوئیچ (بعدِ لودِ پس‌زمینه‌ایِ مدل) رد شود و زمان‌بند با
             # «۲ پچ × ۴ نخ» (کند روی big.LITTLE) کار می‌کرد به‌جای
             # «۴ پچ × ۲ نخ» (تنظیمِ سریعِ v47 روی POCO F4).
-            if (threads and _l is not None and self.use_lama
-                    and int(threads) != int(getattr(self, "_lama_threads", 0) or 0)
-                    and isinstance(_l, LamaMangaONNX)
-                    and str(getattr(_l, "ep_used", "") or "cpu").lower()
-                        in ("", "cpu", "none")
-                    and self._lama_switch_ok(int(threads), force=force)):
+            _want_sw = (threads and _l is not None and self.use_lama
+                        and int(threads) != int(getattr(self, "_lama_threads", 0) or 0)
+                        and isinstance(_l, LamaMangaONNX))
+            if _want_sw and str(getattr(_l, "ep_used", "") or "cpu").lower() \
+                    not in ("", "cpu", "none"):
+                # v1.14.52: دیگر نباید رخ بدهد (ep_used صادق شد) ولی اگر
+                # شد، بی‌صدا نماند
+                try:
+                    print(f"    [~] سوئیچِ LaMa به {threads} نخ رد شد "
+                          f"(EP: {getattr(_l, 'ep_used', '?')})", flush=True)
+                except Exception:
+                    pass
+                _want_sw = False
+            if _want_sw and not self._lama_switch_ok(int(threads),
+                                                     force=force):
+                # v1.14.52: چراییِ ردِ سوئیچ لاگ شود — شکستِ بی‌صدا = لاگِ
+                # بدونِ سرنخ (لاگِ v1.14.51: هیچ «سشنِ LaMa → ۲ نخ»ی چاپ نشده
+                # بود و نمی‌شد فهمید چرا). فقط یک بار به‌ازایِ درخواست.
+                try:
+                    _av = self._available_ram_gb()
+                    _old = int(getattr(self, "_lama_threads", 0) or 0)
+                    _cool = (time.time() - float(
+                        getattr(self, "_lama_switch_at", 0.0) or 0.0)) < 2.0
+                    print(f"    [~] سوئیچِ LaMa به {threads} نخ رد شد "
+                          f"(سشن: {_old} نخ، رم: {_av:.2f}GB، "
+                          f"خنک‌کاری: {'بله' if _cool and not force else 'خیر'})",
+                          flush=True)
+                except Exception:
+                    pass
+                _want_sw = False
+            if _want_sw:
                 self._lama_switch_at = time.time()
                 _new = self._build_lama_cpu(int(threads))
                 if _new is not None:
@@ -3704,6 +3742,15 @@ class MangaTranslator:
                     try:
                         print(f"    [🔥] سشنِ LaMa → {threads} نخ "
                               "(پچِ کم → هسته‌های بیکار پر می‌شود)", flush=True)
+                    except Exception:
+                        pass
+                else:
+                    # v1.14.52: ساختِ سشنِ جدید شکست خورد — دلیلش لاگ شود
+                    try:
+                        _av = self._available_ram_gb()
+                        print(f"    [!] ساختِ سشنِ LaMa با {threads} نخ ناموفق "
+                              f"(رمِ آزاد: {_av:.2f}GB) → سشنِ قبلی حفظ شد",
+                              flush=True)
                     except Exception:
                         pass
             return self._lama
@@ -7612,8 +7659,22 @@ class MangaTranslator:
                 # → «زمینهٔ سفید» معتبر است؛ تصمیمِ نهایی را چکِ badf
                 # (توهمِ تیره) می‌گیرد. عکس/هنر (بافتِ تیره/مخلوط) رد می‌شود
                 # (اندازه‌گیری: همهٔ نواحیِ عکسِ 9.jpg رد ✓ بدونِ رگرسیون).
+                # v1.14.52 — گیتِ «متنِ داخلِ اینتریور»: اعتبار‌سنجیِ ضدتوهم فقط
+                # وقتی معنا دارد که خودِ متنِ عضو عمدتاً «داخلِ همان زمینهٔ
+                # سفیدِ تأییدشده» باشد (حباب). کپشنِ رویِ هنر (مثلِ «AND TO
+                # REQUIRE…» روی کت/چوب در ۹.jpg): فقط ~۲۵٪ ماسک داخلِ
+                # اینتریورِ (میزِ سفید) است → بازسازیِ تیرهٔ درستِ LaMa با
+                # bg_medِ «میز» سنجیده می‌شد → ۶۵٪ «توهم» خوانده شد → عضو به
+                # اصلِ خودش برمی‌گشت → متنِ کامل می‌ماند. حالا اگر متنِ
+                # عضو داخلِ اینتریورِ سفیدِ نباشد، اصلاً اعتبارسنجی نمی‌شود
+                # و خروجیِ LaMa (بازسازیِ هنر) قبول می‌شود.
+                _m_in_i = (float(np.count_nonzero(mm & (_intm > 0)))
+                           / max(1, _n_mm))
                 _ok49 = (_med_i >= 185.0 and _cov >= 0.45 and not _ring_blk
-                         and _wall_ok and _uni >= 0.80 and _t4 < 4)
+                         and _wall_ok and _uni >= 0.80 and _t4 < 4
+                         and _m_in_i >= 0.55)
+                if _dbg:
+                    print(f"      [🛡dbg] m_in_i={_m_in_i:.2f}", flush=True)
                 _fb_comp = None
                 if not _ok49:
                     try:
@@ -7660,13 +7721,19 @@ class MangaTranslator:
                         _cu = float((_gcr[_fb_comp] >= _cm - 30.0).mean())
                         _fcov = float(np.count_nonzero(
                             mm & _fb_comp)) / max(1, _ca)
+                        # v1.14.52: مثلِ ok49 — متنِ عضو باید عمدتاً داخلِ
+                        # کامپوننتِ روشنِ تأییدشده باشد (کپشنِ رویِ هنر:
+                        # fcov=۰.۵۲ ولی m_in_c=۰.۳۲ → رد ✓)
+                        _m_in_c = (float(np.count_nonzero(mm & _fb_comp))
+                                   / max(1, _n_mm))
                         _lr_ok = (_ca >= max(600, 0.55 * _n_mm)
                                   and _cm >= 225.0 and _cu >= 0.75
-                                  and _fcov >= 0.45)
+                                  and _fcov >= 0.45 and _m_in_c >= 0.55)
                         if _dbg:
                             print(f"      [🛡dbg] leak-fallback "
                                   f"comp={_ca} med={_cm:.0f} "
                                   f"uni={_cu:.2f} fcov={_fcov:.2f} "
+                                  f"m_in_c={_m_in_c:.2f} "
                                   f"ok={_lr_ok}", flush=True)
                         if not _lr_ok:
                             _fb_comp = None
