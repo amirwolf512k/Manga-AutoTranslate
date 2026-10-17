@@ -6504,10 +6504,22 @@ class MangaTranslator:
                 return None
             g = cv2.cvtColor(image[sy0:sy1, sx0:sx1], cv2.COLOR_BGR2GRAY)
             med = float(np.median(g))
-            if med >= 128:
-                core = (g < med - 30.0)
+            # v1.14.57: قطبِ جوهر با «جرم» انتخاب می‌شود نه با روشنیِ زمینه —
+            # متنِ سفید روی باکسِ آبیِ میانه (پنجرهٔ سیستمِ asura) قبلاً فقط
+            # دورخطِ تیره را ماسک می‌کرد و بدنهٔ سفیدِ حروف می‌ماند.
+            _dark = (g < med - 30.0)
+            _bright = (g > med + 30.0)
+            _fd = float(_dark.mean())
+            _fb = float(_bright.mean())
+            if _fb > _fd:
+                core = _bright
+                if _fd > 0.004:
+                    # سایه/دورخطِ تیرهٔ چسبیده به حروفِ روشن هم جوهر است
+                    _nc = cv2.dilate(core.astype(np.uint8) * 255,
+                                     np.ones((7, 7), np.uint8)) > 0
+                    core = core | (_dark & _nc)
             else:
-                core = (g > med + 30.0)
+                core = _dark
             # نوارِ خط عمدتاً زمینه است؛ اگر بیشترِ نوار «جوهر» باشد یعنی
             # هنر/بلوکِ تیره است — نه خطِ متن → فال‌بک
             if float(core.mean()) > 0.42:
@@ -6659,15 +6671,6 @@ class MangaTranslator:
                     except Exception:
                         _lsm = None
                     if _lsm is not None and np.any(_lsm):
-                        if getattr(self, "debug", False):
-                            try:
-                                print(f"    [📐] خط‌به‌خط #{region.id}: "
-                                      f"{len(MangaTranslator._group_polys_to_lines(_polys_raw))} نوارِ متن، "
-                                      f"{int(np.count_nonzero(_lsm))}px "
-                                      f"(مستطیلِ قدیمی ≈{int(float(region.rect[2]) * float(region.rect[3]))}px)",
-                                      flush=True)
-                            except Exception:
-                                pass
                         _rm = _lsm
                         if self._fast_bubble_guard(image, _rm, region, True):
                             try:
