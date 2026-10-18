@@ -209,6 +209,10 @@ class MainActivity : AppCompatActivity() {
         // ساخته نمی‌شوند (autoSaveOutputs دیگر پوشهٔ pages_ نمی‌سازد).
         cleanupPagesDirs()
 
+        // v1.14.65b — درخواستِ کاربر: «فقط manga.log و manga_old.log باشه» —
+        // تکراری‌هایِ لاگ (manga.log (N).txt و…) در شروعِ اپ هم جارو شوند
+        cleanupLogDuplicates()
+
         if (Build.VERSION.SDK_INT < 29 &&
             checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
             PackageManager.PERMISSION_GRANTED) {
@@ -2441,6 +2445,7 @@ class MainActivity : AppCompatActivity() {
         Thread {
             val cur = upsertLogInDownloads("manga.log", logFile())
             val old = upsertLogInDownloads("manga_old.log", logOldFile())
+            cleanupLogDuplicates()
             ui.post {
                 if (cur || old) {
                     if (manual) Toast.makeText(this,
@@ -2454,6 +2459,77 @@ class MainActivity : AppCompatActivity() {
                     Toast.LENGTH_LONG).show()
             }
         }.start()
+    }
+
+    // v1.14.65b — درخواستِ کاربر: «فقط manga.log و manga_old.log باشه».
+    // جارویِ کاملِ خانوادهٔ لاگ (manga.log / manga.log (N).txt /
+    // manga (N).log / manga_old…) در Download/manga/ و Download/:
+    // برای هر kind فقط یک ردیف می‌ماند (اسمِ دقیق در Download/manga/
+    // اولویت دارد، وگرنه تازه‌ترین) به اسمِ دقیق renamed می‌شود و
+    // بقیه حذف می‌شوند. فایل‌هایِ خروجی (manga_*.pdf و…) لمس نمی‌شوند.
+    private fun cleanupLogDuplicates() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                data class RowL(val id: Long, val uri: Uri,
+                                val dn: String, val rp: String)
+                val rows = ArrayList<RowL>()
+                contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    arrayOf(MediaStore.MediaColumns._ID,
+                        MediaStore.MediaColumns.DISPLAY_NAME,
+                        MediaStore.MediaColumns.RELATIVE_PATH),
+                    MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
+                    arrayOf("manga%"), null)?.use { c ->
+                        while (c.moveToNext()) {
+                            val id = c.getLong(0)
+                            val dn = c.getString(1) ?: continue
+                            val rp = try { c.getString(2) ?: "" }
+                                    catch (_: Exception) { "" }
+                            if (rp != "Download/manga/" && rp != "Download/") continue
+                            rows.add(RowL(id, android.content.ContentUris
+                                .withAppendedId(
+                                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                    id), dn, rp))
+                        }
+                    }
+                for (kind in listOf("manga.log", "manga_old.log")) {
+                    val mine = rows.filter {
+                        normMangaLogName(it.dn) == kind
+                    }
+                    if (mine.isEmpty()) continue
+                    val main = mine.firstOrNull {
+                        it.dn.equals(kind, ignoreCase = true)
+                                && it.rp == "Download/manga/"
+                    } ?: mine.firstOrNull {
+                        it.dn.equals(kind, ignoreCase = true)
+                    } ?: mine.sortedByDescending { it.id }.first()
+                    for (r in mine) {
+                        if (r.id == main.id) continue
+                        try { contentResolver.delete(r.uri, null, null)
+                        } catch (_: Exception) {}
+                    }
+                    if (!main.dn.equals(kind, ignoreCase = true)) {
+                        try {
+                            contentResolver.update(main.uri,
+                                ContentValues().apply {
+                                    put(MediaStore.MediaColumns.DISPLAY_NAME,
+                                        kind)
+                                }, null, null)
+                        } catch (_: Exception) {}
+                    }
+                }
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS), "manga")
+                for (f in dir.listFiles() ?: emptyArray()) {
+                    if (!f.isFile) continue
+                    val k = normMangaLogName(f.name) ?: continue
+                    if (!f.name.equals(k, ignoreCase = true)) {
+                        try { f.delete() } catch (_: Exception) {}
+                    }
+                }
+            }
+        } catch (_: Exception) {
+        }
     }
 
     private fun autoSaveOutputs(images: List<String>, outFile: String) {
