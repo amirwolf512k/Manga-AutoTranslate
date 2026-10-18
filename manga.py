@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.60"
+APP_VER = "1.14.61"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -8465,11 +8465,39 @@ class MangaTranslator:
                     mh = min(cc.shape[0], mc.shape[0])
                     mw = min(cc.shape[1], mc.shape[1])
                     sub = cc[:mh, :mw]
-                    sub2 = cv2.inpaint(sub, mc[:mh, :mw], 6, cv2.INPAINT_TELEA)
-                    cleaned[y0:y0 + mh, x0:x0 + mw] = sub2
+                    msub = mc[:mh, :mw]
                 else:
-                    cleaned[y0:y1, x0:x1] = cv2.inpaint(
-                        cc, mc, 6, cv2.INPAINT_TELEA)
+                    sub = cc
+                    msub = mc
+                # v1.14.61 — TELEA رویِ زمینهٔ تختِ روشن (داخلِ حبابِ سفید)
+                # خاکستریِ لکه‌دار/مستطیلِ محو می‌سازد (لاگِ گوشی: حباب‌هایِ
+                # 002 — «لگه میزاره»). اگر رینگِ اطرافِ ماسک تخت و روشن است
+                # → پرکردن با رنگِ خودِ زمینه (همان سبکِ پرکننده‌ها)؛
+                # وگرنه مثل قبل TELEA (زمینهٔ بافت‌دار/تیره).
+                _done = False
+                try:
+                    _m = msub > 0
+                    _rg = cv2.dilate(msub, np.ones((13, 13), np.uint8)) > 0
+                    _ring = _rg & (~_m)
+                    if int(_ring.sum()) >= 60 and int(_m.sum()) >= 8:
+                        _gg = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
+                        _rp = _gg[_ring]
+                        _rmed = float(np.median(_rp))
+                        _rstd = float(_rp.std())
+                        if _rmed >= 150.0 and _rstd <= 14.0:
+                            _col = np.median(
+                                sub[_ring].reshape(-1, 3), axis=0)
+                            out = sub.copy()
+                            out[_m] = np.clip(_col, 0, 255).astype(np.uint8)
+                            cleaned[y0:y0 + out.shape[0],
+                                    x0:x0 + out.shape[1]] = out
+                            _done = True
+                except Exception:
+                    _done = False
+                if not _done:
+                    sub2 = cv2.inpaint(sub, msub, 6, cv2.INPAINT_TELEA)
+                    cleaned[y0:y0 + sub2.shape[0],
+                            x0:x0 + sub2.shape[1]] = sub2
                 n += 1
             except Exception:
                 continue
@@ -8702,6 +8730,20 @@ class MangaTranslator:
             _n_inst = self._line_instant_fill(image, cleaned, regions, mask)
             if _n_inst and self.debug:
                 print(f"  [*] {_n_inst} lines instantly filled")
+        except Exception:
+            pass
+        # v1.14.61 — باگِ «لکهٔ بلوکی/سیاهی روی کارتِ تیره»: پرکننده‌هایِ
+        # فوری ناحیهٔ پرشده را از ماسک کِیل می‌کنند؛ بعد کلاسترِ بعدی با
+        # «سوراخِ حروف» به LaMa می‌رسید → LaMa متنِ سفیدِ باقی‌مانده در
+        # حفره‌ها را زمینه فرض می‌کرد و دورش لکهٔ قرمزِ بلوکی می‌ساخت
+        # (نمونه: تیترِ Crimson Dragon و پلیتِ AIDE ZEPHYROS رویِ گوشی).
+        # پس از کِیل، باکسِ کاملِ بلوک‌هایِ اجباری-LaMa دوباره توپر می‌شود
+        # تا LaMa کلِ متن را با هم ببیند و پاک کند (سبکِ پاکسازی عوض
+        # نمی‌شود — همان مسیرِ اجباری-LaMa با ماسکِ کاملِ v1.14.59).
+        try:
+            for _fb in (getattr(self, "_lama_force_rect_boxes",
+                                None) or []):
+                mask[_fb[1]:_fb[3], _fb[0]:_fb[2]] = 255
         except Exception:
             pass
         if not np.any(mask):
@@ -9314,6 +9356,28 @@ class MangaTranslator:
                         cv2.getStructuringElement(
                             cv2.MORPH_ELLIPSE, (31, 31))) > 0
                     resid = resid | _blob | (_dark_raw & _band)
+                    # v1.14.61 — بقایایِ جوهرِ «بیرونِ» ماسکِ هسته (مثلاً
+                    # آپاستروف/کامایِ بینِ نوارهایِ خط — نمونهٔ گوشی: مارکِ
+                    # کنارِ «جملهٔ کوتاه») رویِ زمینهٔ تختِ روشنِ حباب:
+                    # داخلِ مستطیلِ ناحیه (بدونِ حاشیهٔ ۱۲px که کادرِ حباب
+                    # است) هم جارو می‌شود — فقط رویِ زمینهٔ تختِ روشن که
+                    # آسیب به هنر ممکن نیست.
+                    try:
+                        _er = 12
+                        _rh, _rw = _mcore.shape
+                        if _rh > 2 * _er + 8 and _rw > 2 * _er + 8:
+                            _ri = np.zeros((_rh, _rw), dtype=bool)
+                            _ri[_er:_rh - _er, _er:_rw - _er] = True
+                            _dark2 = ((gc.astype(np.int16)
+                                       < int(_bg_lum) - 45.0)
+                                      & _ri & ink)
+                            _blob2 = cv2.morphologyEx(
+                                _dark2.astype(np.uint8), cv2.MORPH_OPEN,
+                                _k5) > 0
+                            if float(_blob2.mean()) <= 0.10:
+                                resid = resid | _blob2
+                    except Exception:
+                        pass
             except Exception:
                 pass
             if r.kind == "dialogue" and not getattr(r, "ocr_empty", False):

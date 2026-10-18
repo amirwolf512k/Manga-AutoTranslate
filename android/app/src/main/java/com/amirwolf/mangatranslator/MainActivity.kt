@@ -382,9 +382,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val UPD_MIRRORS = listOf(
-        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/",
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
-        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/"
+        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
+        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/"
     )
     private var updRow: LinearLayout? = null
     // v1.14.59 — وضعیتِ دانلودِ نصبی: idle=آمادهٔ شروع، dl=در حال دانلود،
@@ -428,9 +428,13 @@ class MainActivity : AppCompatActivity() {
 
     private fun fetchMirror(path: String): ByteArray {
         var last: Exception? = null
+        // v1.14.61 — cache-bust: CDN (به‌خصوص jsdelivr) نسخهٔ کش‌شدهٔ
+        // چندساعتهٔ VERSION را می‌داد → «بروزرسانی نیومد». با پارامترِ
+        // زمانی هر چک، نسخهٔ تازه می‌گیرد.
+        val bust = "?t=" + System.currentTimeMillis()
         for (m in UPD_MIRRORS) {
             try {
-                return fetchUrl(m + path)
+                return fetchUrl(m + path + bust)
             } catch (e: Exception) {
                 last = e
             }
