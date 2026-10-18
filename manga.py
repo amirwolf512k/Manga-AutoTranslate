@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.63"
+APP_VER = "1.14.64"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -6604,6 +6604,22 @@ class MangaTranslator:
             halo = (np.abs(g.astype(np.float32) - med) >= 18.0) \
                 & (np.abs(g.astype(np.float32) - med) <= 30.0) & near
             lm = ((core_u > 0) | halo)
+            # v1.14.64 — نقشهٔ پالی‌هایِ OCR در برشِ نوار: حروف داخلِ پالی‌ها
+            # هستند، دیوارِ حباب/قوس/کادرِ پنل بیرونِ آن‌ها
+            _pm = np.full(lm.shape, 255, dtype=np.uint8)
+            try:
+                _pm = np.zeros(lm.shape, dtype=np.uint8)
+                for _pp in (polys_raw or []):
+                    _ppa = np.asarray(_pp, dtype=np.float32).reshape(-1, 2)
+                    if _ppa.shape[0] < 3:
+                        continue
+                    _pii = np.rint(_ppa).astype(np.int32)
+                    _pii[:, 0] -= sx0
+                    _pii[:, 1] -= sy0
+                    cv2.fillPoly(_pm, [_pii], 255)
+                _pm = cv2.dilate(_pm, np.ones((3, 3), np.uint8))
+            except Exception:
+                _pm = np.full(lm.shape, 255, dtype=np.uint8)
             # قطعه‌هایِ عظیم = هنر، نه حرف — امن‌تر: ردِ خط
             nz, lal, sts, _ = cv2.connectedComponentsWithStats(
                 lm.astype(np.uint8), connectivity=8)
@@ -6618,6 +6634,25 @@ class MangaTranslator:
                         print(f"      [📐dbg] رد: قطعهٔ هنر ca={ca} "
                               f"{cwd}×{chg}", flush=True)
                     return None
+                # v1.14.64 — باگِ «متنِ کج یا ناقص پاک میشه»: قوسِ دیوارِ
+                # حباب/خطِ کادرِ پنل که از لبهٔ بالایی/پایینیِ نوارِ خط
+                # می‌گذرد، «جوهرِ تیرهٔ» نوار خوانده می‌شد → داخلِ ماسکِ
+                # می‌رفت → LaMa قوس را نمی‌ساخت و کامپوز حذفش را به خروجی
+                # می‌برد (قوسِ حباب گم می‌شد). جوهرِ متن همیشه ≥pad_y از
+                # لبهٔ نوار فاصله دارد؛ کامپوننتی که به لبهٔ افقیِ نوار
+                # بچسبد و بیرونِ پالی‌هایِ OCR باشد = ساختار است → از ماسک
+                # بیرون کشیده می‌شود.
+                if sy0 > 0 and sy1 < h:
+                    _ct = int(sts[ci, cv2.CC_STAT_TOP])
+                    if (_ct <= 0 or _ct + chg >= (sy1 - sy0)) \
+                            and chg >= max(6.0, 0.75 * lh):
+                        _cm = (lal == ci)
+                        _onp = float(np.count_nonzero(_cm & (_pm > 0)))
+                        if _onp < 0.35 * float(max(1, ca)):
+                            if _lsm_dbg:
+                                print(f"      [📐dbg] حذفِ ساختارِ لبه‌ای "
+                                      f"ca={ca} chg={chg}", flush=True)
+                            continue
                 kept |= (lal == ci)
             if float(kept.mean()) > 0.60:
                 if _lsm_dbg:
@@ -6651,6 +6686,9 @@ class MangaTranslator:
         # با LaMa و ماسکِ بلوکِ کامل پاک شوند (شبحِ متنِ قدیمی — کارتِ عنوانِ
         # Crimson Dragon). در ابتدایِ هر صفحه خالی می‌شود.
         self._lama_force_rect_boxes = []
+        # v1.14.64 — بنرهایِ تبلیغاتی (واترمارکِ دامنهٔ سایت‌ها): کلِ بنر
+        # توپر پاک می‌شود و در کامپوز هم کلِ بنر از عکسِ پاک‌شده می‌آید
+        self._promo_rect_boxes = []
         padding = max(0, int(getattr(self, "mask_padding", 3)))
         # v1.14.47: دیلیشنِ padding به‌ازایِ هر ناحیه و «قبلِ» گارد/لیمیت انجام
         # می‌شود (قبلاً بعد از حلقه روی کلِ ماسک بود و بعد از کلیپِ حباب،
@@ -6661,6 +6699,35 @@ class MangaTranslator:
         n_ok = 0
         n_skip = 0
         for region in regions:
+            # v1.14.64 — تبلیغ/واترمارکِ دامنه («ASURASCANS.COM مثل دیسکورد
+            # و... سایت هارو کامل فیلتر تبلیغ بزن»): کلِ بنرِ تبلیغ توپر
+            # ماسک می‌شود — نه نوارِ خط‌ها — تا هیچ ذره‌ای از حروفِ تبلیغ
+            # در خروجی نماند. (حذفِ بیش از اندازه مجاز است.)
+            if getattr(region, "kind", "") == "promo":
+                try:
+                    _px0, _py0, _pw, _ph = [int(v) for v in region.rect]
+                    _px0 = max(0, _px0 - 6)
+                    _py0 = max(0, _py0 - 6)
+                    _px1 = min(w, _px0 + _pw + 12)
+                    _py1 = min(h, _py0 + _ph + 12)
+                    if _px1 - _px0 >= 8 and _py1 - _py0 >= 8:
+                        m[_py0:_py1, _px0:_px1] = 255
+                        _prb = getattr(self, "_promo_rect_boxes", None)
+                        if _prb is None:
+                            _prb = []
+                            self._promo_rect_boxes = _prb
+                        _prb.append([_px0, _py0, _px1, _py1])
+                        n_ok += 1
+                        if self.debug:
+                            try:
+                                print(f"  [🔍] تبلیغ → ماسکِ توپرِ بنر "
+                                      f"rect=({_px0},{_py0},"
+                                      f"{_px1 - _px0},{_py1 - _py0})")
+                            except Exception:
+                                pass
+                        continue
+                except Exception:
+                    pass
             pts_list = []
             _tall = 0
             _wide = 0
@@ -8675,6 +8742,18 @@ class MangaTranslator:
             else:
                 out = (base > 0)
             h, w = mask.shape[:2]
+            # v1.14.64 — بنرهایِ تبلیغ: کلِ بنر (نه نوارِ خط‌ها) از عکسِ
+            # پاک‌شده به خروجی می‌رود — «کامل فیلتر تبلیغ»
+            for _pb in (getattr(self, "_promo_rect_boxes", None) or []):
+                try:
+                    _qx0 = max(0, int(_pb[0]))
+                    _qy0 = max(0, int(_pb[1]))
+                    _qx1 = min(w, int(_pb[2]))
+                    _qy1 = min(h, int(_pb[3]))
+                    if _qx1 - _qx0 >= 8 and _qy1 - _qy0 >= 8:
+                        out[_qy0:_qy1, _qx0:_qx1] = True
+                except Exception:
+                    pass
             for _fb in (getattr(self, "_lama_force_rect_boxes",
                                 None) or []):
                 try:
@@ -8764,8 +8843,17 @@ class MangaTranslator:
             if donor.shape[:2] != original.shape[:2]:
                 return donor
             _cmp = cv2.dilate(mask, self._compose_kernel9()) > 0
+            # v1.14.64 — دیوارِ حباب/قوس/کادرِ پنل (نقشهٔ ساختاریِ محافظت)
+            # هرگز از عکسِ پاک‌شده به خروجی نمی‌رود — حتی اگر لبهٔ نوارِ متن
+            # به آن چسبیده باشد. این «قوسِ ناپدیدشده» را ریشه‌کن می‌کند.
+            try:
+                _ppC = getattr(self, "_page_protect", None)
+                if _ppC is not None and _ppC.shape == _cmp.shape:
+                    _cmp &= (_ppC == 0)
+            except Exception:
+                pass
             if not _cmp.any():
-                return donor
+                return np.ascontiguousarray(original)
             _out = np.ascontiguousarray(
                 np.where(_cmp[..., None], donor, original))
             try:
@@ -9723,8 +9811,30 @@ class MangaTranslator:
                             _blob2 = cv2.morphologyEx(
                                 _dark2.astype(np.uint8), cv2.MORPH_OPEN,
                                 _k5) > 0
+                            # v1.14.64 — باگِ «متنِ کج یا ناقص»: قوسِ دیوارِ
+                            # حباب/خطِ کادرِ پنلِ بیرونِ ماسک، «بقایایِ جوهر»
+                            # خوانده می‌شد و جارو می‌شد (قوسِ ناپدیدشده).
+                            # ساختار = کامپوننتِ کشیدهٔ افقی (عریضِ ≥۱۰۰px و
+                            # ≥۲.۵ برابرِ بلندی‌اش). بقایایِ واقعیِ متن =
+                            # قطعه‌هایِ حرفیِ کوچک/فشرده — رد نمی‌شوند.
                             if float(_blob2.mean()) <= 0.10:
-                                resid = resid | _blob2
+                                try:
+                                    _nz2, _lb2, _st2, _ = \
+                                        cv2.connectedComponentsWithStats(
+                                            _blob2.astype(np.uint8), 8)
+                                    _ok2 = np.zeros_like(_blob2)
+                                    for _i2 in range(1, _nz2):
+                                        _cw2 = int(_st2[_i2,
+                                                       cv2.CC_STAT_WIDTH])
+                                        _ch2 = int(_st2[_i2,
+                                                        cv2.CC_STAT_HEIGHT])
+                                        if _cw2 >= 100 \
+                                                and _cw2 >= 2.5 * max(1, _ch2):
+                                            continue
+                                        _ok2 |= (_lb2 == _i2)
+                                    resid = resid | _ok2
+                                except Exception:
+                                    resid = resid | _blob2
                     except Exception:
                         pass
             except Exception:
@@ -9838,6 +9948,10 @@ class MangaTranslator:
                                     _cw = int(_st[_ci, cv2.CC_STAT_WIDTH])
                                     _ch = int(_st[_ci, cv2.CC_STAT_HEIGHT])
                                     if _ca / float(max(1, _cw * _ch)) < 0.30:
+                                        continue
+                                    # v1.14.64 — ساختارِ کشیدهٔ نازک (قوسِ
+                                    # دیوار/کادر) بقایایِ متن نیست
+                                    if _cw >= 100 and _cw >= 2.5 * max(1, _ch):
                                         continue
                                     _touch = ((_cx <= 0) + (_cy <= 0)
                                               + (_cx + _cw >= _zw)
@@ -14777,11 +14891,156 @@ class MangaTranslator:
             except Exception:
                 pass
 
+        # v1.14.64 — جارویِ بنرهایِ تبلیغاتیِ OCR‌نخوانده (واترمارکِ سایت)
+        try:
+            _ads = self._scan_watermark_banners(image, unique_regions)
+            if _ads:
+                print(f"[*] {len(_ads)} بنرِ تبلیغ شناسایی شد")
+                unique_regions = list(unique_regions) + _ads
+        except Exception:
+            pass
+
         if unique_regions:
             print(f"[+] متن استخراج شد: {len(unique_regions)} ناحیه")
         else:
             print("[!] هیچ متن/حبابی یافت نشد.")
         return unique_regions, dbg
+
+    def _scan_watermark_banners(self, image: np.ndarray,
+                                regions: List[TextRegion]) -> List[TextRegion]:
+        """v1.14.64 — جارویِ «بنرهایِ تبلیغاتیِ سایت» (واترمارکِ دامنه) که
+        OCRِ عادیِ صفحه از آن‌ها چیزی نخوانده (نمونه: بنرِ ASURASCANS.COM
+        وسطِ نوارِ بلند). کاندید: بلابِ پهن‌وکوتاهِ پرتراکم از ضربه‌هایِ
+        متضاد با زمینهٔ محلی، بدونِ همپوشانی با نواحیِ موجود → کراپ ×۳ →
+        OCR → اگر متن با `_is_watermark_text` (دامنه/برند) خوانده شد →
+        ناحیهٔ promo ساخته می‌شود؛ ماسکِ سازنده کلِ بنر را توپر پاک
+        می‌کند (تبلیغ باید کامل فیلتر شود)."""
+        found: List[TextRegion] = []
+        try:
+            h, w = image.shape[:2]
+        except Exception:
+            return found
+        if getattr(self, "ocr", None) is None:
+            return found
+        try:
+            # v1.14.64b — جارویِ تمام‌رزولوشنِ کاشی‌شده: بنرهایِ کوچک در
+            # نوارهایِ بلند با downscale نابود می‌شدند (۴px!) → صفحه به
+            # کاشی‌هایِ ~۲۲۰۰px با هم‌پوشانی تقسیم می‌شود و هر کاشی در
+            # رزولوشنِ کامل جارو می‌شود.
+            _tile = 2200
+            _ovl = 120
+            _exist = []
+            for r in (regions or []):
+                try:
+                    _exist.append([int(v) for v in r.rect])
+                except Exception:
+                    continue
+            _kb = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 5))
+            _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 5))
+            _found_rects: list = []
+            _ty0 = 0
+            while _ty0 < h:
+                _y1 = min(h, _ty0 + _tile)
+                tile = image[_ty0:_y1]
+                _tnext = _y1 if _y1 >= h else _y1 - _ovl
+                g = cv2.cvtColor(tile, cv2.COLOR_BGR2GRAY)
+                _med = cv2.medianBlur(g, 21)
+                _stk = (np.abs(g.astype(np.int16)
+                               - _med.astype(np.int16)) > 42)
+                _blob = cv2.morphologyEx((_stk * 255).astype(np.uint8),
+                                         cv2.MORPH_CLOSE, _kb)
+                _blob = cv2.dilate(_blob, _kd)
+                n, lab, st, _ = cv2.connectedComponentsWithStats(_blob, 8)
+                for i in range(1, n):
+                    bx = int(st[i, cv2.CC_STAT_LEFT])
+                    by = int(st[i, cv2.CC_STAT_TOP])
+                    bw_ = int(st[i, cv2.CC_STAT_WIDTH])
+                    bh_ = int(st[i, cv2.CC_STAT_HEIGHT])
+                    if bw_ < 60 or bh_ < 12 or bh_ > 170 or bw_ > 1000:
+                        continue
+                    if bw_ < 2.2 * bh_:
+                        continue
+                    _fill = float(st[i, cv2.CC_STAT_AREA]) / float(bw_ * bh_)
+                    if _fill < 0.06 or _fill > 0.95:
+                        continue
+                    # v1.14.64b — بنرِ توپر (fillِ بالا؛ خودِ جعبهٔ رنگی هم
+                    # بلاب می‌شود): باید ضربهٔ متنیِ داخلش باشد وگرنه
+                    # تابلو/جعبهٔ هنر است. داورِ نهایی OCR + الگویِ دامنه است.
+                    if bw_ >= 60 and bh_ >= 12:
+                        _sub = _stk[by:by + bh_, bx:bx + bw_]
+                        _sr = float(_sub.mean()) if _sub.size else 0.0
+                        if _sr < 0.025 or _sr > 0.60:
+                            continue
+                    else:
+                        continue
+                    X0, X1 = bx, bx + bw_
+                    Y0, Y1 = by + _ty0, by + bh_ + _ty0
+                    _skip = False
+                    for (rx, ry, rw, rh) in _exist:
+                        if not (X1 < rx or X0 > rx + rw
+                                or Y1 < ry or Y0 > ry + rh):
+                            _skip = True
+                            break
+                    if _skip:
+                        continue
+                    _dup = False
+                    for (fx0, fy0, fx1, fy1) in _found_rects:
+                        ix0, iy0 = max(X0, fx0), max(Y0, fy0)
+                        ix1, iy1 = min(X1, fx1), min(Y1, fy1)
+                        if ix1 - ix0 > 0.5 * min(X1 - X0, fx1 - fx0) \
+                                and iy1 - iy0 > 0.5 * min(Y1 - Y0, fy1 - fy0):
+                            _dup = True
+                            break
+                    if _dup:
+                        continue
+                    cx0, cy0 = max(0, X0 - 8), max(0, Y0 - 8)
+                    cx1, cy1 = min(w, X1 + 8), min(h, Y1 + 8)
+                    if cx1 - cx0 < 30 or cy1 - cy0 < 12:
+                        continue
+                    crop = image[cy0:cy1, cx0:cx1]
+                    if crop.size == 0:
+                        continue
+                    _big = cv2.resize(crop, (crop.shape[1] * 3,
+                                             crop.shape[0] * 3),
+                                      interpolation=cv2.INTER_CUBIC)
+                    try:
+                        _res = self.ocr.ocr(_big)
+                    except Exception:
+                        _res = None
+                    _txts = []
+                    if _res:
+                        for _ln in (_res[0] or []):
+                            try:
+                                _tv = _ln[1]
+                                if isinstance(_tv, (tuple, list)):
+                                    _tv = _tv[0]
+                                if str(_tv).strip():
+                                    _txts.append(str(_tv).strip())
+                            except Exception:
+                                continue
+                    _txt = " ".join(_txts)
+                    if not _txt or not self._is_watermark_text(_txt):
+                        continue
+                    _tr = TextRegion(
+                        id=10000 + len(found),
+                        boxes=[np.array([[cx0, cy0], [cx1, cy0],
+                                         [cx1, cy1], [cx0, cy1]],
+                                        dtype=np.float32)],
+                        source_text=_txt,
+                        rect=(cx0, cy0, cx1 - cx0, cy1 - cy0),
+                        kind="promo")
+                    found.append(_tr)
+                    _found_rects.append((cx0, cy0, cx1, cy1))
+                    if self.debug:
+                        try:
+                            print(f"  [🔍] بنرِ تبلیغ: rect={_tr.rect} "
+                                  f"متن: {_txt[:60]}")
+                        except Exception:
+                            pass
+                _ty0 = _tnext
+        except Exception:
+            return found
+        return found
 
     def finish_page_phase(self, image: np.ndarray, regions: List[TextRegion],
                           skip_translate: bool = False,
@@ -14821,7 +15080,8 @@ class MangaTranslator:
         _ocr_empty_regions = [r for r in dialogue_regions
                               if not r.translated_text
                               and getattr(r, "ocr_empty", False)]
-        _clean_regions = translated_regions + _ocr_empty_regions
+        _clean_regions = (translated_regions + _ocr_empty_regions
+                          + promo_regions)
         missing_n = sum(1 for r in dialogue_regions
                         if not r.translated_text
                         and not getattr(r, "ocr_empty", False))
@@ -14829,7 +15089,7 @@ class MangaTranslator:
             print(f"[!] {missing_n} حباب ترجمه نشد")
         if self.debug:
             if promo_regions:
-                print(f"  [*] {len(promo_regions)} تبلیغ → دست‌نخورده")
+                print(f"  [*] {len(promo_regions)} تبلیغ → پاکسازیِ کاملِ بنر")
             if sfx_regions:
                 print(f"  [*] {len(sfx_regions)} SFX → دست‌نخورده")
             if junk_regions:
