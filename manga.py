@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.59"
+APP_VER = "1.14.60"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -8509,6 +8509,27 @@ class MangaTranslator:
                 sub = cleaned[y0:y1, x0:x1]
                 m2 = cv2.dilate(enc[y0:y1, x0:x1],
                                 np.ones((3, 3), np.uint8), iterations=1)
+                # v1.14.60 — هاله/درخششِ اطرافِ حروف (نمونه: تیترِ «The
+                # Crimson Dragon…» که متنِ سفیدِ شعاع‌دار روی کارتِ تیره
+                # دارد) فقط با m2 پر نمی‌شود و شبحِ روشن جا می‌گذارد.
+                # پیکسل‌هایِ روشنِ داخلِ خودِ محفظهٔ تیره که نزدیکِ جوهرند
+                # هم به ماسکِ پرکردن اضافه می‌شوند؛ قابِ تزئینیِ دور از
+                # متن دست‌نخورده می‌ماند.
+                try:
+                    _full_c = getattr(self, "_last_enclosure_full", None)
+                    if (_full_c is not None
+                            and _full_c.shape == enc.shape
+                            and int(_full_c.any())):
+                        _fc = _full_c[y0:y1, x0:x1] > 0
+                        _gg = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
+                        _near = cv2.dilate(
+                            (enc[y0:y1, x0:x1] > 0).astype(np.uint8),
+                            np.ones((25, 25), np.uint8)) > 0
+                        _halo = (_gg >= 110) & _fc & _near & (m2 == 0)
+                        if int(_halo.sum()):
+                            m2 = m2 | _halo.astype(np.uint8)
+                except Exception:
+                    pass
                 if not int(cv2.countNonZero(m2)):
                     continue
                 # v1.14.47: TELEA روی متنِ درشتِ روی بنر، خاکستریِ لکه‌دار
@@ -8539,8 +8560,8 @@ class MangaTranslator:
                 cleaned[y0:y1, x0:x1] = sub
                 # v1.14.47: حلقهٔ padِ دورِ ماسکِ این ناحیه هم حذف شود تا
                 # حلقهٔ کلاسترها روی پس‌ماندِ آن لکه نسازد
-                _kill = cv2.dilate(enc[y0:y1, x0:x1],
-                                   np.ones((9, 9), np.uint8)) > 0
+                # (v1.14.60: کِیل بر اساس m2 — شاملِ هالهٔ پرشده هم هست)
+                _kill = cv2.dilate(m2, np.ones((9, 9), np.uint8)) > 0
                 mask[y0:y1, x0:x1][_kill] = 0
                 n_fill += 1
             except Exception:
@@ -9134,8 +9155,22 @@ class MangaTranslator:
         # باشد (دیوارِ حباب، بینِ خط‌ها، هنر) اینجا دور ریخته می‌شود.
         # سویپ‌هایِ بعدی روی همین تصویرِ ترکیب‌شده کار می‌کنند تا اگر جوهرِ
         # بیرونِ نوار مانده باشد، همان‌جا پاک شود.
+        #
+        # v1.14.60 — باگِ «متن پاک نشده»: کامپوز فقط با «ماسکِ بازمانده»
+        # بود؛ اما _enclosure_instant_fill ناحیهٔ محفظه را از ماسک کِیل
+        # می‌کند و حاصلِ پرکردنِ فوری‌اش (و هر پرکنندهٔ دیگر بیرونِ ماسکِ
+        # کِیل‌شده) با کامپوز دور ریخته می‌شد → متنِ قدیمی از عکسِ اصلی
+        # برمی‌گشت (نمونه: تیترِ «The Crimson Dragon…»). حالا ماسکِ کامپوز
+        # = ماسکِ متن ∪ همهٔ پیکسل‌هایِ واقعاً تغییرکرده — مثلِ مسیرِ
+        # early-return در بالا. سقفِ تغییرها قبلاً با mm_cap (~۱۵px بیرونِ
+        # ماسکِ خام) کنترل شده، پس لکهٔ دور از متن ساخته نمی‌شود.
         if os.environ.get("MANGA_TWO_IMAGE", "1") != "0":
-            cleaned = self._compose_two_image(cleaned, image, mask)
+            try:
+                _chg = np.any(cleaned != image, axis=2)
+                _cmp2 = ((mask > 0) | _chg).astype(np.uint8) * 255
+            except Exception:
+                _cmp2 = mask
+            cleaned = self._compose_two_image(cleaned, image, _cmp2)
 
         _lama_fix = 0
         _kern_r = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
