@@ -693,7 +693,8 @@ class MainActivity : AppCompatActivity() {
                             throw RuntimeException("ناتمام: " + fsize + "/" + total)
                         if (fsize < 1_000_000L)
                             throw RuntimeException("APK ناقص: " + fsize)
-                        done = ok = true
+                        ok = true
+                        done = true
                     } finally {
                         c.disconnect()
                     }
