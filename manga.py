@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.64"
+APP_VER = "1.14.65"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3764,6 +3764,99 @@ class MangaTranslator:
         except Exception:
             return None
 
+    def _get_lama_cpu_safe(self):
+        """v1.14.65 — سشنِ امنِ CPU برایِ نجاتِ پچِ LaMa وقتی EPِ اصلی
+        (xnnpack/nnapi) وسطِ کارِ واقعی ORT_FAIL می‌دهد (پروبِ شکلِ ثابت
+        پاس می‌شود ولی پچِ داینامیک نه — ریشهٔ «لکهٔ قرمزِ» POCO F4).
+        فقط بارِ اول ساخته می‌شود و کش می‌ماند؛ مدل از همان کش می‌آید."""
+        _s = getattr(self, "_lama_cpu_safe", None)
+        if _s is not None:
+            return _s
+        if getattr(self, "_lama_cpu_safe_failed", False):
+            return None
+        try:
+            _cores = int(self._cpu_core_count() or 4)
+            _t = max(1, min(4, _cores))
+            try:
+                _av = self._available_ram_gb()
+            except Exception:
+                _av = None
+            if _av and _av < 0.30:
+                # رمِ آزادِ خیلی کم — ساختِ سشنِ دوم خطرِ OOM دارد
+                self._lama_cpu_safe_failed = True
+                try:
+                    print(f"    [~] سشنِ CPUِ امنِ LaMa ساخته نشد "
+                          f"(رمِ آزاد: {_av:.2f}GB)", flush=True)
+                except Exception:
+                    pass
+                return None
+            try:
+                print(f"    [*] ساختِ سشنِ CPUِ امنِ LaMa (نجاتِ پچ)…",
+                      flush=True)
+            except Exception:
+                pass
+            _mp = getattr(self, "_lama_model_path", None)
+            _s = LamaMangaONNX(prefer_gpu=False, threads=_t,
+                               model_path=_mp) if _mp else \
+                LamaMangaONNX(prefer_gpu=False, threads=_t)
+            self._lama_cpu_safe = _s
+        except Exception:
+            self._lama_cpu_safe_failed = True
+            _s = None
+        return _s
+
+    def _force_box_gradient_fill(self, image: np.ndarray,
+                                 cx0: int, cy0: int, cx1: int, cy1: int):
+        """v1.14.65 — آخرین فال‌بکِ بلوکِ «متنِ روشن روی محفظهٔ تیره»
+        وقتی هم EP شکست خورد هم سشنِ CPU: کلِ داخلِ باکس با همان ریاضیِ
+        پرکنندهٔ گرادیانیِ v1.14.60/62 (میانهٔ محلیِ پیکسل‌هایِ تیره) پر
+        می‌شود. چرا نه اسنپ‌شات؟ چون در مسیرِ block-rect∪ink هیچ
+        پرکنندهٔ فوری‌ای اجرا نشده و اسنپ‌شات هنوز خودِ متن را دارد
+        (بازتولیدِ سندباکس: pastingِ متنِ اصلی!). قابِ تزئینی با فرسایشِ
+        ۸px محافظت می‌شود. خروجی: کراپِ هم‌اندازهٔ (cy1-cy0, cx1-cx0)."""
+        try:
+            _fbs = getattr(self, "_lama_force_rect_boxes", None) or []
+            if not _fbs:
+                return None
+            for _fb in _fbs:
+                _bx0, _by0 = int(_fb[0]), int(_fb[1])
+                _bx1, _by1 = int(_fb[2]), int(_fb[3])
+                _ix0, _iy0 = max(cx0, _bx0), max(cy0, _by0)
+                _ix1, _iy1 = min(cx1, _bx1), min(cy1, _by1)
+                if _ix1 - _ix0 < 24 or _iy1 - _iy0 < 24:
+                    continue
+                _ex0 = max(_ix0, _bx0 + 8)
+                _ey0 = max(_iy0, _by0 + 8)
+                _ex1 = min(_ix1, _bx1 - 7)
+                _ey1 = min(_iy1, _by1 - 7)
+                if _ex1 - _ex0 < 12 or _ey1 - _ey0 < 12:
+                    continue
+                _sub = image[_ey0:_ey1, _ex0:_ex1]
+                _g = cv2.cvtColor(_sub, cv2.COLOR_BGR2GRAY)
+                _blk_med = float(np.median(_g))
+                _thr = min(130.0, max(60.0, _blk_med + 25.0))
+                _dark = (_g < _thr).astype(np.uint8)
+                _src_f = _sub.astype(np.float32)
+                _k = 31
+                _num = cv2.blur(_src_f * _dark[..., None], (_k, _k))
+                _den = cv2.blur(_dark.astype(np.float32), (_k, _k))
+                _dk_px = _src_f[_dark > 0]
+                _fb_col = (np.median(_dk_px, axis=0)
+                           if _dk_px.size >= 30
+                           else np.array([0.0, 0.0, 0.0]))
+                _fill = np.where(
+                    _den[..., None] > 0.02,
+                    _num / np.maximum(_den, 1e-6)[..., None],
+                    _fb_col[None, None, :]).astype(np.float32)
+                _out = image[cy0:cy1, cx0:cx1].copy()
+                _out[_ey0 - cy0:_ey1 - cy0,
+                     _ex0 - cx0:_ex1 - cx0] = np.clip(
+                    np.rint(_fill), 0, 255).astype(np.uint8)
+                return _out
+        except Exception:
+            return None
+        return None
+
     def _get_lama_locked(self):
 
 
@@ -3857,6 +3950,12 @@ class MangaTranslator:
                         prefer_gpu=self.use_gpu,
                         threads=_thr,
                     )
+                    # v1.14.65: مسیرِ مدل برایِ سشنِ امنِ CPU (نجاتِ پچ)
+                    try:
+                        self._lama_model_path = getattr(
+                            self._lama, "model_path", None)
+                    except Exception:
+                        pass
                     self._inpainter_name = "LaMa-Manga"
                 except Exception as e2:
                     print(f"    [!] LaMa-Manga ناموفق ({e2}) → LaMa ONNX")
@@ -6706,10 +6805,10 @@ class MangaTranslator:
             if getattr(region, "kind", "") == "promo":
                 try:
                     _px0, _py0, _pw, _ph = [int(v) for v in region.rect]
-                    _px0 = max(0, _px0 - 6)
-                    _py0 = max(0, _py0 - 6)
-                    _px1 = min(w, _px0 + _pw + 12)
-                    _py1 = min(h, _py0 + _ph + 12)
+                    # v1.14.65 — بنر کامل: قابِ سفید/سایه/ماسکوت هم پوشانده
+                    # شود (باکسِ OCR همیشه تنگ‌تر از گرافیکِ بنر است)
+                    _px0, _py0, _px1, _py1 = self._expand_promo_rect(
+                        image, _px0, _py0, _px0 + _pw, _py0 + _ph)
                     if _px1 - _px0 >= 8 and _py1 - _py0 >= 8:
                         m[_py0:_py1, _px0:_px1] = 255
                         _prb = getattr(self, "_promo_rect_boxes", None)
@@ -7382,6 +7481,13 @@ class MangaTranslator:
         except Exception:
             return 0
         for region in regions:
+            # v1.14.65 — بنرِ تبلیغ (promo) با پرکنندهٔ فوریِ خطی دست‌کاری
+            # نشود: پرِ فوریِ نوارِ متنِ بنر + کِیلِ ماسک = حفره در ماسکِ
+            # توپرِ بنر → LaMa متنِ بنر را نمی‌بیند → «ASURASCANS.COM» در
+            # خروجی می‌ماند (بازتولیدِ سندباکس). بنر فقط با ماسکِ توپر +
+            # LaMa/فال‌بک پاک می‌شود.
+            if getattr(region, "kind", "") == "promo":
+                continue
             for poly in (getattr(region, "ocr_polys", None) or []):
                 try:
                     pp = np.asarray(poly, dtype=np.float32).reshape(-1, 2)
@@ -7949,6 +8055,21 @@ class MangaTranslator:
         bh = max(1, gy1 - gy0)
         pad_x = int(np.clip(round(bw * 0.15), 12, 48))
         pad_y = int(np.clip(round(bh * 0.15), 12, 48))
+        # v1.14.65 — گروه‌هایِ بنرِ تبلیغ (promo): پدِ بزرگ‌تر الزامی است.
+        # با پدِ معمولی (~40px) حفرهٔ بنر ~۵۰٪ کراپ را می‌گیرد و LaMa-Manga
+        # «بنفشِ خیالی/صورتی» نقاشی می‌کند (بازتولیدِ سندباکس: بنرِ
+        # ASURASCANS.COM). با پدِ ~۵۵٪ (حفره ~۲۰٪) مدل راه‌راه‌ها را
+        # واقعاً ادامه می‌دهد — آزمایش: pad=130 → نتیجهٔ تمیز.
+        try:
+            for _pg in (getattr(self, "_promo_rect_boxes", None) or []):
+                if not (gx1 < int(_pg[0]) or gx0 > int(_pg[2])
+                        or gy1 < int(_pg[1]) or gy0 > int(_pg[3])):
+                    _pp65 = int(np.clip(round(0.55 * max(bw, bh)), 48, 200))
+                    pad_x = max(pad_x, _pp65)
+                    pad_y = max(pad_y, _pp65)
+                    break
+        except Exception:
+            pass
         ex0 = max(0, gx0 - pad_x)
         ey0 = max(0, gy0 - pad_y)
         ex1 = min(img_w, gx1 + pad_x)
@@ -7985,7 +8106,7 @@ class MangaTranslator:
             except Exception:
                 pass
         if not sub_msk.any():
-            return
+            return  # v1.14.65: ماسکِ خالی — طبیعی، لاگ لازم نیست
         sub_bgr = None
         try:
             _max_side = int(os.environ.get("MANGA_LAMA_MAX_SIDE", "0") or 0)
@@ -7998,8 +8119,30 @@ class MangaTranslator:
         def _lama_try(si, sm, side):
             try:
                 return lama(si, sm)
-            except Exception:
-                pass
+            except Exception as _e0:
+                # v1.14.65 — سکوتِ ممنوع: EPِ پروب‌شده (مثلاً xnnpack) ورودیِ
+                # ثابتِ پروب (۲۵۶²) را پاس می‌کند ولی رویِ شکلِ واقعیِ پچ
+                # (مثلاً ۳۸۴×۱۸۰) ORT_FAIL می‌دهد (لاگِ POCO F4: پچِ کارتِ
+                # Crimson Dragon بی‌صدا رد شد → فال‌بکِ OpenCV → لکهٔ قرمز).
+                # یک بار با سشنِ امنِ CPU دوباره تلاش می‌کنیم.
+                try:
+                    print(f"    [!] LaMa EP failed "
+                          f"({str(_e0)[:90]}) → CPU retry", flush=True)
+                except Exception:
+                    pass
+                try:
+                    _safe = self._get_lama_cpu_safe()
+                except Exception:
+                    _safe = None
+                if _safe is not None:
+                    try:
+                        return _safe(si, sm)
+                    except Exception as _e1:
+                        try:
+                            print(f"    [!] LaMa CPU retry failed too: "
+                                  f"{str(_e1)[:90]}", flush=True)
+                        except Exception:
+                            pass
             try:
                 _s2 = float(side) / float(max(1, max(si.shape[0], si.shape[1])))
                 if _s2 >= 0.98:
@@ -8018,7 +8161,12 @@ class MangaTranslator:
                     return None
                 return cv2.resize(_ob2, (si.shape[1], si.shape[0]),
                                   interpolation=cv2.INTER_LANCZOS4)
-            except Exception:
+            except Exception as _e2:
+                try:
+                    print(f"    [!] LaMa retry(×{side}) failed too: "
+                          f"{str(_e2)[:90]}", flush=True)
+                except Exception:
+                    pass
                 return None
 
         if max(_pl, _ph) > _max_side:
@@ -8043,10 +8191,21 @@ class MangaTranslator:
             except Exception:
                 sub_bgr = None
             if sub_bgr is None:
+                # v1.14.65 — سکوتِ ممنوع (لاگِ POCO F4 بدونِ سرنخ ماند)
+                try:
+                    print(f"    [!] LaMa group skipped: resize-path failed "
+                          f"(box {_pl}x{_ph})", flush=True)
+                except Exception:
+                    pass
                 return
         else:
             out = _lama_try(sub_img, sub_msk, 640)
             if out is None:
+                try:
+                    print(f"    [!] LaMa group skipped: all attempts failed "
+                          f"(box {_pl}x{_ph})", flush=True)
+                except Exception:
+                    pass
                 return
             sub_bgr = out if isinstance(out, np.ndarray) else np.array(out)
             if sub_bgr.ndim == 2:
@@ -8071,6 +8230,13 @@ class MangaTranslator:
                     _bg_med = float(np.median(_bright))
                     _fill_med = float(np.median(_g[_fm]))
                     if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
+                        # v1.14.65 — لاگ شود؛ این ردِ خاموش = فال‌بکِ OpenCV
+                        try:
+                            print(f"    [!] LaMa group rejected: dark fill "
+                                  f"({_fill_med:.0f} vs bg {_bg_med:.0f})",
+                                  flush=True)
+                        except Exception:
+                            pass
                         return
         except Exception:
             pass
@@ -8596,6 +8762,10 @@ class MangaTranslator:
         می‌سازد."""
         n_fill = 0
         for region in regions:
+            # v1.14.65 — بنرِ تبلیغ (promo): پرکنندهٔ فوریِ محفظه نباید
+            # ماسکِ توپرِ بنر را بکُشد (همان حفرهٔ رویِ متنِ بنر)
+            if getattr(region, "kind", "") == "promo":
+                continue
             _raise_if_stop()
             polys = list(getattr(region, "ocr_polys", None) or [])
             if not polys:
@@ -9128,6 +9298,35 @@ class MangaTranslator:
                             _mm = 10 if _on_android() else 6
                         groups = self._group_nearby_patches(
                             pending, gap=_gap, max_members=_mm)
+                        # v1.14.65 — بنرِ تبلیغ (promo) هرگز با کلاسترهایِ
+                        # دیگر گروه نمی‌شود: گروهِ بزرگ‌تر = کراپِ بزرگ‌تر =
+                        # داون‌اسکیلِ بیشتر (مثلاً 0.61) → LaMa-Manga بنر را
+                        # «موشِ بنفش/صورتی» بازسازی می‌کند (بازتولیدِ
+                        # سندباکس). بنرِ تنها با پدِ ۵۵٪ = تمیزِ کامل.
+                        try:
+                            _prbG = (getattr(self, "_promo_rect_boxes",
+                                             None) or [])
+                            if _prbG:
+                                _ng = []
+                                for _grp in groups:
+                                    _hp = False
+                                    for _c in _grp:
+                                        for _pb in _prbG:
+                                            if not (_c[2] < int(_pb[0])
+                                                    or _c[0] > int(_pb[2])
+                                                    or _c[3] < int(_pb[1])
+                                                    or _c[1] > int(_pb[3])):
+                                                _hp = True
+                                                break
+                                        if _hp:
+                                            break
+                                    if _hp and len(_grp) > 1:
+                                        _ng.extend([[_c] for _c in _grp])
+                                    else:
+                                        _ng.append(_grp)
+                                groups = _ng
+                        except Exception:
+                            pass
                     if _short * 2.5 < _long:
                         _mode += " — long strip"
                     if self.debug:
@@ -9388,6 +9587,24 @@ class MangaTranslator:
             except Exception:
                 _mm_cap = None
             if result is None:
+                # v1.14.65 — بلوکِ اجباری-LaMa (محفظهٔ تیره) که LaMa آن را
+                # از دست داد: پرِ گرادیانیِ توپرِ داخلِ باکس (همان ریاضیِ
+                # اثبات‌شدهٔ پرکنندهٔ فوری) به‌جای فال‌بکِ OpenCV؛ وگرنه
+                # refineِ تنگِ گلیف، هالهٔ قرمز را زنده می‌گذارد (لکهٔ
+                # قرمزِ POCO F4). اسنپ‌شاتِ قبلِ LaMa هم قابلِ اعتماد نیست —
+                # در مسیرِ block-rect∪ink هنوز خودِ متن را دارد.
+                try:
+                    _res65 = self._force_box_gradient_fill(
+                        image, cx0, cy0, cx1, cy1)
+                except Exception:
+                    _res65 = None
+                if _res65 is not None:
+                    result = _res65
+                    if self.debug:
+                        print(f"  [✓] v1.14.65: LaMaِ بلوکِ تیره در دسترس "
+                              f"نبود → پرِ گرادیانیِ توپرِ باکس (ضدِ لکهٔ "
+                              f"قرمز)", flush=True)
+            if result is None:
                 crop_img = image[cy0:cy1, cx0:cx1]
                 try:
                     _thick0 = float(cv2.distanceTransform(
@@ -9400,12 +9617,37 @@ class MangaTranslator:
                 _dil = cv2.morphologyEx(
                     cv2.dilate(crop_msk, _oc_k, iterations=1),
                     cv2.MORPH_CLOSE, _oc_k)
+                # v1.14.65 — هالهٔ گلو (متنِ روشن روی پنلِ تیره): رویِ
+                # زمینهٔ تیره، ماسکِ فال‌بک باید هالهٔ دورِ گلیف را هم
+                # بپوشاند وگرنه جوهرِ قرمز/روشنِ دورِ حرف می‌ماند
+                _bg_med65 = None
+                try:
+                    _g65 = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+                    _m65 = _dil > 0
+                    _ring65 = (cv2.dilate(_dil,
+                                          np.ones((13, 13), np.uint8)) > 0) \
+                        & (~_m65)
+                    if int(_ring65.sum()) >= 60:
+                        _bg_med65 = float(np.median(_g65[_ring65]))
+                        if _bg_med65 < 100.0:
+                            _glow65 = (_g65 >= _bg_med65 + 26.0) & \
+                                (cv2.dilate(_dil, np.ones(
+                                    (15, 15), np.uint8)) > 0)
+                            _glow65 = cv2.morphologyEx(
+                                _glow65.astype(np.uint8), cv2.MORPH_CLOSE,
+                                np.ones((7, 7), np.uint8))
+                            _dil = cv2.bitwise_or(
+                                _dil, (_glow65 > 0).astype(np.uint8) * 255)
+                except Exception:
+                    _bg_med65 = None
                 try:
                     _thick = float(cv2.distanceTransform(
                         (_dil > 0).astype(np.uint8), cv2.DIST_L2, 3).max())
                 except Exception:
                     _thick = _thick0
-                _thin = _thick <= 28.0
+                # v1.14.65 — رویِ پنلِ تیره هرگز «نازک» حساب نشو (گلو)
+                _thin = (_thick <= 28.0) and not (
+                    _bg_med65 is not None and _bg_med65 < 100.0)
                 # v1.14.48: استروکِ نازک روی گرادیان → پرکردنِ صفحه‌ایِ حلقه
                 # (قبل از TELEA که رنگِ هنرِ نزدیک را می‌کشد)
                 if _thick0 <= 14.0:
@@ -9415,7 +9657,24 @@ class MangaTranslator:
                         _rpf = None
                     if _rpf is not None:
                         result = _rpf
-                if self._bg_is_textured(crop_img, _dil):
+                # v1.14.65 — refineِ تنگِ گلیف فقط رویِ زمینهٔ روشن: رویِ
+                # پنلِ تیره ماسک را تا هستهٔ حرف جمع می‌کند و هالهٔ قرمزِ
+                # دورِ حرف زنده می‌ماند (بازتولیدِ لکهٔ قرمزِ POCO F4)
+                # + برایِ خوشهٔ تبلیغ (promo) هرگز refine نکن — ماسکِ توپرِ
+                # بنر باید توپر بماند وگرنه بینِ حروفِ بنر بنفش می‌ماند
+                _is_promo65 = False
+                try:
+                    for _pb65 in (getattr(self, "_promo_rect_boxes",
+                                          None) or []):
+                        if not (cx1 < int(_pb65[0]) or cx0 > int(_pb65[2])
+                                or cy1 < int(_pb65[1]) or cy0 > int(_pb65[3])):
+                            _is_promo65 = True
+                            break
+                except Exception:
+                    _is_promo65 = False
+                if self._bg_is_textured(crop_img, _dil) and \
+                        not _is_promo65 and \
+                        (_bg_med65 is None or _bg_med65 >= 100.0):
                     _refined = self._glyph_refine_mask(crop_img, _dil)
                     if _refined is not None:
                         _tl = self._opencv_inpaint_hq(crop_img, _refined)
@@ -9427,7 +9686,7 @@ class MangaTranslator:
                     if _sm is not None:
                         crop_msk = _dil
                         result = _sm
-                    elif _thin:
+                    elif _thin and not _is_promo65:
                         _refined = self._glyph_refine_mask(crop_img, _dil)
                         if _refined is not None:
                             _sm2 = self._smooth_bg_fill(crop_img, _refined)
@@ -9528,6 +9787,44 @@ class MangaTranslator:
             pass
         self._mem_trim()  # v1.14.48c: قبل از سویپ‌ها رم آزاد شود
 
+        # v1.14.65 — بازرسیِ رنگیِ بنرِ تبلیغ: LaMa-Manga برایِ حفرهٔ بزرگِ
+        # بنر رویِ خطوطِ سرعت گاهی بنفشِ «خیالی» نقاشی می‌کند (منبعش
+        # لبه‌هایِ بنفشِ نیم‌پوشانده است). داخلِ هر بنرِ promo اگر پیکسلِ
+        # بنفشِ اشباعِ معنادار ماند → همان پیکسل‌ها با TELEA از حلقهٔ خود
+        # بنر پر می‌شود (خروجی: راه‌راهِ محو — بی‌بنفش).
+        try:
+            _prbC = (getattr(self, "_promo_rect_boxes", None) or [])
+            if _prbC:
+                _hC, _wC = cleaned.shape[:2]
+                for _pbC in _prbC:
+                    _qx0 = max(0, int(_pbC[0]))
+                    _qy0 = max(0, int(_pbC[1]))
+                    _qx1 = min(_wC, int(_pbC[2]))
+                    _qy1 = min(_hC, int(_pbC[3]))
+                    if _qx1 - _qx0 < 16 or _qy1 - _qy0 < 16:
+                        continue
+                    _roiC = cleaned[_qy0:_qy1, _qx0:_qx1]
+                    _hsvC = cv2.cvtColor(_roiC, cv2.COLOR_BGR2HSV)
+                    _pC = ((_hsvC[..., 0] >= 95) & (_hsvC[..., 0] <= 178)
+                           & (_hsvC[..., 1] >= 60) & (_hsvC[..., 2] >= 30))
+                    _nC = int(_pC.sum())
+                    if _nC < 120:
+                        continue
+                    _mC = cv2.dilate(_pC.astype(np.uint8),
+                                     np.ones((9, 9), np.uint8)) * 255
+                    _roiC2 = cv2.inpaint(_roiC, _mC, 7,
+                                         cv2.INPAINT_TELEA)
+                    cleaned[_qy0:_qy1, _qx0:_qx1] = _roiC2
+                    if self.debug:
+                        try:
+                            print(f"  [✓] v1.14.65: {_nC}px رنگِ بنرِ "
+                                  f"تبلیغ در خروجی ماند → TELEA re-scrub",
+                                  flush=True)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
         # v1.14.62 — جاروی جوهرِ روشنِ باقی‌مانده «داخلِ» بلوک‌هایِ محفظهٔ
         # تیره (کارتِ عنوان). کاربر: «عکس‌ها را کامل خوب پاک کنه؛ اضافه پاک
         # کردن هم اشکال نداره». نمونهٔ واقعی: تکهٔ سفیدِ «S(» وسطِ کارتِ
@@ -9551,6 +9848,10 @@ class MangaTranslator:
                     if _wx1 - _wx0 < 12 or _wy1 - _wy0 < 12:
                         continue
                     _sub = _gW[_wy0:_wy1, _wx0:_wx1]
+                    # v1.14.65 — آستانهٔ ۱۴۰ دست‌نخورده ماند: آزمایشِ سندباکس
+                    # نشان داد آستانهٔ نسبی (med+26) بافتِ اسپَتِر خودِ کارت
+                    # را هم می‌گیرد و «شبحِ تیره» می‌سازد. هالهٔ قرمز باید در
+                    # «ماسک» پوشانده شود (اسنپ‌شات/LaMa)، نه با سویپ.
                     _bright = (_sub >= 140)
                     if _protW is not None:
                         _bright = _bright & (
@@ -10662,11 +10963,80 @@ class MangaTranslator:
                 if _thick > 14.0:
                     continue
                 out[by:by + bh_, bx:bx + bw_][comp] = 255
+            # v1.14.65 — بنرِ تبلیغ هرگز protect نمی‌شود: سایه/لبهٔ تیرهٔ بنر
+            # «ساختارِ نازکِ تیره» حساب می‌شد → از ماسکِ LaMa کم می‌شد →
+            # بنفشِ بنر در ورودیِ مدل می‌ماند و خروجیِ «صورتی/بنفشِ خیالی»
+            # می‌ساخت (بازتولیدِ سندباکس: بنرِ ASURASCANS.COM)
+            for _pbP in (getattr(self, "_promo_rect_boxes", None) or []):
+                try:
+                    _qx0 = max(0, int(_pbP[0]))
+                    _qy0 = max(0, int(_pbP[1]))
+                    _qx1 = min(w, int(_pbP[2]))
+                    _qy1 = min(h, int(_pbP[3]))
+                    if _qx1 > _qx0 and _qy1 > _qy0:
+                        out[_qy0:_qy1, _qx0:_qx1] = 0
+                except Exception:
+                    pass
             if not np.any(out):
                 return None
-            return cv2.dilate(out, np.ones((3, 3), np.uint8))
+            _out_d = cv2.dilate(out, np.ones((3, 3), np.uint8))
+            for _pbP in (getattr(self, "_promo_rect_boxes", None) or []):
+                try:
+                    _qx0 = max(0, int(_pbP[0]))
+                    _qy0 = max(0, int(_pbP[1]))
+                    _qx1 = min(w, int(_pbP[2]))
+                    _qy1 = min(h, int(_pbP[3]))
+                    if _qx1 > _qx0 and _qy1 > _qy0:
+                        _out_d[_qy0:_qy1, _qx0:_qx1] = 0
+                except Exception:
+                    pass
+            return _out_d
         except Exception:
             return None
+
+    @staticmethod
+    def _expand_promo_rect(image: np.ndarray,
+                           rx0: int, ry0: int, rx1: int, ry1: int):
+        """v1.14.65 — بنرِ تبلیغ تقریباً همیشه بزرگ‌تر از باکسِ OCR است:
+        قابِ سفید، سایه، و ماسکوت/لوگویِ کنارِ متن (نمونهٔ ASURASCANS.COM:
+        لوگو تا ۲۹px بیرونِ باکسِ OCR). پدِ ثابت برایِ قاب/سایه + رشدِ
+        hue-محور برایِ لوگویِ رنگیِ چسبیده. طبقِ سبکِ کاربر «حباب خراب شه
+        یا بیشتر پاک شه اشکال نداره» — رشد محتاطانه ولی کامل."""
+        try:
+            h, w = image.shape[:2]
+            # پدِ ثابتِ سخاوتمندانه: قابِ سفید (±)، سایه، و ماسکوتِ کِرمِ
+            # کنارِ بنر (ماسکوتِ ASURA «کرم» است — hue‌اش با زمینهٔ بژ
+            # یکسان است و با hue پیدا نمی‌شود؛ نمونه: تا +۲۹px بیرونِ OCR)
+            rx0 = max(0, int(rx0) - 22)
+            ry0 = max(0, int(ry0) - 14)
+            rx1 = min(w, int(rx1) + 30)
+            ry1 = min(h, int(ry1) + 24)
+            for _ in range(2):
+                wx0, wy0 = max(0, rx0 - 48), max(0, ry0 - 28)
+                wx1, wy1 = min(w, rx1 + 48), min(h, ry1 + 28)
+                roi = image[wy0:wy1, wx0:wx1]
+                if roi.size == 0:
+                    break
+                hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+                _p = ((hsv[..., 0] >= 95) & (hsv[..., 0] <= 178)
+                      & (hsv[..., 1] >= 45) & (hsv[..., 2] >= 25))
+                ys, xs = np.nonzero(_p)
+                if ys.size < 40:
+                    break
+                px0 = int(wx0 + int(xs.min()))
+                px1 = int(wx0 + int(xs.max())) + 1
+                py0 = int(wy0 + int(ys.min()))
+                py1 = int(wy0 + int(ys.max())) + 1
+                _nx0 = min(rx0, px0)
+                _ny0 = min(ry0, py0)
+                _nx1 = max(rx1, px1)
+                _ny1 = max(ry1, py1)
+                if (_nx0, _ny0, _nx1, _ny1) == (rx0, ry0, rx1, ry1):
+                    break
+                rx0, ry0, rx1, ry1 = _nx0, _ny0, _nx1, _ny1
+        except Exception:
+            pass
+        return int(rx0), int(ry0), int(rx1), int(ry1)
 
     def _bubble_interior_sweep(self, image: np.ndarray,
                                cleaned: np.ndarray,
@@ -17597,7 +17967,14 @@ html, body { background: #0a0a0b; }
                     break
 
                 if not getattr(self, "clean_only", False):
-                    _dlg = [r for r in regions if r.kind == "dialogue"]
+                    # v1.14.65 — تبلیغ/واترمارک (promo) هم باید درِ پاکسازیِ
+                    # زودهنگام باشد. قبلاً فقط dialogue می‌آمد → درِ مسیرِ
+                    # precleanedِ رندر، clean_image دوباره صدا نمی‌خورد و
+                    # بنرِ تبلیغ «ASURASCANS.COM» دست‌نخورده در خروجی می‌ماند
+                    # (لاگِ POCO F4: «1 تبلیغ → پاکسازیِ کاملِ بنر» ولی
+                    # بنر در PDFِ نهایی سالم بود).
+                    _dlg = [r for r in regions
+                            if r.kind in ("dialogue", "promo")]
                     if _dlg:
                         try:
                             _pc = self.clean_image(image, _dlg)
