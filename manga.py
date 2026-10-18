@@ -15055,46 +15055,12 @@ class MangaTranslator:
                         if _txt and self._is_watermark_text(_txt):
                             break
                     if not (_txt and self._is_watermark_text(_txt)):
-                        # v1.14.64c — فال‌بکِ بدونِ OCR: بنرِ برندِ اشباعِ
-                        # توپرِ جدا (زمینهٔ یکدستِ رنگی + ضربهٔ متنیِ متضاد)
-                        # تقریباً همیشه واترمارکِ سایت است — بدونِ تأییدِ
-                        # متنی هم تبلیغ شمرده می‌شود (حذفِ بیشتر مجاز است).
-                        _acc = False
-                        try:
-                            _e6 = 6
-                            _bgr2 = tile[max(0, by - _e6):by + bh_ + _e6,
-                                         max(0, bx - _e6):bx + bw_ + _e6]
-                            _hsv = cv2.cvtColor(_bgr2, cv2.COLOR_BGR2HSV)
-                            _satf = float((_hsv[..., 1] >= 70).mean())
-                            # v1.14.64c — تأییدِ «متنِ داخلِ جعبه»: بنرِ برند
-                            # حروفِ ریزِ زیاد (قطعه‌هایِ ۶-۴۰px) داخلِ جعبهٔ
-                            # اشباع دارد؛ مو/لباسِ بنفشِ هنر خط‌هایِ درازِ
-                            # براق دارد → رد. (نمونهٔ فال‌پزیتیو: موِ بنفشِ
-                            # img1 بدونِ این گیت پاک می‌شد!)
-                            _tg2 = cv2.cvtColor(_bgr2, cv2.COLOR_BGR2GRAY)
-                            _m3 = float(np.median(_tg2))
-                            _stk3 = (np.abs(_tg2.astype(np.int16)
-                                            - int(_m3)) > 42)
-                            _nz3, _lb3, _st3, _ = \
-                                cv2.connectedComponentsWithStats(
-                                    _stk3.astype(np.uint8), 8)
-                            _glyph_n = 0
-                            for _i3 in range(1, _nz3):
-                                _ga = int(_st3[_i3, cv2.CC_STAT_AREA])
-                                _gw = int(_st3[_i3, cv2.CC_STAT_WIDTH])
-                                _gh = int(_st3[_i3, cv2.CC_STAT_HEIGHT])
-                                if 6 <= _gh <= 40 and 3 <= _gw <= 60 \
-                                        and 12 <= _ga <= 900:
-                                    _glyph_n += 1
-                            _acc = (_satf >= 0.30 and _glyph_n >= 6
-                                    and 80 <= bw_ <= 520
-                                    and 14 <= bh_ <= 110
-                                    and bw_ >= 2.2 * bh_)
-                        except Exception:
-                            _acc = False
-                        if not _acc:
-                            continue
-                        _txt = "[banner]"
+                        # v1.14.64d — فال‌بکِ بدونِ OCR حذف شد: گیتِ گلیف روی
+                        # بافتِ هنر (زنگار/تسمه/هاشور) فال‌پزیتیو می‌داد و
+                        # تکه‌هایی از هنر پاک می‌شد. فقط تأییدِ متنیِ
+                        # (دامنه/برند) معتبر است — OCRِ پد‌شده/واریانتی
+                        # بنرهایِ واقعی را می‌خواند.
+                        continue
                     _tr = TextRegion(
                         id=10000 + len(found),
                         boxes=[np.array([[cx0, cy0], [cx1, cy0],
