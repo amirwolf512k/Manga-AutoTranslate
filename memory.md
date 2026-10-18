@@ -401,3 +401,18 @@
 - VERSION → 1.14.64 / versionCode 78. `.github/workflows/engine-test.yml` — جدید: ۲ شغل (linux-pc + android-sim با taskset ۲ هسته) روی ۷ لینکِ کاربر + before.jpg، خروجی = آرتیفکت.
 
 **تستِ محلی:** img1: قوسِ حبابِ «THE PREPARATIONS» پیکسل‌به‌پیکسل سالم ✅، بنرِ ASURASCANS.COM کامل حذف ✅؛ ترکیبی img5+img6+img7: کارتِ Crimson Dragon سالم و خالی، واترمارکِ img5 کامل حذف ✅.
+
+## v1.14.65 / 65b — لکهٔ قرمزِ POCO F4 (متنِ روشن روی محفظهٔ تیره) + بنرِ کامل (2026-10-19)
+**لاگِ گوشی (v1.14.64):** مدل از کش آماده، `LaMa patch-wise — 1 clusters → 1 patches` اجرا شد ولی `Cleanup: {'LaMa': 0, 'OpenCV': 1}` → **پچِ واقعیِ LaMa بی‌صدا می‌میرد** (EPِ xnnpack: پروبِ شکلِ ثابتِ ۲۵۶² پاس، پچِ داینامیکِ ~۳۸۴×۱۸۰ ORT_FAIL) → فال‌بکِ OpenCV → هالهٔ قرمزِ دورِ متنِ سفیدِ کارتِ Crimson Dragon باقی می‌ماند. کاربر تأکید کرد ربطی به دانلودِ مدل ندارد.
+
+**فیکس‌ها (v1.14.65):**
+- `_lama_try`: سکوتِ ممنوع — لاگِ خطا + retry با سشنِ امنِ CPU (`_get_lama_cpu_safe`)؛ `_force_box_gradient_fill` (پرِ گرادیانیِ توپرِ باکس) به‌عنوانِ آخرین فال‌بک؛ گلو-ماسک (≥ med+26) در فال‌بکِ OpenCV روی پنلِ تیره؛ refineِ تنگِ گلیف فقط روی زمینهٔ روشن.
+- بنر: `_expand_promo_rect` (پد + رشدِ hue)، promo از پرکننده‌هایِ فوری/پروتکت/گروه‌بندی حذف، پدِ ۵۵٪ برایِ گروهِ بنر، re-scrubِ TELEA بنفشِ باقی‌مانده، early-cleaning شاملِ promo شد.
+
+**فیکس‌های v1.14.65b (این جلسه):**
+- حافظهٔ مرگِ EP: بعد از اولین ORT_FAIL واقعی، بقیهٔ پچ‌هایِ ران مستقیم CPU + `_lama_ep_store(model, "cpu")` → ران‌هایِ بعدیِ گوشی از ابتدا CPU (خودترمیمیِ ماندگار در فایلِ `.epab`).
+- قفلِ `threading.Lock` در `_get_lama_cpu_safe` (دو پچِ موازی دو سشن نمی‌سازند — رمِ گوشی).
+
+**تستِ محلی (890fb1، MANGA_LAMA_PATCH_SIDE=384):**
+- A (عادی): `LaMa: 3, OpenCV: 0`؛ کارت: ۰ پیکسلِ قرمز؛ بنر پاک ✅
+- B (شبیه‌سازیِ مرگِ xnnpack با monkey-patch): لاگِ `[!] LaMa EP failed → CPU retry + ذخیرهٔ CPU`، سشنِ CPU یک‌بار ساخته شد (قفل)، `LaMa: 3, OpenCV: 0`، ۰ پیکسلِ قرمز، `.epab=cpu` ✅

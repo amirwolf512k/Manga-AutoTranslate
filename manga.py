@@ -3774,36 +3774,48 @@ class MangaTranslator:
             return _s
         if getattr(self, "_lama_cpu_safe_failed", False):
             return None
-        try:
-            _cores = int(self._cpu_core_count() or 4)
-            _t = max(1, min(4, _cores))
-            try:
-                _av = self._available_ram_gb()
-            except Exception:
-                _av = None
-            if _av and _av < 0.30:
-                # رمِ آزادِ خیلی کم — ساختِ سشنِ دوم خطرِ OOM دارد
-                self._lama_cpu_safe_failed = True
-                try:
-                    print(f"    [~] سشنِ CPUِ امنِ LaMa ساخته نشد "
-                          f"(رمِ آزاد: {_av:.2f}GB)", flush=True)
-                except Exception:
-                    pass
+        # v1.14.65b — قفل: دو پچِ موازی نباید دو سشنِ CPU بسازند (رمِ گوشی)
+        _lk = getattr(self, "_lama_cpu_safe_lock", None)
+        if _lk is None:
+            import threading as _th
+            _lk = _th.Lock()
+            self._lama_cpu_safe_lock = _lk
+        with _lk:
+            _s = getattr(self, "_lama_cpu_safe", None)
+            if _s is not None:
+                return _s
+            if getattr(self, "_lama_cpu_safe_failed", False):
                 return None
             try:
-                print(f"    [*] ساختِ سشنِ CPUِ امنِ LaMa (نجاتِ پچ)…",
-                      flush=True)
+                _cores = int(self._cpu_core_count() or 4)
+                _t = max(1, min(4, _cores))
+                try:
+                    _av = self._available_ram_gb()
+                except Exception:
+                    _av = None
+                if _av and _av < 0.30:
+                    # رمِ آزادِ خیلی کم — ساختِ سشنِ دوم خطرِ OOM دارد
+                    self._lama_cpu_safe_failed = True
+                    try:
+                        print(f"    [~] سشنِ CPUِ امنِ LaMa ساخته نشد "
+                              f"(رمِ آزاد: {_av:.2f}GB)", flush=True)
+                    except Exception:
+                        pass
+                    return None
+                try:
+                    print(f"    [*] ساختِ سشنِ CPUِ امنِ LaMa (نجاتِ پچ)…",
+                          flush=True)
+                except Exception:
+                    pass
+                _mp = getattr(self, "_lama_model_path", None)
+                _s = LamaMangaONNX(prefer_gpu=False, threads=_t,
+                                   model_path=_mp) if _mp else \
+                    LamaMangaONNX(prefer_gpu=False, threads=_t)
+                self._lama_cpu_safe = _s
             except Exception:
-                pass
-            _mp = getattr(self, "_lama_model_path", None)
-            _s = LamaMangaONNX(prefer_gpu=False, threads=_t,
-                               model_path=_mp) if _mp else \
-                LamaMangaONNX(prefer_gpu=False, threads=_t)
-            self._lama_cpu_safe = _s
-        except Exception:
-            self._lama_cpu_safe_failed = True
-            _s = None
-        return _s
+                self._lama_cpu_safe_failed = True
+                _s = None
+            return _s
 
     def _force_box_gradient_fill(self, image: np.ndarray,
                                  cx0: int, cy0: int, cx1: int, cy1: int):
@@ -8117,17 +8129,35 @@ class MangaTranslator:
         _pl, _ph = int(sub_img.shape[1]), int(sub_img.shape[0])
 
         def _lama_try(si, sm, side):
+            # v1.14.65b — حافظهٔ مرگِ EP: بعد از اولین ORT_FAIL واقعی،
+            # بقیهٔ پچ‌هایِ همین ران مستقیم با سشنِ امنِ CPU اجرا می‌شوند
+            # (تلاشِ مجدد با سشنِ مرده فقط اتلافِ زمان است) + انتخابِ «cpu»
+            # در فایلِ .epab ذخیره می‌شود تا ران‌هایِ بعدیِ گوشی از همان
+            # ابتدا CPU برود و هرگز به فال‌بکِ OpenCV (لکهٔ قرمز) نیفتد.
+            _ep_dead = getattr(self, "_lama_ep_dead", False)
+
+            def _call_main(ai, am):
+                if _ep_dead:
+                    _s0 = self._get_lama_cpu_safe()
+                    if _s0 is not None:
+                        return _s0(ai, am)
+                return lama(ai, am)
+
             try:
-                return lama(si, sm)
+                return _call_main(si, sm)
             except Exception as _e0:
                 # v1.14.65 — سکوتِ ممنوع: EPِ پروب‌شده (مثلاً xnnpack) ورودیِ
                 # ثابتِ پروب (۲۵۶²) را پاس می‌کند ولی رویِ شکلِ واقعیِ پچ
                 # (مثلاً ۳۸۴×۱۸۰) ORT_FAIL می‌دهد (لاگِ POCO F4: پچِ کارتِ
                 # Crimson Dragon بی‌صدا رد شد → فال‌بکِ OpenCV → لکهٔ قرمز).
                 # یک بار با سشنِ امنِ CPU دوباره تلاش می‌کنیم.
+                self._lama_ep_dead = True
                 try:
+                    _lama_ep_store(getattr(self, "_lama_model_path", "") or "",
+                                   "cpu")
                     print(f"    [!] LaMa EP failed "
-                          f"({str(_e0)[:90]}) → CPU retry", flush=True)
+                          f"({str(_e0)[:90]}) → CPU retry + ذخیرهٔ CPU "
+                          f"برای ران‌های بعد", flush=True)
                 except Exception:
                     pass
                 try:
@@ -8151,7 +8181,7 @@ class MangaTranslator:
                 _nh2 = max(64, (int(round(si.shape[0] * _s2)) // 8) * 8)
                 _si2 = cv2.resize(si, (_nw2, _nh2), interpolation=cv2.INTER_AREA)
                 _sm2 = cv2.resize(sm, (_nw2, _nh2), interpolation=cv2.INTER_NEAREST)
-                _o2 = lama(_si2, _sm2)
+                _o2 = _call_main(_si2, _sm2)
                 _ob2 = _o2 if isinstance(_o2, np.ndarray) else np.array(_o2)
                 if _ob2.ndim == 2:
                     _ob2 = cv2.cvtColor(_ob2, cv2.COLOR_GRAY2BGR)
