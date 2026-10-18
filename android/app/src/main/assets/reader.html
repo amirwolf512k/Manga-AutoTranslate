@@ -11,6 +11,12 @@
      تصویرها با عرضِ جدید و بعضی با اندازهٔ قدیمی → چیدمانِ دروغ → پرشِ اسکرول.
      حذف شد؛ loading=lazy می‌ماند و چون تصویرهایِ بالایِ دید همیشه اندازهٔ واقعی
      دارند، زومِ کانونی دقیق می‌ماند.
+     v1.14.62: ① «زوم می‌کنم دستم بردارم میره پایین/بالا» — کامیتِ پینچ نقطهٔ
+     زیرِ انگشت را بدونِ احتسابِ transformِ حینِ پینچ حساب می‌کرد → پرش در
+     لحظهٔ رهاکردن؛ حالا نقطه با k=kz/startZ اصلاح و به انگشتِ باقی‌مانده
+     کانونی می‌شود. ② «نمایش زنده کم کم لود کنه تا رم کمتری بخوره» — لودِ
+     تدریجی با IntersectionObserver: فقط نوارِ اطرافِ دید در RAM می‌ماند؛
+     صفحاتِ دور با قفلِ aspect-ratio به placeholder برمی‌گردند (چیدمان ثابت).
      v1.14.44: اسکرول داخل .rdrS (overflow:auto) — پنِ افقی/عمودیِ طبیعی WebView.
      دیباگ: data-ndbg از سمتِ اندروید تزریق می‌شود تا سوییچِ 🔍 در نمایشِ
      غیرِزنده هم تعدادِ صفحه‌های دیباگ را از اول بداند. -->
@@ -20,7 +26,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=5,user-scalable=yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <title>خواندن</title>
-<style>*{box-sizing:border-box;margin:0;padding:0}html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none;height:100%;overflow:hidden}.rdr{background:#000;direction:ltr;height:100%;display:flex;flex-direction:column}.rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2;flex:0 0 auto}.rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}.rdr-btn:active{background:#2a2a30}.rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}.rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}.rdrS{flex:1 1 auto;overflow:auto;position:relative;background:#000;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}.rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}.rdrC .lg{width:100%}.rdrC .lg[hidden]{display:none}.rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;-webkit-user-drag:none;pointer-events:none}.rdr-progress{position:fixed;bottom:0;left:0;right:0;height:3px;background:#1a1a1c;z-index:3}.rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}.zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}.ph{width:100%;direction:rtl;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:shph 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}@keyframes shph{0%{background-position:120% 0}100%{background-position:-80% 0}}.sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spinph 1s linear infinite}@keyframes spinph{to{transform:rotate(360deg)}}@media (max-width:480px){.rdr-bar{gap:4px;padding:6px 8px}.rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}.rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}}</style>
+<style>*{box-sizing:border-box;margin:0;padding:0}html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none;height:100%;overflow:hidden}.rdr{background:#000;direction:ltr;height:100%;display:flex;flex-direction:column}.rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2;flex:0 0 auto}.rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}.rdr-btn:active{background:#2a2a30}.rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}.rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}.rdrS{flex:1 1 auto;overflow:auto;position:relative;background:#000;-webkit-overflow-scrolling:touch;overscroll-behavior:contain}.rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}.rdrC .lg{width:100%}.rdrC .lg[hidden]{display:none}.rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;-webkit-user-drag:none;pointer-events:none;background:#0b0b0d}.rdr-progress{position:fixed;bottom:0;left:0;right:0;height:3px;background:#1a1a1c;z-index:3}.rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}.zlv{color:#97948c;font-size:.8rem;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}.ph{width:100%;direction:rtl;aspect-ratio:2/3;background:linear-gradient(100deg,#101012 40%,#17171a 50%,#101012 60%);background-size:200% 100%;animation:shph 1.6s infinite;border-radius:10px;margin:0 0 10px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#5d5b55;font-size:.8rem}@keyframes shph{0%{background-position:120% 0}100%{background-position:-80% 0}}.sp{width:26px;height:26px;border-radius:50%;border:3px solid #26262a;border-top-color:#ff4a3d;animation:spinph 1s linear infinite}@keyframes spinph{to{transform:rotate(360deg)}}@media (max-width:480px){.rdr-bar{gap:4px;padding:6px 8px}.rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}.rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}}</style>
 </head>
 <body>
 <div class="rdr" id="manga_rdr" data-zoom="1">
@@ -131,17 +137,43 @@
   const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
   const clampZ = (nz) => Math.min(MAX, Math.max(MIN, +nz || 1));
-  const commitPinch = () => {
+  // v1.14.62 — فیکسِ «زوم می‌کنم دستم را بردارم می‌پرد بالا/پایین»: کامیتِ
+  // قبلی نقطهٔ زیرِ انگشت را (scroll+mid)/z می‌گرفت؛ ولی در حینِ پینچ چیدمان
+  // هنوز در startZ بود و فقط transformِ GPU با k=kz/startZ بزرگ‌نمایی می‌کرد —
+  // یعنی نقطهٔ واقعیِ چیدمانیِ زیرِ انگشت (scroll+mid)/k بود، نه ÷z → بعد از
+  // رهاکردنِ انگشت نقطهٔ اشتباهی کانون می‌شد = پرش. حالا نقطه با k اصلاح
+  // می‌شود و اگر یک انگشت باقی مانده باشد، کانون = همان انگشتِ باقی‌مانده
+  // (نه وسطِ دو انگشت) تا پنِ تک‌انگشتیِ بعدش بدونِ جهش ادامه یابد.
+  const commitPinch = (anchor) => {
     if (pinchRaf) { cancelAnimationFrame(pinchRaf); pinchRaf = 0; }
     if (!pinch) return;
     const kz = pinch.curZ || pinch.startZ;
-    const lm = pinch.lastMid;
+    const lm = anchor || pinch.lastMid;
+    const k = kz / Math.max(0.01, pinch.startZ);
     pinch = null;
     c.style.transform = '';
     c.style.transformOrigin = '';
     c.style.willChange = '';
-    // کامیتِ چیدمانی با همان نقطهٔ کانونیِ پینچ — نه وسطِ صفحه
-    if (lm) applyZoom(kz, lm.x, lm.y); else applyZoom(kz);
+    if (lm) {
+      const rc = s.getBoundingClientRect();
+      const sx = lm.x - rc.left, sy = lm.y - rc.top;
+      // نقطهٔ چیدمانیِ زیرِ lm با احتسابِ transformِ فعلی (k) — واحد: چیدمانِ
+      // startZ. چیدمانِ جدید W1=baseWidth*kz = W0*k است → اسکرولِ درست =
+      // fx*k − sx (نه fx*kz − sx! fx*kz فقط وقتی startZ=1 درست بود؛ در
+      // پینچِ دوم به بعد چیدمانِ قبلی baseWidth*startZ بود → پرشِ
+      // «دستم را بردارم میره پایین/بالا»). fx*k = fx*kz/startZ.
+      const fx = (s.scrollLeft + sx) / k;
+      const fy = (s.scrollTop + sy) / k;
+      z = kz;
+      c.style.maxWidth = 'none';
+      c.style.width = Math.round(baseWidth() * kz) + 'px';
+      s.scrollLeft = Math.max(0, fx * k - sx);
+      s.scrollTop = Math.max(0, fy * k - sy);
+      if (bar) bar.textContent = Math.round(kz * 100) + '%';
+      root.dataset.zoom = String(z);
+    } else {
+      applyZoom(kz);
+    }
   };
   document.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
@@ -182,8 +214,16 @@
           // شروعِ پینچ قفل می‌شود و اسکرول هر فریم = F*k − midِ فعلی —
           // بدونِ پس‌خور؛ حرکتِ انگشت‌ها هم پنِ طبیعی می‌دهد.
           if (!pinch.F) pinch.F = { x: s.scrollLeft + mx, y: s.scrollTop + my };
-          s.scrollLeft = Math.max(0, pinch.F.x * k - mx);
-          s.scrollTop = Math.max(0, pinch.F.y * k - my);
+          // v1.14.62: اسکرول ممکن است به مرزِ چیدمان بخورد (ناحیهٔ دیده‌شدهٔ
+          // transform بزرگ‌تر از چیدمان است) — اگر خورد، کانون را به وضعیتِ
+          // واقعی قفل کن تا فریم‌های بعدی از همان‌جا ادامه دهند (بدونِ جهش)
+          const mX = s.scrollWidth - s.clientWidth, mY = s.scrollHeight - s.clientHeight;
+          const wX = pinch.F.x * k - mx, wY = pinch.F.y * k - my;
+          const tX = Math.max(0, Math.min(mX, wX));
+          const tY = Math.max(0, Math.min(mY, wY));
+          s.scrollLeft = tX; s.scrollTop = tY;
+          if (tX !== wX) pinch.F.x = (tX + mx) / k;
+          if (tY !== wY) pinch.F.y = (tY + my) / k;
           pinch.curZ = kz;
           pinch.lastMid = { x: m.x, y: m.y };
           if (bar) bar.textContent = Math.round(kz * 100) + '%';
@@ -192,7 +232,9 @@
     }
   }, { passive: false });
   document.addEventListener('touchend', (e) => {
-    if (pinch && e.touches.length < 2) commitPinch();
+    // v1.14.62: اگر یک انگشت باقی مانده، همان انگشت کانونِ کامیت شود
+    if (pinch && e.touches.length < 2)
+      commitPinch(e.touches.length === 1 ? { x: e.touches[0].clientX, y: e.touches[0].clientY } : null);
   });
   document.addEventListener('touchcancel', () => commitPinch());
   const updateProgress = () => {
@@ -236,7 +278,47 @@
   while (c.firstChild) lgF.appendChild(c.firstChild);
   c.appendChild(lgF);
   c.appendChild(lgD);
+  // ——— v1.14.62: لودِ تدریجی برای رمِ کمتر («نمایش زنده کم کم لود کنه») ———
+  // تصویرها تا ۲۸ مگاپیکسل‌اند؛ هر کدام ~۱۱۰MB بیت‌مپِ دیکودشده می‌خواهد و
+  // WebView با چند صفحه خفه می‌شود. حالا فقط نوارِ اطرافِ دید (±۲.۲ برابرِ
+  // ارتفاعِ دید) نگه داشته می‌شود؛ صفحاتِ دور به placeholderِ ۱px برمی‌گردند
+  // (اول aspect-ratio از اندازهٔ واقعی قفل می‌شود تا چیدمان و اسکرول ذره‌ای
+  // تکان نخورد) و با نزدیک‌شدن دوباره لود می‌شوند = لودِ «کم‌کم». لیستِ مخفی
+  // (display:none) همیشه کاملاً تخلیه است و هنگام سوئیچ از نو لود می‌شود.
+  const PH1 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+  const mgIO = ('IntersectionObserver' in window) ? new IntersectionObserver((es) => {
+    for (const en of es) {
+      const im = en.target;
+      if (en.isIntersecting) {
+        const r = im.dataset.src || '';
+        if (r && im.getAttribute('src') !== r) im.setAttribute('src', r);
+      } else if (im.naturalWidth > 1 && im.naturalHeight > 1) {
+        // >1: placeholderِ ۱px هرگز aspect-ratio را با ۱/۱ بازنویسی نکند
+        try { im.style.aspectRatio = im.naturalWidth + '/' + im.naturalHeight; } catch (err) {}
+        if (im.getAttribute('src') !== PH1) im.setAttribute('src', PH1);
+      }
+    }
+  }, { root: s, rootMargin: '220% 0px 220% 0px' }) : null;
+  const mgImg = (im) => {
+    if (!mgIO || !im || im.__mgd) return;
+    im.__mgd = 1;
+    if (!im.dataset.src) im.dataset.src = im.getAttribute('src') || '';
+    try { mgIO.observe(im); } catch (err) {}
+  };
+  const mkImg = (i, dbg) => {
+    const im = document.createElement('img');
+    im.src = (dbg ? 'd/' : 'i/') + i;
+    im.dataset.src = im.src;
+    im.loading = 'lazy';
+    im.decoding = 'async';
+    im.alt = '';
+    im.draggable = false;
+    mgImg(im);
+    return im;
+  };
   arrived = lgF.querySelectorAll('img').length;
+  // v1.14.62: تصویرهایِ تزریقیِ استاتیکِ اندروید هم تحتِ مدیریتِ لودِ تدریجی
+  try { lgF.querySelectorAll('img').forEach(mgImg); } catch (err) {}
   const scrollMem = { final: 0, dbg: 0 };
   try {
     const tb0 = root.querySelector('[data-act="dbg"]');
@@ -247,15 +329,6 @@
     d.className = 'ph';
     d.innerHTML = '<span class="sp"></span>در حال ترجمه…';
     return d;
-  };
-  const mkImg = (i, dbg) => {
-    const im = document.createElement('img');
-    im.src = (dbg ? 'd/' : 'i/') + i;
-    im.loading = 'lazy';
-    im.decoding = 'async';
-    im.alt = '';
-    im.draggable = false;
-    return im;
   };
   // تعدادِ اسلاتِ «در حال ترجمه» که در اولین رندر تزریق شده — بعد از اولین
   // __mangaLive این عدد با total جایگزین می‌شود (v1.14.45 هم همین بود)

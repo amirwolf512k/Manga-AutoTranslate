@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.61"
+APP_VER = "1.14.62"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -6847,7 +6847,9 @@ class MangaTranslator:
                                             # سقفِ ترکیبِ دو-عکسی هنرِ بیرونِ بلوک را
                                             # سالم نگه می‌دارد. مسیرِ opencv مثل قبل تنگ.
                                             if (getattr(self, "use_lama", False)
-                                                    and self._clean_level() != "fast"):
+                                                    and self._clean_level() != "fast"
+                                                    and self._ink_bg_dark(
+                                                        image, _inkB)):
                                                 _rm = cv2.bitwise_or(_rm, _inkB)
                                                 try:
                                                     _ys2, _xs2 = np.nonzero(_rm)
@@ -6857,6 +6859,12 @@ class MangaTranslator:
                                                          int(_ys2.max()) + 1])
                                                 except Exception:
                                                     pass
+                                            elif getattr(self, "use_lama", False):
+                                                # v1.14.62b — زمینهٔ روشن → بلوکِ
+                                                # کامل ممنوع؛ ماسکِ سخاوتمند ∪ جوهر
+                                                # با مسیرِ عادی (flat/color/LaMaِ
+                                                # کلاستر) پاک می‌شود
+                                                _rm = cv2.bitwise_or(_rm, _inkB)
                                             else:
                                                 _rm = _inkB
                                         elif self._free_text_tight_ok(
@@ -6960,8 +6968,14 @@ class MangaTranslator:
                         if self._ink_tight_ok(
                                 image, _rm, _ink2, _polys_raw):
                             # v1.14.59 — همان قانونِ محفظهٔ تیره برای مسیرِ پالی‌ها
+                            # v1.14.62b — force-box فقط برای زمینهٔ «تیره»؛
+                            # پنجره‌هایِ آبیِ روشن ([SPECIAL CHANGES]) بلوکِ
+                            # کامل نشوند — LaMaِ کلِ بلوک + اسنپ‌شاتِ کثیف
+                            # (که هنوز متن دارد) = متنِ شبح. زمینهٔ روشن →
+                            # مسیرِ عادی با ماسکِ سخاوتمند ∪ جوهر.
                             if (getattr(self, "use_lama", False)
-                                    and self._clean_level() != "fast"):
+                                    and self._clean_level() != "fast"
+                                    and self._ink_bg_dark(image, _ink2)):
                                 _rm = cv2.bitwise_or(_rm, _ink2)
                                 try:
                                     _ys2, _xs2 = np.nonzero(_rm)
@@ -6971,6 +6985,8 @@ class MangaTranslator:
                                          int(_ys2.max()) + 1])
                                 except Exception:
                                     pass
+                            elif getattr(self, "use_lama", False):
+                                _rm = cv2.bitwise_or(_rm, _ink2)
                             else:
                                 _rm = _ink2
                         elif self._free_text_tight_ok(
@@ -8596,6 +8612,25 @@ class MangaTranslator:
                 continue
         return n_fill
 
+    def _ink_bg_dark(self, image: np.ndarray, ink: np.ndarray) -> bool:
+        """v1.14.62b — آیا زمینهٔ دورِ جوهرِ این ناحیه واقعاً تیره است؟
+        بلوکِ اجباریِ LaMa (force-box) فقط برای «متنِ روشن روی محفظهٔ تیره»
+        معنا دارد. پنجره‌هایِ آبیِ روشن (مثل [SPECIAL CHANGES]) را هم بلوکِ
+        کامل می‌گرفت → LaMa کلِ پنل را بازسازی می‌کرد و بعدِ مقایسه با
+        اسنپ‌شاتِ قبل از LaMa (که هنوز متن دارد) «لکه» تشخیص می‌داد و
+        اسنپ‌شاتِ کثیف جایگزین می‌شد = متنِ انگلیسی برمی‌گشت. حلقهٔ دورِ
+        جوهر (دیلیت ۱۳ منهای دیلیت ۳) میانهٔ خاکستری ≤ ۱۴۵ → تیره."""
+        try:
+            g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            _d1 = cv2.dilate(ink, np.ones((13, 13), np.uint8))
+            _d0 = cv2.dilate(ink, np.ones((3, 3), np.uint8))
+            _ring = (_d1 > 0) & (_d0 == 0)
+            if int(_ring.sum()) < 40:
+                return False
+            return float(np.median(g[_ring])) <= 145.0
+        except Exception:
+            return False
+
     @staticmethod
     def _mem_trim() -> None:
         """v1.14.48c — آزادسازیِ حافظهٔ کش‌شده به OS بینِ فازهایِ سنگین.
@@ -8705,7 +8740,8 @@ class MangaTranslator:
                 _fy0 = max(0, int(_fb[1]) - 4)
                 _fx1 = min(_w59, int(_fb[2]) + 5)
                 _fy1 = min(_h59, int(_fb[3]) + 5)
-                if _fx1 - _fx0 >= 8 and _fy1 - _fy0 >= 8:
+                if (_fx1 - _fx0 >= 8 and _fy1 - _fy0 >= 8
+                        and os.environ.get("MANGA_NO_FORCE_LAMA", "0") != "1"):
                     mask[_fy0:_fy1, _fx0:_fx1] = 255
             if _fb_list:
                 # سقفِ رنگ‌آمیزی (cap) هم باید کلِ بلوک را بپوشاند
@@ -8743,9 +8779,48 @@ class MangaTranslator:
         try:
             for _fb in (getattr(self, "_lama_force_rect_boxes",
                                 None) or []):
-                mask[_fb[1]:_fb[3], _fb[0]:_fb[2]] = 255
+                if os.environ.get("MANGA_NO_FORCE_LAMA", "0") != "1":
+                    mask[_fb[1]:_fb[3], _fb[0]:_fb[2]] = 255
         except Exception:
             pass
+        # v1.14.62 — اسنپ‌شاتِ «وضعیتِ پرکنندهٔ فوری» برایِ بلوک‌هایِ محفظهٔ
+        # تیره، قبل از حلقهٔ LaMa. چرا: در نوارِ ترکیبی، بازسازیِ بلوکِ کامل
+        # توسطِ LaMa-Manga (مدلِ گوشی/سقفِ پچِ ۳۸۴) رویِ صفحهٔ گرادیانیِ تیره
+        # «لکهٔ بلوکی» می‌سازد (کارتِ عنوانِ Crimson Dragon — بازتولیدِ
+        # سندباکس در strip_003). پرکنندهٔ فوریِ گرادیانی (v1.14.60) رویِ همان
+        # بلوک «کاملاً تمیز» است (اثبات: MANGA_NO_FORCE_LAMA=1). پس نتیجهٔ
+        # LaMaِ هر بلوک در اعمالِ نهایی با این اسنپ‌شات سنجیده می‌شود؛ اگر
+        # انحرافِ لکه‌ای بزرگ داشت، همان اسنپ‌شات جایگزین می‌شود.
+        self._force_pre_snap = None
+        try:
+            _fbs62 = (getattr(self, "_lama_force_rect_boxes", None) or [])
+            if _fbs62:
+                _hS, _wS = mask.shape[:2]
+                _snaps = []
+                for _fb in _fbs62:
+                    _sx0 = max(0, int(_fb[0]) - 6)
+                    _sy0 = max(0, int(_fb[1]) - 6)
+                    _sx1 = min(_wS, int(_fb[2]) + 7)
+                    _sy1 = min(_hS, int(_fb[3]) + 7)
+                    if _sx1 - _sx0 >= 8 and _sy1 - _sy0 >= 8:
+                        _snaps.append([_sx0, _sy0, _sx1, _sy1,
+                                       cleaned[_sy0:_sy1, _sx0:_sx1].copy()])
+                if _snaps:
+                    self._force_pre_snap = _snaps
+                    _sddS = os.environ.get("MANGA_STAGE_DUMP", "")
+                    if _sddS:
+                        try:
+                            _siS = int(getattr(self, "_snap_i", 0))
+                            self._snap_i = _siS + 1
+                            _sdS = os.path.join(_sddS, f"snap{_siS:02d}")
+                            os.makedirs(_sdS, exist_ok=True)
+                            for _kS, _sn in enumerate(_snaps):
+                                cv2.imwrite(os.path.join(
+                                    _sdS, f"box{_kS:02d}.jpg"), _sn[4])
+                        except Exception:
+                            pass
+        except Exception:
+            self._force_pre_snap = None
         if not np.any(mask):
             if self.debug:
                 print("  [*] everything cleaned by instant fill")
@@ -9029,6 +9104,86 @@ class MangaTranslator:
                 print("  [!] LaMa unavailable → OpenCV for remaining clusters")
 
         for cx0, cy0, cx1, cy1, crop_msk, result, method in crops:
+            # v1.14.62 — اعتبارسنجیِ نتیجهٔ LaMa رویِ بلوک‌هایِ محفظهٔ تیره:
+            # در نوارِ ترکیبی، بازسازیِ بلوکِ کاملِ LaMa-Manga رویِ صفحهٔ
+            # گرادیانیِ تیره «لکهٔ بلوکیِ تیره» می‌سازد (کارتِ عنوانِ Crimson
+            # Dragon — بازتولیدِ سندباکس). اسنپ‌شاتِ پرکنندهٔ فوریِ گرادیانی
+            # (قبل از LaMa) مرجع است؛ انحرافِ بزرگ = لکه → جایگزینی با
+            # اسنپ‌شات (سبکِ پاکسازی عوض نمی‌شود — همان پرکنندهٔ فوریِ خودم).
+            if (method == "LaMa" and result is not None
+                    and getattr(self, "_force_pre_snap", None)):
+                try:
+                    for _sn in self._force_pre_snap:
+                        _ix0 = max(cx0, _sn[0])
+                        _iy0 = max(cy0, _sn[1])
+                        _ix1 = min(cx1, _sn[2])
+                        _iy1 = min(cy1, _sn[3])
+                        if _ix1 - _ix0 < 24 or _iy1 - _iy0 < 24:
+                            continue
+                        _ra = (np.asarray(result[
+                            _iy0 - cy0:_iy1 - cy0,
+                            _ix0 - cx0:_ix1 - cx0],
+                            dtype=np.int16))
+                        _rb = (np.asarray(_sn[4][
+                            _iy0 - _sn[1]:_iy1 - _sn[1],
+                            _ix0 - _sn[0]:_ix1 - _sn[0]],
+                            dtype=np.int16))
+                        if _ra.shape != _rb.shape or _ra.size < 400:
+                            continue
+                        _dM = np.abs(_ra - _rb).max(axis=2).astype(np.uint8)
+                        _dM = cv2.GaussianBlur(_dM, (0, 0), 4)
+                        _dm_mean = float(_dM.mean())
+                        _dm_big = float((_dM > 26).mean())
+                        # v1.14.62b — گاردِ «متنِ شبح»: اگر اسنپ‌شات هنوز
+                        # جوهرِ متنیِ زیاد دارد (پرکنندهٔ فوری ناکام مانده —
+                        # پنلِ روشن) ولی نتیجهٔ LaMa هموارتر است، جایگزینی
+                        # ممنوع — وگرنه متنِ انگلیسی برمی‌گشت. سنجش:
+                        # انرژیِ فرکانسِ بالا نسبت به میانهٔ محلی (حروف نازک
+                        # = ساختار؛ لکه/گرادیانِ نرم = بی‌ساختار).
+                        _gs62 = cv2.cvtColor(
+                            np.clip(_rb, 0, 255).astype(np.uint8),
+                            cv2.COLOR_BGR2GRAY)
+                        _gl62 = cv2.cvtColor(
+                            np.clip(_ra, 0, 255).astype(np.uint8),
+                            cv2.COLOR_BGR2GRAY)
+                        _mk62 = (41 if min(_gs62.shape) >= 41
+                                 else 31 if min(_gs62.shape) >= 31 else 15)
+                        _ms62 = cv2.medianBlur(_gs62, _mk62)
+                        _ml62 = cv2.medianBlur(_gl62, _mk62)
+                        _fs62 = float((np.abs(
+                            _gs62.astype(np.int16)
+                            - _ms62.astype(np.int16)) > 30).mean())
+                        _fl62 = float((np.abs(
+                            _gl62.astype(np.int16)
+                            - _ml62.astype(np.int16)) > 30).mean())
+                        if _fs62 > _fl62 * 1.6 + 0.02:
+                            if self.debug:
+                                print(f"  [✓] v1.14.62b: اسنپ‌شاتِ بلوک هنوز "
+                                      f"متن دارد (جوهرِ اسنپ={_fs62:.3f} > "
+                                      f"LaMa={_fl62:.3f}) → نتیجهٔ LaMa "
+                                      f"نگه داشته شد (جلوگیری از متنِ شبح)",
+                                      flush=True)
+                            continue
+                        # فقط «لکهٔ بلوکی» — لکهٔ واقعی (کارتِ عنوان) در
+                        # Δ>26 بوم‌بوم است (اندازه‌گیری: ۰.۶۲/۰.۷۶) ولی
+                        # بازسازیِ سالمِ LaMa روی پنل‌هایِ آبی فقط Δμ=۶-۷
+                        # و Δ>26≈۰.۰۱ دارد → شرط روی فراکسیونِ لکه‌ای است
+                        # نه میانگین (وگرنه پاکیِ سالم جایگزین می‌شد!)
+                        if _dm_big > 0.08 and _dm_mean > 9.0:
+                            _res2 = np.array(result)
+                            _res2[_iy0 - cy0:_iy1 - cy0,
+                                  _ix0 - cx0:_ix1 - cx0] = \
+                                _sn[4][_iy0 - _sn[1]:_iy1 - _sn[1],
+                                       _ix0 - _sn[0]:_ix1 - _sn[0]]
+                            result = _res2
+                            if self.debug:
+                                print(f"  [✓] v1.14.62: لکهٔ بلوکیِ LaMa روی "
+                                      f"بلوکِ تیره (Δμ={_dm_mean:.1f}, "
+                                      f"Δ>{_dm_big:.2f}) → پرکنندهٔ فوریِ "
+                                      f"گرادیانی جایگزین شد", flush=True)
+                            break
+                except Exception:
+                    pass
             _prot_c = None
             if getattr(self, "_page_protect", None) is not None:
                 try:
@@ -9190,6 +9345,72 @@ class MangaTranslator:
             pass
         self._mem_trim()  # v1.14.48c: قبل از سویپ‌ها رم آزاد شود
 
+        # v1.14.62 — جاروی جوهرِ روشنِ باقی‌مانده «داخلِ» بلوک‌هایِ محفظهٔ
+        # تیره (کارتِ عنوان). کاربر: «عکس‌ها را کامل خوب پاک کنه؛ اضافه پاک
+        # کردن هم اشکال نداره». نمونهٔ واقعی: تکهٔ سفیدِ «S(» وسطِ کارتِ
+        # Crimson Dragon که نه در کِیلِ پرکنندهٔ فوری بود و نه LaMa کامل
+        # برداشت. داخلِ این بلوک‌ها هر پیکسلِ روشن (پس‌زمینهٔ کارت تیره است)
+        # با رنگِ محلیِ خودِ صفحه (همان پرکنندهٔ فوریِ گرادیانی) پر می‌شود؛
+        # قابِ تزئینی بیرونِ باکس است (باکس ۸px فرسایش می‌گیرد) و دست
+        # نمی‌خورد.
+        try:
+            _fbsW = (getattr(self, "_lama_force_rect_boxes", None) or [])
+            if _fbsW:
+                _hW, _wW = cleaned.shape[:2]
+                _gW = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+                _protW = getattr(self, "_page_protect", None)
+                _nW = 0
+                for _fbW in _fbsW:
+                    _wx0 = max(0, int(_fbW[0]) + 8)
+                    _wy0 = max(0, int(_fbW[1]) + 8)
+                    _wx1 = min(_wW, int(_fbW[2]) - 7)
+                    _wy1 = min(_hW, int(_fbW[3]) - 7)
+                    if _wx1 - _wx0 < 12 or _wy1 - _wy0 < 12:
+                        continue
+                    _sub = _gW[_wy0:_wy1, _wx0:_wx1]
+                    _bright = (_sub >= 140)
+                    if _protW is not None:
+                        _bright = _bright & (
+                            _protW[_wy0:_wy1, _wx0:_wx1] == 0)
+                    _bright = cv2.morphologyEx(
+                        _bright.astype(np.uint8), cv2.MORPH_OPEN,
+                        np.ones((3, 3), np.uint8)) > 0
+                    if int(_bright.sum()) < 16:
+                        continue
+                    if float(_bright.mean()) > 0.5:
+                        continue  # بلوک عمدتاً روشن؟ → این کارتِ تیره نیست
+                    _subC = cleaned[_wy0:_wy1, _wx0:_wx1]
+                    _darkM = ((_sub < 120).astype(np.uint8)
+                              & (~_bright).astype(np.uint8))
+                    _srcF = _subC.astype(np.float32)
+                    _kW = 31
+                    _numW = cv2.blur(_srcF * _darkM[..., None], (_kW, _kW))
+                    _denW = cv2.blur(_darkM.astype(np.float32), (_kW, _kW))
+                    _dkW = _srcF[_darkM > 0]
+                    _fbW2 = (np.median(_dkW, axis=0) if _dkW.size >= 30
+                             else np.median(
+                                 _srcF[_bright == 0].reshape(-1, 3),
+                                 axis=0)
+                             if int((_bright == 0).sum()) > 30
+                             else np.array([0.0, 0.0, 0.0]))
+                    _fillW = np.where(
+                        _denW[..., None] > 0.02,
+                        _numW / np.maximum(_denW, 1e-6)[..., None],
+                        _fbW2[None, None, :]).astype(np.float32)
+                    _dilW = cv2.dilate(
+                        _bright.astype(np.uint8),
+                        np.ones((5, 5), np.uint8)) > 0
+                    _selW = _dilW
+                    _subC[_selW] = np.clip(
+                        np.rint(_fillW[_selW]), 0, 255).astype(np.uint8)
+                    cleaned[_wy0:_wy1, _wx0:_wx1] = _subC
+                    _nW += int(_bright.sum())
+                if _nW and self.debug:
+                    print(f"  [✓] v1.14.62: {_nW}px جوهرِ روشنِ باقی‌مانده "
+                          f"داخلِ بلوک‌هایِ تیره پاک شد", flush=True)
+        except Exception:
+            pass
+
         # v1.14.54 — روشِ «دو عکس» کاربر: عکسِ اول = پاک‌شدهٔ کامل (حتی اگر
         # حباب در آن خراب یا بیشتر پاک شده باشد — مهم نیست)، عکسِ دوم =
         # عکسِ اصلی که «خروجی» روی آن ساخته می‌شود. فقط نوارهایِ متن از
@@ -9206,6 +9427,18 @@ class MangaTranslator:
         # = ماسکِ متن ∪ همهٔ پیکسل‌هایِ واقعاً تغییرکرده — مثلِ مسیرِ
         # early-return در بالا. سقفِ تغییرها قبلاً با mm_cap (~۱۵px بیرونِ
         # ماسکِ خام) کنترل شده، پس لکهٔ دور از متن ساخته نمی‌شود.
+        # ابزارِ دیباگِ مرحله‌ای (MANGA_STAGE_DUMP=پوشه) — قبل/بعدِ کامپوز و
+        # سویپِ بقایا؛ برایِ ریشه‌یابیِ «لکه» که کدام مرحله ساخته
+        _sdd = os.environ.get("MANGA_STAGE_DUMP", "")
+        if _sdd:
+            try:
+                _si = int(getattr(self, "_stage_i", 0))
+                self._stage_i = _si + 1
+                _sd = os.path.join(_sdd, f"s{_si:02d}")
+                os.makedirs(_sd, exist_ok=True)
+                cv2.imwrite(os.path.join(_sd, "pre_compose.jpg"), cleaned)
+            except Exception:
+                _sd = ""
         if os.environ.get("MANGA_TWO_IMAGE", "1") != "0":
             try:
                 _chg = np.any(cleaned != image, axis=2)
@@ -9213,6 +9446,11 @@ class MangaTranslator:
             except Exception:
                 _cmp2 = mask
             cleaned = self._compose_two_image(cleaned, image, _cmp2)
+        if _sdd and _sd:
+            try:
+                cv2.imwrite(os.path.join(_sd, "post_compose.jpg"), cleaned)
+            except Exception:
+                pass
 
         _lama_fix = 0
         _kern_r = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
@@ -9247,6 +9485,11 @@ class MangaTranslator:
             import traceback as _tb
             print("  [!] Residue sweep error:")
             _tb.print_exc()
+        if _sdd and _sd:
+            try:
+                cv2.imwrite(os.path.join(_sd, "post_sweep.jpg"), cleaned)
+            except Exception:
+                pass
 
         # v1.14.48: جاروی لکهٔ محوِ داخلِ حباب‌هایِ سفید (halo حروف) —
         # نمونهٔ کاربر: لکهٔ وسطِ «BUT I LIKE IT HERE.» / نقطهٔ «MR. JUN~»
