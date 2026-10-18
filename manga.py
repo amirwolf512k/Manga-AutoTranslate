@@ -2169,7 +2169,19 @@ class RapidOCRBackend:
                 _cpu_n = _os2.cpu_count() or 4
             except Exception:
                 _cpu_n = 4
-            _intra = 1 if _cpu_n <= 4 else 2
+            # v1.14.66 — نخِ OCR: رویِ PC قبلاً سقفِ ۲ بود (کُند!)؛ حالا
+            # MANGA_OCR_THREADS یا cores÷2 (تا ۴) — نتیجهٔ OCR عوض نمی‌شود،
+            # فقط سریع‌تر. اندروید مثلِ قبل (رم).
+            try:
+                _ocr_th = int(_os2.environ.get("MANGA_OCR_THREADS", "0") or 0)
+            except Exception:
+                _ocr_th = 0
+            if _ocr_th > 0:
+                _intra = max(1, _ocr_th)
+            elif _on_android():
+                _intra = 1 if _cpu_n <= 4 else 2
+            else:
+                _intra = max(2, min(4, _cpu_n // 2))
             _threads = {
                 "EngineConfig.onnxruntime.intra_op_num_threads": int(_intra),
                 "EngineConfig.onnxruntime.inter_op_num_threads": 1,
