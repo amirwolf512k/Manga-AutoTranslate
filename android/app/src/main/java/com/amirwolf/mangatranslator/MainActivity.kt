@@ -2606,6 +2606,25 @@ class MainActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 android.util.Log.e("MangaApp", "cleanupPagesDirs", e)
             }
+            // v1.14.66 — پوشه‌هایِ خالیِ pages_…: MediaStore فقط «فایل»
+            // می‌بیند نه پوشه → فایل‌ها پاک می‌شدند ولی خودِ پوشهٔ خالی
+            // می‌ماند (گزارشِ کاربر). جارویِ فایل‌محوریِ تکمیلی:
+            try {
+                val baseF = File(Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS), "manga")
+                for (d in baseF.listFiles() ?: emptyArray()) {
+                    if (d.isDirectory && d.name.startsWith("pages_")) {
+                        try {
+                            val kids = d.listFiles()
+                            if (kids == null || kids.isEmpty()) {
+                                if (d.delete()) n++
+                            } else if (d.deleteRecursively()) n++
+                        } catch (_: Exception) {
+                        }
+                    }
+                }
+            } catch (_: Exception) {
+            }
             if (n > 0) {
                 android.util.Log.i("MangaApp", "cleanupPagesDirs: $n items removed")
                 ui.post {

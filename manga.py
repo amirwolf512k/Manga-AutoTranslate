@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.65"
+APP_VER = "1.14.66"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -780,9 +780,56 @@ def _ep_ab_feed(sess, side: int = 256) -> dict:
     return feed
 
 
+_LAMA_STATIC_SIDE = None
+
+
+def _lama_static_side() -> int:
+    """v1.14.66 — شکلِ ثابتِ پچِ LaMa برایِ EPهایی که با شکلِ داینامیک
+    می‌میرند (xnnpack رویِ اندروید: پروبِ ثابت پاس می‌شود ولی پچِ واقعیِ
+    384×~200 ORT_FAIL می‌دهد — ریشهٔ مرگِ LaMa و فال‌بکِ OpenCV). وقتی
+    فعال باشد، هر ورودیِ LaMa دقیقاً به (side×side) پد می‌شود → xnnpack
+    فقط یک‌بار کامپایل می‌کند و واقعاً کار می‌کند (سریع‌تر از CPUِ خالی).
+    env: MANGA_LAMA_STATIC_SIDE=0 (خاموش) | N (اندازه) | خالی = خودکار
+    (اندروید + xnnpack موجود → 384، بقیه → 0)."""
+    global _LAMA_STATIC_SIDE
+    if _LAMA_STATIC_SIDE is not None:
+        return int(_LAMA_STATIC_SIDE)
+    v = -1
+    try:
+        _raw = (os.environ.get("MANGA_LAMA_STATIC_SIDE", "") or "").strip()
+        if _raw != "":
+            v = int(_raw)
+    except Exception:
+        v = -1
+    side = 0
+    if v > 0:
+        side = (int(v) // 64) * 64
+    elif v == 0:
+        side = 0
+    else:
+        try:
+            if _on_android() and ort is not None and (
+                    "XnnpackExecutionProvider"
+                    in list(ort.get_available_providers())):
+                side = 384
+        except Exception:
+            side = 0
+    _LAMA_STATIC_SIDE = int(side)
+    return int(side)
+
+
+def _lama_probe_side(ab: bool = False) -> int:
+    """شکلِ فیدِ پروب/AB — وقتی باکتِ ثابت فعال است، پروب باید با همان
+    شکلِ واقعیِ پچ‌ها باشد تا کامپایلِ xnnpack از همان ابتدا درست باشد."""
+    s = _lama_static_side()
+    if s > 0:
+        return s
+    return 256 if ab else 64
+
+
 def _ep_ab_time(sess) -> float:
     try:
-        feed = _ep_ab_feed(sess, side=256)
+        feed = _ep_ab_feed(sess, side=_lama_probe_side(True))
         if not feed:
             return float("inf")
         outs = [o.name for o in sess.get_outputs()][:1]
@@ -800,7 +847,7 @@ def _ep_ab_time(sess) -> float:
 
 def _ort_probe_ok(sess, threads: int) -> bool:
     try:
-        feed = _ep_ab_feed(sess, side=64)
+        feed = _ep_ab_feed(sess, side=_lama_probe_side(False))
         if not feed:
             return False
         outs = [o.name for o in sess.get_outputs()][:1]
@@ -1268,6 +1315,22 @@ class LamaMangaONNX:
         names = [i.name for i in self.session.get_inputs()]
         self._in_image = names[0]
         self._in_mask = names[1] if len(names) > 1 else "mask"
+        # v1.14.66 — باکتِ شکلِ ثابت برایِ xnnpack: هر ورودیِ LaMa دقیقاً
+        # _static_bucket×_static_bucket پد می‌شود تا EPِ xnnpack که با
+        # شکلِ داینامیک ORT_FAIL می‌دهد واقعاً کار کند (پچِ LaMa زنده
+        # می‌ماند → بدونِ فال‌بکِ OpenCV → بدونِ لکهٔ قرمز + سریع‌تر).
+        self._static_bucket = 0
+        try:
+            _pv66 = [str(p).lower()
+                     for p in (self.session.get_providers() or [])]
+            if _lama_static_side() > 0 and any(
+                    p.startswith("xnnpack") for p in _pv66):
+                self._static_bucket = int(_lama_static_side())
+                print(f"[*] LaMa xnnpack → پچِ ثابتِ "
+                      f"{self._static_bucket}×{self._static_bucket} "
+                      f"(ضدِ ORT_FAILِ شکلِ داینامیک)", flush=True)
+        except Exception:
+            self._static_bucket = 0
         self._input_cap = self.SIZE
         try:
             _env_ps = int(os.environ.get("MANGA_LAMA_PATCH_SIDE", "0") or 0)
@@ -1351,7 +1414,31 @@ class LamaMangaONNX:
         s = self._dyn_size if self._fixed_size else min(self.SIZE, self._input_cap)
         _mx = max(ow, oh)
 
-        if not self._fixed_size and _mx <= s:
+        _bucket66 = int(getattr(self, "_static_bucket", 0) or 0)
+        if _bucket66 and not self._fixed_size:
+            # v1.14.66 — همهٔ ورودی‌ها دقیقاً _bucket66×_bucket66 → شکلِ
+            # ثابت برایِ xnnpack (یک کامپایل، بدونِ ORT_FAILِ شکلِ تازه).
+            # ماسک در ناحیهٔ پد صفر است و خروجی فقط داخلِ ناحیهٔ اصلی
+            # برش می‌خورد — ریاضیِ خروجی مثلِ مسیرِ fixed-size است.
+            s = _bucket66
+            scale = s / _mx
+            if scale < 1.0:
+                rw, rh = max(1, round(ow * scale)), max(1, round(oh * scale))
+                img_np = cv2.resize(img_rgb, (rw, rh),
+                                    interpolation=cv2.INTER_AREA)
+                msk = (cv2.resize(original_mask.astype(np.float32), (rw, rh),
+                                  interpolation=cv2.INTER_NEAREST_EXACT)
+                       > 0).astype(np.uint8)
+            else:
+                rw, rh = ow, oh
+                img_np = img_rgb.copy()
+                msk = original_mask.astype(np.uint8)
+            if rh < s or rw < s:
+                img_np = cv2.copyMakeBorder(img_np, 0, s - rh, 0, s - rw,
+                                            cv2.BORDER_REFLECT)
+                msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw,
+                                         cv2.BORDER_CONSTANT, value=0)
+        elif not self._fixed_size and _mx <= s:
             _tgt = max(_mx, 128)
             _sc = _tgt / _mx
             if abs(_sc - 1.0) < 1e-6:
@@ -2865,6 +2952,14 @@ DOMAIN_TLDS = (
     "jp", "cn", "ru", "de", "fr", "es", "pt", "br", "id",
     "gg", "link", "page", "club", "fun", "live", "news", "blog",
     "ink", "toon", "scans",
+    # v1.14.66 — فیلترِ تبلیغ «عمومی» شد: هر دامنهٔ سایتی = تبلیغ،
+    # نه فقط لیستِ ثابت (درخواستِ کاربر)
+    "me", "tv", "cc", "co", "ai", "mobi", "pro", "top",
+    "store", "shop", "website", "space", "host", "press",
+    "media", "team", "wiki", "zone", "run", "icu", "cyou",
+    "buzz", "vip", "pw", "art", "fans", "moe", "systems",
+    "sbs", "cafe", "tools", "tips", "today", "social",
+    "community", "network", "digital",
 )
 
 DOMAIN_RE = re.compile(
@@ -9070,6 +9165,57 @@ class MangaTranslator:
         return {"lama-manga": "lama.onnx", "lama-big": "big-lama"}.get(
             str(getattr(self, "clean_method", "") or "").lower(), "opencv")
 
+    @staticmethod
+    def _absorb_text_halo(bgr: np.ndarray, mask: np.ndarray,
+                          band: int = 13, s_min: int = 80) -> np.ndarray:
+        """v1.14.66 — هالهٔ گلوِ اشباعِ گرمِ دورِ متن (قرمز/نارنجی/زرد/
+        سرخابی — مثلِ کارتِ «Crimson Dragon») جزوِ جوهرِ متن حساب می‌شود.
+        پیکسل‌هایِ پُراشباعِ گرمِ «چسبیده به ماسک» (تا band پیکسل) به ماسک
+        اضافه می‌شوند تا هر مسیرِ پاکسازی آن‌ها را هم ببرد — وگرنه هاله
+        زنده می‌ماند و «لکهٔ قرمز» دیده می‌شود (POCO F4). فقط توده‌های
+        چسبیده به ماسک؛ تراشهٔ پراکنده و هنرِ دور دست‌نخورده می‌ماند.
+        درخواستِ صریحِ کاربر: «اشکال نداره بیشتر پاک شه»."""
+        try:
+            if bgr is None or mask is None:
+                return mask
+            if bgr.shape[:2] != mask.shape[:2] or not mask.size:
+                return mask
+            m0 = (mask > 0)
+            if not m0.any():
+                return mask
+            hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+            hh, ss = hsv[..., 0], hsv[..., 1]
+            warm = (((hh <= 40) | (hh >= 150)) & (ss >= int(s_min)))
+            k = 2 * int(band) + 1
+            ring = (cv2.dilate(m0.astype(np.uint8),
+                               np.ones((k, k), np.uint8)) > 0) & (~m0)
+            halo = (warm & ring).astype(np.uint8)
+            if int(halo.sum()) < 40:
+                return mask
+            n, lab, stats, _ = cv2.connectedComponentsWithStats(halo, 8)
+            keep = np.zeros_like(halo)
+            hgt, wdt = halo.shape
+            for i in range(1, n):
+                if stats[i, cv2.CC_STAT_AREA] < 12:
+                    continue
+                x0 = max(0, int(stats[i, cv2.CC_STAT_LEFT]) - 2)
+                y0 = max(0, int(stats[i, cv2.CC_STAT_TOP]) - 2)
+                w0 = min(wdt - x0, int(stats[i, cv2.CC_STAT_WIDTH]) + 4)
+                h0 = min(hgt - y0, int(stats[i, cv2.CC_STAT_HEIGHT]) + 4)
+                if w0 <= 0 or h0 <= 0:
+                    continue
+                if (lab[y0:y0 + h0, x0:x0 + w0] == i).any() and \
+                        m0[y0:y0 + h0, x0:x0 + w0].any():
+                    keep[lab == i] = 1
+            if not keep.any():
+                return mask
+            keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE,
+                                    np.ones((5, 5), np.uint8))
+            keep = cv2.dilate(keep, np.ones((3, 3), np.uint8))
+            return ((m0 | (keep > 0)).astype(np.uint8)) * 255
+        except Exception:
+            return mask
+
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
@@ -9100,6 +9246,22 @@ class MangaTranslator:
                 pass
             if not np.any(mask):
                 return image.copy()
+
+        # v1.14.66 — هالهٔ گلوِ اشباعِ دورِ متن (لکهٔ قرمزِ کارتِ عنوان)
+        # قبل از اسنپ‌شاتِ کامپوز و همهٔ مسیرهایِ پاکسازی به ماسک می‌چسبد
+        # تا نوارِ ترکیبِ دو-عکسی هم هاله را بپوشاند (خروجی = بدونِ لکه).
+        try:
+            _t66 = time.time()
+            _n66 = int((mask > 0).sum())
+            _mask66 = MangaTranslator._absorb_text_halo(image, mask)
+            if _mask66 is not mask:
+                mask = _mask66
+                if self.debug:
+                    print(f"  [+] v1.14.66: هالهٔ گلو → ماسک "
+                          f"(+{int((mask > 0).sum()) - _n66}px, "
+                          f"{time.time() - _t66:.2f}s)", flush=True)
+        except Exception:
+            pass
 
         # v1.14.63 — ماسکِ کامپوزِ «خط‌به‌خط»: نسخهٔ خامِ ماسکِ متنِ همین
         # لحظه (بعدِ کارو/پروتکت، «قبلِ» کِیلِ پرکننده‌هایِ فوری و «قبلِ»
@@ -15562,18 +15724,39 @@ class MangaTranslator:
         return final_image, page_debug
 
     def process_core(self, image: np.ndarray) -> np.ndarray:
+        # v1.14.66 — زمان‌گیریِ مراحل (درخواستِ کاربر: از استخراج تا آخرِ
+        # پاکسازی رویِ PC و اندروید زمان بگیر تا سریع‌سازیِ بدونِ افت بشود)
+        _t_all66 = time.time()
+        _t66 = time.time()
         regions, dbg = self.extract_regions_phase(image)
+        _t_ext66 = time.time() - _t66
         if dbg is not None:
             self._last_debug_image = dbg
         else:
             self._last_debug_image = None
         if not regions:
+            try:
+                print(f"[TIME] extract={_t_ext66:.1f}s | "
+                      f"total={time.time() - _t_all66:.1f}s (بدونِ متن)",
+                      flush=True)
+            except Exception:
+                pass
             return image
+        _t66 = time.time()
         try:
             self._classify_balloon_tones(image, regions)
         except Exception:
             pass
+        _t_tone66 = time.time() - _t66
+        _t66 = time.time()
         final_image, _ = self.finish_page_phase(image, regions)
+        _t_fin66 = time.time() - _t66
+        try:
+            print(f"[TIME] extract={_t_ext66:.1f}s tone={_t_tone66:.1f}s "
+                  f"translate+clean+render={_t_fin66:.1f}s "
+                  f"total={time.time() - _t_all66:.1f}s", flush=True)
+        except Exception:
+            pass
         return final_image
 
     def _classify_balloon_tones(self, image: np.ndarray,
@@ -15623,14 +15806,16 @@ class MangaTranslator:
         return False
 
     def process_image_file(self, in_path: str) -> Optional[np.ndarray]:
+        _t_ld66 = time.time()
         image = MangaTranslator._imread_any(in_path)
+        _t_ld66 = time.time() - _t_ld66
         if image is None:
             raise ValueError(f"تصویر قابل خواندن نیست: {in_path}")
         basename = os.path.basename(in_path)
         if self._is_mostly_blank(image):
             print(f"[!] رد شد (صفحه تقریباً خالی/کارت پایان): {basename}")
             return None
-        print(f"[*] {basename}")
+        print(f"[*] {basename} (لود {_t_ld66:.2f}s)")
         return self.process_core(image)
 
     @staticmethod
@@ -15975,15 +16160,37 @@ class MangaTranslator:
                 pass
 
     @staticmethod
+    def _webp_avif_magic(content: bytes) -> bool:
+        """شناساییِ وب‌پی/avif از جادویِ بایت‌ها (بدونِ نیاز به پسوند)."""
+        try:
+            if content is None or len(content) < 16:
+                return False
+            if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+                return True
+            if content[4:8] == b"ftyp":
+                return True
+        except Exception:
+            pass
+        return False
+
+    @staticmethod
     def _decode_image_bytes(content: bytes):
         """بایت‌ها → تصویر. زنجیرهٔ بازش: opencv → Pillow → کدکِ اندروید.
         اگر opencv باز نکرد (مثلاً وب‌پی رویِ گوشی) با Pillow باز می‌کنیم؛
         اگر Pillow هم کدک نداشت (وب‌پیِ گوشی) BitmapFactoryِ اندروید باز
-        می‌کند و بایتِ jpg برمی‌گردد تا ذخیره و خواندنِ بعدیِ cv2 سالم بماند."""
-        arr = np.frombuffer(content, dtype=np.uint8)
-        img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-        if img is not None:
-            return img, None
+        می‌کند و بایتِ jpg برمی‌گردد تا ذخیره و خواندنِ بعدیِ cv2 سالم بماند.
+        v1.14.66 — رویِ اندروید وب‌پی/avif «اولِ Pillow»: دیکودِ وب‌پیِ
+        opencvِ گوشی دورِ متنِ قرمز نویزِ کروما می‌گذارد و هاله از ماسک
+        فرار می‌کند (لکهٔ قرمزِ POCO F4 — کشفِ کاربر: همان فایل با فرمتِ
+        jpg تمیز پاک می‌شود). با Pillow-first مسیرِ «لینک» و «فایلِ
+        محلی» پیکسل‌به‌پیکسل یکی می‌شوند (هر دو = دیکودِ Pillow + jpg q92)."""
+        _prefer_pillow = (_on_android()
+                          and MangaTranslator._webp_avif_magic(content))
+        if not _prefer_pillow:
+            arr = np.frombuffer(content, dtype=np.uint8)
+            img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+            if img is not None:
+                return img, None
         _rgb = None
         try:
             from io import BytesIO
@@ -16031,11 +16238,19 @@ class MangaTranslator:
         زنجیرهٔ کاملِ بازش همان‌جا به jpg تبدیل و مسیرِ تازه برمی‌گردد؛
         فایلِ اصلی دست‌نخورده می‌ماند. اگر فایل قابلِ باز شدن نباشد،
         مسیرِ اصلی برمی‌گردد تا مرحلهٔ بعد پیامِ دقیق بدهد."""
-        try:
-            if cv2.imread(path, cv2.IMREAD_COLOR) is not None:
-                return path
-        except Exception:
-            pass
+        # v1.14.66 — اندروید: وب‌پی/avif/heic همیشه از زنجیرهٔ کاملِ بازش
+        # می‌گذرد (همان زنجیرهٔ مسیرِ لینک) — حتی اگر opencvِ گوشی بتواند
+        # بخوانَد؛ دیکودِ وب‌پیِ opencvِ گوشی دورِ متنِ قرمز نویز می‌گذارد
+        # و هالهٔ قرمز از ماسک فرار می‌کند (لکهٔ قرمزِ POCO F4).
+        _ext_norm = os.path.splitext(path)[1].lower()
+        _force_chain = (_on_android() and _ext_norm in (
+            ".webp", ".avif", ".heif", ".heic"))
+        if not _force_chain:
+            try:
+                if cv2.imread(path, cv2.IMREAD_COLOR) is not None:
+                    return path
+            except Exception:
+                pass
         try:
             with open(path, "rb") as f:
                 content = f.read()
@@ -16077,6 +16292,7 @@ class MangaTranslator:
         from bs4 import BeautifulSoup
         from urllib.parse import urljoin, urlparse
 
+        _t_dl66 = time.time()
         os.makedirs(dest_dir, exist_ok=True)
         headers = {
             "User-Agent": (
@@ -16271,7 +16487,8 @@ class MangaTranslator:
             if path:
                 saved.append(path)
 
-        print(f"    {len(saved)} تصویر از {url} دانلود شد.")
+        print(f"    {len(saved)} تصویر از {url} دانلود شد "
+              f"({time.time() - _t_dl66:.1f}s).")
         return saved
 
     @staticmethod
@@ -17787,6 +18004,7 @@ html, body { background: #0a0a0b; }
         def _extract_one(item):
             page_i, f, out_file = item
             _raise_if_stop()
+            _t_ext66 = time.time()  # v1.14.66 — زمان‌گیریِ لود+استخراج
             MangaTranslator._title_skip_enabled = (page_i == 0)
             try:
                 image = MangaTranslator._imread_any(f)
@@ -17798,6 +18016,12 @@ html, body { background: #0a0a0b; }
                     return page_i, out_file, None, None, None
                 print(f"[*] {basename}")
                 regions, dbg = self.extract_regions_phase(image)
+                try:
+                    print(f"[TIME] page#{page_i + 1} "
+                          f"load+extract={time.time() - _t_ext66:.1f}s",
+                          flush=True)
+                except Exception:
+                    pass
                 return page_i, out_file, image, regions, dbg
             except GeminiQuotaExhausted:
                 raise
@@ -17812,9 +18036,15 @@ html, body { background: #0a0a0b; }
                 return page_i, out_file, None, dbg
             if not regions:
                 return page_i, out_file, image, dbg
+            _t_fin66 = time.time()  # v1.14.66 — زمان‌گیریِ پاکسازی+رندر
             try:
                 result, page_debug = self.finish_page_phase(image, regions)
-
+                try:
+                    print(f"[TIME] page#{page_i + 1} "
+                          f"clean+render={time.time() - _t_fin66:.1f}s",
+                          flush=True)
+                except Exception:
+                    pass
                 dbg_out = page_debug if page_debug is not None else dbg
                 return page_i, out_file, result, dbg_out
             except GeminiQuotaExhausted:
@@ -17867,9 +18097,16 @@ html, body { background: #0a0a0b; }
                 if not regions:
                     results_by_i[page_i] = (out_file, image, dbg)
                     return
+                _t_fin66 = time.time()  # v1.14.66 — پاکسازی+رندر
                 result, page_debug = self.finish_page_phase(
                     image, regions, skip_translate=True, precleaned=precleaned
                 )
+                try:
+                    print(f"[TIME] page#{page_i + 1} "
+                          f"clean+render={time.time() - _t_fin66:.1f}s",
+                          flush=True)
+                except Exception:
+                    pass
                 dbg_out = page_debug if page_debug is not None else dbg
                 try:
                     self._write_image(result, out_file)

@@ -51,36 +51,52 @@ C_ERR = "#ff6a5e"
 
 
 FONT_BUNDLES = [
+    # v1.14.66 — اول «آینهٔ jsDelivr»: raw.githubusercontent.com در ایران
+    # اغلب بسته/کند است و فونت‌ها دانلود نمی‌شدند (درخواستِ کاربر).
     ("normal",       "Vazirmatn-Bold.ttf", "کودک — متن عادی حباب", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@master/fonts/ttf/Vazirmatn-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Bold.ttf",
     ]),
     ("free_text",    "Vazirmatn-Regular.ttf", "متن بیرون حباب", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@master/fonts/ttf/Vazirmatn-Regular.ttf",
         "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Regular.ttf",
     ]),
     ("shout",        "Lalezar-Fixed.ttf", "داد خشم", [
+        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/fonts/Lalezar-Fixed.ttf",
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
+        "https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@master/dist/Shabnam-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
     ]),
     ("comedy_shout", "Gandom.ttf", "داد کمدی", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/gandom-font@master/dist/Gandom.ttf",
         "https://raw.githubusercontent.com/rastikerdar/gandom-font/master/dist/Gandom.ttf",
+        "https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@master/dist/Shabnam-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
     ]),
     ("whisper",      "Nahid.ttf", "زمزمه دست‌نویس", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/nahid-font@master/dist/Nahid.ttf",
         "https://raw.githubusercontent.com/rastikerdar/nahid-font/master/dist/Nahid.ttf",
+        "https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@master/dist/Sahel.ttf",
         "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel.ttf",
     ]),
     ("thought",      "Samim-Bold.ttf", "تفکر ابری", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/samim-font@master/dist/Samim-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/samim-font/master/dist/Samim-Bold.ttf",
     ]),
     ("system",       "Vazir-Code.ttf", "پنجرهٔ سیستم/UI (دیجیتال)", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/vazir-code-font@master/dist/Vazir-Code.ttf",
         "https://raw.githubusercontent.com/rastikerdar/vazir-code-font/master/dist/Vazir-Code.ttf",
+        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/fonts/Vazir-Code.ttf",
         "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/fonts/Vazir-Code.ttf",
+        "https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@master/dist/Sahel-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Bold.ttf",
     ]),
     ("letter",       "Amiri-Regular.ttf", "نامه/طومار", [
+        "https://cdn.jsdelivr.net/gh/google/fonts@main/ofl/amiri/Amiri-Regular.ttf",
         "https://raw.githubusercontent.com/google/fonts/main/ofl/amiri/Amiri-Regular.ttf",
     ]),
     ("narrator",     "Shabnam-Bold.ttf", "راوی مستطیل", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@master/dist/Shabnam-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
     ]),
 ]
@@ -3159,6 +3175,15 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             if not src:
                 return _pack("🚀  شروع ترجمه",
                              "❌ ورودی خالی است — فایل آپلود کنید یا URL بدهید.")
+
+            # v1.14.66 — اگر فونت‌هایِ لحن از استارتِ اپ جامانده‌اند (اینترنتِ
+            # موقعِ استارت قطع بوده)، همین‌جا دوباره تلاش کن — نه فقط استارت.
+            try:
+                if any(not os.path.isfile(os.path.join(FONT_DIR, _fb[1]))
+                       for _fb in FONT_BUNDLES):
+                    download_fonts(log=lambda *_a: None)
+            except Exception:
+                pass
 
             font_v = font_up or find_font()
             if not font_v or not os.path.isfile(font_v):
