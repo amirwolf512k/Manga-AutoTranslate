@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.62"
+APP_VER = "1.14.63"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -8656,6 +8656,94 @@ class MangaTranslator:
             self._compose_k9 = _k
         return _k
 
+    def _compose_strip_mask(self, image: np.ndarray,
+                            mask: np.ndarray) -> np.ndarray:
+        """v1.14.63 — ماسکِ کامپوزِ «فقط نوارِ متن، خط به خط»:
+        پایه = ماسکِ متنِ خام (self._compose_text_mask — بعدِ کارو/پروتکت،
+        قبلِ کِیل/توپرشدن). برایِ بلوک‌هایِ محفظهٔ تیره که ماسکِ فعال‌شان
+        «کلِ محفظه» است، به‌جایِ کلِ بلوک فقط «نوارِ هر خطِ متن» — از رویِ
+        جوهرِ همان خط در عکسِ اصلی اندازه‌گاری شده — واردِ ماسکِ کامپوز
+        می‌شود؛ دقیقاً طبقِ اصلاحِ کاربر:
+        «به اندازهٔ متنِ اصلی برش بخوره بذاره رو عکسِ اصلی — چرا کلِ حباب
+        رو منتقل می‌کنی به عکسِ دوم؟ گفتم خط به خط برش بخوره.»
+        نتیجه: دیوار/زمینه/هنرِ دورِ متن همیشه پیکسل‌به‌پیکسل از عکسِ
+        اصلیِ دوم می‌ماند و فقط محلِ متن با نسخهٔ پاک‌شده جایگزین می‌شود."""
+        try:
+            base = getattr(self, "_compose_text_mask", None)
+            if base is None or base.shape != mask.shape[:2]:
+                out = (mask > 0)
+            else:
+                out = (base > 0)
+            h, w = mask.shape[:2]
+            for _fb in (getattr(self, "_lama_force_rect_boxes",
+                                None) or []):
+                try:
+                    bx0 = max(0, int(_fb[0]) - 4)
+                    by0 = max(0, int(_fb[1]) - 4)
+                    bx1 = min(w, int(_fb[2]) + 5)
+                    by1 = min(h, int(_fb[3]) + 5)
+                    if bx1 - bx0 < 8 or by1 - by0 < 8:
+                        continue
+                    # کلِ بلوک از کامپوز حذف؛ فقط نوارِ خط‌ها برمی‌گردد
+                    out[by0:by1, bx0:bx1] = False
+                    g = cv2.cvtColor(image[by0:by1, bx0:bx1],
+                                     cv2.COLOR_BGR2GRAY)
+                    med = float(np.median(g))
+                    ink = (g > med + 30.0)
+                    if not bool(ink.any()):
+                        ink = (np.abs(g.astype(np.float32) - med) > 30.0)
+                    if not bool(ink.any()):
+                        continue
+                    ink_u = cv2.dilate(
+                        ink.astype(np.uint8),
+                        np.ones((7, 7), np.uint8)) > 0
+                    _ridx = np.nonzero(ink_u.any(axis=1))[0]
+                    if _ridx.size == 0:
+                        continue
+                    if _ridx.size > 1:
+                        _gap = float(np.median(np.diff(_ridx)))
+                    else:
+                        _gap = 24.0
+                    _gap = max(6.0, 0.9 * max(8.0, _gap))
+                    _bands = []
+                    _s = int(_ridx[0])
+                    _p = int(_ridx[0])
+                    for _i in range(1, _ridx.size):
+                        _r = int(_ridx[_i])
+                        if _r - _p > _gap:
+                            _bands.append((_s, _p))
+                            _s = _r
+                        _p = _r
+                    _bands.append((_s, _p))
+                    bh0, bw0 = by1 - by0, bx1 - bx0
+                    for (r0, r1) in _bands:
+                        _cols = np.nonzero(
+                            ink_u[r0:r1 + 1].any(axis=0))[0]
+                        if _cols.size == 0:
+                            continue
+                        c0, c1 = int(_cols[0]), int(_cols[-1])
+                        bh = r1 - r0 + 1
+                        pady = max(6, int(0.40 * bh))
+                        padx = max(6, int(0.30 * bh))
+                        sy0 = max(0, r0 - pady)
+                        sy1 = min(bh0, r1 + pady + 1)
+                        sx0 = max(0, c0 - padx)
+                        sx1 = min(bw0, c1 + padx + 1)
+                        if sx1 - sx0 < 8 or sy1 - sy0 < 8:
+                            continue
+                        out[by0 + sy0:by0 + sy1,
+                            bx0 + sx0:bx0 + sx1] = True
+                except Exception:
+                    # در خطا: همان بلوکِ کامل مثلِ قبل — امن‌تر از برگشتِ متن
+                    try:
+                        out[max(0, int(_fb[1])):min(h, int(_fb[3]) + 1),
+                            max(0, int(_fb[0])):min(w, int(_fb[2]) + 1)] = True
+                    except Exception:
+                        pass
+            return (out.astype(np.uint8)) * 255
+        except Exception:
+            return mask
+
     def _compose_two_image(self, donor: np.ndarray, original: np.ndarray,
                            mask: np.ndarray) -> np.ndarray:
         """v1.14.54 — ترکیبِ «دو عکس» — عینِ ایدهٔ خودِ کاربر:
@@ -8724,6 +8812,14 @@ class MangaTranslator:
                 pass
             if not np.any(mask):
                 return image.copy()
+
+        # v1.14.63 — ماسکِ کامپوزِ «خط‌به‌خط»: نسخهٔ خامِ ماسکِ متنِ همین
+        # لحظه (بعدِ کارو/پروتکت، «قبلِ» کِیلِ پرکننده‌هایِ فوری و «قبلِ»
+        # توپرشدنِ بلوک‌هایِ تیره) برایِ ترکیبِ دو-عکسی نگه داشته می‌شود.
+        # طبقِ حرفِ تازهٔ کاربر: «به اندازهٔ متنِ اصلی برش بخوره بذاره رو
+        # عکسِ اصلی — چرا کلِ حباب رو منتقل می‌کنی؟» → کامپوز فقط نوارِ
+        # متن را می‌گیرد، نه کلِ حباب/محفظه/پیکسل‌هایِ تغییرکردهٔ پراکنده.
+        self._compose_text_mask = mask.copy()
 
         # v1.14.59 — بلوک‌هایِ «متنِ روشن روی محفظهٔ تیره» (کارتِ عنوانِ
         # Crimson Dragon و امثالش): هرچه کارو/کلیپِ حباب/پروتکت از ماسک
@@ -8824,10 +8920,9 @@ class MangaTranslator:
         if not np.any(mask):
             if self.debug:
                 print("  [*] everything cleaned by instant fill")
-            # v1.14.54: در این مسیر هم خروجی = عکسِ اصلی + فقط نوارِ تغییرکرده
+            # v1.14.54/63: در این مسیر هم خروجی = عکسِ اصلی + فقط نوارِ متن
             try:
-                _chg = np.any(cleaned != image, axis=2)
-                _cmp = ((mask > 0) | _chg).astype(np.uint8) * 255
+                _cmp = self._compose_strip_mask(image, mask)
                 cleaned = self._compose_two_image(cleaned, image, _cmp)
             except Exception:
                 pass
@@ -9439,10 +9534,13 @@ class MangaTranslator:
                 cv2.imwrite(os.path.join(_sd, "pre_compose.jpg"), cleaned)
             except Exception:
                 _sd = ""
+        # v1.14.63 — کامپوزِ دو-عکسیِ «خط‌به‌خطِ سخت»: فقط نوارِ متنِ خام
+        # (نه پیکسل‌هایِ تغییرکردهٔ پراکنده، نه کلِ حباب/محفظه). قبلًا
+        # «تغییرکرده ∪ ماسک» بود که کلِ حبابِ پُرشده را به خروجی می‌برد —
+        # اعتراضِ کاربر: «چرا کلِ حباب رو منتقل می‌کنی؟ خط به خط برش بزن».
         if os.environ.get("MANGA_TWO_IMAGE", "1") != "0":
             try:
-                _chg = np.any(cleaned != image, axis=2)
-                _cmp2 = ((mask > 0) | _chg).astype(np.uint8) * 255
+                _cmp2 = self._compose_strip_mask(image, mask)
             except Exception:
                 _cmp2 = mask
             cleaned = self._compose_two_image(cleaned, image, _cmp2)
@@ -9461,8 +9559,16 @@ class MangaTranslator:
                               and bool(getattr(self, "use_lama", False))
                               and self._clean_level() != "fast")
                 _rboxes: List[Tuple[int, int, int, int, np.ndarray]] = []
+                # v1.14.63 — جاروی بقایا با «ماسکِ متنِ خام» نه ماسکِ
+                # کِیل‌شده: پرکننده‌هایِ فوری ماسک را کِیل می‌کنند و سویپ
+                # قبلاً آن ناحیه‌ها را کامل رد می‌کرد (_m_px<80) → متنِ
+                # قدیمیِ دست‌نخورده (نمونهٔ گوشی: «L» کنارِ «جملهٔ کوتاه»)
+                # هرگز پیدا نمی‌شد. ماسکِ خام = همان نوارهایِ متن.
+                _mres = getattr(self, "_compose_text_mask", None)
+                if _mres is None or _mres.shape != mask.shape[:2]:
+                    _mres = mask
                 _n = self._residue_sweep(
-                    image, cleaned, regions, mask,
+                    image, cleaned, regions, _mres,
                     collect=(_rboxes if _want_lama else None))
                 if _want_lama and _rboxes:
                     _n_l = self._lama_rescue_boxes(cleaned, _rboxes, _kern_r)

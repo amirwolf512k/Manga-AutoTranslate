@@ -203,6 +203,12 @@ class MainActivity : AppCompatActivity() {
 
         if (!Python.isStarted()) Python.start(AndroidPlatform(this))
 
+        // v1.14.63 — درخواستِ کاربر: «Downloads/manga/pages_*** پوشه بپاکه کلا»
+        // پوشه‌هایِ pages_… (انبارِ ذخیرهٔ خودکارِ صفحات در اجراهایِ قبل)
+        // هنگامِ بازشدنِ اپ به‌کلی پاک می‌شوند؛ و از این به بعد دیگر
+        // ساخته نمی‌شوند (autoSaveOutputs دیگر پوشهٔ pages_ نمی‌سازد).
+        cleanupPagesDirs()
+
         if (Build.VERSION.SDK_INT < 29 &&
             checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
             PackageManager.PERMISSION_GRANTED) {
@@ -2470,8 +2476,10 @@ class MainActivity : AppCompatActivity() {
                         "manga_${stampNow()}." + f.extension.ifBlank { "bin" } else null
                     if (saveAnyToDownloads(outFile, null, nice)) n++
                 }
-                val sub = "pages_${stampNow()}"
-                for (p in images) if (saveAnyToDownloads(p, sub, null)) n++
+                // v1.14.63 — پوشهٔ pages_… دیگر ساخته نمی‌شود (درخواستِ کاربر:
+                // «Downloads/manga/pages_*** پوشه بپاکه کلا»). صفحات در جایی
+                // ذخیرهٔ خودکار نمی‌شوند؛ خروجیِ اصلی (PDF/ZIP) سرِ جایش است
+                // و دانلودِ دستی با دکمه‌هایِ ⬇ سرِ جایش است.
                 ui.post {
                     if (n > 0) Toast.makeText(this,
                         "📥 $n فایل ذخیره شد در Download/manga", Toast.LENGTH_LONG).show()
@@ -2480,6 +2488,54 @@ class MainActivity : AppCompatActivity() {
                 ui.post {
                     Toast.makeText(this, "ذخیره خودکار نشد: ${e.message}",
                         Toast.LENGTH_LONG).show()
+                }
+            }
+        }.start()
+    }
+
+    /** v1.14.63 — حذفِ کاملِ پوشه‌هایِ pages_… از Download/manga —
+     *  هم در API جدید (MediaStore) و هم قدیمی (فایلِ مستقیم). */
+    private fun cleanupPagesDirs() {
+        Thread {
+            var n = 0
+            try {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    val sel = "${MediaStore.MediaColumns.RELATIVE_PATH} LIKE ? ESCAPE '\\'"
+                    val args = arrayOf("Download/manga/pages\\_%")
+                    val proj = arrayOf(MediaStore.MediaColumns._ID)
+                    contentResolver.query(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, proj, sel, args, null
+                    )?.use { c ->
+                        val idCol = c.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                        val ids = mutableListOf<Long>()
+                        while (c.moveToNext()) ids.add(c.getLong(idCol))
+                        for (id in ids) {
+                            val uri = android.content.ContentUris.withAppendedId(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, id)
+                            try {
+                                if (contentResolver.delete(uri, null, null) > 0) n++
+                            } catch (_: Exception) {}
+                        }
+                    }
+                } else if (canWritePublic()) {
+                    val base = File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), "manga")
+                    val kids = base.listFiles() ?: emptyArray()
+                    for (d in kids) {
+                        if (d.isDirectory && d.name.startsWith("pages_")) {
+                            try { if (d.deleteRecursively()) n++ } catch (_: Exception) {}
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("MangaApp", "cleanupPagesDirs", e)
+            }
+            if (n > 0) {
+                android.util.Log.i("MangaApp", "cleanupPagesDirs: $n items removed")
+                ui.post {
+                    Toast.makeText(this,
+                        "🧹 $n مورد از پوشه‌های pages_ قدیمی پاک شد",
+                        Toast.LENGTH_SHORT).show()
                 }
             }
         }.start()
