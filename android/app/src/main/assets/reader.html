@@ -121,26 +121,66 @@
   });
   // v1.14.44: پنِ تک‌انگشتی به WebView سپرده شد — درگ روی .rdrS (overflow:auto)
   // به‌طور طبیعی افقی/عمودی با مومنتوم اسکرول می‌کند. JS فقط پینچ را می‌گیرد.
-  let pinch = null;
+  // v1.14.59 — ضدِ لگِ زوم (مشکلِ «عکسِ دوم زوم می‌کنم لگ میزنه»): زومِ
+  // چیدمانی (تغییرِ width) در «هر» فریمِ پینچ، همهٔ تصویرهایِ عظیمِ داخلِ
+  // DOM را دوباره چیدمان+رستریزی می‌کند (هر صفحه ۲۸MP!) — با چند صفحه
+  // بودجۀ رستریWebView تمام می‌شود = لگ. حالا در حینِ پینچ فقط transformِ
+  // GPU (بدونِ چیدمان) با نرخِ RAF اعمال می‌شود و در «پایانِ» پینچ یک‌بار
+  // چیدمانِ نهایی commit می‌شود (برندگیِ تیز مثل قبل).
+  let pinch = null, pinchRaf = 0, pinchEvt = null;
   const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+  const clampZ = (nz) => Math.min(MAX, Math.max(MIN, +nz || 1));
+  const commitPinch = () => {
+    if (pinchRaf) { cancelAnimationFrame(pinchRaf); pinchRaf = 0; }
+    if (!pinch) return;
+    const kz = pinch.curZ || pinch.startZ;
+    pinch = null;
+    c.style.transform = '';
+    c.style.willChange = '';
+    applyZoom(kz);
+  };
   document.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
-      pinch = { startDist: dist(e.touches[0], e.touches[1]), startZ: z };
+      // اگر پینچِ قبلی وسطِ کار بود اول commit کن
+      if (pinch) commitPinch();
+      pinch = {
+        startDist: dist(e.touches[0], e.touches[1]),
+        startZ: z, curZ: z
+      };
+      c.style.willChange = 'transform';
     }
   }, { passive: true });
   document.addEventListener('touchmove', (e) => {
     if (pinch && e.touches.length === 2) {
       e.preventDefault();
-      const d = dist(e.touches[0], e.touches[1]);
-      const m = mid(e.touches[0], e.touches[1]);
-      applyZoom(pinch.startZ * (d / Math.max(1, pinch.startDist)), m.x, m.y);
+      pinchEvt = e;
+      if (!pinchRaf) {
+        pinchRaf = requestAnimationFrame(() => {
+          pinchRaf = 0;
+          if (!pinch || !pinchEvt) return;
+          const ev = pinchEvt; pinchEvt = null;
+          const d = dist(ev.touches[0], ev.touches[1]);
+          const m = mid(ev.touches[0], ev.touches[1]);
+          const kz = clampZ(pinch.startZ * (d / Math.max(1, pinch.startDist)));
+          const k = kz / Math.max(0.01, pinch.startZ);
+          // تبدیلِ GPU: فقط رستریِ لایه — هیچ چیدمانِ دوباره
+          c.style.transform = 'scale(' + k + ')';
+          const rc = s.getBoundingClientRect();
+          const mx = m.x - rc.left, my = m.y - rc.top;
+          // نقطه‌ای که زیرِ وسطِ دو انگشت است ثابت بماند
+          s.scrollLeft = Math.max(0, (s.scrollLeft + mx) * k - mx);
+          s.scrollTop = Math.max(0, (s.scrollTop + my) * k - my);
+          pinch.curZ = kz;
+          if (bar) bar.textContent = Math.round(kz * 100) + '%';
+        });
+      }
     }
   }, { passive: false });
   document.addEventListener('touchend', (e) => {
-    if (e.touches.length < 2) pinch = null;
+    if (pinch && e.touches.length < 2) commitPinch();
   });
-  document.addEventListener('touchcancel', () => { pinch = null; });
+  document.addEventListener('touchcancel', () => commitPinch());
   const updateProgress = () => {
     if (!prog) return;
     const m = s.scrollHeight - s.clientHeight;

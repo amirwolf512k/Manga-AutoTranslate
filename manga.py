@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.58"
+APP_VER = "1.14.59"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5856,6 +5856,15 @@ class MangaTranslator:
             sub = rm[y0:y1, x0:x1]
             gray = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
             interior = self._bubble_interior_mask(gray, sub, erode_iters=1)
+            try:
+                _di = os.environ.get("MANGA_DUMP_INTERIOR")
+                if _di and interior is not None:
+                    _full_i = np.zeros(image.shape[:2], dtype=np.uint8)
+                    _full_i[y0:y1, x0:x1] = interior
+                    cv2.imwrite(_di, _full_i)
+                    print(f"  [🔍] interior dumped: px={int(cv2.countNonZero(interior))} med={float(np.median(gray[interior > 0])):.0f}")
+            except Exception:
+                pass
             if interior is not None and int(cv2.countNonZero(interior)) > 0:
                 ch, cw = gray.shape[:2]
                 _area = float(ch * cw)
@@ -5907,9 +5916,31 @@ class MangaTranslator:
         except Exception:
             return rm
 
+    def _ink_is_light(self, image: np.ndarray,
+                      ink: Optional[np.ndarray]) -> bool:
+        """v1.14.59 — قطبیتِ متن: جوهرِ گلیف‌ها به‌وضوح روشن‌تر از زمینهٔ
+        چسبیده است؟ (متنِ سفید/کرم روی بنر/کارتِ تیره — Crimson Dragon،
+        بنرهایِ هدر). برای گاردهایِ کارو و اجبارِ LaMa."""
+        try:
+            if ink is None or not np.any(ink):
+                return False
+            g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            im = ink > 0
+            if int(np.count_nonzero(im)) < 40:
+                return False
+            t_ink = float(np.median(g[im]))
+            ring = (cv2.dilate(ink, np.ones((9, 9), np.uint8)) > 0) & (~im)
+            if int(np.count_nonzero(ring)) < 40:
+                return False
+            t_out = float(np.median(g[ring]))
+            return t_ink > t_out + 45.0
+        except Exception:
+            return False
+
     def _carve_structural_walls(self, image: np.ndarray, rm: np.ndarray,
                                 region: "TextRegion",
-                                polys_raw: list) -> np.ndarray:
+                                polys_raw: list,
+                                ink_mask: Optional[np.ndarray] = None) -> np.ndarray:
         """v1.14.48 — باگِ «حبابِ پاک‌شده» (صفحهٔ LIKE A TIME BOMB — ناحیهٔ
         «YOU'RE LEAVING THE COMPANY?»): ماسکِ بلوکِ متن تقریباً به‌اندازهٔ
         خودِ حباب می‌شود و تا دیوارِ حباب/کادرِ پنل پیش می‌رود؛ پرکننده
@@ -5923,6 +5954,11 @@ class MangaTranslator:
             h, w = image.shape[:2]
             ys, xs = np.nonzero(rm)
             if xs.size == 0:
+                return rm
+            # v1.14.59 — متنِ روشن روی محفظهٔ تیره: «کامپوننتِ تیرهٔ ساختاری»
+            # اینجا خودِ زمینه است نه دیوار → کارو ماسک را پنیرِ سوری می‌کند
+            # (حروفِ سفید سالم می‌مانند = «متنِ قبلی سرِ جایش»). رها کن.
+            if ink_mask is not None and self._ink_is_light(image, ink_mask):
                 return rm
             M = 24
             x0 = max(0, int(xs.min()) - M)
@@ -5963,6 +5999,26 @@ class MangaTranslator:
                     polyf = cv2.dilate(polyf, np.ones((5, 5), np.uint8))
             except Exception:
                 polyf = None
+            # v1.14.59 — گاردِ قطبیت (همه‌جایی): متنِ روشن روی محفظهٔ تیره
+            # (کارتِ عنوانِ Crimson Dragon، بنرهایِ هدر) — اینجا «کامپوننتِ
+            # تیرهٔ ساختاری» خودِ زمینه است نه دیوار؛ کارو آن را از ماسک
+            # بیرون می‌کشد = ماسکِ پنیرِ سوری = حروفِ قدیمی سالم می‌مانند.
+            # تشخیصِ قطبیت: فاصلهٔ صدکِ ۹۰ِ پیکسل‌هایِ داخلِ پالی‌ها تا
+            # میانهٔ زمینهٔ چسبیده، بیشتر از فاصلهٔ صدکِ ۱۰ باشد → جوهرِ
+            # روشن → کارو ممنوع.
+            if polyf is not None and np.any(polyf):
+                try:
+                    _pg = gray[polyf > 0].astype(np.float32)
+                    _rg2 = ((cv2.dilate(polyf, np.ones((21, 21), np.uint8)) > 0)
+                            & (polyf == 0))
+                    if _pg.size >= 60 and int(np.count_nonzero(_rg2)) >= 40:
+                        _tout2 = float(np.median(gray[_rg2]))
+                        _p90 = float(np.percentile(_pg, 90))
+                        _p10 = float(np.percentile(_pg, 10))
+                        if (_p90 - _tout2) > (_tout2 - _p10):
+                            return rm
+                except Exception:
+                    pass
             carve = np.zeros_like(dark)
             n_carved = 0
             for i in range(1, n):
@@ -6260,6 +6316,19 @@ class MangaTranslator:
             out = np.zeros((h, w), dtype=np.uint8)
             out[wy0:wy1, wx0:wx1] = cv2.dilate(
                 ink, np.ones((3, 3), np.uint8), iterations=1)
+            # v1.14.59 — کلِ محفظهٔ تیره با «پر شدنِ حفره‌ها» (حروفِ روشن داخلِ
+            # comp سوراخ‌اند!) تا ماسکِ حالتِ LaMaِ کیفیت توپر باشد — نه پنیرِ
+            # سوری که حروفِ قدیمی را بیرون بگذارد (کارتِ عنوانِ Crimson Dragon)
+            _crop_c = comp.astype(np.uint8) * 255
+            _ff = _crop_c.copy()
+            _fm2 = np.zeros((_ff.shape[0] + 2, _ff.shape[1] + 2), np.uint8)
+            cv2.floodFill(_ff, _fm2, (0, 0), 255)
+            _holes = cv2.bitwise_not(_ff)
+            _holes &= cv2.dilate(
+                _crop_c, np.ones((25, 25), np.uint8))
+            _enc_full = np.zeros((h, w), dtype=np.uint8)
+            _enc_full[wy0:wy1, wx0:wx1] = _crop_c | _holes
+            self._last_enclosure_full = _enc_full
             return out
         except Exception:
             return None
@@ -6578,6 +6647,10 @@ class MangaTranslator:
             m = np.zeros((h, w), dtype=np.uint8)
         except Exception:
             return None
+        # v1.14.59 — صندوق‌هایِ «متنِ روشن روی محفظهٔ تیره» که باید اجباری
+        # با LaMa و ماسکِ بلوکِ کامل پاک شوند (شبحِ متنِ قدیمی — کارتِ عنوانِ
+        # Crimson Dragon). در ابتدایِ هر صفحه خالی می‌شود.
+        self._lama_force_rect_boxes = []
         padding = max(0, int(getattr(self, "mask_padding", 3)))
         # v1.14.47: دیلیشنِ padding به‌ازایِ هر ناحیه و «قبلِ» گارد/لیمیت انجام
         # می‌شود (قبلاً بعد از حلقه روی کلِ ماسک بود و بعد از کلیپِ حباب،
@@ -6609,6 +6682,11 @@ class MangaTranslator:
                 if _pw_ >= 1.3 * _ph_ and _pw_ >= 18.0:
                     _wide += 1
             if pts_list:
+                if self.debug:
+                    try:
+                        print(f"  [🔍] ناحیه rect={tuple(int(v) for v in region.rect)} polys={len(_polys_raw)} tall={_tall} wide={_wide}")
+                    except Exception:
+                        pass
                 # v1.14.47: متن روی محفظهٔ تیرهٔ یکدست (بنرِ سیاه و امثالش)
                 # → ماسکِ جوهریِ تنگ؛ قبل از شاخه‌هایِ مستطیلی
                 try:
@@ -6618,6 +6696,29 @@ class MangaTranslator:
                 except Exception:
                     _enc = None
                 if _enc is not None and np.any(_enc):
+                    # v1.14.59 — محفظهٔ تیره + متنِ روشن با LaMaِ کیفیت:
+                    # کلِ محفظه (با پر شدنِ حفره‌هایِ حروف) پاک می‌شود نه فقط
+                    # جوهرِ گلیف‌ها — طبقِ سبکِ کاربر «عکسِ اول باید کامل پاک
+                    # شود؛ حباب هم آسیب دید مهم نیست». سقفِ ترکیبِ دو-عکسی
+                    # هنرِ بیرونِ محفظه را سالم نگه می‌دارد. opencv مثل قبل تنگ.
+                    if self.debug:
+                        try:
+                            print("  [🔍] ماسکِ #مسیر: enclosure-tight")
+                        except Exception:
+                            pass
+                    _enc_full = getattr(self, "_last_enclosure_full", None)
+                    if (getattr(self, "use_lama", False)
+                            and self._clean_level() != "fast"
+                            and _enc_full is not None
+                            and np.any(_enc_full)):
+                        _enc = _enc_full
+                        try:
+                            _ys2, _xs2 = np.nonzero(_enc)
+                            self._lama_force_rect_boxes.append(
+                                [int(_xs2.min()), int(_ys2.min()),
+                                 int(_xs2.max()) + 1, int(_ys2.max()) + 1])
+                        except Exception:
+                            pass
                     if _pad_k is not None:
                         _enc = cv2.dilate(_enc, _pad_k)
                     _enc = self._limit_mask_to_bubble(image, _enc, region)
@@ -6625,6 +6726,11 @@ class MangaTranslator:
                     n_ok += 1
                     continue
                 if _tall >= 2 and len(_polys_raw) >= 2:
+                    if self.debug:
+                        try:
+                            print("  [🔍] → تلاشِ vert-block")
+                        except Exception:
+                            pass
                     try:
                         _bb = MangaTranslator._text_block_box(
                             _polys_raw, region.rect, vert=True)
@@ -6661,6 +6767,11 @@ class MangaTranslator:
                     except Exception:
                         pass
                 if MangaTranslator._polys_dense(_polys_raw):
+                    if self.debug:
+                        try:
+                            print("  [🔍] → تلاشِ line-strips")
+                        except Exception:
+                            pass
                     # v1.14.53 — ایدهٔ «دو عکس» کاربر: اولی = پاک‌شده که فقط
                     # «به اندازهٔ متنِ استخراج‌شده، خط به خط» برش می‌خورد؛
                     # دومی = اصلی که جایِ دقیقِ هر خط از روی آن اندازه گرفته
@@ -6672,10 +6783,20 @@ class MangaTranslator:
                         _lsm = None
                     if _lsm is not None and np.any(_lsm):
                         _rm = _lsm
+                        if self.debug:
+                            try:
+                                print(f"  [🔍] ماسکِ #مسیر: line-strips px={int(cv2.countNonZero(_rm))}")
+                            except Exception:
+                                pass
                         if self._fast_bubble_guard(image, _rm, region, True):
                             try:
                                 _rm = self._carve_structural_walls(
                                     image, _rm, region, _polys_raw)
+                                if self.debug:
+                                    try:
+                                        print(f"  [🔍] پس از کارو (strips) px={int(cv2.countNonZero(_rm))}")
+                                    except Exception:
+                                        pass
                             except Exception:
                                 pass
                             _rm = self._limit_mask_to_bubble(
@@ -6698,6 +6819,7 @@ class MangaTranslator:
                                         image, _rm, region, True):
                                     n_skip += 1
                                     continue
+                                _inkB = None
                                 try:
                                     _inkB = MangaTranslator._ink_absorb_mask(
                                         image, _rm, _polys_raw, band=14,
@@ -6712,18 +6834,76 @@ class MangaTranslator:
                                         # می‌گیرد — مستطیل لکهٔ تخت می‌سازد
                                         if self._ink_tight_ok(
                                                 image, _rm, _inkB, _polys_raw):
-                                            _rm = _inkB
+                                            # v1.14.59 — محفظهٔ تیره + متنِ روشن:
+                                            # تنگِ جوهری فقط هستهٔ گلیف را می‌گرفت
+                                            # → پرکنندهٔ رنگی روی گرادیانِ تیره شبحِ
+                                            # حروف جا می‌گذاشت و در ترکیبِ دو-عکسی
+                                            # هم پیکسلِ بینِ گلیف‌ها از عکسِ اصلی
+                                            # می‌ماند = «متنِ قبلی سرِ جایش». طبقِ سبکِ
+                                            # کاربر (عکسِ اول باید کامل پاک شود؛ حباب/
+                                            # محفظه هم آسیب دید مهم نیست) در حالتِ
+                                            # LaMaِ کیفیت مستطیلِ کاملِ بلوک ∪ جوهر
+                                            # می‌ماند و کلاستر اجباراً به LaMa می‌رود؛
+                                            # سقفِ ترکیبِ دو-عکسی هنرِ بیرونِ بلوک را
+                                            # سالم نگه می‌دارد. مسیرِ opencv مثل قبل تنگ.
+                                            if (getattr(self, "use_lama", False)
+                                                    and self._clean_level() != "fast"):
+                                                _rm = cv2.bitwise_or(_rm, _inkB)
+                                                try:
+                                                    _ys2, _xs2 = np.nonzero(_rm)
+                                                    self._lama_force_rect_boxes.append(
+                                                        [int(_xs2.min()), int(_ys2.min()),
+                                                         int(_xs2.max()) + 1,
+                                                         int(_ys2.max()) + 1])
+                                                except Exception:
+                                                    pass
+                                            else:
+                                                _rm = _inkB
                                         elif self._free_text_tight_ok(
                                                 image, _rm, _inkB, _polys_raw):
                                             _rm = _inkB
                                         else:
                                             _rm = cv2.bitwise_or(_rm, _inkB)
+                                            if self.debug:
+                                                try:
+                                                    print("  [🔍] ماسکِ #مسیر: block-rect∪ink")
+                                                    _g2 = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                                                    _im2 = _inkB > 0
+                                                    _ti = float(np.median(_g2[_im2])) if np.any(_im2) else -1
+                                                    _ri2 = ((cv2.dilate(_inkB, np.ones((9, 9), np.uint8)) > 0) & (~_im2))
+                                                    _to = float(np.median(_g2[_ri2])) if np.any(_ri2) else -1
+                                                    print(f"  [🔍] inkB px={int(cv2.countNonZero(_inkB))} t_ink={_ti:.0f} t_out={_to:.0f} light={self._ink_is_light(image, _inkB)}")
+                                                except Exception as _e:
+                                                    print("  [🔍] inkB dbg fail:", _e)
+                                            # v1.14.59 — متنِ روشن روی محفظهٔ تیره:
+                                            # ماسکِ توپر (مستطیل ∪ جوهر) قطعی است —
+                                            # کارو/کلیپِ حباب/تایتِن اینجا فقط خرابکاری
+                                            # می‌کنند (پنیرِ سوری = شبحِ حروف) →
+                                            # مستقیم در ماسک می‌نشیند و ادامه نمی‌دهد
+                                            if (getattr(self, "use_lama", False)
+                                                    and self._clean_level() != "fast"
+                                                    and self._ink_is_light(
+                                                        image, _inkB)):
+                                                try:
+                                                    _ys2, _xs2 = np.nonzero(_rm)
+                                                    self._lama_force_rect_boxes.append(
+                                                        [int(_xs2.min()), int(_ys2.min()),
+                                                         int(_xs2.max()) + 1,
+                                                         int(_ys2.max()) + 1])
+                                                except Exception:
+                                                    pass
+                                                if _pad_k is not None:
+                                                    _rm = cv2.dilate(_rm, _pad_k)
+                                                m = cv2.bitwise_or(m, _rm)
+                                                n_ok += 1
+                                                continue
                                 except Exception:
                                     pass
                                 # v1.14.48: دیوارِ حباب/کادر از ماسک جدا شود
                                 try:
                                     _rm = self._carve_structural_walls(
-                                        image, _rm, region, _polys_raw)
+                                        image, _rm, region, _polys_raw,
+                                        ink_mask=_inkB)
                                 except Exception:
                                     pass
                                 _rm = self._limit_mask_to_bubble(
@@ -6738,12 +6918,23 @@ class MangaTranslator:
                                 if _pad_k is not None:
                                     _rm = cv2.dilate(_rm, _pad_k)
                                 m = cv2.bitwise_or(m, _rm)
+                                try:
+                                    _dm3 = os.environ.get("MANGA_DUMP_MASK3")
+                                    if _dm3:
+                                        cv2.imwrite(_dm3, m)
+                                except Exception:
+                                    pass
                                 n_ok += 1
                                 continue
                     except Exception:
                         pass
                 _rm = np.zeros_like(m)
                 cv2.fillPoly(_rm, pts_list, 255)
+                if self.debug:
+                    try:
+                        print(f"  [🔍] ماسکِ #مسیر: fillPoly px={int(cv2.countNonZero(_rm))}")
+                    except Exception:
+                        pass
                 if not self._fast_bubble_guard(image, _rm, region, True):
                     try:
                         _ink = MangaTranslator._ink_absorb_mask(
@@ -6757,6 +6948,7 @@ class MangaTranslator:
                         pass
                     n_skip += 1
                     continue
+                _ink2 = None
                 try:
                     _ink2 = MangaTranslator._ink_absorb_mask(
                         image, _rm, _polys_raw, band=14,
@@ -6767,18 +6959,43 @@ class MangaTranslator:
                         # v1.14.48: متنِ آزادِ گرادیانی هم ماسکِ تنگ
                         if self._ink_tight_ok(
                                 image, _rm, _ink2, _polys_raw):
-                            _rm = _ink2
+                            # v1.14.59 — همان قانونِ محفظهٔ تیره برای مسیرِ پالی‌ها
+                            if (getattr(self, "use_lama", False)
+                                    and self._clean_level() != "fast"):
+                                _rm = cv2.bitwise_or(_rm, _ink2)
+                                try:
+                                    _ys2, _xs2 = np.nonzero(_rm)
+                                    self._lama_force_rect_boxes.append(
+                                        [int(_xs2.min()), int(_ys2.min()),
+                                         int(_xs2.max()) + 1,
+                                         int(_ys2.max()) + 1])
+                                except Exception:
+                                    pass
+                            else:
+                                _rm = _ink2
                         elif self._free_text_tight_ok(
                                 image, _rm, _ink2, _polys_raw):
                             _rm = _ink2
                         else:
                             _rm = cv2.bitwise_or(_rm, _ink2)
+                            # v1.14.59 — متنِ روشن روی محفظهٔ تیره → اجباری LaMa
+                            if (getattr(self, "use_lama", False)
+                                    and self._clean_level() != "fast"
+                                    and self._ink_is_light(image, _ink2)):
+                                try:
+                                    _ys2, _xs2 = np.nonzero(_rm)
+                                    self._lama_force_rect_boxes.append(
+                                        [int(_xs2.min()), int(_ys2.min()),
+                                         int(_xs2.max()) + 1,
+                                         int(_ys2.max()) + 1])
+                                except Exception:
+                                    pass
                 except Exception:
                     pass
                 # v1.14.48: دیوارِ حباب/کادر از ماسک جدا شود
                 try:
                     _rm = self._carve_structural_walls(
-                        image, _rm, region, _polys_raw)
+                        image, _rm, region, _polys_raw, ink_mask=_ink2)
                 except Exception:
                     pass
                 _rm = self._limit_mask_to_bubble(
@@ -6825,6 +7042,12 @@ class MangaTranslator:
                     continue
         if n_ok <= 0 and n_skip <= 0:
             return None
+        try:
+            _dm2 = os.environ.get("MANGA_DUMP_MASK2")
+            if _dm2:
+                cv2.imwrite(_dm2, m)
+        except Exception:
+            pass
         return m
 
     @staticmethod
@@ -8397,12 +8620,54 @@ class MangaTranslator:
         # پرکننده‌ها ماسک را گشاد می‌کنند و دیوار را می‌بلعند
         # (بدونِ copy — bitwise_and خروجیِ جدید می‌سازد و raw می‌ماند)
         self._page_raw_text_mask = mask
+        try:
+            _dm = os.environ.get("MANGA_DUMP_MASK")
+            if _dm:
+                cv2.imwrite(_dm, mask)
+                print(f"  [*] mask dumped → {_dm}")
+        except Exception:
+            pass
         _protect = self._structural_protect_mask(image, regions)
         self._page_protect = _protect
         if _protect is not None:
             mask = cv2.bitwise_and(mask, cv2.bitwise_not(_protect))
+            try:
+                _dp = os.environ.get("MANGA_DUMP_POSTPROTECT")
+                if _dp:
+                    cv2.imwrite(_dp, mask)
+                    print(f"  [*] post-protect mask dumped → {_dp}")
+            except Exception:
+                pass
             if not np.any(mask):
                 return image.copy()
+
+        # v1.14.59 — بلوک‌هایِ «متنِ روشن روی محفظهٔ تیره» (کارتِ عنوانِ
+        # Crimson Dragon و امثالش): هرچه کارو/کلیپِ حباب/پروتکت از ماسک
+        # کم کرده باشد بی‌اثر — ماسک در این بلوک‌ها اجباری توپر می‌شود تا
+        # ۱) LaMa کلِ بلوک را بازسازی کند (پرکنندهٔ تخت شبح نمی‌گذارد)
+        # ۲) نوارِ ترکیبِ دو-عکسی کلِ بلوک را از عکسِ پاک‌شده بگیرد
+        # (پیکسلِ بینِ حروف از عکسِ اصلی نماند = «متنِ قبلی سرِ جایش»).
+        # سقفِ ترکیب هنرِ بیرونِ بلوک را سالم نگه می‌دارد.
+        try:
+            _fb_list = (getattr(self, "_lama_force_rect_boxes", None) or [])
+            _h59, _w59 = mask.shape[:2]
+            for _fb in _fb_list:
+                _fx0 = max(0, int(_fb[0]) - 4)
+                _fy0 = max(0, int(_fb[1]) - 4)
+                _fx1 = min(_w59, int(_fb[2]) + 5)
+                _fy1 = min(_h59, int(_fb[3]) + 5)
+                if _fx1 - _fx0 >= 8 and _fy1 - _fy0 >= 8:
+                    mask[_fy0:_fy1, _fx0:_fx1] = 255
+            if _fb_list:
+                # سقفِ رنگ‌آمیزی (cap) هم باید کلِ بلوک را بپوشاند
+                self._page_raw_text_mask = mask.copy()
+                if self.debug:
+                    try:
+                        print(f"  [✓] v1.14.59: {len(_fb_list)} بلوکِ محفظهٔ تیره توپر شد")
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         cleaned = image.copy()
         counts = {"flat": 0, "color": 0, "LaMa": 0, "OpenCV": 0}
@@ -8430,6 +8695,13 @@ class MangaTranslator:
                 pass
             return cleaned
         page_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
+        if self.debug:
+            try:
+                _nf = len(getattr(self, "_lama_force_rect_boxes", None) or [])
+                if _nf:
+                    print(f"  [*] v1.14.59: {_nf} محفظهٔ تیره → اجباری LaMa با ماسکِ کامل")
+            except Exception:
+                pass
         _wall_cache = {"tried": False, "val": None}
 
         def _page_wall():
@@ -8461,26 +8733,45 @@ class MangaTranslator:
                 _ok_flat = (_cb_area <= 0.0035 * _pg_area
                             and (bx1 - bx0) <= 0.30 * _pg_w
                             and (by1 - by0) <= 0.22 * _pg_h)
-            result = (self._flat_fill_uniform(crop_img, crop_msk)
-                      if _ok_flat else None)
-            method = "flat"
-            _pf_ok = False
-            if result is None:
-                _cr = self._color_fill_cluster(crop_img, crop_msk)
-                if _cr is not None:
-                    crop_msk, result = _cr
-                    method = "color"
-            if result is None:
-                if not _q_lama:
-                    _pf = self._paper_fill_cluster(crop_img, crop_msk)
-                    if _pf is not None:
-                        result = _pf
-                        _pf_ok = True
-            if result is None and not _q_lama:
-                result = self._flat_fill_cluster(crop_img, crop_msk)
-            if (result is not None and not _pf_ok
-                    and self._bg_is_textured(crop_img, crop_msk, strong=True)):
+            # v1.14.59 — کلاسترهایِ «متنِ روشن روی محفظهٔ تیره» اجباری LaMa:
+            # پرکنندهٔ تخت/رنگی روی گرادیانِ تیره شبحِ حروف جا می‌گذارد
+            _force_lama = False
+            if _q_lama:
+                try:
+                    for _fb in (getattr(self, "_lama_force_rect_boxes",
+                                        None) or []):
+                        if not (bx1 < _fb[0] - 8 or bx0 > _fb[2] + 8
+                                or by1 < _fb[1] - 8 or by0 > _fb[3] + 8):
+                            _force_lama = True
+                            break
+                except Exception:
+                    pass
+            if _force_lama:
                 result = None
+                method = "flat"
+                _pf_ok = False
+            else:
+                result = (self._flat_fill_uniform(crop_img, crop_msk)
+                          if _ok_flat else None)
+                method = "flat"
+                _pf_ok = False
+                if result is None:
+                    _cr = self._color_fill_cluster(crop_img, crop_msk)
+                    if _cr is not None:
+                        crop_msk, result = _cr
+                        method = "color"
+                if result is None:
+                    if not _q_lama:
+                        _pf = self._paper_fill_cluster(crop_img, crop_msk)
+                        if _pf is not None:
+                            result = _pf
+                            _pf_ok = True
+                if result is None and not _q_lama:
+                    result = self._flat_fill_cluster(crop_img, crop_msk)
+                if (result is not None and not _pf_ok
+                        and self._bg_is_textured(crop_img, crop_msk,
+                                                 strong=True)):
+                    result = None
             crops.append([cx0, cy0, cx1, cy1, crop_msk, result, method])
 
         pending = [c for c in crops if c[5] is None]

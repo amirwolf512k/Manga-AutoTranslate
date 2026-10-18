@@ -15,6 +15,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.text.InputType
 import android.util.TypedValue
 import android.view.Gravity
@@ -386,6 +387,30 @@ class MainActivity : AppCompatActivity() {
         "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/"
     )
     private var updRow: LinearLayout? = null
+    // v1.14.59 — وضعیتِ دانلودِ نصبی: idle=آمادهٔ شروع، dl=در حال دانلود،
+    // ready=فایل کامل و آمادهٔ نصب، fail=قطع‌شده (ادامه‌پذیر)
+    private var updState = "idle"
+    private var updVerName = ""
+    private var updVerCode = 0
+    private var updStatus: TextView? = null
+    private var updBar: android.widget.ProgressBar? = null
+    private var updBtn: Button? = null
+    private var updThread: Thread? = null
+
+    private fun updApkName(): String = "update_" + updVerCode + ".apk"
+
+    private fun updPartFile(): java.io.File {
+        val dir = (getExternalFilesDir(null) ?: filesDir)
+        return java.io.File(dir, updApkName() + ".part")
+    }
+
+    private fun updDstFile(): java.io.File {
+        val dir = (getExternalFilesDir(null) ?: filesDir)
+        return java.io.File(dir, updApkName())
+    }
+
+    private fun updExpectedSize(): Long =
+        prefs.getLong("apk_size_" + updVerCode, 0L)
 
     private fun fetchUrl(url: String, timeoutMs: Int = 15000): ByteArray {
         val c = java.net.URL(url).openConnection() as java.net.HttpURLConnection
@@ -443,59 +468,258 @@ class MainActivity : AppCompatActivity() {
             val base = if (abis.any { it.contains("arm64") } && apk64.isNotEmpty())
                 apk64 else apkUni.ifEmpty { apk64 }
             if (base.isEmpty()) return
-            val dir = (getExternalFilesDir(null) ?: filesDir)
-            val dst = java.io.File(dir, "update_" + remote + ".apk")
-            if (dst.exists() && dst.length() > 1_000_000L) {
-                ui.post { showUpdateRow(rname, dst) }
-                return
+            prefs.edit().putString("apk_url_" + remote, base).apply()
+            ui.post {
+                updVerName = rname
+                updVerCode = remote
+                val dst = updDstFile()
+                val exp = updExpectedSize()
+                val okFile = dst.isFile && dst.length() > 1_000_000L &&
+                        (exp <= 0L || dst.length() == exp)
+                if (!okFile && dst.isFile) dst.delete()
+                // v1.14.59 — دانلودِ سنگینِ بی‌صدا حذف شد؛ فقط ردیفِ «دانلود
+                // و نصب» نشان داده می‌شود — دانلود خودِ لحظه‌ای که کاربر
+                // «نصب» را می‌زند شروع می‌شود با درصد و ادامه از نقطهٔ قطع
+                showUpdateRow()
             }
-            var ok = false
-            var lastDl: Exception? = null
-            for (u in listOf(base, "https://gh-proxy.com/" + base)) {
-                try {
-                    val b = fetchUrl(u, 120000)
-                    if (b.size < 1_000_000L) throw RuntimeException("APK ناقص: " + b.size)
-                    java.io.FileOutputStream(dst).use { it.write(b) }
-                    ok = true
-                    break
-                } catch (e: Exception) {
-                    lastDl = e
-                }
-            }
-            if (!ok || !dst.exists()) return
-            ui.post { showUpdateRow(rname, dst) }
         } catch (_: Exception) {
 
         }
     }
 
-    private fun showUpdateRow(verName: String, apk: java.io.File) {
-        if (updRow != null) return
+    private fun showUpdateRow() {
+        if (updRow != null) {
+            updateUpdRowUi()
+            return
+        }
         val row = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             background = rounded(Color.parseColor("#1d2b1d"), 14, 1,
                 Color.parseColor("#3f7f3f"))
             setPadding(dp(14), dp(8), dp(14), dp(8))
         }
-        row.addView(TextView(this).apply {
-            text = "🔄 آپدیت جدید v" + verName + " — آمادهٔ نصب"
+        val l1 = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        val status = TextView(this).apply {
             setTextColor(TXT); textSize = 14f
-        }, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
-        row.addView(Button(this).apply {
-            text = "نصب"
+        }
+        l1.addView(status, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val btn = Button(this).apply {
             setTextColor(Color.WHITE); textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
             background = gradBtn()
             setPadding(dp(18), dp(6), dp(18), dp(6))
-            setOnClickListener { installUpdate(apk) }
-        })
+        }
+        l1.addView(btn)
+        row.addView(l1, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
+        val bar = android.widget.ProgressBar(
+            this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 1000
+            progress = 0
+            visibility = View.GONE
+        }
+        row.addView(bar, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(6) })
         (runBtn.parent as? ViewGroup)?.addView(
             row,
             LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(8) })
         updRow = row
+        updStatus = status
+        updBar = bar
+        updBtn = btn
+        btn.setOnClickListener { onUpdButton() }
+        updateUpdRowUi()
+    }
+
+    /** بازنویسیِ متن/دکمه/نوار بر اساسِ وضعیت */
+    private fun updateUpdRowUi() {
+        val st = updStatus ?: return
+        val btn = updBtn
+        val bar = updBar
+        val dst = updDstFile()
+        val exp = updExpectedSize()
+        val okFile = dst.isFile && dst.length() > 1_000_000L &&
+                (exp <= 0L || dst.length() == exp)
+        when (updState) {
+            "dl" -> {
+                st.text = "⏳ دانلودِ آپدیتِ v" + updVerName + " …"
+                btn?.visibility = View.GONE
+                bar?.visibility = View.VISIBLE
+            }
+            "fail" -> {
+                val part = updPartFile()
+                val pct = if (exp > 0)
+                    (part.length() * 100 / exp).toInt().coerceIn(0, 99) else 0
+                st.text = ("⚠ اینترنت قطع شد — v" + updVerName +
+                        (" (٪" + pct + " گرفته شده)") +
+                        " — دوباره بزن تا از همان‌جا ادامه بدهد")
+                btn?.visibility = View.VISIBLE
+                btn?.text = "ادامه"
+                bar?.visibility = View.GONE
+            }
+            else -> {
+                bar?.visibility = View.GONE
+                btn?.visibility = View.VISIBLE
+                if (okFile) {
+                    st.text = "🔄 آپدیتِ جدید v" + updVerName + " — آمادهٔ نصب"
+                    btn?.text = "نصب"
+                } else {
+                    st.text = "🔄 آپدیتِ جدید v" + updVerName +
+                            " — فایلِ نصبی دانلود شود؟"
+                    btn?.text = "نصب"
+                }
+            }
+        }
+    }
+
+    private fun onUpdButton() {
+        if (updState == "dl") return
+        val dst = updDstFile()
+        val exp = updExpectedSize()
+        val okFile = dst.isFile && dst.length() > 1_000_000L &&
+                (exp <= 0L || dst.length() == exp)
+        if (okFile) {
+            installUpdate(dst)
+            return
+        }
+        // v1.14.59 — دانلود در همین لحظه با درصد + ادامه از نقطهٔ قطع
+        val url = prefs.getString("apk_url_" + updVerCode, null)
+        if (url.isNullOrEmpty()) return
+        updState = "dl"
+        updateUpdRowUi()
+        updThread = Thread { downloadApkResumable(url) }.apply { start() }
+    }
+
+    private fun fmtMB(b: Long): String =
+        String.format(java.util.Locale.US, "%.1f", b / 1048576.0)
+
+    private fun downloadApkResumable(url: String) {
+        val dst = updDstFile()
+        val part = updPartFile()
+        var lastEx: Exception? = null
+        var ok = false
+        for (u in listOf(url, "https://gh-proxy.com/" + url)) {
+            try {
+                var done = false
+                while (!done) {
+                    val already = if (part.isFile) part.length() else 0L
+                    val c = java.net.URL(u).openConnection()
+                        as java.net.HttpURLConnection
+                    c.connectTimeout = 15000
+                    c.readTimeout = 30000
+                    c.instanceFollowRedirects = true
+                    c.setRequestProperty("User-Agent", "Mozilla/5.0")
+                    if (already > 0L)
+                        c.setRequestProperty("Range", "bytes=" + already + "-")
+                    try {
+                        c.connect()
+                        if (c.responseCode / 100 != 2)
+                            throw RuntimeException("HTTP " + c.responseCode)
+                        // اندازهٔ کل: از Content-Range (ادامه) یا Content-Length
+                        val total: Long = if (c.responseCode == 206) {
+                            val cr = c.getHeaderField("Content-Range") ?: ""
+                            val mm = Regex("/(\\d+)\\s*$").find(cr)
+                            mm?.groupValues?.get(1)?.toLongOrNull()
+                                ?: (already +
+                                    (c.getHeaderField("Content-Length")
+                                        ?.toLongOrNull() ?: 0L))
+                        } else {
+                            c.getHeaderField("Content-Length")?.toLongOrNull()
+                                ?: 0L
+                        }
+                        if (total > 0L) {
+                            if (updExpectedSize() != total)
+                                prefs.edit().putLong(
+                                    "apk_size_" + updVerCode, total).apply()
+                            // فایلِ ناقصِ قبلی که اندازه‌اش با کل نمی‌خواند
+                            if (already > total) {
+                                part.delete()
+                                continue
+                            }
+                        }
+                        if (total > 0L && already == total && already > 1_000_000L) {
+                            done = true
+                            break
+                        }
+                        c.inputStream.use { ins ->
+                            java.io.FileOutputStream(part, true).use { fo ->
+                                val buf = ByteArray(65536)
+                                var lastUi = 0L
+                                while (true) {
+                                    if (Thread.currentThread().isInterrupted)
+                                        throw RuntimeException("لغو")
+                                    val n = ins.read(buf)
+                                    if (n < 0) break
+                                    fo.write(buf, 0, n)
+                                    val now = SystemClock.elapsedRealtime()
+                                    if (now - lastUi > 400) {
+                                        lastUi = now
+                                        val got = part.length()
+                                        val pct = if (total > 0)
+                                            (got * 1000 / total).toInt()
+                                                .coerceIn(0, 999) else -1
+                                        ui.post {
+                                            updBar?.let { bb ->
+                                                if (pct >= 0) {
+                                                    bb.isIndeterminate = false
+                                                    bb.progress = pct
+                                                } else bb.isIndeterminate = true
+                                            }
+                                            updStatus?.text =
+                                                ("⏳ دانلودِ v" + updVerName +
+                                                        " — " +
+                                                        (if (pct >= 0)
+                                                            "٪" + (pct / 10)
+                                                        else "") +
+                                                        " (" + fmtMB(got) +
+                                                        (if (total > 0)
+                                                            "/" + fmtMB(total)
+                                                        else "") + " MB)")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        val fsize = part.length()
+                        if (total > 0L && fsize < total)
+                            throw RuntimeException("ناتمام: " + fsize + "/" + total)
+                        if (fsize < 1_000_000L)
+                            throw RuntimeException("APK ناقص: " + fsize)
+                        done = ok = true
+                    } finally {
+                        c.disconnect()
+                    }
+                }
+                break
+            } catch (e: Exception) {
+                lastEx = e
+                // فایلِ ناقص نگه داشته می‌شود → تلاشِ بعدی/بعد از قطعی ادامه می‌دهد
+            }
+        }
+        ui.post {
+            if (ok) {
+                val old = if (dst.isFile) dst else null
+                old?.delete()
+                if (!part.renameTo(dst)) {
+                    part.copyTo(dst, overwrite = true)
+                    part.delete()
+                }
+                updState = "idle"
+                updateUpdRowUi()
+                installUpdate(dst)
+            } else {
+                updState = "fail"
+                updateUpdRowUi()
+            }
+        }
     }
 
     private fun installUpdate(apk: java.io.File) {
