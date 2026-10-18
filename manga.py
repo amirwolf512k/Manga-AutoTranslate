@@ -14938,6 +14938,7 @@ class MangaTranslator:
             _kb = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 5))
             _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 5))
             _found_rects: list = []
+            _cand_n = 0
             _ty0 = 0
             while _ty0 < h:
                 _y1 = min(h, _ty0 + _tile)
@@ -15000,27 +15001,100 @@ class MangaTranslator:
                     crop = image[cy0:cy1, cx0:cx1]
                     if crop.size == 0:
                         continue
-                    _big = cv2.resize(crop, (crop.shape[1] * 3,
-                                             crop.shape[0] * 3),
-                                      interpolation=cv2.INTER_CUBIC)
-                    try:
-                        _res = self.ocr.ocr(_big)
-                    except Exception:
-                        _res = None
-                    _txts = []
-                    if _res:
-                        for _ln in (_res[0] or []):
+                    # v1.14.64c — OCRِ بنر باید به نسخهٔ OCR بی‌ربط باشد:
+                    # rapidocrِ جدید (PP-OCRv5/v6) روی کراپِ کوچک «det خالی»
+                    # می‌دهد → اول پد (حداقل ۴۸px بلندی) بعد بزرگ‌نمایی، و
+                    # چند واریانت امتحان می‌شود.
+                    _pad_h = max(0, 48 - crop.shape[0])
+                    _pad_w = max(0, 160 - crop.shape[1])
+                    if _pad_h or _pad_w:
+                        crop = cv2.copyMakeBorder(
+                            crop, _pad_h // 2, _pad_h - _pad_h // 2,
+                            _pad_w // 2, _pad_w - _pad_w // 2,
+                            cv2.BORDER_REPLICATE)
+                    _txt = ""
+                    for _zm in (3, 2):
+                        _big = cv2.resize(
+                            crop, (crop.shape[1] * _zm,
+                                   crop.shape[0] * _zm),
+                            interpolation=cv2.INTER_CUBIC)
+                        for _var in (0, 1):
+                            _try = _big
+                            if _var == 1:
+                                try:
+                                    _lab2 = cv2.cvtColor(_big,
+                                                         cv2.COLOR_BGR2LAB)
+                                    _clahe = cv2.createCLAHE(
+                                        2.2, (8, 8))
+                                    _l2 = _clahe.apply(_lab2[..., 0])
+                                    _try = cv2.cvtColor(
+                                        cv2.merge([_l2, _l2, _l2]),
+                                        cv2.COLOR_BGR2GRAY)
+                                    _try = cv2.cvtColor(
+                                        _try, cv2.COLOR_GRAY2BGR)
+                                except Exception:
+                                    _try = _big
                             try:
-                                _tv = _ln[1]
-                                if isinstance(_tv, (tuple, list)):
-                                    _tv = _tv[0]
-                                if str(_tv).strip():
-                                    _txts.append(str(_tv).strip())
+                                _res = self.ocr.ocr(_try)
                             except Exception:
-                                continue
-                    _txt = " ".join(_txts)
-                    if not _txt or not self._is_watermark_text(_txt):
-                        continue
+                                _res = None
+                            _txts = []
+                            if _res:
+                                for _ln in (_res[0] or []):
+                                    try:
+                                        _tv = _ln[1]
+                                        if isinstance(_tv, (tuple, list)):
+                                            _tv = _tv[0]
+                                        if str(_tv).strip():
+                                            _txts.append(str(_tv).strip())
+                                    except Exception:
+                                        continue
+                            _txt = " ".join(_txts)
+                            if self._is_watermark_text(_txt):
+                                break
+                        if _txt and self._is_watermark_text(_txt):
+                            break
+                    if not (_txt and self._is_watermark_text(_txt)):
+                        # v1.14.64c — فال‌بکِ بدونِ OCR: بنرِ برندِ اشباعِ
+                        # توپرِ جدا (زمینهٔ یکدستِ رنگی + ضربهٔ متنیِ متضاد)
+                        # تقریباً همیشه واترمارکِ سایت است — بدونِ تأییدِ
+                        # متنی هم تبلیغ شمرده می‌شود (حذفِ بیشتر مجاز است).
+                        _acc = False
+                        try:
+                            _e6 = 6
+                            _bgr2 = tile[max(0, by - _e6):by + bh_ + _e6,
+                                         max(0, bx - _e6):bx + bw_ + _e6]
+                            _hsv = cv2.cvtColor(_bgr2, cv2.COLOR_BGR2HSV)
+                            _satf = float((_hsv[..., 1] >= 70).mean())
+                            # v1.14.64c — تأییدِ «متنِ داخلِ جعبه»: بنرِ برند
+                            # حروفِ ریزِ زیاد (قطعه‌هایِ ۶-۴۰px) داخلِ جعبهٔ
+                            # اشباع دارد؛ مو/لباسِ بنفشِ هنر خط‌هایِ درازِ
+                            # براق دارد → رد. (نمونهٔ فال‌پزیتیو: موِ بنفشِ
+                            # img1 بدونِ این گیت پاک می‌شد!)
+                            _tg2 = cv2.cvtColor(_bgr2, cv2.COLOR_BGR2GRAY)
+                            _m3 = float(np.median(_tg2))
+                            _stk3 = (np.abs(_tg2.astype(np.int16)
+                                            - int(_m3)) > 42)
+                            _nz3, _lb3, _st3, _ = \
+                                cv2.connectedComponentsWithStats(
+                                    _stk3.astype(np.uint8), 8)
+                            _glyph_n = 0
+                            for _i3 in range(1, _nz3):
+                                _ga = int(_st3[_i3, cv2.CC_STAT_AREA])
+                                _gw = int(_st3[_i3, cv2.CC_STAT_WIDTH])
+                                _gh = int(_st3[_i3, cv2.CC_STAT_HEIGHT])
+                                if 6 <= _gh <= 40 and 3 <= _gw <= 60 \
+                                        and 12 <= _ga <= 900:
+                                    _glyph_n += 1
+                            _acc = (_satf >= 0.30 and _glyph_n >= 6
+                                    and 80 <= bw_ <= 520
+                                    and 14 <= bh_ <= 110
+                                    and bw_ >= 2.2 * bh_)
+                        except Exception:
+                            _acc = False
+                        if not _acc:
+                            continue
+                        _txt = "[banner]"
                     _tr = TextRegion(
                         id=10000 + len(found),
                         boxes=[np.array([[cx0, cy0], [cx1, cy0],
@@ -15038,6 +15112,11 @@ class MangaTranslator:
                         except Exception:
                             pass
                 _ty0 = _tnext
+            if self.debug:
+                try:
+                    print(f"  [🔍] جارویِ بنر: {len(found)} تبلیغ شناسایی شد")
+                except Exception:
+                    pass
         except Exception:
             return found
         return found
