@@ -209,9 +209,10 @@ class MainActivity : AppCompatActivity() {
         // ساخته نمی‌شوند (autoSaveOutputs دیگر پوشهٔ pages_ نمی‌سازد).
         cleanupPagesDirs()
 
-        // v1.14.65b — درخواستِ کاربر: «فقط manga.log و manga_old.log باشه» —
-        // تکراری‌هایِ لاگ (manga.log (N).txt و…) در شروعِ اپ هم جارو شوند
-        cleanupLogDuplicates()
+        // v1.14.70 — درخواستِ کاربر: «اول استارت همهٔ .log.txt حذف کنه
+        // بعد بسازه» — همهٔ لاگ‌هایِ قبلی در شروع پاک می‌شوند؛ لاگِ تازه
+        // بعد از اجرا ساخته می‌شود.
+        deleteAllMangaLogsOnStart()
 
         if (Build.VERSION.SDK_INT < 29 &&
             checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) !=
@@ -2537,6 +2538,52 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         }.start()
+    }
+
+    // v1.14.70 — درخواستِ کاربر: «اول استارت همهٔ .log.txt حذف کنه بعد
+    // بسازه». در شروعِ اپ همهٔ لاگ‌هایِ manga — هر دو kind و با هر اسمی
+    // (manga.log، manga.log.txt، manga.log (N).txt، manga_old… ) — از
+    // Download/manga/ و Download/ به‌کلی پاک می‌شوند؛ لاگِ تازه بعد از
+    // اجرا ساخته می‌شود. فایل‌هایِ خروجی (manga_*.pdf و…) لمس نمی‌شوند.
+    private fun deleteAllMangaLogsOnStart() {
+        try {
+            if (Build.VERSION.SDK_INT >= 29) {
+                val proj = arrayOf(MediaStore.MediaColumns._ID,
+                    MediaStore.MediaColumns.DISPLAY_NAME,
+                    MediaStore.MediaColumns.RELATIVE_PATH)
+                val doomed = ArrayList<Uri>()
+                contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    proj, MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
+                    arrayOf("manga%"), null)?.use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val dn = c.getString(1) ?: continue
+                        val rp = try { c.getString(2) ?: "" }
+                                catch (_: Exception) { "" }
+                        if (rp != "Download/manga/" && rp != "Download/") continue
+                        if (normMangaLogName(dn) == null) continue
+                        doomed.add(android.content.ContentUris.withAppendedId(
+                            MediaStore.Downloads.EXTERNAL_CONTENT_URI, id))
+                    }
+                }
+                for (u in doomed) try {
+                    contentResolver.delete(u, null, null)
+                } catch (_: Exception) {}
+            } else {
+                val dir = File(Environment.getExternalStoragePublicDirectory(
+                    Environment.DIRECTORY_DOWNLOADS), "manga")
+                for (f in dir.listFiles() ?: emptyArray()) {
+                    if (!f.isFile) continue
+                    if (normMangaLogName(f.name) != null) {
+                        try { f.delete() } catch (_: Exception) {}
+                    }
+                }
+            }
+            // لاگِ خصوصیِ اپ هم تازه شود (در اجرا از نو ساخته می‌شود)
+            try { logFile().delete() } catch (_: Exception) {}
+            try { logOldFile().delete() } catch (_: Exception) {}
+        } catch (_: Exception) {
+        }
     }
 
     // v1.14.65b — درخواستِ کاربر: «فقط manga.log و manga_old.log باشه».

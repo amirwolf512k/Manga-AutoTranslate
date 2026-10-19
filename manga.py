@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.69"
+APP_VER = "1.14.70"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -986,7 +986,71 @@ def _ep_ab_time(sess) -> float:
         return float("inf")
 
 
-def _ort_probe_ok(sess, threads: int) -> bool:
+def _lama_probeok_path(model_path: str) -> str:
+    return str(model_path) + ".probeok"
+
+
+def _lama_probeok_key(model_path: str, ep_name: str) -> str:
+    _v = "x"
+    try:
+        _v = str(getattr(ort, "__version__", "x") or "x")
+    except Exception:
+        pass
+    try:
+        _side = int(_lama_static_side())
+    except Exception:
+        _side = 0
+    try:
+        _sz = int(os.path.getsize(model_path)) if model_path else 0
+    except Exception:
+        _sz = 0
+    _ep = str(ep_name or "").lower().replace("executionprovider", "")
+    return f"{_ep}|{_v}|{_side}|{_sz}"
+
+
+def _lama_probeok_hit(model_path, ep_name) -> bool:
+    try:
+        if not model_path or not isinstance(model_path, str):
+            return False
+        if os.environ.get("MANGA_ORT_EP_REPROBE", "0") == "1":
+            return False
+        p = _lama_probeok_path(model_path)
+        if not os.path.isfile(p):
+            return False
+        with open(p, "r", encoding="utf-8") as f:
+            v = (f.read() or "").strip()
+        return v == _lama_probeok_key(model_path, ep_name) + "|ok"
+    except Exception:
+        return False
+
+
+def _lama_probeok_store(model_path, ep_name) -> None:
+    try:
+        if not model_path or not isinstance(model_path, str):
+            return
+        with open(_lama_probeok_path(model_path), "w", encoding="utf-8") as f:
+            f.write(_lama_probeok_key(model_path, ep_name) + "|ok")
+    except Exception:
+        pass
+
+
+def _ort_probe_ok(sess, threads: int, model_path=None,
+                  ep_name: str = "") -> bool:
+    _t70 = time.time()
+    # v1.14.70 — کشِ نتیجهٔ پروب: پروبِ سلامت/سریالی تا ۵ اینفرنسِ
+    # ۳۸۴² رویِ xnnpack انجام می‌دهد (رویِ گوشی ده‌ها ثانیه) و در هر
+    # استارت تکرار می‌شد؛ نتیجه برایِ (مدل، EP، نسخهٔ ORT، ساید، حجم)
+    # ماندگار می‌شود. MANGA_ORT_EP_REPROBE=1 → پروبِ دوباره.
+    try:
+        if _lama_probeok_hit(model_path, ep_name):
+            try:
+                print("    [*] پروبِ EP از کش — بدونِ اینفرنسِ دوباره",
+                      flush=True)
+            except Exception:
+                pass
+            return True
+    except Exception:
+        pass
     try:
         feed = _ep_ab_feed(sess, side=_lama_probe_side(False))
         if not feed:
@@ -1012,6 +1076,7 @@ def _ort_probe_ok(sess, threads: int) -> bool:
                     pass
                 return False
         if threads <= 0:
+            _lama_probeok_store(model_path, ep_name)
             return True
         t0 = time.time()
         try:
@@ -1021,6 +1086,23 @@ def _ort_probe_ok(sess, threads: int) -> bool:
         except Exception:
             return False
         if t_ser <= 0.02:
+            _lama_probeok_store(model_path, ep_name)
+            return True
+        # v1.14.70 — اندروید: فقط اعتبارسنجی (۱ ران کافی است)؛
+        # مقایسهٔ سریال/موازی ۴ اینفرنسِ اضافه می‌خواهد و رویِ گوشیِ
+        # کم‌رم ده‌ها ثانیه به استارت اضافه می‌کند، درحالی‌که A/Bِ
+        # واقعی (.epab) جداگانه EP را با CPU مقایسه کرده است.
+        try:
+            _and70 = _on_android()
+        except Exception:
+            _and70 = False
+        if _and70:
+            try:
+                print(f"[TIME] lama-probe={time.time() - _t70:.1f}s "
+                      f"(اندروید: فقط اعتبارسنجی)", flush=True)
+            except Exception:
+                pass
+            _lama_probeok_store(model_path, ep_name)
             return True
         # v1.14.67 — امولاتورِ x86_64: رانِ موازیِ همزمان در libonnxruntimeِ
         # x86_64 SIGFPE می‌دهد (تقسیمِ صحیحِ صفر در زمان‌بندِ thread-pool) —
@@ -1049,6 +1131,11 @@ def _ort_probe_ok(sess, threads: int) -> bool:
             except Exception:
                 pass
             return False
+        try:
+            print(f"[TIME] lama-probe={time.time() - _t70:.1f}s", flush=True)
+        except Exception:
+            pass
+        _lama_probeok_store(model_path, ep_name)
         return True
     except Exception:
         return False
@@ -1097,7 +1184,8 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
             s_c = ort.InferenceSession(model_path, sess_options=so_c,
                                        providers=[cand, "CPUExecutionProvider"])
             t_make = time.time() - t0
-            if not _ort_probe_ok(s_c, threads if threads > 0 else 0):
+            if not _ort_probe_ok(s_c, threads if threads > 0 else 0,
+                                 model_path, cand):
                 try:
                     print(f"    [*] {short}: مردود (پروب سلامت/سریالی)")
                 except Exception:
@@ -1256,7 +1344,8 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
             try:
                 s_ep = _lama_session_cached(model_path, so_ep,
                                             [ep, "CPUExecutionProvider"])
-                if _ort_probe_ok(s_ep, threads if threads > 0 else 0):
+                if _ort_probe_ok(s_ep, threads if threads > 0 else 0,
+                                 model_path, ep):
                     try:
                         print(f"[+] شتاب سخت‌افزاری ORT فعال شد: {ep} "
                               f"(MANGA_ORT_EP — اجباری)")
@@ -3668,10 +3757,15 @@ class MangaTranslator:
         style_fonts: bool = True,
         active_tones: Optional[List[str]] = None,
         instruction_text: Optional[str] = None,
+        clean_sfx: bool = False,
         repair_page_seams: bool = True,
     ):
         self.fake_translate = bool(fake_translate)
         self.clean_only = bool(clean_only)
+        # v1.14.70 — پاکسازیِ افکت‌های صوتی/متنِ استایل‌دارِ بیرونِ حباب
+        # (پیش‌فرض خاموش: SFX هنر حساب می‌شود و دست‌نخورده می‌ماند)
+        self.clean_sfx = bool(clean_sfx) or (
+            os.environ.get("MANGA_CLEAN_SFX", "0").strip() == "1")
         self.style_fonts = bool(style_fonts)
         self.active_tones = (set(active_tones) if active_tones else None)
         self.custom_instruction = (instruction_text or "").strip() or ""
@@ -4022,7 +4116,14 @@ class MangaTranslator:
                 )
 
             self._key_index = 0
-            self._apply_api_key(self._api_keys[0])
+            # v1.14.70 — در clean-only یا fake-translate هیچ درخواستی به
+            # API زده نمی‌شود؛ ساختِ کلاینتِ واقعی (genai/openai) هم لازم
+            # نیست و رویِ بعضی شبکه‌ها (پروکسیِ IPv6 در no_proxy) حتی
+            # کرش می‌کند.
+            if not self.clean_only and not self.fake_translate:
+                self._apply_api_key(self._api_keys[0])
+            else:
+                self.client = None
             self._model_cascade = self._build_model_cascade(self.model_name, self.client)
             self.model_name = self._model_cascade[0]
             if len(self._api_keys) > 1:
@@ -4037,7 +4138,12 @@ class MangaTranslator:
                     "  pip install openai"
                 )
             self._key_index = 0
-            self._apply_api_key(self._api_keys[0])
+            # v1.14.70 — clean-only/fake-translate: بدونِ کلاینتِ API
+            # (مثلِ شاخهٔ gemini)
+            if not self.clean_only and not self.fake_translate:
+                self._apply_api_key(self._api_keys[0])
+            else:
+                self.client = None
             self._model_cascade = [self.model_name]
             print(f"[*] مترجم: {self.model_name} ({self.provider})")
             if len(self._api_keys) > 1:
@@ -7231,28 +7337,34 @@ class MangaTranslator:
             # و... سایت هارو کامل فیلتر تبلیغ بزن»): کلِ بنرِ تبلیغ توپر
             # ماسک می‌شود — نه نوارِ خط‌ها — تا هیچ ذره‌ای از حروفِ تبلیغ
             # در خروجی نماند. (حذفِ بیش از اندازه مجاز است.)
-            if getattr(region, "kind", "") == "promo":
+            # v1.14.70 — SFX هم توپر: پلیِ OCR اغلب فقط بخشی از حروفِ
+            # درشت را می‌گیرد («HAA»→«10») و بقیه می‌ماند؛ rect ناحیه از
+            # روی جوهر تنگ بریده شده پس توپرکردنش امن است.
+            if getattr(region, "kind", "") in ("promo", "sfx"):
                 try:
                     _px0, _py0, _pw, _ph = [int(v) for v in region.rect]
-                    # v1.14.65 — بنر کامل: قابِ سفید/سایه/ماسکوت هم پوشانده
-                    # شود (باکسِ OCR همیشه تنگ‌تر از گرافیکِ بنر است)
-                    _px0, _py0, _px1, _py1 = self._expand_promo_rect(
-                        image, _px0, _py0, _px0 + _pw, _py0 + _ph)
+                    _px1, _py1 = _px0 + _pw, _py0 + _ph
+                    if getattr(region, "kind", "") == "promo":
+                        # v1.14.65 — بنر کامل: قابِ سفید/سایه/ماسکوت هم پوشانده
+                        # شود (باکسِ OCR همیشه تنگ‌تر از گرافیکِ بنر است)
+                        _px0, _py0, _px1, _py1 = self._expand_promo_rect(
+                            image, _px0, _py0, _px1, _py1)
                     if _px1 - _px0 >= 8 and _py1 - _py0 >= 8:
                         m[_py0:_py1, _px0:_px1] = 255
-                        _prb = getattr(self, "_promo_rect_boxes", None)
-                        if _prb is None:
-                            _prb = []
-                            self._promo_rect_boxes = _prb
-                        _prb.append([_px0, _py0, _px1, _py1])
                         n_ok += 1
                         if self.debug:
                             try:
-                                print(f"  [🔍] تبلیغ → ماسکِ توپرِ بنر "
+                                print(f"  [🔍] {getattr(region, 'kind', '')} → ماسکِ توپر "
                                       f"rect=({_px0},{_py0},"
                                       f"{_px1 - _px0},{_py1 - _py0})")
                             except Exception:
                                 pass
+                        if getattr(region, "kind", "") == "promo":
+                            _prb = getattr(self, "_promo_rect_boxes", None)
+                            if _prb is None:
+                                _prb = []
+                                self._promo_rect_boxes = _prb
+                            _prb.append([_px0, _py0, _px1, _py1])
                         continue
                 except Exception:
                     pass
@@ -15513,14 +15625,18 @@ class MangaTranslator:
         return extra
 
     def _discover_free_text_regions(self, image: np.ndarray,
-                                    regions: List["TextRegion"]) -> List["TextRegion"]:
+                                    regions: List["TextRegion"],
+                                    relaxed: bool = False) -> List["TextRegion"]:
         """متنِ تایپ‌شدهٔ بیرونِ حباب (زیرنویسِ روی عکس، بنر، کاغذ، سند و…)
         را پیدا می‌کند — RT-DETR فقط حباب می‌بیند و متنِ رویِ عکسِ خالی
         («LEARN, THROUGHOUT ALL…»، «THE … BY …») هرگز پاک نمی‌شد.
         روش: اجزای همبندِ جوهرِ هم‌اندازهٔ حرف بیرونِ پوشش → خوشهٔ خط →
         OCRِ فقط همان تکه‌های کوچک (ارزان) → متنِ خوانا روی زمینهٔ یکدست.
         متنِ عمودی/استایل‌دار (افکتِ صوتی/لوگو = هنر) و زمینهٔ شلوغ هرگز
-        لمس نمی‌شود. MANGA_FREE_TEXT=0 → خاموش."""
+        لمس نمی‌شود. MANGA_FREE_TEXT=0 → خاموش.
+        relaxed=True (v1.14.70 — پاکسازیِ SFX): حروفِ درشت‌تر، متنِ
+        استایل‌دار/کج و زمینهٔ شلوغ هم پذیرفته می‌شود؛ آستانهٔ OCR
+        پایین‌تر است و kind ناحیه‌ها «sfx» می‌شود."""
         try:
             h, w = image.shape[:2]
         except Exception:
@@ -15564,7 +15680,9 @@ class MangaTranslator:
                 continue
             _cw = int(_st[i, cv2.CC_STAT_WIDTH]) / max(_sc, 1e-6)
             _ch = int(_st[i, cv2.CC_STAT_HEIGHT]) / max(_sc, 1e-6)
-            if _ch < 6 or _ch > 78 or _cw < 5 or _cw > 420:
+            # v1.14.70 — relaxed (SFX): حروفِ درشتِ افکتِ صوتی هم قبول
+            _ch_max = 200 if relaxed else 78
+            if _ch < 6 or _ch > _ch_max or _cw < 5 or _cw > 420:
                 continue
             _cand[_lab == i] = 255
         if not np.any(_cand):
@@ -15594,9 +15712,12 @@ class MangaTranslator:
             _ry0, _ry1 = float(_ys.min()), float(_ys.max())
             _tw = (_rx1 - _rx0 + 1) / _sc
             _th = (_ry1 - _ry0 + 1) / _sc
-            if _th < 7 or _th > 92 or _tw < 24:
+            # v1.14.70 — relaxed (SFX): خط‌های درشت‌تر هم قبول
+            _th_max = 220 if relaxed else 92
+            _tw_min = 20 if relaxed else 24
+            if _th < 7 or _th > _th_max or _tw < _tw_min:
                 continue
-            if _tw < 1.15 * _th:
+            if not relaxed and _tw < 1.15 * _th:
                 continue  # متنِ عمودی/استایل‌دار = هنر → دست نمی‌زنیم
             boxes.append((_bx + _rx0 / _sc, _by + _ry0 / _sc,
                           _bx + _rx1 / _sc, _by + _ry1 / _sc, _th))
@@ -15605,22 +15726,40 @@ class MangaTranslator:
         # ۴) خط‌های نزدیک → بلوک
         boxes.sort(key=lambda b: (b[1], b[0]))
         blocks: List[List[tuple]] = []
-        for b in boxes:
-            placed = False
-            for bl in blocks:
-                ref = bl[-1]
-                _mh = max(b[4], ref[4])
-                _gy = abs((b[1] + b[3]) / 2 - (ref[1] + ref[3]) / 2)
-                _gx = max(0.0, max(ref[0], b[0]) - min(ref[2], b[2]))
-                if _gy <= max(14.0, 0.9 * _mh) and _gx <= max(30.0, 1.6 * _mh):
-                    bl.append(b)
-                    placed = True
-                    break
-            if not placed:
-                blocks.append([b])
+        # v1.14.70 — relaxed (SFX): بلوک‌بندی انجام نمی‌شود؛ هر باکسِ خط
+        # جداگانه OCR می‌شود چون ادغام کراپ را بزرگ می‌کند و دیتکتورِ
+        # PP-OCR روی کراپِ بزرگِ SFX هیچی پیدا نمی‌کند (کراپِ تنگ جواب
+        # می‌دهد). باکس‌ها از قبل در سطحِ خط هستند.
+        if relaxed:
+            # v1.14.70 — فقط باکس‌هایِ به‌اندازهٔ کافی بزرگ (SFX واقعی؛
+            # نویزِ کوچک حذف) تا تعدادِ OCR کم و سرعت قابل‌قبول شود
+            blocks = [[b] for b in boxes
+                      if (b[2] - b[0]) * (b[3] - b[1]) >= 3000]
+        else:
+            for b in boxes:
+                placed = False
+                for bl in blocks:
+                    ref = bl[-1]
+                    _mh = max(b[4], ref[4])
+                    _gy = abs((b[1] + b[3]) / 2 - (ref[1] + ref[3]) / 2)
+                    _gx = max(0.0, max(ref[0], b[0]) - min(ref[2], b[2]))
+                    if _gy <= max(14.0, 0.9 * _mh) and _gx <= max(30.0, 1.6 * _mh):
+                        bl.append(b)
+                        placed = True
+                        break
+                if not placed:
+                    blocks.append([b])
         # ۵) OCRِ فقط بلوک‌های کوچک + فیلترِ زمینه/کنتراست/متن
         out: List["TextRegion"] = []
-        for bl in blocks[:28]:
+        # v1.14.70 — relaxed (SFX): سقفِ بلوک بالاتر تا SFXهایِ پایینِ
+        # صفحه هم بررسی شوند؛ بلوک‌ها از بزرگ به کوچک (SFXها درشت‌اند)
+        # تا مهم‌ترین‌ها اول OCR شوند
+        _cap70 = 28
+        if relaxed:
+            _cap70 = 80
+            blocks.sort(key=lambda bl: -((bl[0][2] - bl[0][0])
+                                         * (bl[0][3] - bl[0][1])))
+        for bl in blocks[:_cap70]:
             try:
                 xs0 = max(0, int(min(b[0] for b in bl)) - 8)
                 ys0 = max(0, int(min(b[1] for b in bl)) - 6)
@@ -15641,10 +15780,23 @@ class MangaTranslator:
                       (xs0 - _mx0):(xs1 - _mx0) + 1] = False
                 if _ring.sum() < 40:
                     continue
-                if float(_sub[_ring].astype(np.float32).std()) > 46.0:
+                # v1.14.70 — relaxed (SFX): زمینهٔ شلوغ هم اشکال ندارد
+                # (LaMa بازسازی می‌کند؛ ترکیبِ دو-عکسی فقط نوارِ متن را
+                # برمی‌گرداند پس خرابیِ پس‌زمینه به خروجی نمی‌رسد)
+                if not relaxed and float(
+                        _sub[_ring].astype(np.float32).std()) > 46.0:
                     continue  # زمینهٔ شلوغ → هنر/صحنه
                 _raise_if_stop()
                 crop = image[ys0:ys1 + 1, xs0:xs1 + 1]
+                # v1.14.70 — relaxed (SFX): دیتکتورِ PP-OCR وقتی متن به
+                # لبهٔ کراپ می‌چسبد هیچی پیدا نمی‌کند؛ حاشیهٔ سفید اضافه
+                # می‌کنیم و مختصاتِ باکس را برمی‌گردانیم
+                _pad70 = 0
+                if relaxed:
+                    _pad70 = max(12, int(min(crop.shape[:2]) * 0.15))
+                    crop = cv2.copyMakeBorder(
+                        crop, _pad70, _pad70, _pad70, _pad70,
+                        cv2.BORDER_CONSTANT, value=(255, 255, 255))
                 try:
                     res = self.ocr.ocr(crop)
                 except Exception:
@@ -15667,20 +15819,27 @@ class MangaTranslator:
                         box = np.asarray(line[0], dtype=np.float32).reshape(-1, 2)
                         if box.size < 8:
                             continue
+                        # v1.14.70 — جبرانِ حاشیهٔ سفیدِ relaxed
+                        if _pad70:
+                            box[:, 0] -= _pad70
+                            box[:, 1] -= _pad70
                         box[:, 0] += xs0
                         box[:, 1] += ys0
                     except Exception:
                         continue
                     text = (text or "").strip()
                     _al = sum(1 for c in text if c.isalnum())
-                    if _al < 3:
+                    # v1.14.70 — relaxed (SFX): «HAA» و «SIGH» سه‌حرفی‌اند
+                    if _al < (2 if relaxed else 3):
                         continue
                     _sp = sum(1 for c in text if c.isalnum() or c.isspace())
                     if _sp < 0.55 * len(text):
                         continue
                     if conf > best_conf:
                         best_txt, best_conf, best_box = text, conf, box
-                if best_conf < 0.45 or best_box is None:
+                # v1.14.70 — relaxed (SFX): آستانهٔ اطمینانِ پایین‌تر
+                _conf_min = 0.30 if relaxed else 0.45
+                if best_conf < _conf_min or best_box is None:
                     continue  # متنِ خوانا نیست → هنر/بقایای مبهم
                 # مرکزِ بلوک داخلِ ناحیهٔ موجود؟ (دوباره‌چک با باکسِ OCR)
                 _cx = float(best_box[:, 0].mean())
@@ -15693,6 +15852,9 @@ class MangaTranslator:
                 if _hit:
                     continue
                 polys = [np.asarray(best_box, dtype=np.float32)]
+                # v1.14.70 — relaxed (SFX): kind ناحیه «sfx» تا در
+                # clean_targets پاک شود (نه free_text که دست‌نخورده می‌ماند)
+                _kind70 = "sfx" if relaxed else "free_text"
                 out.append(TextRegion(
                     id=-1,
                     boxes=[np.array([[xs0, ys0], [xs1, ys0], [xs1, ys1],
@@ -15700,17 +15862,113 @@ class MangaTranslator:
                     source_text=best_txt,
                     rect=(xs0, ys0, xs1 - xs0, ys1 - ys0),
                     angle=0.0,
-                    kind="free_text",
-                    bubble_style="free_text",
+                    kind=_kind70,
+                    bubble_style=_kind70,
                     det_class="",
                     ocr_polys=polys,
                 ))
             except Exception:
                 continue
         if out and self.debug:
-            print(f"    [+] متنِ بیرونِ حباب: {len(out)} ناحیهٔ اضافی "
+            _lbl70 = "SFX" if relaxed else "متنِ بیرونِ حباب"
+            print(f"    [+] {_lbl70}: {len(out)} ناحیهٔ اضافی "
                   f"({time.time() - t0:.1f}s)")
         return out
+
+    def _discover_sfx_regions(self, image: np.ndarray,
+                              regions: List["TextRegion"]) -> List["TextRegion"]:
+        """v1.14.70 — افکتِ صوتی/متنِ استایل‌دارِ بیرونِ حباب (HAA، SFX
+        کره‌ای، پلاکِ اسم و…) با فیلترهایِ شل‌شده پیدا می‌شود تا در
+        «کپیِ اولِ تهاجمی» کامل پاک شود. فقط وقتی MANGA_CLEAN_SFX=1 یا
+        --clean-sfx."""
+        try:
+            out = self._discover_free_text_regions(image, regions,
+                                                   relaxed=True)
+        except Exception:
+            return []
+        # تکه‌های یک SFX (حروفِ دور از هم مثل HAA..) را به هم بچسبان
+        return self._merge_sfx_fragments(image, out)
+
+    def _merge_sfx_fragments(self, image: np.ndarray,
+                             regions: List["TextRegion"]) -> List["TextRegion"]:
+        """v1.14.70 — ناحیه‌های sfxِ نزدیکِ هم (تکه‌های یک افکت) را ادغام
+        می‌کند و rect را تا جوهرِ نزدیک گسترش می‌دهد تا ماسکِ توپر کلِ
+        کلمه (مثل HAA..) را بپوشاند."""
+        if not regions:
+            return regions
+        try:
+            h, w = image.shape[:2]
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            med = cv2.medianBlur(gray, 31)
+            ink = (np.abs(gray.astype(np.int16) - med.astype(np.int16))
+                   > 52).astype(np.uint8) * 255
+        except Exception:
+            ink = None
+        try:
+            rs = sorted(regions, key=lambda r: (r.rect[1], r.rect[0]))
+            merged: List["TextRegion"] = []
+            for r in rs:
+                placed = False
+                try:
+                    x, y, w_, h_ = [int(v) for v in r.rect]
+                except Exception:
+                    merged.append(r)
+                    continue
+                for m in merged:
+                    try:
+                        mx, my, mw, mh = [int(v) for v in m.rect]
+                    except Exception:
+                        continue
+                    if (x - 70 < mx + mw and mx - 70 < x + w_
+                            and y - 70 < my + mh and my - 70 < y + h_):
+                        nx0, ny0 = min(mx, x), min(my, y)
+                        nx1, ny1 = max(mx + mw, x + w_), max(my + mh, y + h_)
+                        m.rect = (nx0, ny0, nx1 - nx0, ny1 - ny0)
+                        try:
+                            m.boxes = list(m.boxes or []) + list(r.boxes or [])
+                            m.ocr_polys = (list(m.ocr_polys or [])
+                                           + list(r.ocr_polys or []))
+                        except Exception:
+                            pass
+                        try:
+                            _t1 = (m.source_text or "").strip()
+                            _t2 = (r.source_text or "").strip()
+                            if _t2 and _t2 not in _t1:
+                                m.source_text = (_t1 + " " + _t2).strip()
+                        except Exception:
+                            pass
+                        placed = True
+                        break
+                if not placed:
+                    merged.append(r)
+            if ink is not None:
+                for m in merged:
+                    try:
+                        mx, my, mw, mh = [int(v) for v in m.rect]
+                        # گسترشِ تکراری: تا ۳ بار، هر بار ۸۰px باز و به
+                        # مرزِ جوهر بچسبان (حالتِ تهاجمیِ SFX — سقفِ رشد
+                        # برداشته شد؛ کاربر گفته «بیشتر پاک شه» اشکال ندارد)
+                        for _ in range(3):
+                            ex0, ey0 = max(0, mx - 80), max(0, my - 80)
+                            ex1 = min(w, mx + mw + 80)
+                            ey1 = min(h, my + mh + 80)
+                            sub = ink[ey0:ey1, ex0:ex1]
+                            ys, xs = np.nonzero(sub)
+                            if len(xs) < 20:
+                                break
+                            nx0, ny0 = ex0 + int(xs.min()), ey0 + int(ys.min())
+                            nx1 = ex0 + int(xs.max()) + 1
+                            ny1 = ey0 + int(ys.max()) + 1
+                            if (nx0 == mx and ny0 == my
+                                    and nx1 == mx + mw and ny1 == my + mh):
+                                break
+                            mx, my, mw, mh = nx0, ny0, nx1 - nx0, ny1 - ny0
+                        m.rect = (mx, my, mw, mh)
+                    except Exception:
+                        pass
+            return merged
+        except Exception:
+            return regions
 
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
 
@@ -15741,6 +15999,19 @@ class MangaTranslator:
                 _ft = self._discover_free_text_regions(image, unique_regions)
                 if _ft:
                     unique_regions.extend(_ft)
+            except Exception:
+                pass
+        _raise_if_stop()
+
+        # v1.14.70 — پاکسازیِ SFX: افکتِ صوتی/متنِ استایل‌دارِ بیرونِ حباب
+        # فقط وقتی --clean-sfx یا MANGA_CLEAN_SFX=1 (پیش‌فرض: SFX هنر
+        # است و دست‌نخورده می‌ماند)
+        if unique_regions and getattr(self, "clean_sfx", False):
+            _raise_if_stop()
+            try:
+                _sfx = self._discover_sfx_regions(image, unique_regions)
+                if _sfx:
+                    unique_regions.extend(_sfx)
             except Exception:
                 pass
         _raise_if_stop()
@@ -16201,6 +16472,10 @@ class MangaTranslator:
                               and getattr(r, "ocr_empty", False)]
         _clean_regions = (translated_regions + _ocr_empty_regions
                           + promo_regions)
+        # v1.14.70 — با --clean-sfx، افکت‌های صوتی هم پاک می‌شوند
+        # (ترجمه نمی‌شوند؛ فقط حذف)
+        if getattr(self, "clean_sfx", False) and sfx_regions:
+            _clean_regions = _clean_regions + sfx_regions
         missing_n = sum(1 for r in dialogue_regions
                         if not r.translated_text
                         and not getattr(r, "ocr_empty", False))
@@ -16210,7 +16485,9 @@ class MangaTranslator:
             if promo_regions:
                 print(f"  [*] {len(promo_regions)} تبلیغ → پاکسازیِ کاملِ بنر")
             if sfx_regions:
-                print(f"  [*] {len(sfx_regions)} SFX → دست‌نخورده")
+                # v1.14.70 — با --clean-sfx پاک می‌شوند، وگرنه دست‌نخورده
+                _sfx70 = "پاک شدند" if getattr(self, "clean_sfx", False) else "دست‌نخورده"
+                print(f"  [*] {len(sfx_regions)} SFX → {_sfx70}")
             if junk_regions:
                 print(f"  [*] {len(junk_regions)} junk → دست‌نخورده")
 
@@ -19023,7 +19300,9 @@ html, body { background: #0a0a0b; }
             if len(_angs) >= 2:
                 _med = float(np.median(_angs))
                 _spread = float(np.max(np.abs(np.asarray(_angs) - _med)))
-                if _spread <= 4.0:
+                # v1.14.70 — کجیِ کوچک (زیر ۵ درجه) نویزِ OCR است نه شیبِ
+                # واقعی؛ فقط شیبِ واضح اعمال می‌شود تا متن «کج» نچسبد
+                if _spread <= 4.0 and abs(_med) >= 5.0:
                     angle = _med
         except Exception:
             pass
@@ -19351,6 +19630,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--clean-only", action="store_true",
                    help="فقط پاکسازی متن (inpaint) بدون ترجمه و بدون رندر فارسی — "
                         "برای تست تشخیص حباب/پاکسازی؛ کلید API لازم نیست")
+    p.add_argument("--clean-sfx", action="store_true",
+                   help="پاکسازی افکت‌های صوتی و متنِ استایل‌دارِ بیرونِ حباب "
+                        "(HAA، SFX کره‌ای، پلاک اسم…) — پیش‌فرض خاموش (SFX هنر "
+                        "حساب می‌شود)؛ env متناظر: MANGA_CLEAN_SFX=1")
     p.add_argument("--no-style-fonts", action="store_true",
                    help="فونت جداگانهٔ هر لحن حباب خاموش شود → همه با فونت اصلی رندر می‌شوند")
     p.add_argument("--active-tones", default=None,
@@ -19488,6 +19771,7 @@ def main():
         story_brief=not getattr(args, "no_brief", False),
         fake_translate=bool(getattr(args, "fake_translate", False)),
         clean_only=bool(getattr(args, "clean_only", False)),
+        clean_sfx=bool(getattr(args, "clean_sfx", False)),
         style_fonts=not getattr(args, "no_style_fonts", False),
         instruction_text=(
             open(args.instruction, encoding="utf-8").read()
