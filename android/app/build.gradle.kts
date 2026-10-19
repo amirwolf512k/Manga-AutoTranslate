@@ -25,7 +25,11 @@ android {
     }
 
     packaging {
-        jniLibs.useLegacyPackaging = false
+        // v1.14.67 — رویِ امولاتورِ x86_64 (ترجمهٔ arm64) لودِ .soِ
+        // فشرده‌نشده از داخلِ APK ممکن است کار نکند → با -PlegacyJni=true
+        // کتابخانه‌ها extract می‌شوند (فقط برایِ تستِ CI؛ پیش‌فرض false)
+        jniLibs.useLegacyPackaging =
+            ((findProperty("legacyJni") as String?) == "true")
     }
 
     compileOptions {

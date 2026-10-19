@@ -81,7 +81,7 @@ jobs:
       - name: Build arm64 debug APK
         working-directory: android
         run: |
-          gradle :app:assembleDebug -PappAbis="arm64-v8a" \
+          gradle :app:assembleDebug -PappAbis="arm64-v8a" -PlegacyJni=true \
             -PchaquopyBuildPython="$(command -v python3)"
           mkdir -p ../dist
           cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-arm64.apk
@@ -134,9 +134,12 @@ jobs:
             # inp_upload=webpِ محلی داخلِ حافظهٔ اپ + حالتِ تست + دیباگ
             adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiIHN0YW5kYWxvbmU9InllcyIgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0LndlYnA8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9IndlYl9kZWJ1ZyI+dHJ1ZTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJjbGVhbl9tZXRob2QiPmxhbWEtbWFuZ2E8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0ib3V0X2ZtdCI+UERGPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9InJlYWRvcmQiPnJ0bDwvc3RyaW5nPgogICAgPGJvb2xlYW4gbmFtZT0iYmF0dGVyeV9hc2tlZCIgdmFsdWU9InRydWUiIC8+CiAgICA8Ym9vbGVhbiBuYW1lPSJ2aWV3ZXJfaGludF92MyIgdmFsdWU9InRydWUiIC8+CjwvbWFwPgo= | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
             # ۵) اجرای اپ + زدنِ دکمهٔ شروع
+            adb logcat -c || true
             adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
-            sleep 25
-            python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail.png; adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png 2>/dev/null || true; adb logcat -d -t 500 > /tmp/emulout/logcat_fail.txt 2>/dev/null || true; exit 1; }
+            sleep 15
+            adb logcat -d -t 600 > /tmp/emulout/logcat_start.txt 2>/dev/null || true
+            sleep 10
+            python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail.png; adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png 2>/dev/null || true; adb logcat -d -t 800 > /tmp/emulout/logcat_fail.txt 2>/dev/null || true; exit 1; }
             # ۶) انتظار تا پایانِ موتور (۶۰ دقیقه — اجرای arm64 رویِ
             # ترجمهٔ x86 کند است؛ دادهٔ [TIME] هم می‌دهد)
             python3 .ci_scripts/wait_done.py 60
