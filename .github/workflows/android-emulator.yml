@@ -124,9 +124,11 @@ jobs:
         run: |
           "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
           echo "emulator started in background"
-          timeout 600 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 5; done'
+          adb start-server || true
+          timeout 720 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 5; done' || { echo "=== emulator boot FAILED — log tail:"; tail -40 /tmp/emu_boot.log; exit 1; }
           adb shell input keyevent 82 || true
           adb devices
+          tail -3 /tmp/emu_boot.log
 
       - name: Run APK on real Android emulator + red-stain gate
         run: |
