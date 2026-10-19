@@ -114,14 +114,21 @@ jobs:
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"; yes | "$SDKM" "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || true
           echo no | "$AVDM" create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
           CFG=$("$AVDM" list avd | grep -A5 'Name: ciavd' | grep 'Path:' | awk '{print $2}')
-          CFG="${CFG:-$HOME/.android/avd/ciavd.avd}/config.ini"
-          echo "AVD config: $CFG"
-          grep -q "hw.cpu.ncore" "$CFG" && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG" || echo "hw.cpu.ncore=4" >> "$CFG"
-          echo "hw.ramSize=3072MB" >> "$CFG"
-          tail -5 "$CFG"
+          CFG="${CFG:-$HOME/.android/avd/ciavd.avd}"
+          echo "AVD path: $CFG"
+          grep -q "hw.cpu.ncore" "$CFG/config.ini" && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG/config.ini" || echo "hw.cpu.ncore=4" >> "$CFG/config.ini"
+          echo "hw.ramSize=3072MB" >> "$CFG/config.ini"
+          # v1.14.67 — مسیرِ AVDِ avdmanager با مسیرِ جست‌وجویِ emulator فرق دارد → symlink
+          mkdir -p "$HOME/.android/avd"
+          ln -sfn "$CFG" "$HOME/.android/avd/ciavd.avd"
+          INI="$(dirname "$CFG")/ciavd.ini"
+          if [ -f "$INI" ]; then ln -sfn "$INI" "$HOME/.android/avd/ciavd.ini"; else printf 'avd.ini.encoding=UTF-8\npath=%s\n' "$CFG" > "$HOME/.android/avd/ciavd.ini"; fi
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          tail -5 "$CFG/config.ini"
 
       - name: Boot emulator
         run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
           "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
           echo "emulator started in background"
           adb start-server || true
@@ -132,6 +139,7 @@ jobs:
 
       - name: Run APK on real Android emulator + red-stain gate
         run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
           set -x
           adb devices
           mkdir -p /tmp/emulout emul-artifacts
