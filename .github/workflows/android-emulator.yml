@@ -81,7 +81,7 @@ jobs:
       - name: Build x86_64 debug APK (emulator — arm64 under libndk translation SIGSEGVs in libpython)
         working-directory: android
         run: |
-          gradle :app:assembleDebug -PappAbis="x86_64" -PlegacyJni=true \
+          gradle :app:assembleDebug -PappAbis="x86_64" -PlegacyJni=true -PortVer=1.28.0 \
             -PchaquopyBuildPython="$(command -v python3)"
           mkdir -p ../dist
           cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-x86_64.apk
