@@ -107,57 +107,59 @@ jobs:
           sudo -E adduser "$USER" kvm 2>/dev/null || true
           sudo chown -R "$USER" /dev/kvm 2>/dev/null || true
 
+      # v1.14.67 — امولاتورِ دستی (۴ هسته — AVDِ پیش‌فرضِ اکشن ۲ هسته است
+      # و ORT-androidِ x86_64 با ۲ هسته SIGFPE می‌دهد)
+      - name: Create AVD (4 cores)
+        run: |
+          sdkmanager "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || yes | sdkmanager "system-images;android-30;google_apis;x86_64"
+          echo no | avdmanager create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
+          grep -q "hw.cpu.ncore" ~/.android/avd/ciavd.avd/config.ini && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' ~/.android/avd/ciavd.avd/config.ini || echo "hw.cpu.ncore=4" >> ~/.android/avd/ciavd.avd/config.ini
+          echo "hw.ramSize=3072MB" >> ~/.android/avd/ciavd.avd/config.ini
+          tail -5 ~/.android/avd/ciavd.avd/config.ini
+
+      - name: Boot emulator
+        run: |
+          emulator -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
+          echo "emulator started in background"
+          timeout 600 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 5; done'
+          adb shell input keyevent 82 || true
+          adb devices
+
       - name: Run APK on real Android emulator + red-stain gate
-        uses: reactivecircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          target: google_apis
-          arch: x86_64
-          ram-size: 3072M
-          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
-          disable-animations: true
-          script: |
-            set -x
-            adb devices
-            mkdir -p /tmp/emulout emul-artifacts
-            # ۱) نصبِ APK
-            adb install -r -t dist/MangaTranslator-x86_64.apk
-            # ۲) ورودی داخلِ حافظهٔ خودِ اپ (بدونِ مجوزِ حافظه — از
-            # /sdcard اپِ بدونِ مجوز نمی‌خوانَد)
-            adb push /tmp/mt/imgs/img5.webp /data/local/tmp/test.webp
-            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files && cat /data/local/tmp/test.webp > /data/user/0/com.amirwolf.mangatranslator/files/test.webp'"
-            # ۳) مدل‌ها از قبل داخلِ کش — دانلودِ داخلِ امولاتور حذف شود
-            adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
-            adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
-            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models && cp /data/local/tmp/det.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/detector-v4-s_int8.onnx && cp /data/local/tmp/lama.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/lama-manga-dyn.onnx'"
-            # ۴) پیش‌تنظیمِ تنظیمات (base64 — بی‌دردسرِ کوتیشن):
-            # inp_upload=webpِ محلی داخلِ حافظهٔ اپ + حالتِ تست + دیباگ
-            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiIHN0YW5kYWxvbmU9InllcyIgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0LndlYnA8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9IndlYl9kZWJ1ZyI+dHJ1ZTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJjbGVhbl9tZXRob2QiPmxhbWEtbWFuZ2E8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0ib3V0X2ZtdCI+UERGPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9InJlYWRvcmQiPnJ0bDwvc3RyaW5nPgogICAgPGJvb2xlYW4gbmFtZT0iYmF0dGVyeV9hc2tlZCIgdmFsdWU9InRydWUiIC8+CiAgICA8Ym9vbGVhbiBuYW1lPSJ2aWV3ZXJfaGludF92MyIgdmFsdWU9InRydWUiIC8+CjwvbWFwPgo= | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
-            # ۵) اجرای اپ + زدنِ دکمهٔ شروع
-            adb logcat -c || true
-            adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
-            sleep 15
-            adb shell pidof com.amirwolf.mangatranslator > /tmp/emulout/pid.txt 2>&1 || true
-            adb logcat -d -t 600 > /tmp/emulout/logcat_start.txt 2>/dev/null || true
-            adb logcat -d -b crash > /tmp/emulout/logcat_crash.txt 2>/dev/null || true
-            sleep 10
-            python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail.png || true; adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png || true; adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga.log || true; adb exec-out run-as com.amirwolf.mangatranslator ls -R files/work > /tmp/emulout/work_ls.txt || true; adb logcat -d -t 4000 > /tmp/emulout/logcat_fail.txt || true; adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
-            # ۶) انتظار تا پایانِ موتور (۶۰ دقیقه — اجرای arm64 رویِ
-            # ترجمهٔ x86 کند است؛ دادهٔ [TIME] هم می‌دهد)
-            python3 .ci_scripts/wait_done.py 60
-            # ۷) کشیدنِ لاگ و خروجی
-            mkdir -p /tmp/emulout
-            adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_emulator.log || true
-            adb shell "run-as com.amirwolf.mangatranslator ls -la files/work/out" | tee /tmp/emulout/out_ls.txt || true
-            adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test.pdf > /tmp/emulout/test_out.pdf || true
-            adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test_debug.pdf > /tmp/emulout/test_debug.pdf || true
-            # فایل‌هایِ موقتِ /data/local/tmp پاک شوند
-            adb shell rm -f /data/local/tmp/test.webp /data/local/tmp/det.onnx /data/local/tmp/lama.onnx || true
-            # ۸) گیتِ لکهٔ قرمز
-            test -s /tmp/emulout/test_out.pdf
-            python3 .ci_scripts/check_red.py /tmp/emulout/test_out.pdf /tmp/mt/imgs/img5.webp
-            mkdir -p emul-artifacts
-            cp /tmp/emulout/* emul-artifacts/ || true
+        run: |
+          set -x
+          adb devices
+          mkdir -p /tmp/emulout emul-artifacts
+          adb install -r -t dist/MangaTranslator-x86_64.apk
+          adb push /tmp/mt/imgs/img5.webp /data/local/tmp/test.webp
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files && cat /data/local/tmp/test.webp > /data/user/0/com.amirwolf.mangatranslator/files/test.webp'"
+          adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
+          adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models && cp /data/local/tmp/det.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/detector-v4-s_int8.onnx && cp /data/local/tmp/lama.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/lama-manga-dyn.onnx'"
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiIHN0YW5kYWxvbmU9InllcyIgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0LndlYnA8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9IndlYl9kZWJ1ZyI+dHJ1ZTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJjbGVhbl9tZXRob2QiPmxhbWEtbWFuZ2E8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0ib3V0X2ZtdCI+UERGPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9InJlYWRvcmQiPnJ0bDwvc3RyaW5nPgogICAgPGJvb2xlYW4gbmFtZT0iYmF0dGVyeV9hc2tlZCIgdmFsdWU9InRydWUiIC8+CiAgICA8Ym9vbGVhbiBuYW1lPSJ2aWV3ZXJfaGludF92MyIgdmFsdWU9InRydWUiIC8+CjwvbWFwPgo= | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+          adb logcat -c || true
+          adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+          sleep 15
+          adb shell pidof com.amirwolf.mangatranslator > /tmp/emulout/pid.txt 2>&1 || true
+          adb logcat -d -t 600 > /tmp/emulout/logcat_start.txt 2>/dev/null || true
+          adb logcat -d -b crash > /tmp/emulout/logcat_crash.txt 2>/dev/null || true
+          sleep 10
+          python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail.png || true; adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png || true; adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga.log || true; adb exec-out run-as com.amirwolf.mangatranslator ls -R files/work > /tmp/emulout/work_ls.txt || true; adb logcat -d -t 4000 > /tmp/emulout/logcat_fail.txt || true; adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          python3 .ci_scripts/wait_done.py 60
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_emulator.log || true
+          adb shell "run-as com.amirwolf.mangatranslator ls -la files/work/out" | tee /tmp/emulout/out_ls.txt || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test.pdf > /tmp/emulout/test_out.pdf || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test_debug.pdf > /tmp/emulout/test_debug.pdf || true
+          adb shell rm -f /data/local/tmp/test.webp /data/local/tmp/det.onnx /data/local/tmp/lama.onnx || true
+          test -s /tmp/emulout/test_out.pdf
+          python3 .ci_scripts/check_red.py /tmp/emulout/test_out.pdf /tmp/mt/imgs/img5.webp
+          cp /tmp/emulout/* emul-artifacts/ || true
+
+      - name: Shutdown emulator
+        if: always()
+        run: |
+          adb emu kill || true
+          sleep 5
 
       - name: Upload artifacts
         if: always()
