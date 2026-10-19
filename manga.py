@@ -15687,23 +15687,22 @@ class MangaTranslator:
                     cx1, cy1 = min(w, X1 + 8), min(h, Y1 + 8)
                     if cx1 - cx0 < 30 or cy1 - cy0 < 12:
                         continue
-                    # v1.14.67 — OCR فقط برایِ کاندیدهایِ منتخب: اول همهٔ
-                    # کاندیدها با امتیاز جمع می‌شوند (بنرِ توپر = جعبهٔ
-                    # رنگی با fill بالا اول)، بعد فقط سقفِ بودجه OCR
-                    # می‌خورد. قبلاً هر بلابِ هنری ۴ فراخوانیِ OCR می‌گرفت
-                    # (PC: ۸۸ فراخوانیِ خالی = ۱۲۲ ثانیه!) — استخراجِ
-                    # ۱-۲ دقیقه‌ایِ کاربر همین بود.
+                    # v1.14.67b — OCR فقط برایِ کاندیدهایِ منتخب. امتیاز:
+                    # (چسبیده‌به‌لبه اول — واترمارکِ سایت‌ها معمولاً در حاشیه
+                    # است، بعد تراکمِ ضربه = متن‌مانند، بعد پُری). کاندیدها
+                    # «گردشی» (round-robin) بینِ کاشی‌ها مصرف می‌شوند تا
+                    # بنرِ دورِ نوارِ بلند (img1: y≈11000) همیشه به نوبت
+                    # برسد — رتبه‌بندیِ سراسری بنرِ دور را قربانیِ بلاب‌هایِ
+                    # بالای صفحه می‌کرد (رگرسیونِ اکشن).
+                    _edge67 = 0 if min(int(X0), w - int(X1)) <= 40 else 1
                     _cands.append((
-                        0 if _fill >= 0.30 else 1,
-                        -min(8.0, float(bw_) / float(max(1, bh_))),
-                        -int(bw_ * bh_),
+                        int(_ty0),
+                        _edge67,
+                        -float(_sr),
+                        -float(_fill),
                         cx0, cy0, cx1, cy1))
                 _ty0 = _tnext
-            # v1.14.67 — بودجهٔ OCRِ جارو + اولویتِ بنرهایِ توپر؛ بعد از
-            # اتمامِ بودجه جارو تمام می‌شود. بنرِ واقعی همیشه در اولویت‌هاست
-            # (جعبهٔ یکدست با متن). بودجه با بلندیِ صفحه بزرگ‌تر می‌شود
-            # (نوارِ بلند = کاشی‌هایِ بیشتر = بنرِ دورتر؛ نمونه: img1
-            # بنرِ y≈11000) — سقفِ ۳۲ تا بنرهایِ چندگانه از دست نروند.
+            # v1.14.67 — بودجهٔ OCRِ جارو + مصرفِ گردشیِ بینِ کاشی‌ها.
             try:
                 _max_calls = int(os.environ.get(
                     "MANGA_BANNER_OCR_MAX", "0") or 0)
@@ -15711,10 +15710,28 @@ class MangaTranslator:
                 _max_calls = 0
             if _max_calls <= 0:
                 _nt = max(1, int((h + _tile - 1) // max(1, _tile - _ovl)))
-                _max_calls = min(32, 20 + 5 * max(0, _nt - 2))
-            _cands.sort(key=lambda t: (t[0], t[1], t[2]))
+                _max_calls = min(40, 24 + 6 * max(0, _nt - 2))
+            _buckets: dict = {}
+            for _c67 in _cands:
+                _buckets.setdefault(_c67[0], []).append(_c67)
+            for _b67 in _buckets.values():
+                _b67.sort(key=lambda t: (t[1], t[2], t[3]))
+            _ordered: list = []
+            while any(_buckets.values()):
+                for _tk in sorted(_buckets):
+                    if _buckets[_tk]:
+                        _ordered.append(_buckets[_tk].pop(0))
+            if self.debug:
+                try:
+                    _top67 = ", ".join(
+                        f"({c[4]},{c[5]},edge{c[1]},s{-c[2]:.2f})"
+                        for c in _ordered[:12])
+                    print(f"  [🔍] جارویِ بنر: {len(_cands)} کاندید | "
+                          f"بودجه {_max_calls} | ترتیبِ گردشی: {_top67}")
+                except Exception:
+                    pass
             _ocr_calls = 0
-            for (_s0, _s1, _s2, cx0, cy0, cx1, cy1) in _cands:
+            for (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) in _ordered:
                 if _ocr_calls >= _max_calls:
                     if self.debug:
                         try:
@@ -15739,6 +15756,9 @@ class MangaTranslator:
                         _pad_w // 2, _pad_w - _pad_w // 2,
                         cv2.BORDER_REPLICATE)
                 _txt = ""
+                # v1.14.67b — نردبانِ کاملِ خواندن (زوم۳ ساده/CLAHE + زوم۲
+                # ساده/CLAHE): بنرِ img1 فقط با زوم۲ خوانده شد — حذفِ زوم۲
+                # باعثِ رگرسیون شد. جبرانش: بودجه + شایست پس از اولین بنر.
                 for _zm in (3, 2):
                     _big = cv2.resize(
                         crop, (crop.shape[1] * _zm,
@@ -15793,29 +15813,45 @@ class MangaTranslator:
                     # (دامنه/برند) معتبر است — OCRِ پد‌شده/واریانتی
                     # بنرهایِ واقعی را می‌خواند.
                     continue
-                    _tr = TextRegion(
-                        id=10000 + len(found),
-                        boxes=[np.array([[cx0, cy0], [cx1, cy0],
-                                         [cx1, cy1], [cx0, cy1]],
-                                        dtype=np.float32)],
-                        source_text=_txt,
-                        rect=(cx0, cy0, cx1 - cx0, cy1 - cy0),
-                        kind="promo")
-                    found.append(_tr)
-                    _found_rects.append((cx0, cy0, cx1, cy1))
-                    if self.debug:
-                        try:
-                            print(f"  [🔍] بنرِ تبلیغ: rect={_tr.rect} "
-                                  f"متن: {_txt[:60]}")
-                        except Exception:
-                            pass
-                _ty0 = _tnext
+                _tr = TextRegion(
+                    id=10000 + len(found),
+                    boxes=[np.array([[cx0, cy0], [cx1, cy0],
+                                     [cx1, cy1], [cx0, cy1]],
+                                    dtype=np.float32)],
+                    source_text=_txt,
+                    rect=(cx0, cy0, cx1 - cx0, cy1 - cy0),
+                    kind="promo")
+                found.append(_tr)
+                _found_rects.append((cx0, cy0, cx1, cy1))
+                # v1.14.67b — بعد از اولین بنر، بودجهٔ باقی‌مانده به
+                # یک‌سوم فشرده می‌شود (چند بنر در یک صفحه نادر است؛
+                # ادامه با بودجهٔ کامل فقط وقت می‌گیرد)
+                try:
+                    _max_calls = min(
+                        _max_calls,
+                        _ocr_calls + max(6,
+                                         (_max_calls - _ocr_calls) // 3))
+                except Exception:
+                    pass
+                if self.debug:
+                    try:
+                        print(f"  [🔍] بنرِ تبلیغ: rect={_tr.rect} "
+                              f"متن: {_txt[:60]}")
+                    except Exception:
+                        pass
             if self.debug:
                 try:
                     print(f"  [🔍] جارویِ بنر: {len(found)} تبلیغ شناسایی شد")
                 except Exception:
                     pass
         except Exception:
+            import traceback as _tb67
+            if self.debug:
+                try:
+                    print("  [🔍] جارویِ بنر: خطا —")
+                    _tb67.print_exc()
+                except Exception:
+                    pass
             return found
         return found
 
