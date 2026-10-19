@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.70"
+APP_VER = "1.14.71"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -6160,6 +6160,62 @@ class MangaTranslator:
                                iterations=it)
         return filled
 
+    def _expand_donor_to_bubble_interiors(self, image: np.ndarray,
+                                         mask: np.ndarray,
+                                         regions) -> np.ndarray:
+        """v1.14.71 — ماسکِ donor (عکسِ اول) برایِ ناحیه‌هایِ حبابی =
+        کلِ داخلِ حباب. فقط برایِ تمیزکاریِ عکسِ اول؛ ماسکِ کامپوز
+        (self._compose_text_mask) جداگانه و خط‌به‌خط می‌ماند."""
+        try:
+            if mask is None or not np.any(mask):
+                return mask
+            h_img, w_img = image.shape[:2]
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            out = mask.copy()
+            n_exp = 0
+            for region in (regions or []):
+                try:
+                    _dc = (getattr(region, "det_class", "") or "")
+                    if _dc not in ("bubble", "text_bubble"):
+                        continue
+                    x, y, rw, rh = [int(v) for v in region.rect]
+                    x0 = max(0, x - 4)
+                    y0 = max(0, y - 4)
+                    x1 = min(w_img, x + rw + 5)
+                    y1 = min(h_img, y + rh + 5)
+                    if x1 - x0 < 16 or y1 - y0 < 16:
+                        continue
+                    zone = self._text_zone_in_crop(region, x0, y0, x1, y1)
+                    if zone is None or not np.any(zone):
+                        continue
+                    interior = self._bubble_interior_mask(
+                        gray[y0:y1, x0:x1], zone, erode_iters=1)
+                    if interior is None or not np.any(interior):
+                        continue
+                    # فقط جایی که ماسکِ متن از قبل هست (ناحیهٔ حبابیِ فعال)
+                    # گسترش می‌یابد — حبابِ بدونِ متن دست‌نخورده می‌ماند
+                    _cur = (out[y0:y1, x0:x1] > 0)
+                    if not _cur.any():
+                        continue
+                    _dil = cv2.dilate(_cur.astype(np.uint8),
+                                      np.ones((31, 31), np.uint8)) > 0
+                    _add = (interior > 0) & _dil
+                    if not _add.any():
+                        continue
+                    _blk = out[y0:y1, x0:x1]
+                    _blk[_add] = 255
+                    n_exp += 1
+                except Exception:
+                    continue
+            if n_exp and getattr(self, "debug", False):
+                try:
+                    print(f"  [*] v1.14.71: donor = کلِ داخلِ {n_exp} حباب")
+                except Exception:
+                    pass
+            return out
+        except Exception:
+            return mask
+
     def _letters_mask_in_crop(self, gray_crop: np.ndarray, zone: np.ndarray,
                               ch: int, cw: int, wide: bool = False,
                               bright: bool = False) -> np.ndarray:
@@ -10071,6 +10127,18 @@ class MangaTranslator:
         # عکسِ اصلی — چرا کلِ حباب رو منتقل می‌کنی؟» → کامپوز فقط نوارِ
         # متن را می‌گیرد، نه کلِ حباب/محفظه/پیکسل‌هایِ تغییرکردهٔ پراکنده.
         self._compose_text_mask = mask.copy()
+
+        # v1.14.71 — درخواستِ کاربر: «پاکسازیم اول کل حباب پاک کنه بعد خط
+        # به خط انتقال بده عکس دومی» — ماسکِ تمیزکاریِ عکسِ اول (donor)
+        # برایِ ناحیه‌هایِ حبابی = کلِ داخلِ حباب (نه فقط نوارِ متن) تا
+        # «لگِ سیاه/متنِ قبلیِ» لبهٔ ماسک نماند و نوارِ برش‌خورده کاملاً
+        # تمیز باشد. ماسکِ کامپوز (خط‌به‌خط، فقط جایِ متن) دست‌نخورده
+        # می‌ماند → حبابِ عکسِ دوم سالم.
+        try:
+            mask = self._expand_donor_to_bubble_interiors(
+                image, mask, regions)
+        except Exception:
+            pass
 
         # v1.14.59 — بلوک‌هایِ «متنِ روشن روی محفظهٔ تیره» (کارتِ عنوانِ
         # Crimson Dragon و امثالش): هرچه کارو/کلیپِ حباب/پروتکت از ماسک
