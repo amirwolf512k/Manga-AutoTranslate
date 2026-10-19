@@ -121,19 +121,17 @@ jobs:
             adb devices
             # ۱) نصبِ APK
             adb install -r -t dist/MangaTranslator-arm64.apk
-            # ۲) تصویرِ تست (webp — همانِ لکهٔ قرمزِ POCO F4)
-            adb shell mkdir -p /sdcard/Download/manga
-            adb push /tmp/mt/imgs/img5.webp /sdcard/Download/manga/test.webp
+            # ۲) ورودی داخلِ حافظهٔ خودِ اپ (بدونِ مجوزِ حافظه — از
+            # /sdcard اپِ بدونِ مجوز نمی‌خوانَد)
+            adb push /tmp/mt/imgs/img5.webp /data/local/tmp/test.webp
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/test.webp > /data/user/0/com.amirwolf.mangatranslator/files/test.webp'"
             # ۳) مدل‌ها از قبل داخلِ کش — دانلودِ داخلِ امولاتور حذف شود
-            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p files/.cache/manga_translator_models'"
-            adb push /tmp/models/detector-v4-s_int8.onnx /sdcard/Download/manga/det.onnx || true
-            adb push /tmp/models/lama-manga-dyn.onnx /sdcard/Download/manga/lama.onnx || true
-            adb shell "run-as com.amirwolf.mangatranslator sh -c 'cp /sdcard/Download/manga/det.onnx files/.cache/manga_translator_models/detector-v4-s_int8.onnx 2>/dev/null; cp /sdcard/Download/manga/lama.onnx files/.cache/manga_translator_models/lama-manga-dyn.onnx 2>/dev/null'" || true
-            # ۴) پیش‌تنظیمِ تنظیمات (فایلِ محلیِ webp + حالتِ تست + دیباگ)
-            # نکته: این اکشن اسکریپت را خط‌به‌خط اجرا می‌کند → همه‌چیز تک‌خطی
-            printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <string name="inp_upload_path">/sdcard/Download/manga/test.webp</string>\n    <string name="fake_test">true</string>\n    <string name="web_debug">true</string>\n    <string name="clean_method">lama-manga</string>\n    <string name="out_fmt">PDF</string>\n    <string name="readord">rtl</string>\n    <boolean name="battery_asked" value="true" />\n    <boolean name="viewer_hint_v3" value="true" />\n</map>\n' > /tmp/prefs.xml
-            adb push /tmp/prefs.xml /sdcard/Download/manga/prefs.xml
-            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p shared_prefs; cat /sdcard/Download/manga/prefs.xml > shared_prefs/manga_settings.xml'"
+            adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
+            adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models && cp /data/local/tmp/det.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/detector-v4-s_int8.onnx && cp /data/local/tmp/lama.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/lama-manga-dyn.onnx'"
+            # ۴) پیش‌تنظیمِ تنظیمات (base64 — بی‌دردسرِ کوتیشن):
+            # inp_upload=webpِ محلی داخلِ حافظهٔ اپ + حالتِ تست + دیباگ
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiIHN0YW5kYWxvbmU9InllcyIgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0LndlYnA8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9IndlYl9kZWJ1ZyI+dHJ1ZTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJjbGVhbl9tZXRob2QiPmxhbWEtbWFuZ2E8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0ib3V0X2ZtdCI+UERGPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9InJlYWRvcmQiPnJ0bDwvc3RyaW5nPgogICAgPGJvb2xlYW4gbmFtZT0iYmF0dGVyeV9hc2tlZCIgdmFsdWU9InRydWUiIC8+CiAgICA8Ym9vbGVhbiBuYW1lPSJ2aWV3ZXJfaGludF92MyIgdmFsdWU9InRydWUiIC8+CjwvbWFwPgo= | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
             # ۵) اجرای اپ + زدنِ دکمهٔ شروع
             adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
             sleep 25
@@ -147,8 +145,8 @@ jobs:
             adb shell "run-as com.amirwolf.mangatranslator ls -la files/work/out" | tee /tmp/emulout/out_ls.txt || true
             adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test.pdf > /tmp/emulout/test_out.pdf || true
             adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test_debug.pdf > /tmp/emulout/test_debug.pdf || true
-            # فایل‌هایِ موقتِ داخلِ Download پاک شوند
-            adb shell rm -f /sdcard/Download/manga/det.onnx /sdcard/Download/manga/lama.onnx /sdcard/Download/manga/prefs.xml || true
+            # فایل‌هایِ موقتِ /data/local/tmp پاک شوند
+            adb shell rm -f /data/local/tmp/test.webp /data/local/tmp/det.onnx /data/local/tmp/lama.onnx || true
             # ۸) گیتِ لکهٔ قرمز
             test -s /tmp/emulout/test_out.pdf
             python3 .ci_scripts/check_red.py /tmp/emulout/test_out.pdf /tmp/mt/imgs/img5.webp
