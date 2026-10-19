@@ -209,9 +209,11 @@ class MainActivity : AppCompatActivity() {
         // ساخته نمی‌شوند (autoSaveOutputs دیگر پوشهٔ pages_ نمی‌سازد).
         cleanupPagesDirs()
 
-        // v1.14.70 — درخواستِ کاربر: «اول استارت همهٔ .log.txt حذف کنه
-        // بعد بسازه» — همهٔ لاگ‌هایِ قبلی در شروع پاک می‌شوند؛ لاگِ تازه
-        // بعد از اجرا ساخته می‌شود.
+        // v1.14.70 — درخواستِ کاربر: «اول استارت میزنم همه .log.txt حذف کنه
+        // بعد بسازه» — در شروعِ اپ همهٔ لاگ‌هایِ قبلی حذف و دو فایلِ خالیِ
+        // تازه (manga.log.txt / manga_old.log.txt) ساخته می‌شوند.
+        Thread { resetLogsOnStart() }.start()
+        // نسخهٔ مرج‌شده: پاکسازیِ لاگ‌هایِ داخلیِ اپ هم انجام شود.
         deleteAllMangaLogsOnStart()
 
         if (Build.VERSION.SDK_INT < 29 &&
@@ -2657,6 +2659,84 @@ class MainActivity : AppCompatActivity() {
                         try { f.delete() } catch (_: Exception) {}
                     }
                 }
+            }
+        } catch (_: Exception) {
+        }
+    }
+
+    // v1.14.70 — درخواستِ کاربر: «اول استارت میزنم همه .log.txt حذف کنه
+    // بعد بسازه». یعنی در شروعِ اپ:
+    //   ۱) هر فایلِ لاگِ خانوادهٔ manga (manga.log / manga.log.txt /
+    //      manga.log (N).txt / manga_old.log…) در Download/manga و Download
+    //      کاملاً حذف شود.
+    //   ۲) دو فایلِ خالیِ تازه ساخته شود: manga.log.txt و manga_old.log.txt
+    //      تا هر اجرا از صفر شروع شود و لاگِ اجرای قبلی قاطی نشود.
+    //   ۳) لاگِ داخلیِ برنامه (filesDir/manga.log و manga_old.log) هم
+    //      خالی شود تا «لاگِ زنده» از اجرای قبلی باقی نماند.
+    private fun isLogFamilyName(dn: String): Boolean {
+        val s = dn.lowercase().trim()
+        if (s.endsWith(".log.txt")) return true
+        if (normMangaLogName(s) != null) return true
+        return false
+    }
+
+    private fun resetLogsOnStart() {
+        try {
+            // ۱) حذفِ همهٔ فایل‌هایِ لاگ از پوشه‌هایِ عمومی
+            if (Build.VERSION.SDK_INT >= 29) {
+                val proj = arrayOf(MediaStore.MediaColumns._ID,
+                    MediaStore.MediaColumns.DISPLAY_NAME,
+                    MediaStore.MediaColumns.RELATIVE_PATH)
+                val doomed = ArrayList<Uri>()
+                contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                    proj, null, null, null)?.use { c ->
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val dn = c.getString(1) ?: continue
+                        val rp = try { c.getString(2) ?: "" }
+                                catch (_: Exception) { "" }
+                        if (rp != "Download/manga/" && rp != "Download/") continue
+                        if (!isLogFamilyName(dn)) continue
+                        doomed.add(android.content.ContentUris
+                            .withAppendedId(
+                                MediaStore.Downloads.EXTERNAL_CONTENT_URI, id))
+                    }
+                }
+                for (u in doomed) {
+                    try { contentResolver.delete(u, null, null) }
+                    catch (_: Exception) {}
+                }
+            } else {
+                for (dir in listOf("manga", "")) {
+                    val base = File(Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS), dir)
+                    for (f in base.listFiles() ?: emptyArray()) {
+                        if (!f.isFile) continue
+                        if (!isLogFamilyName(f.name)) continue
+                        try { f.delete() } catch (_: Exception) {}
+                    }
+                }
+            }
+            // ۲) ساختِ دو فایلِ خالیِ تازه
+            val empty = File(filesDir, "_empty_log_tmp")
+            try {
+                empty.writeText("")
+            } catch (_: Exception) {
+            }
+            if (empty.isFile) {
+                try { upsertLogInDownloads("manga.log", empty) }
+                catch (_: Exception) {}
+                try { upsertLogInDownloads("manga_old.log", empty) }
+                catch (_: Exception) {}
+                try { empty.delete() } catch (_: Exception) {}
+            }
+            // ۳) خالی‌کردنِ لاگِ داخلیِ برنامه
+            try {
+                val f = logFile()
+                if (f.exists()) f.writeText("") else f.writeText("")
+                val o = logOldFile()
+                if (o.exists()) o.writeText("") else o.writeText("")
+            } catch (_: Exception) {
             }
         } catch (_: Exception) {
         }
