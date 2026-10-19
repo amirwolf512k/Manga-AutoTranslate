@@ -875,14 +875,26 @@ def _ort_probe_ok(sess, threads: int) -> bool:
     try:
         feed = _ep_ab_feed(sess, side=_lama_probe_side(False))
         if not feed:
+            try:
+                print("    [!] پروب: فیدِ خالی (شکلِ ورودیِ مدل؟)")
+            except Exception:
+                pass
             return False
         outs = [o.name for o in sess.get_outputs()][:1]
         try:
             sess.run(outs, feed)
-        except Exception:
+        except Exception as _pe:
+            try:
+                print(f"    [!] پروبِ run با نام خروجی: {str(_pe)[:110]}")
+            except Exception:
+                pass
             try:
                 sess.run(None, feed)
-            except Exception:
+            except Exception as _pe2:
+                try:
+                    print(f"    [!] پروبِ run هم با None: {str(_pe2)[:110]}")
+                except Exception:
+                    pass
                 return False
         if threads <= 0:
             return True
@@ -1053,6 +1065,35 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
     global _ORT_CUDA_OK
     if ort is None:
         raise RuntimeError("onnxruntime نصب نیست")
+    # v1.14.67 — امولاتورِ x86_64 (CI): CPU-EPِ ORT-android در createSession
+    # SIGFPE می‌دهد و تورنمنت هم پروب را رد می‌کند → سشنِ دومِ fallback
+    # کرشِ نیتیو می‌دهد. تجربهٔ ران ۲۴: ساختِ اولینِ سشنِ XNNPACK سالم بود؛
+    # پس: هیچ تورنمنت، هیچ پروب، هیچ سشنِ دوم — فقط یک سشنِ مستقیمِ
+    # XNNPACK+CPU (گره‌هایِ پشتیبانی‌نشده خودکار به CPU برمی‌گردند).
+    try:
+        import platform as _pf86
+        if _on_android() and _pf86.machine().lower() in ("x86_64", "amd64"):
+            so86 = _ort_session_options(1)
+            try:
+                so86.append_execution_provider("XnnpackExecutionProvider")
+            except Exception:
+                try:
+                    so86._eps = [("XnnpackExecutionProvider", {})]
+                except Exception:
+                    pass
+            sess86 = ort.InferenceSession(
+                model_path, sess_options=so86,
+                providers=["XnnpackExecutionProvider", "CPUExecutionProvider"])
+            try:
+                print("[*] x86_64: سشنِ مستقیمِ XNNPACK (بدونِ تورنمنت/پروب)")
+            except Exception:
+                pass
+            return sess86
+    except Exception as e:
+        try:
+            print(f"[!] x86_64 سشنِ مستقیمِ XNNPACK ناموفق: {str(e)[:110]}")
+        except Exception:
+            pass
     so = _ort_session_options(threads)
     want = prefer_gpu and (_ORT_CUDA_OK is not False)
 
@@ -1162,6 +1203,10 @@ def _cpu_thread_fallback(session, model_path: str, use_threads: int,
 
 
     try:
+        # v1.14.67 — x86_64: بازسازیِ سشنِ CPU = SIGFPE → دست‌نخورده برگرد
+        import platform as _pf86
+        if _on_android() and _pf86.machine().lower() in ("x86_64", "amd64"):
+            return session, use_threads
         provs = list(session.get_providers())
         _cap = 4 if _on_android() else 8
         cpu_n = max(1, min(_cap, os.cpu_count() or 4))
