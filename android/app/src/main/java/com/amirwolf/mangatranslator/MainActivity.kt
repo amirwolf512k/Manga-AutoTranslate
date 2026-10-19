@@ -1350,7 +1350,16 @@ class MainActivity : AppCompatActivity() {
                     text = lbl
                     setTextColor(TXT); textSize = 13f
                     setPadding(dp(4), dp(8), dp(4), dp(8))
-                    isChecked = (savedOr(id, dflt) as? Boolean) ?: (dflt == true)
+                    // v1.14.67 — بازیابیِ واقعیِ سوییچ از prefs: قبلاً
+                    // savedOr همیشه String برمی‌گرداند و as? Boolean null
+                    // می‌شد → سوییچ همیشه روی dflt می‌ماند (تنظیمِ ذخیره‌شده
+                    // بی‌اثر بود — مثلاً «حالت تست» بعد از ری‌استارت خاموش)
+                    val _svB = savedOr(id, dflt)
+                    isChecked = when (_svB) {
+                        is Boolean -> _svB
+                        is String -> _svB.equals("true", true)
+                        else -> (dflt == true)
+                    }
                     thumbTintList = android.content.res.ColorStateList.valueOf(ACC)
                     trackTintList = android.content.res.ColorStateList(
                         arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
@@ -2326,7 +2335,49 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
+    // v1.14.67 — ریشهٔ «manga (N).log.txt»: مایمِ text/plain با اسمِ
+    // «manga.log» از نظرِ MediaStore پسوندش با MIME نمی‌خواند → سیستم
+    // خودش اسم را «manga.log.txt» می‌کند و رویِ برخورد « (N)» می‌گذارد.
+    // راهِ قطعی: قبل از هر insert همهٔ ردیف‌هایِ هم‌kind حذف می‌شوند تا
+    // هیچ‌وقت برخوردی رخ ندهد و سیستم نسخهٔ شماره‌دار نسازد.
+    private fun deleteAllLogKindRows(kind: String) {
+        try {
+            val proj = arrayOf(MediaStore.MediaColumns._ID,
+                MediaStore.MediaColumns.DISPLAY_NAME,
+                MediaStore.MediaColumns.RELATIVE_PATH)
+            contentResolver.query(MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                proj, MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?",
+                arrayOf("manga%"), null)?.use { c ->
+                    val doomed = ArrayList<Uri>()
+                    while (c.moveToNext()) {
+                        val id = c.getLong(0)
+                        val dn = c.getString(1) ?: continue
+                        val rp = try { c.getString(2) ?: "" }
+                                catch (_: Exception) { "" }
+                        if (rp != "Download/manga/" && rp != "Download/") continue
+                        if (normMangaLogName(dn) == kind) {
+                            doomed.add(android.content.ContentUris
+                                .withAppendedId(
+                                    MediaStore.Downloads.EXTERNAL_CONTENT_URI,
+                                    id))
+                        }
+                    }
+                    for (u in doomed) try {
+                        contentResolver.delete(u, null, null)
+                    } catch (_: Exception) {}
+                }
+        } catch (_: Exception) {
+        }
+    }
+
     private fun insertLogEntry(name: String, src: File): Boolean {
+        // v1.14.67 — قبل از insert همهٔ هم‌kindها پاک می‌شوند (ضدِ
+        // «manga.log (N).txt»)؛ اگر نوشتن شکست خورد هم ردیفِ نیمه‌کاره
+        // حذف می‌شود تا پشته نشود.
+        val kind = normMangaLogName(name)
+        if (kind != null && Build.VERSION.SDK_INT >= 29) {
+            deleteAllLogKindRows(kind)
+        }
         val uri = contentResolver.insert(
             MediaStore.Downloads.EXTERNAL_CONTENT_URI,
             ContentValues().apply {
@@ -2335,7 +2386,12 @@ class MainActivity : AppCompatActivity() {
                 put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/manga/")
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
             }) ?: return false
-        return writeLogEntry(uri, src)
+        val ok = writeLogEntry(uri, src)
+        if (!ok) {
+            try { contentResolver.delete(uri, null, null) }
+            catch (_: Exception) {}
+        }
+        return ok
     }
 
     // فقط دو فایل: manga.log (لاگ فعلی) و manga_old.log (لاگ قبلی)
@@ -2443,20 +2499,24 @@ class MainActivity : AppCompatActivity() {
 
     private fun autoSaveLog(manual: Boolean = false) {
         Thread {
-            val cur = upsertLogInDownloads("manga.log", logFile())
-            val old = upsertLogInDownloads("manga_old.log", logOldFile())
-            cleanupLogDuplicates()
-            ui.post {
-                if (cur || old) {
-                    if (manual) Toast.makeText(this,
-                        "✔ ذخیره شد: Download/manga/manga.log",
-                        Toast.LENGTH_SHORT).show()
-                    else Toast.makeText(this,
-                        "📋 لاگ کامل ذخیره شد: Download/manga/manga.log",
-                        Toast.LENGTH_SHORT).show()
-                } else if (manual) Toast.makeText(this,
-                    "❌ لاگی موجود نیست — اول یک ترجمه اجرا کن",
-                    Toast.LENGTH_LONG).show()
+            // v1.14.67 — قفلِ سراسری: دو رانِ پشتِ هم نباید با هم
+            // همزمان insert/cleanup کنند (مسابقه = نسخهٔ شماره‌دار)
+            synchronized(this@MainActivity) {
+                val cur = upsertLogInDownloads("manga.log", logFile())
+                val old = upsertLogInDownloads("manga_old.log", logOldFile())
+                cleanupLogDuplicates()
+                ui.post {
+                    if (cur || old) {
+                        if (manual) Toast.makeText(this,
+                            "✔ ذخیره شد: Download/manga/manga.log",
+                            Toast.LENGTH_SHORT).show()
+                        else Toast.makeText(this,
+                            "📋 لاگ کامل ذخیره شد: Download/manga/manga.log",
+                            Toast.LENGTH_SHORT).show()
+                    } else if (manual) Toast.makeText(this,
+                        "❌ لاگی موجود نیست — اول یک ترجمه اجرا کن",
+                        Toast.LENGTH_LONG).show()
+                }
             }
         }.start()
     }

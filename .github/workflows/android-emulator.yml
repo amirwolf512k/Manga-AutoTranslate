@@ -1,0 +1,176 @@
+name: Android Emulator Test (real APK — red-stain gate)
+
+# درخواستِ کاربر (v1.14.67): «رو GitHub action واقعی اندروید ایجاد بشه
+# ران بزنه — سیستم تو رمش کمه، اونجا حداقل رم واسه تست داره، اونجا تست کن»
+# → APKِ واقعی رویِ امولاتورِ واقعیِ اندروید (KVM) نصب و ران می‌شود؛
+# همان تصویرِ webpِ لکهٔ قرمز (img5) با مسیرِ «فایلِ محلی» داده می‌شود؛
+# خروجیِ PDF کشیده می‌شود و گیتِ «لکهٔ قرمز» (check_red.py) سنجیده می‌شود.
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_fixes:
+        description: 'test branch (fixes) — uncheck for main'
+        type: boolean
+        default: true
+  push:
+    branches: [test, main, mail]
+    paths:
+      - "manga.py"
+      - "android/**"
+      - ".ci_scripts/**"
+      - ".github/workflows/android-emulator.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 85
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.use_fixes && 'test' || 'main' }}
+          fetch-depth: 1
+        if: github.event_name == 'workflow_dispatch'
+      - name: Checkout (push)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+        if: github.event_name == 'push'
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Python 3.10 (Chaquopy buildPython + verify tools)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install verify deps (host)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pymupdf pillow numpy requests
+
+      - name: Fetch vendored Python packages
+        run: |
+          python3 android/scripts/fetch_vendor.py --check || \
+            python3 android/scripts/fetch_vendor.py
+
+      - name: Sync engine sources into APK
+        run: python3 android/scripts/sync_sources.py
+
+      - name: Inject version from VERSION
+        run: |
+          VC=$(sed -n 's/^versionCode=//p' VERSION | tr -d '[:space:]')
+          VN=$(sed -n 's/^versionName=//p' VERSION | tr -d '[:space:]')
+          echo "versionCode=$VC versionName=$VN"
+          sed -i -E "s/versionCode = .*/versionCode = $VC/; s/versionName = .*/versionName = \"$VN\"/" \
+            android/app/build.gradle.kts
+
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build arm64 debug APK
+        working-directory: android
+        run: |
+          gradle :app:assembleDebug -PappAbis="arm64-v8a" \
+            -PchaquopyBuildPython="$(command -v python3)"
+          mkdir -p ../dist
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-arm64.apk
+          ls -la ../dist
+
+      - name: Prepare test assets (img5 webp + models)
+        run: |
+          mkdir -p /tmp/mt/imgs /tmp/models
+          UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
+          curl -sL --max-time 120 -A "$UA" -o /tmp/mt/imgs/img5.webp \
+            "https://cdn.asurascans.com/asura-images/chapters/my-slain-dragon-bride/1/890fb1.webp?v=1787405548" || true
+          ls -la /tmp/mt/imgs
+          test -s /tmp/mt/imgs/img5.webp
+          curl -fL --retry 3 --max-time 300 -o /tmp/models/detector-v4-s_int8.onnx \
+            "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/download/models/detector-v4-s_int8.onnx" || true
+          curl -fL --retry 3 --max-time 600 -o /tmp/models/lama-manga-dyn.onnx \
+            "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/download/models/lama-manga-dyn.onnx" || true
+          ls -la /tmp/models
+
+      - name: Check KVM
+        run: |
+          ls -la /dev/kvm || true
+          sudo -E adduser "$USER" kvm 2>/dev/null || true
+          sudo chown -R "$USER" /dev/kvm 2>/dev/null || true
+
+      - name: Run APK on real Android emulator + red-stain gate
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          ram-size: 3072M
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          script: |
+            set -x
+            adb devices
+            # ۱) نصبِ APK
+            adb install -r -t dist/MangaTranslator-arm64.apk
+            # ۲) تصویرِ تست (webp — همانِ لکهٔ قرمزِ POCO F4)
+            adb shell mkdir -p /sdcard/Download/manga
+            adb push /tmp/mt/imgs/img5.webp /sdcard/Download/manga/test.webp
+            # ۳) مدل‌ها از قبل داخلِ کش — دانلودِ داخلِ امولاتور حذف شود
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p files/.cache/manga_translator_models'"
+            adb push /tmp/models/detector-v4-s_int8.onnx /sdcard/Download/manga/det.onnx || true
+            adb push /tmp/models/lama-manga-dyn.onnx /sdcard/Download/manga/lama.onnx || true
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'cp /sdcard/Download/manga/det.onnx files/.cache/manga_translator_models/detector-v4-s_int8.onnx 2>/dev/null; cp /sdcard/Download/manga/lama.onnx files/.cache/manga_translator_models/lama-manga-dyn.onnx 2>/dev/null'" || true
+            # ۴) پیش‌تنظیمِ تنظیمات (فایلِ محلیِ webp + حالتِ تست + دیباگ)
+            printf '%s\n' \
+              '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' \
+              '<map>' \
+              '    <string name="inp_upload_path">/sdcard/Download/manga/test.webp</string>' \
+              '    <string name="fake_test">true</string>' \
+              '    <string name="web_debug">true</string>' \
+              '    <string name="clean_method">lama-manga</string>' \
+              '    <string name="out_fmt">PDF</string>' \
+              '    <string name="readord">rtl</string>' \
+              '    <boolean name="battery_asked" value="true" />' \
+              '    <boolean name="viewer_hint_v3" value="true" />' \
+              '</map>' > /tmp/prefs.xml
+            adb push /tmp/prefs.xml /sdcard/Download/manga/prefs.xml
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p shared_prefs; cat /sdcard/Download/manga/prefs.xml > shared_prefs/manga_settings.xml'"
+            # ۵) اجرای اپ + زدنِ دکمهٔ شروع
+            adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+            sleep 25
+            python3 .ci_scripts/tap_run.py
+            # ۶) انتظار تا پایانِ موتور (۶۰ دقیقه — اجرای arm64 رویِ
+            # ترجمهٔ x86 کند است؛ دادهٔ [TIME] هم می‌دهد)
+            python3 .ci_scripts/wait_done.py 60
+            # ۷) کشیدنِ لاگ و خروجی
+            mkdir -p /tmp/emulout
+            adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_emulator.log || true
+            adb shell "run-as com.amirwolf.mangatranslator ls -la files/work/out" | tee /tmp/emulout/out_ls.txt || true
+            adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test.pdf > /tmp/emulout/test_out.pdf || true
+            adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test_debug.pdf > /tmp/emulout/test_debug.pdf || true
+            # فایل‌هایِ موقتِ داخلِ Download پاک شوند
+            adb shell rm -f /sdcard/Download/manga/det.onnx /sdcard/Download/manga/lama.onnx /sdcard/Download/manga/prefs.xml || true
+            # ۸) گیتِ لکهٔ قرمز
+            test -s /tmp/emulout/test_out.pdf
+            python3 .ci_scripts/check_red.py /tmp/emulout/test_out.pdf /tmp/mt/imgs/img5.webp
+            mkdir -p emul-artifacts
+            cp /tmp/emulout/* emul-artifacts/ || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-android-emulator
+          path: |
+            emul-artifacts/**
+          if-no-files-found: warn
+          retention-days: 10

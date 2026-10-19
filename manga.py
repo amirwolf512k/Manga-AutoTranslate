@@ -1356,6 +1356,77 @@ class LamaMangaONNX:
             f"[+] مدل پاکسازی آماده | threads={use_threads} | size={self.SIZE}" +
             (f" | سقفِ پچ: {self._input_cap}" if self._input_cap != self.SIZE else "")
         )
+        # v1.14.67 — A/B با شکلِ واقعیِ پچ (یک‌بار + کشِ .epab): پروبِ قدیمی
+        # با شکلِ کوچک بود؛ xnnpack ممکن است «کار کند» ولی از CPUِ چندنخی
+        # کندتر باشد (لاگِ POCO F4: 28.4s برایِ ۲ پچِ ۳۸۴²). برنده ماندگار
+        # می‌شود. گیتِ رم: با رمِ آزادِ کم (دو سشن همزمان) A/B نمی‌کنیم.
+        try:
+            self._ep_real_shape_ab(use_threads)
+        except Exception:
+            pass
+
+    def _ep_real_shape_ab(self, threads: int) -> None:
+        try:
+            if os.environ.get("MANGA_LAMA_AB", "1") == "0":
+                return
+            _pv = [str(p).lower()
+                   for p in (self.session.get_providers() or [])]
+            if not any(p.startswith("xnnpack") for p in _pv):
+                return
+            if not _on_android():
+                return
+            if _lama_ep_cached(self.model_path) == "cpu":
+                return
+            # گیتِ رم: MemAvailable < 1.5GB → A/B نه (دو سشن جا نمی‌شود)
+            _free_mb = 0
+            try:
+                with open("/proc/meminfo", "r") as _mi:
+                    for _ln in _mi:
+                        if _ln.startswith("MemAvailable:"):
+                            _free_mb = int(_ln.split()[1]) // 1024
+                            break
+            except Exception:
+                _free_mb = 0
+            if _free_mb and _free_mb < 1500:
+                try:
+                    print(f"    [*] A/Bِ EP رد شد (رمِ آزاد {_free_mb}MB "
+                          f"< 1500MB) — همان EP فعلی", flush=True)
+                except Exception:
+                    pass
+                return
+            _side = int(self._static_bucket or _lama_probe_side(True) or 384)
+            t_hw = _ep_ab_time(self.session)
+            if not (t_hw < float("inf")):
+                return
+            s_cpu = ort.InferenceSession(
+                self.model_path,
+                sess_options=_ort_session_options(threads),
+                providers=["CPUExecutionProvider"])
+            t_cpu = _ep_ab_time(s_cpu)
+            try:
+                print(f"    [*] A/Bِ واقعیِ {_side}²: xnnpack {t_hw:.2f}s | "
+                      f"CPU {t_cpu:.2f}s", flush=True)
+            except Exception:
+                pass
+            if t_cpu < t_hw * 0.85:
+                self.session = s_cpu
+                self.ep_used = None
+                self._static_bucket = 0
+                self.thr_used = max(1, int(threads or 1))
+                _lama_ep_store(self.model_path, "cpu")
+                try:
+                    print(f"[+] LaMa → CPU (سریع‌تر از xnnpack رویِ این "
+                          f"دستگاه — ماندگار در .epab)", flush=True)
+                except Exception:
+                    pass
+            else:
+                try:
+                    del s_cpu
+                except Exception:
+                    pass
+                _lama_ep_store(self.model_path, "xnnpack")
+        except Exception:
+            pass
 
     @classmethod
     def _download_model(cls, cache_dir: Optional[str] = None) -> str:
@@ -8918,10 +8989,12 @@ class MangaTranslator:
             try:
                 ys, xs = np.nonzero(enc)
                 h, w = image.shape[:2]
-                x0 = max(0, int(xs.min()) - 12)
-                y0 = max(0, int(ys.min()) - 12)
-                x1 = min(w, int(xs.max()) + 13)
-                y1 = min(h, int(ys.max()) + 13)
+                # v1.14.67 — حاشیهٔ ۲۰px (قبلاً ۱۲): گشادکردنِ ۱۳pxِ ماسکِ
+                # پرکردن (برجستگیِ متن) باید داخلِ پنجره جا شود
+                x0 = max(0, int(xs.min()) - 20)
+                y0 = max(0, int(ys.min()) - 20)
+                x1 = min(w, int(xs.max()) + 21)
+                y1 = min(h, int(ys.max()) + 21)
                 if x1 - x0 < 8 or y1 - y0 < 8:
                     continue
                 sub = cleaned[y0:y1, x0:x1]
@@ -8946,6 +9019,41 @@ class MangaTranslator:
                         _halo = (_gg >= 110) & _fc & _near & (m2 == 0)
                         if int(_halo.sum()):
                             m2 = m2 | _halo.astype(np.uint8)
+                        # v1.14.67 — هالهٔ گرمِ «تیره» (قرمزِ گلو روی کارتِ
+                        # تیره — لکهٔ قرمزِ POCO F4) در خاکستری تیره است و
+                        # با _gg>=110 نمی‌آمد → قرمزِ غالبِ نزدیکِ جوهر هم
+                        # داخلِ پرکردن می‌آید (اجازهٔ «بیشتر پاک شه»).
+                        try:
+                            _rr = sub[..., 2].astype(np.int16)
+                            _gg2 = sub[..., 1].astype(np.int16)
+                            _bb = sub[..., 0].astype(np.int16)
+                            _sv = cv2.cvtColor(sub,
+                                               cv2.COLOR_BGR2HSV)[..., 1]
+                            _warm = ((_rr > _gg2 + 15) & (_rr > _bb + 15)
+                                     & (_sv >= 45) & (_gg >= 14)
+                                     & _fc & _near & (m2 == 0))
+                            if int(_warm.sum()):
+                                m2 = (m2 |
+                                      _warm.astype(np.uint8))
+                        except Exception:
+                            pass
+                        # v1.14.67 — برجستگی/سایهٔ متنِ روشن روی کارتِ تیره
+                        # (اندازه‌گیری رویِ کارتِ Crimson Dragon: قرمزِ
+                        # اشباعِ تیره تا ۶.۷px از گلیف — p99=5.6px) نه در
+                        # _halo می‌آید نه _warm → شبحِ تیره‌قرمزِ حروف در
+                        # خروجی می‌ماند. پرکردن = گشادکردنِ ۱۳px ماسک
+                        # محدود به خودِ محفظهٔ تیره → ۱۰۰٪ برجستگی +
+                        # اجازهٔ «بیشتر پاک شه»؛ قابِ تزئینی بیرونِ محفظه
+                        # دست‌نخورده می‌ماند.
+                        try:
+                            _growE = cv2.dilate(m2,
+                                                np.ones((13, 13), np.uint8))
+                            _absE = ((_growE > 0) & _fc)
+                            if int(_absE.sum()):
+                                m2 = (m2 |
+                                      _absE.astype(np.uint8))
+                        except Exception:
+                            pass
                 except Exception:
                     pass
                 if not int(cv2.countNonZero(m2)):
@@ -9179,14 +9287,18 @@ class MangaTranslator:
 
     @staticmethod
     def _absorb_text_halo(bgr: np.ndarray, mask: np.ndarray,
-                          band: int = 13, s_min: int = 80) -> np.ndarray:
+                          band: int = 17, s_min: int = 55) -> np.ndarray:
         """v1.14.66 — هالهٔ گلوِ اشباعِ گرمِ دورِ متن (قرمز/نارنجی/زرد/
         سرخابی — مثلِ کارتِ «Crimson Dragon») جزوِ جوهرِ متن حساب می‌شود.
         پیکسل‌هایِ پُراشباعِ گرمِ «چسبیده به ماسک» (تا band پیکسل) به ماسک
         اضافه می‌شوند تا هر مسیرِ پاکسازی آن‌ها را هم ببرد — وگرنه هاله
         زنده می‌ماند و «لکهٔ قرمز» دیده می‌شود (POCO F4). فقط توده‌های
         چسبیده به ماسک؛ تراشهٔ پراکنده و هنرِ دور دست‌نخورده می‌ماند.
-        درخواستِ صریحِ کاربر: «اشکال نداره بیشتر پاک شه»."""
+        درخواستِ صریحِ کاربر: «اشکال نداره بیشتر پاک شه».
+        v1.14.67 — گوشیِ POCO F4 هنوز لکه داشت: دنبالهٔ کم‌رنگِ هاله
+        (S<80) و فراتر از ۱۳پیکسل زنده می‌ماند → band ۱۷، s_min ۵۵،
+        و گشادش‌کردنِ نهاییِ هالهٔ جذب‌شده با ۷px تا مرزِ ماسک روی
+        «زمینهٔ پاک» بفتد نه دنبالهٔ هاله (فیلِ بعدی قرمز نمی‌گیرد)."""
         try:
             if bgr is None or mask is None:
                 return mask
@@ -9223,7 +9335,9 @@ class MangaTranslator:
                 return mask
             keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE,
                                     np.ones((5, 5), np.uint8))
-            keep = cv2.dilate(keep, np.ones((3, 3), np.uint8))
+            # v1.14.67 — گشادکردنِ ۷px: مرزِ ماسک باید از دنبالهٔ هاله
+            # رد شود؛ وگرنه پرکنندهٔ گرادیانی رنگِ هاله را داخل می‌کشد
+            keep = cv2.dilate(keep, np.ones((7, 7), np.uint8))
             return ((m0 | (keep > 0)).astype(np.uint8)) * 255
         except Exception:
             return mask
@@ -15512,6 +15626,7 @@ class MangaTranslator:
             _kb = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 5))
             _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 5))
             _found_rects: list = []
+            _cands: list = []
             _cand_n = 0
             _ty0 = 0
             while _ty0 < h:
@@ -15572,69 +15687,112 @@ class MangaTranslator:
                     cx1, cy1 = min(w, X1 + 8), min(h, Y1 + 8)
                     if cx1 - cx0 < 30 or cy1 - cy0 < 12:
                         continue
-                    crop = image[cy0:cy1, cx0:cx1]
-                    if crop.size == 0:
-                        continue
-                    # v1.14.64c — OCRِ بنر باید به نسخهٔ OCR بی‌ربط باشد:
-                    # rapidocrِ جدید (PP-OCRv5/v6) روی کراپِ کوچک «det خالی»
-                    # می‌دهد → اول پد (حداقل ۴۸px بلندی) بعد بزرگ‌نمایی، و
-                    # چند واریانت امتحان می‌شود.
-                    _pad_h = max(0, 48 - crop.shape[0])
-                    _pad_w = max(0, 160 - crop.shape[1])
-                    if _pad_h or _pad_w:
-                        crop = cv2.copyMakeBorder(
-                            crop, _pad_h // 2, _pad_h - _pad_h // 2,
-                            _pad_w // 2, _pad_w - _pad_w // 2,
-                            cv2.BORDER_REPLICATE)
-                    _txt = ""
-                    for _zm in (3, 2):
-                        _big = cv2.resize(
-                            crop, (crop.shape[1] * _zm,
-                                   crop.shape[0] * _zm),
-                            interpolation=cv2.INTER_CUBIC)
-                        for _var in (0, 1):
-                            _try = _big
-                            if _var == 1:
-                                try:
-                                    _lab2 = cv2.cvtColor(_big,
-                                                         cv2.COLOR_BGR2LAB)
-                                    _clahe = cv2.createCLAHE(
-                                        2.2, (8, 8))
-                                    _l2 = _clahe.apply(_lab2[..., 0])
-                                    _try = cv2.cvtColor(
-                                        cv2.merge([_l2, _l2, _l2]),
-                                        cv2.COLOR_BGR2GRAY)
-                                    _try = cv2.cvtColor(
-                                        _try, cv2.COLOR_GRAY2BGR)
-                                except Exception:
-                                    _try = _big
+                    # v1.14.67 — OCR فقط برایِ کاندیدهایِ منتخب: اول همهٔ
+                    # کاندیدها با امتیاز جمع می‌شوند (بنرِ توپر = جعبهٔ
+                    # رنگی با fill بالا اول)، بعد فقط سقفِ بودجه OCR
+                    # می‌خورد. قبلاً هر بلابِ هنری ۴ فراخوانیِ OCR می‌گرفت
+                    # (PC: ۸۸ فراخوانیِ خالی = ۱۲۲ ثانیه!) — استخراجِ
+                    # ۱-۲ دقیقه‌ایِ کاربر همین بود.
+                    _cands.append((
+                        0 if _fill >= 0.30 else 1,
+                        -min(8.0, float(bw_) / float(max(1, bh_))),
+                        -int(bw_ * bh_),
+                        cx0, cy0, cx1, cy1))
+                _ty0 = _tnext
+            # v1.14.67 — بودجهٔ OCRِ جارو + اولویتِ بنرهایِ توپر؛ بعد از
+            # اتمامِ بودجه جارو تمام می‌شود. بنرِ واقعی همیشه در اولویت‌هاست
+            # (جعبهٔ یکدست با متن). بودجه با بلندیِ صفحه بزرگ‌تر می‌شود
+            # (نوارِ بلند = کاشی‌هایِ بیشتر = بنرِ دورتر؛ نمونه: img1
+            # بنرِ y≈11000) — سقفِ ۳۲ تا بنرهایِ چندگانه از دست نروند.
+            try:
+                _max_calls = int(os.environ.get(
+                    "MANGA_BANNER_OCR_MAX", "0") or 0)
+            except Exception:
+                _max_calls = 0
+            if _max_calls <= 0:
+                _nt = max(1, int((h + _tile - 1) // max(1, _tile - _ovl)))
+                _max_calls = min(32, 20 + 5 * max(0, _nt - 2))
+            _cands.sort(key=lambda t: (t[0], t[1], t[2]))
+            _ocr_calls = 0
+            for (_s0, _s1, _s2, cx0, cy0, cx1, cy1) in _cands:
+                if _ocr_calls >= _max_calls:
+                    if self.debug:
+                        try:
+                            print(f"  [🔍] جارویِ بنر: بودجهٔ OCR تمام شد "
+                                  f"({_max_calls} فراخوانی) — "
+                                  f"{len(_cands)} کاندید")
+                        except Exception:
+                            pass
+                    break
+                crop = image[cy0:cy1, cx0:cx1]
+                if crop.size == 0:
+                    continue
+                # v1.14.64c — OCRِ بنر باید به نسخهٔ OCR بی‌ربط باشد:
+                # rapidocrِ جدید (PP-OCRv5/v6) روی کراپِ کوچک «det خالی»
+                # می‌دهد → اول پد (حداقل ۴۸px بلندی) بعد بزرگ‌نمایی، و
+                # چند واریانت امتحان می‌شود.
+                _pad_h = max(0, 48 - crop.shape[0])
+                _pad_w = max(0, 160 - crop.shape[1])
+                if _pad_h or _pad_w:
+                    crop = cv2.copyMakeBorder(
+                        crop, _pad_h // 2, _pad_h - _pad_h // 2,
+                        _pad_w // 2, _pad_w - _pad_w // 2,
+                        cv2.BORDER_REPLICATE)
+                _txt = ""
+                for _zm in (3, 2):
+                    _big = cv2.resize(
+                        crop, (crop.shape[1] * _zm,
+                               crop.shape[0] * _zm),
+                        interpolation=cv2.INTER_CUBIC)
+                    for _var in (0, 1):
+                        _try = _big
+                        if _var == 1:
                             try:
-                                _res = self.ocr.ocr(_try)
+                                _lab2 = cv2.cvtColor(_big,
+                                                     cv2.COLOR_BGR2LAB)
+                                _clahe = cv2.createCLAHE(
+                                    2.2, (8, 8))
+                                _l2 = _clahe.apply(_lab2[..., 0])
+                                _try = cv2.cvtColor(
+                                    cv2.merge([_l2, _l2, _l2]),
+                                    cv2.COLOR_BGR2GRAY)
+                                _try = cv2.cvtColor(
+                                    _try, cv2.COLOR_GRAY2BGR)
                             except Exception:
-                                _res = None
-                            _txts = []
-                            if _res:
-                                for _ln in (_res[0] or []):
-                                    try:
-                                        _tv = _ln[1]
-                                        if isinstance(_tv, (tuple, list)):
-                                            _tv = _tv[0]
-                                        if str(_tv).strip():
-                                            _txts.append(str(_tv).strip())
-                                    except Exception:
-                                        continue
-                            _txt = " ".join(_txts)
-                            if self._is_watermark_text(_txt):
-                                break
-                        if _txt and self._is_watermark_text(_txt):
+                                _try = _big
+                        try:
+                            _res = self.ocr.ocr(_try)
+                        except Exception:
+                            _res = None
+                        _ocr_calls += 1
+                        _txts = []
+                        if _res:
+                            for _ln in (_res[0] or []):
+                                try:
+                                    _tv = _ln[1]
+                                    if isinstance(_tv, (tuple, list)):
+                                        _tv = _tv[0]
+                                    if str(_tv).strip():
+                                        _txts.append(str(_tv).strip())
+                                except Exception:
+                                    continue
+                        _txt = " ".join(_txts)
+                        if self._is_watermark_text(_txt):
                             break
-                    if not (_txt and self._is_watermark_text(_txt)):
-                        # v1.14.64d — فال‌بکِ بدونِ OCR حذف شد: گیتِ گلیف روی
-                        # بافتِ هنر (زنگار/تسمه/هاشور) فال‌پزیتیو می‌داد و
-                        # تکه‌هایی از هنر پاک می‌شد. فقط تأییدِ متنیِ
-                        # (دامنه/برند) معتبر است — OCRِ پد‌شده/واریانتی
-                        # بنرهایِ واقعی را می‌خواند.
-                        continue
+                        # v1.14.67 — متنِ خوانا ولی غیرِتبلیغ → این بلاب
+                        # بنر نیست؛ CLAHE/زومِ بعدی کمکی نمی‌کند → کاندیدِ
+                        # بعدی (صرفه: تا ۳ فراخوانی به ازای هر بلاب)
+                        if _txt:
+                            break
+                    if _txt and self._is_watermark_text(_txt):
+                        break
+                if not (_txt and self._is_watermark_text(_txt)):
+                    # v1.14.64d — فال‌بکِ بدونِ OCR حذف شد: گیتِ گلیف روی
+                    # بافتِ هنر (زنگار/تسمه/هاشور) فال‌پزیتیو می‌داد و
+                    # تکه‌هایی از هنر پاک می‌شد. فقط تأییدِ متنیِ
+                    # (دامنه/برند) معتبر است — OCRِ پد‌شده/واریانتی
+                    # بنرهایِ واقعی را می‌خواند.
+                    continue
                     _tr = TextRegion(
                         id=10000 + len(found),
                         boxes=[np.array([[cx0, cy0], [cx1, cy0],
@@ -16230,7 +16388,21 @@ class MangaTranslator:
     @staticmethod
     def _imread_any(path: str):
         """خواندنِ فایلِ تصویر: اول cv2.imread؛ اگر نشد (وب‌پی/avif رویِ
-        گوشی) بایت‌ها با زنجیرهٔ کاملِ بازش (Pillow/اندروید) باز می‌شود."""
+        گوشی) بایت‌ها با زنجیرهٔ کاملِ بازش (Pillow/اندروید) باز می‌شود.
+        v1.14.67 — رویِ اندروید وب‌پیِ با پسوندِ دروغین (rename به
+        .png/.jpg) هم مستقیم به زنجیرهٔ کامل می‌رود؛ دیکودِ وب‌پیِ opencvِ
+        گوشی نویزِ کروما می‌گذارد و هالهٔ قرمز از ماسک فرار می‌کند."""
+        if _on_android():
+            try:
+                with open(path, "rb") as _fmg:
+                    if MangaTranslator._webp_avif_magic(_fmg.read(16)):
+                        with open(path, "rb") as _f:
+                            img, _rb = MangaTranslator._decode_image_bytes(
+                                _f.read())
+                        if img is not None:
+                            return img
+            except Exception:
+                pass
         try:
             img = cv2.imread(path, cv2.IMREAD_COLOR)
         except Exception:
@@ -16257,6 +16429,17 @@ class MangaTranslator:
         _ext_norm = os.path.splitext(path)[1].lower()
         _force_chain = (_on_android() and _ext_norm in (
             ".webp", ".avif", ".heif", ".heic"))
+        # v1.14.67 — پسوندِ دروغین (لکهٔ قرمزِ POCO F4 دورِ دوم): فایلِ وب‌پیِ
+        # محلی که پسوندش به .png/.jpg «اصلاح» شده بود از گاردِ پسوندی می‌گذشت
+        # و opencvِ گوشی دیکودِ کروما-نویز می‌کرد. حالا رویِ اندروید جادویِ
+        # بایت هم چک می‌شود — محتوا اهمیت دارد نه پسوند.
+        if not _force_chain and _on_android():
+            try:
+                with open(path, "rb") as _fmg:
+                    _force_chain = MangaTranslator._webp_avif_magic(
+                        _fmg.read(16))
+            except Exception:
+                pass
         if not _force_chain:
             try:
                 if cv2.imread(path, cv2.IMREAD_COLOR) is not None:
@@ -17655,6 +17838,7 @@ html, body { background: #0a0a0b; }
         self._chapter_brief = ""
         self._brief_corpus = []
         self._brief_attempted = False
+        _t_run67 = time.time()  # v1.14.67 — کلِ زمانِ ران
         if clean_old:
             self._cleanup_previous_artifacts(output_path, keep_outputs=False)
 
@@ -18275,11 +18459,17 @@ html, body { background: #0a0a0b; }
             raise JobCancelled("لغو توسط کاربر")
 
         _flush_translate_buffer(force=True)
+        _t_trw67 = time.time()  # v1.14.67 — انتظارِ ترجمه
         for _f in trans_futures:
             try:
                 _f.result()
             except Exception:
                 pass
+        try:
+            print(f"[TIME] translate_wait={time.time() - _t_trw67:.1f}s",
+                  flush=True)
+        except Exception:
+            pass
         if stop_requested():
             trans_pool.shutdown(wait=False)
             raise JobCancelled("لغو توسط کاربر")
@@ -18291,6 +18481,7 @@ html, body { background: #0a0a0b; }
         except Exception:
             pass
 
+        _t_save67 = time.time()  # v1.14.67 — ذخیرهٔ نهایی
         print("[*] ذخیرهٔ نهایی خروجی‌ها...", flush=True)
         debug_files = []
         for page_i in sorted(results_by_i.keys()):
@@ -18383,6 +18574,12 @@ html, body { background: #0a0a0b; }
                 print(f"[✓] HTML همراه هم ساخته شد: {html_path}")
             except Exception as e:
                 print(f"    [!] ساخت HTML همراه ناموفق: {e}")
+        # v1.14.67 — جمعِ زمان‌ها (ذخیره + کلِ ران)
+        try:
+            print(f"[TIME] save={time.time() - _t_save67:.1f}s | "
+                  f"total={time.time() - _t_run67:.1f}s", flush=True)
+        except Exception:
+            pass
 
     def _render_one_region(self, pil_img, draw, image, original_image, region) -> None:
         x, y, w, h = region.rect
