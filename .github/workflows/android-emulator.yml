@@ -119,7 +119,7 @@ jobs:
           script: |
             set -x
             adb devices
-            mkdir -p /tmp/emulout
+            mkdir -p /tmp/emulout emul-artifacts
             # ۱) نصبِ APK
             adb install -r -t dist/MangaTranslator-arm64.apk
             # ۲) ورودی داخلِ حافظهٔ خودِ اپ (بدونِ مجوزِ حافظه — از
@@ -137,9 +137,18 @@ jobs:
             adb logcat -c || true
             adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
             sleep 15
+            adb shell pidof com.amirwolf.mangatranslator > /tmp/emulout/pid.txt 2>&1 || true
             adb logcat -d -t 600 > /tmp/emulout/logcat_start.txt 2>/dev/null || true
+            adb logcat -d -b crash > /tmp/emulout/logcat_crash.txt 2>/dev/null || true
             sleep 10
-            python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail.png; adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png 2>/dev/null || true; adb logcat -d -t 800 > /tmp/emulout/logcat_fail.txt 2>/dev/null || true; exit 1; }
+            if ! python3 .ci_scripts/tap_run.py; then
+              adb shell screencap -p /sdcard/scr_fail.png || true
+              adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png || true
+              adb logcat -d -t 1200 > /tmp/emulout/logcat_fail.txt || true
+              adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt || true
+              cp /tmp/emulout/* emul-artifacts/ || true
+              exit 1
+            fi
             # ۶) انتظار تا پایانِ موتور (۶۰ دقیقه — اجرای arm64 رویِ
             # ترجمهٔ x86 کند است؛ دادهٔ [TIME] هم می‌دهد)
             python3 .ci_scripts/wait_done.py 60
