@@ -113,9 +113,12 @@ jobs:
         run: |
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"; yes | "$SDKM" "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || true
           echo no | "$AVDM" create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
-          grep -q "hw.cpu.ncore" ~/.android/avd/ciavd.avd/config.ini && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' ~/.android/avd/ciavd.avd/config.ini || echo "hw.cpu.ncore=4" >> ~/.android/avd/ciavd.avd/config.ini
-          echo "hw.ramSize=3072MB" >> ~/.android/avd/ciavd.avd/config.ini
-          tail -5 ~/.android/avd/ciavd.avd/config.ini
+          CFG=$("$AVDM" list avd | grep -A5 'Name: ciavd' | grep 'Path:' | awk '{print $2}')
+          CFG="${CFG:-$HOME/.android/avd/ciavd.avd}/config.ini"
+          echo "AVD config: $CFG"
+          grep -q "hw.cpu.ncore" "$CFG" && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG" || echo "hw.cpu.ncore=4" >> "$CFG"
+          echo "hw.ramSize=3072MB" >> "$CFG"
+          tail -5 "$CFG"
 
       - name: Boot emulator
         run: |
