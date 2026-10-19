@@ -124,7 +124,7 @@ jobs:
             # ۲) ورودی داخلِ حافظهٔ خودِ اپ (بدونِ مجوزِ حافظه — از
             # /sdcard اپِ بدونِ مجوز نمی‌خوانَد)
             adb push /tmp/mt/imgs/img5.webp /data/local/tmp/test.webp
-            adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/test.webp > /data/user/0/com.amirwolf.mangatranslator/files/test.webp'"
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files && cat /data/local/tmp/test.webp > /data/user/0/com.amirwolf.mangatranslator/files/test.webp'"
             # ۳) مدل‌ها از قبل داخلِ کش — دانلودِ داخلِ امولاتور حذف شود
             adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
             adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
