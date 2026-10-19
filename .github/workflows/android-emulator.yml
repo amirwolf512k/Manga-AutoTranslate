@@ -78,13 +78,13 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      - name: Build arm64 debug APK
+      - name: Build x86_64 debug APK (emulator — arm64 under libndk translation SIGSEGVs in libpython)
         working-directory: android
         run: |
-          gradle :app:assembleDebug -PappAbis="arm64-v8a" -PlegacyJni=true \
+          gradle :app:assembleDebug -PappAbis="x86_64" -PlegacyJni=true \
             -PchaquopyBuildPython="$(command -v python3)"
           mkdir -p ../dist
-          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-arm64.apk
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-x86_64.apk
           ls -la ../dist
 
       - name: Prepare test assets (img5 webp + models)
@@ -121,7 +121,7 @@ jobs:
             adb devices
             mkdir -p /tmp/emulout emul-artifacts
             # ۱) نصبِ APK
-            adb install -r -t dist/MangaTranslator-arm64.apk
+            adb install -r -t dist/MangaTranslator-x86_64.apk
             # ۲) ورودی داخلِ حافظهٔ خودِ اپ (بدونِ مجوزِ حافظه — از
             # /sdcard اپِ بدونِ مجوز نمی‌خوانَد)
             adb push /tmp/mt/imgs/img5.webp /data/local/tmp/test.webp
