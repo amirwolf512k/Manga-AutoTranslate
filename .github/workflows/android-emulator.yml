@@ -192,6 +192,13 @@ jobs:
           python3 .ci_scripts/check_red.py /tmp/emulout/test_out.pdf /tmp/mt/imgs/img5.webp
           cp /tmp/emulout/* emul-artifacts/ || true
 
+      - name: Capture diagnostics (always on failure)
+        if: failure()
+        run: |
+          mkdir -p emul-artifacts
+          cp /tmp/emulout/* emul-artifacts/ 2>/dev/null || true
+          ls -la emul-artifacts || true
+
       - name: Shutdown emulator
         if: always()
         run: |

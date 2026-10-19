@@ -130,6 +130,14 @@ def main():
         ANGLE_TOL_DEG))).sum()) / max(1, int(fp_edges.sum()))
     print(f"[check] full-page relief-edge ghost (info): {fp_pct:.2f}%")
 
+    # diagnostic crops (next to the output file) for CI artifacts
+    try:
+        base = out_path.rsplit(".", 1)[0]
+        cv2.imwrite(base + "_card_out.png", out[y0:y1, x0:x1])
+        cv2.imwrite(base + "_card_orig.png", orig[y0:y1, x0:x1])
+    except Exception:
+        pass
+
     print("[check] PASS ✔" if ok else "[check] FAIL ✘")
     return 0 if ok else 1
 
