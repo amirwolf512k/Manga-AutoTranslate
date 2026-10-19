@@ -55,7 +55,7 @@ jobs:
       - name: Install verify deps (host)
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install pymupdf pillow numpy requests
+          python3 -m pip install pymupdf pillow numpy requests opencv-python-headless
 
       - name: Fetch vendored Python packages
         run: |
@@ -120,7 +120,9 @@ jobs:
 
       # v1.14.67 — امولاتورِ دستی (۴ هسته — AVDِ پیش‌فرضِ اکشن ۲ هسته است
       # و ORT-androidِ x86_64 با ۲ هسته SIGFPE می‌دهد)
-      - name: Create AVD (4 cores)
+      # رمِ 5GB: گیتِ LaMa «حداقل ۴GB رمِ کل» دارد — با 3GB به OpenCV
+      # برمی‌گشت و مسیرِ واقعیِ لکهٔ قرمز آزموده نمی‌شد (ران ۲۵)
+      - name: Create AVD (4 cores, 5GB)
         run: |
           SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"; yes | "$SDKM" "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || true
           echo no | "$AVDM" create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
@@ -128,7 +130,7 @@ jobs:
           CFG="${CFG:-$HOME/.android/avd/ciavd.avd}"
           echo "AVD path: $CFG"
           grep -q "hw.cpu.ncore" "$CFG/config.ini" && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG/config.ini" || echo "hw.cpu.ncore=4" >> "$CFG/config.ini"
-          echo "hw.ramSize=3072MB" >> "$CFG/config.ini"
+          echo "hw.ramSize=5120MB" >> "$CFG/config.ini"
           # v1.14.67 — مسیرِ AVDِ avdmanager با مسیرِ جست‌وجویِ emulator فرق دارد → symlink
           mkdir -p "$HOME/.android/avd"
           ln -sfn "$CFG" "$HOME/.android/avd/ciavd.avd"
@@ -142,7 +144,7 @@ jobs:
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
           adb start-server || true
-          "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
+          "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 5120 > /tmp/emu_boot.log 2>&1 &
           EMU_PID=$!
           echo "emulator started in background (pid $EMU_PID)"
           OK=0
