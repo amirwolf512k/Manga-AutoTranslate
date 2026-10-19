@@ -2466,6 +2466,7 @@ class MainActivity : AppCompatActivity() {
             } ?: cands.sortedByDescending { it.id }
                     .sortedBy { dupNum(it.dn) }
                     .firstOrNull()
+            val mainDn: String = main?.dn ?: ""
             var mainUri: Uri? = null
             if (main != null) {
                 mainUri = android.content.ContentUris.withAppendedId(
@@ -2497,7 +2498,7 @@ class MainActivity : AppCompatActivity() {
                 // هیچ هم‌kindی باقی نمانده (وگرنه renameِ رویِ اسمِ موجود =
                 // « (N)» از سمتِ MediaProvider). شکستِ rename هم مشکلی
                 // ندارد — محتوا تازه است و دفعهٔ بعد cleanup اسم را می‌رساند.
-                if (ok && allDeleted && !main.dn.equals(canon, ignoreCase = true)) {
+                if (ok && allDeleted && !mainDn.equals(canon, ignoreCase = true)) {
                     try {
                         contentResolver.update(target, ContentValues().apply {
                             put(MediaStore.MediaColumns.DISPLAY_NAME, canon)
