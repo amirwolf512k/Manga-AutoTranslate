@@ -111,15 +111,15 @@ jobs:
       # و ORT-androidِ x86_64 با ۲ هسته SIGFPE می‌دهد)
       - name: Create AVD (4 cores)
         run: |
-          sdkmanager "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || yes | sdkmanager "system-images;android-30;google_apis;x86_64"
-          echo no | avdmanager create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"; yes | "$SDKM" "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || true
+          echo no | "$AVDM" create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
           grep -q "hw.cpu.ncore" ~/.android/avd/ciavd.avd/config.ini && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' ~/.android/avd/ciavd.avd/config.ini || echo "hw.cpu.ncore=4" >> ~/.android/avd/ciavd.avd/config.ini
           echo "hw.ramSize=3072MB" >> ~/.android/avd/ciavd.avd/config.ini
           tail -5 ~/.android/avd/ciavd.avd/config.ini
 
       - name: Boot emulator
         run: |
-          emulator -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
+          "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
           echo "emulator started in background"
           timeout 600 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 5; done'
           adb shell input keyevent 82 || true
