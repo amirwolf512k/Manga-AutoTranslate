@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.69"
+APP_VER = "1.14.70"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -7090,6 +7090,41 @@ class MangaTranslator:
         total_area = 0
         rect_area = max(1.0, rw * rh)
         for (lx0, ly0, lx1, ly1) in lines:
+            _strip = self._line_strip_ink(image, lx0, ly0, lx1, ly1,
+                                          polys_raw, dbg=_lsm_dbg)
+            if _strip is None:
+                return None
+            sx0, sy0, sx1, sy1, kept = _strip
+            m[sy0:sy1, sx0:sx1][kept] = 255
+            total_area += int(np.count_nonzero(kept))
+        if total_area < 150:
+            if _lsm_dbg:
+                print(f"      [📐dbg] رد: خیلی کوچک {total_area}",
+                      flush=True)
+            return None
+        # ماسکِ خط‌به‌خط نباید خودش «تقریباً کلِ ناحیه» شود — وگرنه هدف
+        # (نماندنِ حباب در ماسک) از بین می‌رود → فال‌بک
+        if total_area > 0.72 * rect_area:
+            if _lsm_dbg:
+                print(f"      [📐dbg] رد: نزدیکِ کلِ rect {total_area}"
+                      f"/{int(rect_area)}", flush=True)
+            return None
+        return m
+
+    def _line_strip_ink(self, image: np.ndarray, lx0: float, ly0: float,
+                        lx1: float, ly1: float, polys_raw: list,
+                        dbg: bool = False):
+        """v1.14.70 — جوهرِ یک خطِ متن (نوارِ خط‌به‌خط) — «اندازهٔ دقیقِ
+        متن».
+
+        این همان هستهٔ محاسباتیِ `_line_strips_mask` است ولی جدا شد تا
+        «کامپوزِ دو-عکسی» هم بتواند نوارهایِ خط‌به‌خط را *بدونِ* شرط‌هایِ
+        ردِ ناحیه‌ای بسازد (کامپوز باید «به اندازهٔ متن» باشد، نه بیشتر).
+
+        خروجی: (sx0, sy0, sx1, sy1, kept) یا None (این خط هنر است/معتبر
+        نیست). kept ماسکِ جوهرِ خط در مختصاتِ برش است."""
+        try:
+            h, w = image.shape[:2]
             lh = max(1.0, ly1 - ly0)
             pad_y = max(2.0, 0.32 * lh)
             pad_x = max(3.0, 0.22 * lh)
@@ -7120,7 +7155,7 @@ class MangaTranslator:
             # نوارِ خط عمدتاً زمینه است؛ اگر بیشترِ نوار «جوهر» باشد یعنی
             # هنر/بلوکِ تیره است — نه خطِ متن → فال‌بک
             if float(core.mean()) > 0.42:
-                if _lsm_dbg:
+                if dbg:
                     print(f"      [📐dbg] رد: نوارِ پر از جوهر "
                           f"core={float(core.mean()):.2f} med={med:.0f}",
                           flush=True)
@@ -7158,7 +7193,7 @@ class MangaTranslator:
                 chg = int(sts[ci, cv2.CC_STAT_HEIGHT])
                 if ca > 0.55 * (sy1 - sy0) * (sx1 - sx0) \
                         and max(cwd, chg) > 2.5 * max(8.0, lh):
-                    if _lsm_dbg:
+                    if dbg:
                         print(f"      [📐dbg] رد: قطعهٔ هنر ca={ca} "
                               f"{cwd}×{chg}", flush=True)
                     return None
@@ -7177,31 +7212,35 @@ class MangaTranslator:
                         _cm = (lal == ci)
                         _onp = float(np.count_nonzero(_cm & (_pm > 0)))
                         if _onp < 0.35 * float(max(1, ca)):
-                            if _lsm_dbg:
+                            if dbg:
                                 print(f"      [📐dbg] حذفِ ساختارِ لبه‌ای "
                                       f"ca={ca} chg={chg}", flush=True)
                             continue
                 kept |= (lal == ci)
             if float(kept.mean()) > 0.60:
-                if _lsm_dbg:
+                if dbg:
                     print(f"      [📐dbg] رد: نوارِ اشباع "
                           f"kept={float(kept.mean()):.2f}", flush=True)
                 return None
-            m[sy0:sy1, sx0:sx1][kept] = 255
-            total_area += int(np.count_nonzero(kept))
-        if total_area < 150:
-            if _lsm_dbg:
-                print(f"      [📐dbg] رد: خیلی کوچک {total_area}",
-                      flush=True)
+            # v1.14.70 — متنِ سفید با دورخطِ تیره (مثلِ «WE FRIENDS?»):
+            # بدنهٔ سفیدِ حرف «حفره»ٔ دورخط است → نوار فقط دورخط را
+            # می‌گرفت و بدنهٔ حروف (خودِ متن!) باقی می‌ماند. پرکردنِ
+            # حفره‌هایِ کوچک نوار = پوششِ کاملِ حروف. اگر پرکردن سطحِ
+            # زیادی اضافه کند (ساختارِ بزرگ) → همان نوارِ قبلی می‌ماند.
+            # ⚠️ kept باید بولی بماند (نحوهٔ ایندکسِ m[...][kept] ماسکِ
+            # صفحه bool است و kept هم باید bool باشد).
+            try:
+                _kept_n = int(np.count_nonzero(kept))
+                if _kept_n > 0:
+                    _filled = self._fill_holes_mask(kept)
+                    _filled_n = int(np.count_nonzero(_filled))
+                    if _filled_n > _kept_n and _filled_n <= 2.2 * _kept_n:
+                        kept = np.asarray(_filled, dtype=bool)
+            except Exception:
+                pass
+            return (sx0, sy0, sx1, sy1, kept)
+        except Exception:
             return None
-        # ماسکِ خط‌به‌خط نباید خودش «تقریباً کلِ ناحیه» شود — وگرنه هدف
-        # (نماندنِ حباب در ماسک) از بین می‌رود → فال‌بک
-        if total_area > 0.72 * rect_area:
-            if _lsm_dbg:
-                print(f"      [📐dbg] رد: نزدیکِ کلِ rect {total_area}"
-                      f"/{int(rect_area)}", flush=True)
-            return None
-        return m
 
     def _build_text_mask_fast(self, image: np.ndarray,
                               regions: List[TextRegion]) -> Optional[np.ndarray]:
@@ -8963,9 +9002,13 @@ class MangaTranslator:
                                              np.ones((5, 5), np.uint8))
                     _ink8 = cv2.dilate(_ink8, np.ones((5, 5), np.uint8))
                     _ink8[~_ffc] = 0  # سقف: هرگز بیرونِ نسخهٔ پرشده (دیوار)
+                    # v1.14.70 — نشتِ اینتریور (دمِ بازِ حباب) نباید متن را
+                    # زنده بگذارد: جوهرِ تیرهٔ داخلِ ماسک (بدونِ گیتِ comp)
+                    _ink8b = self._mask_ink_only(_gcr, dm, _cm49 - 40.0)
                     _pnt = mm & ((cv2.dilate(
                         _fb_comp.astype(np.uint8),
-                        np.ones((3, 3), np.uint8)) > 0) | (_ink8 > 0))
+                        np.ones((3, 3), np.uint8)) > 0) | (_ink8 > 0)
+                        | (_ink8b > 0))
                 else:
                     # v1.14.53: مسیرِ ok49 هم «پوسته‌ای» شد — قبلاً _pnt=mm
                     # بود و هر جا ماسک تا دیوار کشیده شده بود، کلِ ناحیه
@@ -8981,10 +9024,30 @@ class MangaTranslator:
                                              np.ones((5, 5), np.uint8))
                     _ink9 = cv2.dilate(_ink9, np.ones((5, 5), np.uint8))
                     _ink9[_int_d == 0] = 0
-                    _pnt = mm & ((_int_d > 0) | (_ink9 > 0))
+                    # v1.14.70 — «متنِ کج/ناقص پاک میشه» و «بعضی متن‌ها
+                    # جا می‌مونه»: ریشه‌اش این بود که اینتریورِ حباب از
+                    # دمِ بازِ حباب نشت می‌کرد → پیکسل‌هایِ ماسکِ متن که
+                    # بیرونِ اینتریور می‌افتادند اصلاً رنگ نمی‌گرفتند و چون
+                    # _rc به «اصل» برمی‌گردد، همان‌جا متن زنده می‌ماند
+                    # (نمونهٔ «I GOT TO QUIT… / BUT YOU CAN'T, RIGHT~?» —
+                    # دو خطِ آخر نصفه پاک می‌شدند). حالا جوهرِ تیرهٔ داخلِ
+                    # ماسک هم رنگ می‌گیرد (دیوارهای کشیده حذف می‌شوند) →
+                    # خطِ متن کامل پاک می‌شود و دیوارِ حباب دست‌نخورده
+                    # می‌ماند.
+                    _ink9b = self._mask_ink_only(_gcr, dm, _med_i - 40.0)
+                    _pnt = mm & ((_int_d > 0) | (_ink9 > 0) | (_ink9b > 0))
                 if _ppc is not None:
                     _pnt = _pnt & (_ppc == 0)
-                _rc[:] = _sic
+                # v1.14.70 — «بازگشت به اصل» فقط بیرونِ ماسک: قبلاً کلِ
+                # کراپ به اصل برمی‌گشت (`_rc[:] = _sic`) → هر پیکسلِ متنی
+                # که رنگ نگرفته بود دوباره متن می‌شد. حالا فقط ناحیهٔ
+                # بیرونِ ماسک (لغزشِ LaMa) به اصل برمی‌گردد و داخلِ ماسک
+                # پرِ تخت می‌گیرد → نه متن می‌ماند، نه لکه.
+                try:
+                    _unm = ~mm
+                    _rc[_unm] = _sic[_unm]
+                except Exception:
+                    _rc[:] = _sic
                 if _pnt.any():
                     _rc[_pnt] = _fill_col
                 _n_rej += 1
@@ -9024,6 +9087,46 @@ class MangaTranslator:
             c[4] = cv2.dilate(crop_msk, page_kernel)
             c[5] = sub_bgr[cy0 - ey0:cy1 - ey0, cx0 - ex0:cx1 - ex0]
             c[6] = "LaMa"
+
+    @staticmethod
+    def _mask_ink_only(gray_crop: np.ndarray, zone: np.ndarray,
+                       thr: float) -> np.ndarray:
+        """v1.14.70 — جوهرِ تیرهٔ داخلِ ماسک (بدونِ گیتِ اینتریور).
+
+        ریشهٔ «بعضی متن‌ها جا می‌مونه / کج پاک میشه»: اینتریورِ حباب از
+        دمِ بازِ حباب (یا شکافِ JPEGِ دیوار) نشت می‌کرد → پیکسل‌هایِ متن
+        که بیرونِ اینتریور می‌افتادند در پرِ تختِ ضدتوهم شرکت نمی‌کردند و
+        چون کراپ به «اصل» برمی‌گشت، همان متن زنده می‌ماند.
+
+        این تابع جوهرِ تیرهٔ داخلِ ماسک را برمی‌گرداند ولی «ساختارهای
+        کشیده» (دیوارِ حباب/قابِ پنل) را حذف می‌کند تا حباب خراب نشود:
+        کامپوننتی که قدش ≥ ۲.۵ برابرِ پهنایش و ≥ ۳۰پیکسل باشد = دیوار،
+        نه حرف."""
+        try:
+            if gray_crop is None or zone is None:
+                return np.zeros((1, 1), np.uint8)
+            ink = ((gray_crop < float(thr)) & (zone > 0)).astype(np.uint8) * 255
+            if not ink.any():
+                return ink
+            ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
+            ink = cv2.dilate(ink, np.ones((5, 5), np.uint8))
+            n, lab, st, _ = cv2.connectedComponentsWithStats(ink, 8)
+            keep = np.zeros_like(ink)
+            for i in range(1, n):
+                a = int(st[i, cv2.CC_STAT_AREA])
+                if a < 8:
+                    continue
+                cw_ = int(st[i, cv2.CC_STAT_WIDTH])
+                ch_ = int(st[i, cv2.CC_STAT_HEIGHT])
+                # دیوار/قاب: بلند و نازک (عمودی) یا خیلی کشیده (افقی)
+                if ch_ >= 30 and ch_ >= 2.5 * cw_:
+                    continue
+                if cw_ >= 120 and cw_ >= 6.0 * max(1, ch_):
+                    continue
+                keep[lab == i] = 255
+            return keep
+        except Exception:
+            return np.zeros((1, 1), np.uint8)
 
     def _clean_level(self) -> str:
         try:
@@ -9377,6 +9480,83 @@ class MangaTranslator:
             self._compose_k9 = _k
         return _k
 
+    def _compose_region_strips(self, image: np.ndarray,
+                               region: "TextRegion") -> Optional[np.ndarray]:
+        """v1.14.70 — نوارهایِ خط‌به‌خطِ «اندازهٔ دقیقِ متن» برایِ یک ناحیه.
+
+        خواستِ کاربر: «عکس اول کامل میپاکه بعد همون اندازه متن برش میزنه
+        به عکس دوم میزاره نه بیشتر نه کمتر حباب خراب نشه». پس ماسکِ
+        کامپوز باید دقیقاً «جوهرِ حروف» باشد — نه مستطیلِ بلوک (که حباب
+        را با خود می‌برد) و نه کلِ ناحیه."""
+        try:
+            polys = []
+            for p in (getattr(region, "ocr_polys", None) or []):
+                try:
+                    pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                if pp.shape[0] >= 3:
+                    polys.append(pp)
+            if not polys:
+                return None, np.zeros((1, 1), dtype=np.uint8)
+            lines = MangaTranslator._group_polys_to_lines(polys)
+            if not lines:
+                return None, np.zeros((1, 1), dtype=np.uint8)
+            h, w = image.shape[:2]
+            m = np.zeros((h, w), dtype=np.uint8)
+            failed = np.zeros((h, w), dtype=np.uint8)
+            n = 0
+            _dbgc = bool(os.environ.get("MANGA_LSM_DBG"))
+            for (lx0, ly0, lx1, ly1) in lines:
+                st = self._line_strip_ink(image, lx0, ly0, lx1, ly1, polys,
+                                          dbg=_dbgc)
+                if st is None:
+                    # v1.14.70 — خطی که نوارش ساخته نشد (مثلِ متنِ سفید با
+                    # دورخطِ تیره روی زمینهٔ روشن) نباید از کامپوز بیفتد وگرنه
+                    # متن از عکسِ دوم برمی‌گردد («WE FRIENDS?»). برایِ این
+                    # خط، پالیِ خودش جایگزین می‌شود (اندازهٔ متن).
+                    try:
+                        for _pa in polys:
+                            _bx0 = float(_pa[:, 0].min())
+                            _bx1 = float(_pa[:, 0].max())
+                            _by0 = float(_pa[:, 1].min())
+                            _by1 = float(_pa[:, 1].max())
+                            if (_bx1 >= lx0 - 2 and _bx0 <= lx1 + 2
+                                    and _by1 >= ly0 - 2 and _by0 <= ly1 + 2):
+                                cv2.fillPoly(
+                                    failed,
+                                    [np.rint(_pa).astype(np.int32)], 255)
+                    except Exception:
+                        pass
+                    continue
+                sx0, sy0, sx1, sy1, kept = st
+                m[sy0:sy1, sx0:sx1][kept] = 255
+                n += 1
+            if n == 0:
+                # هیچ خطی نوار نشد → کلِ ناحیه به مسیرِ خام سپرده شود
+                return None, failed
+            # v1.14.70 — «نه بیشتر نه کمتر»: نوارها فقط داخلِ پالیِ OCR
+            # (همان باکسِ متن) می‌مانند. بدونِ این محدودیت، دیوارِ حباب
+            # که در نوارِ بالا/پایینِ خط می‌افتد جزوِ «جوهر» می‌شد و از
+            # عکسِ پاک‌شده (که حبابش خراب شده) برمی‌گشت → حباب می‌شکست.
+            _pm = np.zeros((h, w), dtype=np.uint8)
+            for _pa in polys:
+                try:
+                    cv2.fillPoly(
+                        _pm, [np.rint(_pa).astype(np.int32)], 255)
+                except Exception:
+                    continue
+            if not _pm.any():
+                return None, failed
+            _pm = cv2.dilate(_pm, np.ones((7, 7), np.uint8)) > 0
+            m = (m & _pm).astype(np.uint8) * 255
+            failed = (failed & _pm).astype(np.uint8) * 255
+            if not m.any() and not failed.any():
+                return None, np.zeros((h, w), dtype=np.uint8)
+            return m, failed
+        except Exception:
+            return None, np.zeros((1, 1), dtype=np.uint8)
+
     def _compose_strip_mask(self, image: np.ndarray,
                             mask: np.ndarray) -> np.ndarray:
         """v1.14.63 — ماسکِ کامپوزِ «فقط نوارِ متن، خط به خط»:
@@ -9396,6 +9576,84 @@ class MangaTranslator:
             else:
                 out = (base > 0)
             h, w = mask.shape[:2]
+            # v1.14.70 — «نه بیشتر نه کمتر»: برایِ هر ناحیه‌ای که پالیِ
+            # OCR دارد، نوارهایِ خط‌به‌خط (اندازهٔ دقیقِ حروف) جایِ
+            # مستطیلِ بلوکِ ماسکِ خام می‌نشینند. نتیجه: دیوارِ حباب،
+            # قوس، قابِ پنل و هنرِ اطراف هرگز از عکسِ پاک‌شده نمی‌آیند
+            # → حباب سالم می‌ماند؛ فقط خودِ حروف پاک می‌شوند.
+            _regions = getattr(self, "_page_regions", None) or []
+            _n_str = 0
+            # v1.14.70 — دامنهٔ امنِ «جارویِ بقایا»: فقط نوارهایِ متن.
+            # قبلاً دامنه = ماسکِ خام (مستطیلِ بلوک) بود → دیوارِ حباب که
+            # داخلِ بلوک می‌افتد «بقایایِ متن» خوانده می‌شد و پاک می‌شد
+            # → حباب می‌شکست. دامنهٔ جدید = دقیقاً حروف.
+            _sweep = np.zeros((h, w), dtype=np.uint8)
+            for _rg in _regions:
+                try:
+                    _res = self._compose_region_strips(image, _rg)
+                except Exception:
+                    _res = None
+                if not _res:
+                    continue
+                _strips, _failed = _res[0], _res[1]
+                if _strips is None:
+                    _strips = np.zeros((h, w), dtype=np.uint8)
+                if _failed is None:
+                    _failed = np.zeros((h, w), dtype=np.uint8)
+                if not _strips.any() and not _failed.any():
+                    continue
+                # ناحیهٔ متنیِ این منطقه از ماسکِ خام حذف می‌شود (تا
+                # مستطیلِ بلوک به خروجی نیاید) و نوارهای خط جایگزین می‌شوند
+                _area = np.zeros((h, w), dtype=np.uint8)
+                _ok = False
+                for _p in (getattr(_rg, "ocr_polys", None) or []):
+                    try:
+                        _pa = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                    except Exception:
+                        continue
+                    if _pa.shape[0] < 3:
+                        continue
+                    cv2.fillPoly(_area, [np.rint(_pa).astype(np.int32)], 255)
+                    _ok = True
+                if not _ok:
+                    continue
+                _area = cv2.dilate(_area, np.ones((13, 13), np.uint8)) > 0
+                out[_area] = False
+                out |= (_strips > 0)
+                out |= (_failed > 0)
+                _sweep |= (_strips > 0)
+                _sweep |= (_failed > 0)
+                _n_str += 1
+            # ناحیه‌هایی که نوار ندارند (متنِ آزاد/بنر) → ماسکِ خامِ آن‌ها
+            for _rg in _regions:
+                if getattr(_rg, "kind", "") == "promo":
+                    continue
+                if (getattr(_rg, "ocr_polys", None) or []):
+                    continue
+                try:
+                    _rx, _ry, _rw2, _rh2 = [int(v) for v in _rg.rect]
+                except Exception:
+                    continue
+                _x0 = max(0, _rx - 6)
+                _y0 = max(0, _ry - 6)
+                _x1 = min(w, _rx + _rw2 + 7)
+                _y1 = min(h, _ry + _rh2 + 7)
+                if _x1 > _x0 and _y1 > _y0:
+                    _sweep[_y0:_y1, _x0:_x1] |= (out[_y0:_y1, _x0:_x1])
+            self._compose_sweep_mask = _sweep
+            if _n_str and self.debug:
+                try:
+                    print(f"  [*] v1.14.70: کامپوز = {_n_str} ناحیه با "
+                          f"نوارِ خط‌به‌خط (اندازهٔ دقیقِ متن)")
+                except Exception:
+                    pass
+            try:
+                _dc = os.environ.get("MANGA_DUMP_COMPOSE", "")
+                if _dc:
+                    cv2.imwrite(_dc, (out.astype(np.uint8)) * 255)
+                    print(f"  [*] compose mask dumped → {_dc}")
+            except Exception:
+                pass
             # v1.14.64 — بنرهایِ تبلیغ: کلِ بنر (نه نوارِ خط‌ها) از عکسِ
             # پاک‌شده به خروجی می‌رود — «کامل فیلتر تبلیغ»
             for _pb in (getattr(self, "_promo_rect_boxes", None) or []):
@@ -9476,6 +9734,69 @@ class MangaTranslator:
             return (out.astype(np.uint8)) * 255
         except Exception:
             return mask
+
+    def _compose_polish(self, image: np.ndarray, composed: np.ndarray,
+                         mask: np.ndarray) -> np.ndarray:
+        """v1.14.70 — «پاکسازیِ کثیف»: لکهٔ خاکستری/سبزِ LaMa داخلِ حبابِ
+        سفید، وقتی به عکسِ دوم منتقل می‌شود، به‌صورتِ لکهٔ محو دیده می‌شود
+        (نمونه: حبابِ «YEP!» و «OH BOY…»). راه‌حل: اگر حلقهٔ دورِ نوار یکنواخت
+        باشد (زمینهٔ ساده)، هر پیکسلِ نوار که از رنگِ حلقه تیره‌تر/روشن‌تر
+        است «لکه» خوانده می‌شود و با رنگِ خودِ حلقه پر می‌شود.
+
+        فقط جایی اعمال می‌شود که حلقه یکنواخت باشد → روی متنِ رویِ هنر
+        (عکس/بافت) دست نمی‌زند."""
+        try:
+            if mask is None or not np.any(mask):
+                return composed
+            m = (mask > 0).astype(np.uint8)
+            n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
+            if n <= 1:
+                return composed
+            out = composed
+            _k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+            for i in range(1, n):
+                x = int(st[i, cv2.CC_STAT_LEFT])
+                y = int(st[i, cv2.CC_STAT_TOP])
+                w = int(st[i, cv2.CC_STAT_WIDTH])
+                h = int(st[i, cv2.CC_STAT_HEIGHT])
+                a = int(st[i, cv2.CC_STAT_AREA])
+                if a < 40 or w < 6 or h < 6:
+                    continue
+                if w > 0.9 * out.shape[1] or h > 0.9 * out.shape[0]:
+                    continue
+                _pad = 18
+                x0 = max(0, x - _pad)
+                y0 = max(0, y - _pad)
+                x1 = min(out.shape[1], x + w + _pad)
+                y1 = min(out.shape[0], y + h + _pad)
+                sub = out[y0:y1, x0:x1]
+                subm = (lab[y0:y1, x0:x1] == i)
+                if not subm.any():
+                    continue
+                ring = cv2.dilate(subm.astype(np.uint8), _k) > 0
+                ring &= ~subm
+                if int(np.count_nonzero(ring)) < 40:
+                    continue
+                rg = cv2.cvtColor(sub, cv2.COLOR_BGR2GRAY)
+                rv = rg[ring]
+                rmed = float(np.median(rv))
+                rstd = float(np.std(rv))
+                if rstd > 26.0:
+                    continue  # زمینهٔ بافت‌دار → دست نزن
+                stain = subm & (np.abs(rg.astype(np.float32) - rmed) > 26.0)
+                if not stain.any():
+                    continue
+                if int(np.count_nonzero(stain)) > 0.8 * int(subm.sum()):
+                    continue  # کلِ نوار متفاوت است → ساختارِ واقعی، نه لکه
+                fill = np.median(sub[ring].astype(np.float32), axis=0)
+                _s = sub.copy()
+                _s[stain] = np.clip(np.rint(fill[None, None, :]), 0, 255
+                                    ).astype(np.uint8)
+                sub[:] = _s
+                out[y0:y1, x0:x1] = sub
+            return out
+        except Exception:
+            return composed
 
     def _compose_two_image(self, donor: np.ndarray, original: np.ndarray,
                            mask: np.ndarray) -> np.ndarray:
@@ -9582,6 +9903,9 @@ class MangaTranslator:
             return mask
 
     def clean_image(self, image: np.ndarray, regions: List[TextRegion]) -> np.ndarray:
+        # v1.14.70 — نواحیِ صفحه نگه داشته می‌شوند تا «کامپوزِ دو-عکسی»
+        # بتواند نوارهایِ خط‌به‌خط (اندازهٔ دقیقِ متن) را بسازد.
+        self._page_regions = list(regions or [])
         mask = self._build_text_mask(image, regions)
         if not np.any(mask):
             return image.copy()
@@ -10490,6 +10814,13 @@ class MangaTranslator:
             except Exception:
                 _cmp2 = mask
             cleaned = self._compose_two_image(cleaned, image, _cmp2)
+            # v1.14.70 — «پاکسازیِ کثیف»: لکهٔ محوِ LaMa داخلِ حبابِ سفید
+            # (خاکستری/سبز) وقتی به عکسِ دوم منتقل می‌شود دیده می‌شود →
+            # اگر حلقهٔ دورِ نوار یکنواخت باشد، لکه با رنگِ حلقه پر می‌شود.
+            try:
+                cleaned = self._compose_polish(image, cleaned, _cmp2)
+            except Exception:
+                pass
         if _sdd and _sd:
             try:
                 cv2.imwrite(os.path.join(_sd, "post_compose.jpg"), cleaned)
@@ -10513,6 +10844,13 @@ class MangaTranslator:
                 _mres = getattr(self, "_compose_text_mask", None)
                 if _mres is None or _mres.shape != mask.shape[:2]:
                     _mres = mask
+                # v1.14.70 — دامنهٔ امن: فقط نوارهایِ متن (نه مستطیلِ
+                # بلوک) — با دامنهٔ بلوک، دیوارِ حباب «بقایایِ متن»
+                # خوانده می‌شد و پاک می‌شد → حباب خراب.
+                _msw = getattr(self, "_compose_sweep_mask", None)
+                if _msw is not None and _msw.shape == mask.shape[:2] \
+                        and int(np.count_nonzero(_msw)) >= 40:
+                    _mres = _msw
                 _n = self._residue_sweep(
                     image, cleaned, regions, _mres,
                     collect=(_rboxes if _want_lama else None))
@@ -18181,6 +18519,14 @@ html, body { background: #0a0a0b; }
         self._brief_corpus = []
         self._brief_attempted = False
         _t_run67 = time.time()  # v1.14.67 — کلِ زمانِ ران
+        # v1.14.70 — سرعت: ساختِ سشنِ LaMa (۲۰۰MB) از همان اولِ کار شروع
+        # می‌شود تا با دانلودِ تصویرها/آماده‌سازیِ صفحه‌ها هم‌پوشانی داشته
+        # باشد. قبلاً بعد از آماده‌سازی شروع می‌شد → اولین صفحه منتظرِ
+        # سشن می‌ماند (لاگِ گوشی: «لما-wait=67s»).
+        try:
+            self.preload_lama_async()
+        except Exception:
+            pass
         if clean_old:
             self._cleanup_previous_artifacts(output_path, keep_outputs=False)
 
