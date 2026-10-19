@@ -663,6 +663,16 @@ def _prepare_ort_cuda_dlls() -> None:
         pass
 
 
+def _on_x86() -> bool:
+    """v1.14.67 — امولاتورِ x86_64 (CI): CPU-EPِ libonnxruntimeِ x86_64
+    در sess.run تقسیم‌برصفر (SIGFPE) می‌دهد؛ XNNPACK سالم است."""
+    try:
+        import platform as _pf
+        return _pf.machine().lower() in ("x86_64", "amd64")
+    except Exception:
+        return False
+
+
 def _is_auto_ep() -> bool:
     try:
         v = (os.environ.get("MANGA_ORT_EP", "auto") or "auto").strip().lower()
@@ -973,18 +983,43 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
             s_c = None
             continue
     s_cpu, t_cpu = None, float("inf")
-    try:
-        s_cpu = ort.InferenceSession(model_path,
-                                     sess_options=_ort_session_options(threads),
-                                     providers=["CPUExecutionProvider"])
-        t_cpu = _ep_ab_time(s_cpu)
+    if _on_x86():
+        # v1.14.67 — سشنِ CPU رویِ x86 ساخته می‌شود ولی run نمی‌شود
+        # (SIGFPE)؛ فقط برایِ فال‌بکِ نهایی
         try:
-            print(f"    [*] پروب CPU: {t_cpu:.2f}s")
+            s_cpu = ort.InferenceSession(model_path,
+                                         sess_options=_ort_session_options(
+                                             threads),
+                                         providers=["CPUExecutionProvider"])
+        except Exception:
+            s_cpu = None
+    else:
+        try:
+            s_cpu = ort.InferenceSession(
+                model_path,
+                sess_options=_ort_session_options(threads),
+                providers=["CPUExecutionProvider"])
+            t_cpu = _ep_ab_time(s_cpu)
+            try:
+                print(f"    [*] پروب CPU: {t_cpu:.2f}s")
+            except Exception:
+                pass
         except Exception:
             pass
-    except Exception:
-        pass
     rows.sort(key=lambda r: r[0])
+    # v1.14.67 — امولاتورِ x86_64: مقایسه با CPU (سشنِ CPU) خودش کرش
+    # می‌کند → برندهٔ سخت‌افزاریِ پروب‌شده را بی‌مقایسه بپذیر
+    if _on_x86():
+        if rows:
+            winner = rows[0]
+            try:
+                print(f"[*] پروب EP (x86 — بدونِ مقایسه با CPU): {winner[1]}")
+            except Exception:
+                pass
+            _lama_ep_store(model_path, winner[1])
+            return winner[2]
+        _lama_ep_store(model_path, "cpu")
+        return s_cpu
     winner = rows[0] if (rows and rows[0][0] < t_cpu) else None
     try:
         summary = " | ".join(f"{r[1]} {r[0]:.2f}s" for r in rows) or "—"
@@ -1084,6 +1119,11 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
 
     if want and "CUDAExecutionProvider" in ort.get_available_providers():
         providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    elif _on_x86() and "XnnpackExecutionProvider" in list(
+            ort.get_available_providers()):
+        # v1.14.67 — امولاتورِ x86_64: CPU-EPِ ORT می‌میرد → همهٔ سشن‌ها
+        # (دیتکتور/LaMa) از XNNPACK می‌روند (پروبش سالم بود)
+        providers = ["XnnpackExecutionProvider", "CPUExecutionProvider"]
     else:
         providers = ["CPUExecutionProvider"]
 
@@ -1394,6 +1434,8 @@ class LamaMangaONNX:
                 return
             if _lama_ep_cached(self.model_path) == "cpu":
                 return
+            if _on_x86():
+                return  # A/B با سشنِ CPU رویِ x86 ممکن نیست (SIGFPEِ ORT)
             # گیتِ رم: MemAvailable < 1.5GB → A/B نه (دو سشن جا نمی‌شود)
             _free_mb = 0
             try:
