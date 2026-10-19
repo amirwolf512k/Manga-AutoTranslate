@@ -611,6 +611,14 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     so = ort.SessionOptions()
     so.log_severity_level = 3
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+    # v1.14.67 — امولاتورِ x86_64: ORT-androidِ x86_64 با نخِ >۱ در
+    # زمان‌بندِ thread-pool تقسیم‌برِصفر (SIGFPE) می‌دهد → تک‌نخ.
+    try:
+        import platform as _pf67
+        if _pf67.machine().lower() in ("x86_64", "amd64"):
+            threads = 1
+    except Exception:
+        pass
     so.intra_op_num_threads = max(1, int(threads))
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -869,6 +877,15 @@ def _ort_probe_ok(sess, threads: int) -> bool:
             return False
         if t_ser <= 0.02:
             return True
+        # v1.14.67 — امولاتورِ x86_64: رانِ موازیِ همزمان در libonnxruntimeِ
+        # x86_64 SIGFPE می‌دهد (تقسیمِ صحیحِ صفر در زمان‌بندِ thread-pool) —
+        # پروبِ موازی رویِ x86 بی‌معناست (CI فقط درستی می‌سنجد) → پرش.
+        try:
+            import platform as _pf67
+            if _pf67.machine().lower() in ("x86_64", "amd64"):
+                return True
+        except Exception:
+            pass
         from concurrent.futures import ThreadPoolExecutor as _TPE
         try:
             with _TPE(max_workers=2) as ex:
