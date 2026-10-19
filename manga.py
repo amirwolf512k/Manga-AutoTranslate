@@ -623,10 +623,14 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     # پچ‌های موازی LaMa + OCR هم‌زمان اجرا می‌شوند؛ spin-wait هسته‌ها را می‌سوزاند
-    try:
-        so.add_session_config_entry("session.intra_op.allow_spinning", "0")
-    except Exception:
-        pass
+    # v1.14.67 — رویِ x86_64 این کانفیگ SIGFPE می‌دهد (حدس: شمارشِ spin=۰
+    # → تقسیم بر صفر در مسیرِ x86) — فقط رویِ arm خاموش می‌شود
+    if not _on_x86():
+        try:
+            so.add_session_config_entry(
+                "session.intra_op.allow_spinning", "0")
+        except Exception:
+            pass
     if low_mem is None:
         _av = _sys_avail_ram_gb()
         low_mem = bool(_on_android() or (_av is not None and _av < 3.0))
