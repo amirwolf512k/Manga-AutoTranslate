@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.71"
+APP_VER = "1.14.72"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5930,7 +5930,10 @@ class MangaTranslator:
                 if med < 128:
                     bright_t = max(150, med + 60)
                 else:
-                    bright_t = min(180, med + 40)
+                    # v1.14.72 — سقفِ ۱۸۰ برای زمینهٔ روشنِ رنگی (زرد با
+                    # مدین ~۲۰۰) کلِ زمینه را هم «متنِ روشن» می‌خواند؛
+                    # سقف برداشته شد تا فقط واقعاً روشن‌تر از زمینه بیاید.
+                    bright_t = med + 40
                 hard = (crop > bright_t).astype(np.uint8) * 255
                 flag = cv2.THRESH_BINARY
             try:
@@ -5953,12 +5956,16 @@ class MangaTranslator:
         dark_ink = _mask(True)
         dark_cov = float(np.count_nonzero(dark_ink)) / float(max(1, ch * cw))
 
-
-        if dark_cov > 0.45:
+        # v1.14.72 — متنِ روشن روی زمینهٔ رنگی (حبابِ زرد با متنِ سفید):
+        # وقتی dark_cov خیلی کم است (متنِ تیره‌ای نیست) هم باید bright را
+        # امتحان کرد؛ قبلاً فقط وقتی dark_cov > 0.45 بود bright چک می‌شد
+        # → متنِ سفید روی زرد هرگز ماسک نمی‌شد و «جا می‌ماند».
+        if dark_cov > 0.45 or dark_cov < 0.08:
             bright_ink = _mask(False)
             bright_cov = float(np.count_nonzero(bright_ink)) / float(max(1, ch * cw))
-            if 0 < bright_cov < dark_cov:
-                return bright_ink
+            if 0.02 < bright_cov < 0.60:
+                if dark_cov < 0.08 or bright_cov < dark_cov:
+                    return bright_ink
         return dark_ink
 
     @staticmethod
