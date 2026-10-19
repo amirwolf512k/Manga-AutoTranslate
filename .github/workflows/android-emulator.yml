@@ -130,18 +130,8 @@ jobs:
             adb push /tmp/models/lama-manga-dyn.onnx /sdcard/Download/manga/lama.onnx || true
             adb shell "run-as com.amirwolf.mangatranslator sh -c 'cp /sdcard/Download/manga/det.onnx files/.cache/manga_translator_models/detector-v4-s_int8.onnx 2>/dev/null; cp /sdcard/Download/manga/lama.onnx files/.cache/manga_translator_models/lama-manga-dyn.onnx 2>/dev/null'" || true
             # ۴) پیش‌تنظیمِ تنظیمات (فایلِ محلیِ webp + حالتِ تست + دیباگ)
-            printf '%s\n' \
-              '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>' \
-              '<map>' \
-              '    <string name="inp_upload_path">/sdcard/Download/manga/test.webp</string>' \
-              '    <string name="fake_test">true</string>' \
-              '    <string name="web_debug">true</string>' \
-              '    <string name="clean_method">lama-manga</string>' \
-              '    <string name="out_fmt">PDF</string>' \
-              '    <string name="readord">rtl</string>' \
-              '    <boolean name="battery_asked" value="true" />' \
-              '    <boolean name="viewer_hint_v3" value="true" />' \
-              '</map>' > /tmp/prefs.xml
+            # نکته: این اکشن اسکریپت را خط‌به‌خط اجرا می‌کند → همه‌چیز تک‌خطی
+            printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <string name="inp_upload_path">/sdcard/Download/manga/test.webp</string>\n    <string name="fake_test">true</string>\n    <string name="web_debug">true</string>\n    <string name="clean_method">lama-manga</string>\n    <string name="out_fmt">PDF</string>\n    <string name="readord">rtl</string>\n    <boolean name="battery_asked" value="true" />\n    <boolean name="viewer_hint_v3" value="true" />\n</map>\n' > /tmp/prefs.xml
             adb push /tmp/prefs.xml /sdcard/Download/manga/prefs.xml
             adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p shared_prefs; cat /sdcard/Download/manga/prefs.xml > shared_prefs/manga_settings.xml'"
             # ۵) اجرای اپ + زدنِ دکمهٔ شروع
