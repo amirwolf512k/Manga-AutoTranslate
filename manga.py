@@ -664,9 +664,13 @@ def _prepare_ort_cuda_dlls() -> None:
 
 
 def _on_x86() -> bool:
-    """v1.14.67 — امولاتورِ x86_64 (CI): CPU-EPِ libonnxruntimeِ x86_64
-    در sess.run تقسیم‌برصفر (SIGFPE) می‌دهد؛ XNNPACK سالم است."""
+    """v1.14.67 — فقط «امولاتورِ x86_64» (اندروید + x86): CPU-EPِ
+    libonnxruntimeِ x86_64 در sess.run تقسیم‌برصفر (SIGFPE) می‌دهد؛
+    XNNPACK سالم است. PCِ لینوکسی x86 هم هست ولی اندروید نیست → False
+    (وگرنه نخِ PC به ۱ محدود و مسیرِ XNNPACK خراب می‌شد)."""
     try:
+        if not _on_android():
+            return False
         import platform as _pf
         return _pf.machine().lower() in ("x86_64", "amd64")
     except Exception:
