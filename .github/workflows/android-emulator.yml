@@ -104,8 +104,10 @@ jobs:
       - name: Check KVM
         run: |
           ls -la /dev/kvm || true
-          sudo -E adduser "$USER" kvm 2>/dev/null || true
-          sudo chown -R "$USER" /dev/kvm 2>/dev/null || true
+          # مهم: adduser برایِ پروسهٔ همین استپ اعمال نمی‌شود → chmodِ مستقیم
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          ls -la /dev/kvm
+          "${ANDROID_HOME}/emulator/emulator" -accel-check || true
 
       # v1.14.67 — امولاتورِ دستی (۴ هسته — AVDِ پیش‌فرضِ اکشن ۲ هسته است
       # و ORT-androidِ x86_64 با ۲ هسته SIGFPE می‌دهد)
@@ -129,10 +131,19 @@ jobs:
       - name: Boot emulator
         run: |
           export ANDROID_AVD_HOME="$HOME/.android/avd"
-          "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
-          echo "emulator started in background"
           adb start-server || true
-          timeout 720 bash -c 'until [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d "\r")" = "1" ]; do sleep 5; done' || { echo "=== emulator boot FAILED — log tail:"; tail -40 /tmp/emu_boot.log; exit 1; }
+          "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
+          EMU_PID=$!
+          echo "emulator started in background (pid $EMU_PID)"
+          OK=0
+          for i in $(seq 1 144); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then echo "=== emulator process DIED at $((i*5))s ==="; break; fi
+            V=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$V" = "1" ]; then OK=1; echo "boot completed after ~$((i*5))s"; break; fi
+            if [ $((i % 12)) = 0 ]; then echo "--- boot wait $((i*5))s ---"; tail -2 /tmp/emu_boot.log; fi
+            sleep 5
+          done
+          if [ "$OK" != "1" ]; then echo "=== emulator boot FAILED — log tail:"; tail -40 /tmp/emu_boot.log; exit 1; fi
           adb shell input keyevent 82 || true
           adb devices
           tail -3 /tmp/emu_boot.log
