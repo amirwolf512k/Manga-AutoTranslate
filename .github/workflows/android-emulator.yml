@@ -119,6 +119,7 @@ jobs:
           script: |
             set -x
             adb devices
+            mkdir -p /tmp/emulout
             # ۱) نصبِ APK
             adb install -r -t dist/MangaTranslator-arm64.apk
             # ۲) ورودی داخلِ حافظهٔ خودِ اپ (بدونِ مجوزِ حافظه — از
@@ -135,7 +136,7 @@ jobs:
             # ۵) اجرای اپ + زدنِ دکمهٔ شروع
             adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
             sleep 25
-            python3 .ci_scripts/tap_run.py
+            python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail.png; adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png 2>/dev/null || true; adb logcat -d -t 500 > /tmp/emulout/logcat_fail.txt 2>/dev/null || true; exit 1; }
             # ۶) انتظار تا پایانِ موتور (۶۰ دقیقه — اجرای arm64 رویِ
             # ترجمهٔ x86 کند است؛ دادهٔ [TIME] هم می‌دهد)
             python3 .ci_scripts/wait_done.py 60
