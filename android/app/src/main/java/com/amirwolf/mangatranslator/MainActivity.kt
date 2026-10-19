@@ -2374,14 +2374,20 @@ class MainActivity : AppCompatActivity() {
         // v1.14.67 — قبل از insert همهٔ هم‌kindها پاک می‌شوند (ضدِ
         // «manga.log (N).txt»)؛ اگر نوشتن شکست خورد هم ردیفِ نیمه‌کاره
         // حذف می‌شود تا پشته نشود.
+        // v1.14.69 — اسمِ insert مستقیماً «.txt» است: MediaProvider اسمِ
+        // «manga.log» را با MIMEِ text/plain ناسازگار می‌بیند و خودش
+        // «manga.log.txt» می‌سازد — در همین لحظهٔ ساختِ نهایی (پس از
+        // IS_PENDING=0) اگر هم‌نامی در پوشه باشد « (N)» می‌چسباند.
+        // با اسمِ سازگارِ «manga.log.txt» هیچ بازنویسی/برخوردی رخ نمی‌دهد.
         val kind = normMangaLogName(name)
         if (kind != null && Build.VERSION.SDK_INT >= 29) {
             deleteAllLogKindRows(kind)
         }
+        val fname = if (name.endsWith(".txt")) name else "$name.txt"
         val uri = contentResolver.insert(
             MediaStore.Downloads.EXTERNAL_CONTENT_URI,
             ContentValues().apply {
-                put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                put(MediaStore.MediaColumns.DISPLAY_NAME, fname)
                 put(MediaStore.MediaColumns.MIME_TYPE, "text/plain")
                 put(MediaStore.MediaColumns.RELATIVE_PATH, "Download/manga/")
                 put(MediaStore.MediaColumns.IS_PENDING, 1)
@@ -2448,10 +2454,16 @@ class MainActivity : AppCompatActivity() {
                 val m = Regex("\\((\\d+)\\)").find(dn) ?: return 0
                 return m.groupValues[1].toIntOrNull() ?: 0
             }
-            // main = اسم دقیق، وگرنه کم‌ترین شمارهٔ (N)، وگرنه تازه‌ترین _id
+            // v1.14.69 — اسمِ نهاییِ همیشه‌سازگار: «manga.log.txt» /
+            // «manga_old.log.txt» (بدونِ بازنویسیِ پسوند توسطِ سیستم).
+            val canon = if (name.endsWith(".txt")) name else "$name.txt"
+            // main = اسمِ دقیق (با یا بدونِ .txt)، وگرنه کم‌ترین شمارهٔ (N)،
+            // وگرنه تازه‌ترین _id
             val cands = mine.filter { normMangaLogName(it.dn) == kind }
-            val main = cands.firstOrNull { it.dn.equals(name, ignoreCase = true) }
-                ?: cands.sortedByDescending { it.id }
+            val main = cands.firstOrNull {
+                it.dn.equals(name, ignoreCase = true)
+                        || it.dn.equals(canon, ignoreCase = true)
+            } ?: cands.sortedByDescending { it.id }
                     .sortedBy { dupNum(it.dn) }
                     .firstOrNull()
             var mainUri: Uri? = null
@@ -2468,9 +2480,11 @@ class MainActivity : AppCompatActivity() {
                 if (u == mainUri) continue
                 doomed.add(u)
             }
+            var allDeleted = true
             for (u in doomed) try {
                 contentResolver.delete(u, null, null)
             } catch (_: Exception) {
+                allDeleted = false
             }
             var ok = false
             val target = mainUri
@@ -2479,11 +2493,14 @@ class MainActivity : AppCompatActivity() {
                 if (!ok) {
                     try { contentResolver.delete(target, null, null) } catch (_: Exception) {}
                 }
-                // اسمِ main را به اسمِ دقیق برسان (بهترین تلاش)
-                if (ok) {
+                // v1.14.69 — اسمِ main فقط وقتی به اسمِ سازگار برمی‌گردد که
+                // هیچ هم‌kindی باقی نمانده (وگرنه renameِ رویِ اسمِ موجود =
+                // « (N)» از سمتِ MediaProvider). شکستِ rename هم مشکلی
+                // ندارد — محتوا تازه است و دفعهٔ بعد cleanup اسم را می‌رساند.
+                if (ok && allDeleted && !main.dn.equals(canon, ignoreCase = true)) {
                     try {
                         contentResolver.update(target, ContentValues().apply {
-                            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+                            put(MediaStore.MediaColumns.DISPLAY_NAME, canon)
                         }, null, null)
                     } catch (_: Exception) {
                     }
@@ -2556,23 +2573,28 @@ class MainActivity : AppCompatActivity() {
                         normMangaLogName(it.dn) == kind
                     }
                     if (mine.isEmpty()) continue
+                    // v1.14.69 — اسمِ نهاییِ سازگار با MIME = «kind + .txt»
+                    // (بازنویسیِ پسوندِ سیستم = ریشهٔ «manga.log (N).txt» حذف می‌شود)
+                    val canon = "$kind.txt"
                     val main = mine.firstOrNull {
-                        it.dn.equals(kind, ignoreCase = true)
+                        (it.dn.equals(kind, ignoreCase = true)
+                                || it.dn.equals(canon, ignoreCase = true))
                                 && it.rp == "Download/manga/"
                     } ?: mine.firstOrNull {
                         it.dn.equals(kind, ignoreCase = true)
+                                || it.dn.equals(canon, ignoreCase = true)
                     } ?: mine.sortedByDescending { it.id }.first()
                     for (r in mine) {
                         if (r.id == main.id) continue
                         try { contentResolver.delete(r.uri, null, null)
                         } catch (_: Exception) {}
                     }
-                    if (!main.dn.equals(kind, ignoreCase = true)) {
+                    if (!main.dn.equals(canon, ignoreCase = true)) {
                         try {
                             contentResolver.update(main.uri,
                                 ContentValues().apply {
                                     put(MediaStore.MediaColumns.DISPLAY_NAME,
-                                        kind)
+                                        canon)
                                 }, null, null)
                         } catch (_: Exception) {}
                     }

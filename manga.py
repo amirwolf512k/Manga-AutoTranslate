@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.68"
+APP_VER = "1.14.69"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -641,6 +641,119 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     return so
 
 
+# ── v1.14.69 — کشِ «مدلِ بهینه‌شده» برایِ LaMa ──────────────────────────
+# لاگِ POCO F4 (1.14.68): [TIME] lama-wait=67.3s → کلِ زمان در
+# OrtEnvironment.createSession رویِ مدلِ ۲۰۶MB می‌رود؛ بهینه‌سازِ گرافِ
+# ORT تک‌نخی است و رویِ هسته‌هایِ ضعیف + رمِ آزادِ ~۳۵۵MB ده‌ها ثانیه
+# طول می‌کشد (رویِ PC/امولاتور <۱s — برایِ همین دیده نمی‌شد).
+# راه: بارِ اول، مدلِ بهینه‌شده رویِ دیسک ذخیره می‌شود
+# (SessionOptions.optimized_model_filepath — در pip هست؛ در شیمِ اندروید
+# به OrtSession.SessionOptions.setOptimizationModelFilePath جاوا
+# می‌رود) و بارهایِ بعدی از همان فایل ساخته می‌شوند → مرحلهٔ
+# بهینه‌سازی کامل حذف می‌شود. ذخیره با EPِ CPU انجام می‌شود (الگوی
+# استاندارد؛ مدلِ بهینه‌شده، گرافِ عمومیِ بهینه است) و بارگذاری با
+# هر EPِ درخواستی خودش دوباره EP را سوار می‌کند.
+_LAMA_OPT_LOCK = threading.Lock()
+
+
+def _lama_opt_cache_path(model_path: str, providers) -> str:
+    _v = "x"
+    try:
+        _v = str(getattr(ort, "__version__", "x") or "x")
+    except Exception:
+        pass
+    _ep = "cpu"
+    try:
+        for _p in (providers or ()):
+            if str(_p).lower().startswith("xnnpack"):
+                _ep = "xnnpack"
+                break
+    except Exception:
+        pass
+    _d, _f = os.path.split(str(model_path))
+    _stem = _f[:-5] if _f.lower().endswith(".onnx") else _f
+    return os.path.join(_d, f"{_stem}.opt69-{_v}-{_ep}.onnx")
+
+
+def _lama_session_cached(model_path, so, providers):
+    """سشنِ LaMa با کشِ مدلِ بهینه‌شده + [TIME]ِ زمانِ ساخت.
+
+    شکستِ هر مرحله = رفتارِ قبل (بدونِ کش) — هیچ مسیرِ تازه‌ای نباید
+    بتواند ساختِ سشن را خراب کند."""
+    _t69 = time.time()
+    _opt69 = None
+    try:
+        if str(os.environ.get("MANGA_LAMA_OPT_CACHE", "1")).strip() == "1" \
+                and isinstance(model_path, str):
+            _opt69 = _lama_opt_cache_path(model_path, providers)
+    except Exception:
+        _opt69 = None
+    if _opt69 and os.path.isfile(_opt69) \
+            and os.path.getsize(_opt69) > 1_000_000:
+        try:
+            _s69 = ort.InferenceSession(_opt69, sess_options=so,
+                                        providers=providers)
+            try:
+                print(f"[TIME] lama-create={time.time() - _t69:.1f}s "
+                      f"(از کشِ بهینه‌شده)", flush=True)
+            except Exception:
+                pass
+            return _s69
+        except Exception:
+            try:
+                os.remove(_opt69)
+            except Exception:
+                pass
+    # بارِ اول: مدلِ بهینه‌شده ذخیره می‌شود (اگر ORT پشتیبانی نکرد،
+    # بی‌صدا مثلِ قبل). رویِ اندروید سطحِ بهینه‌سازی BASIC — بهینه‌سازِ
+    # ALLِ تک‌نخی بخشِ بزرگی از همان ۶۷s است و XNNPACKِ سنگین‌کارِ
+    # اصلی را خودش انجام می‌دهد (رویِ PC: ALL→BASIC فقط ‎+۴٪ زمانِ
+    # اجرا؛ ساخت ×۲.۵ سریع‌تر).
+    _part69 = None
+    try:
+        _android69 = _on_android()
+    except Exception:
+        _android69 = False
+    if _opt69 and _android69:
+        try:
+            so.graph_optimization_level = \
+                ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
+        except Exception:
+            pass
+    if _opt69:
+        _part69 = _opt69 + ".part"
+        try:
+            so.optimized_model_filepath = _part69
+        except Exception:
+            _part69 = None
+    try:
+        _s69 = ort.InferenceSession(model_path, sess_options=so,
+                                    providers=providers)
+    finally:
+        try:
+            if _part69 and os.path.isfile(_part69):
+                with _LAMA_OPT_LOCK:
+                    try:
+                        os.replace(_part69, _opt69)
+                        try:
+                            print(f"[TIME] lama-create={time.time() - _t69:.1f}s "
+                                  f"(مدلِ بهینه‌شده ذخیره شد → کش)", flush=True)
+                        except Exception:
+                            pass
+                    except Exception:
+                        try:
+                            os.remove(_part69)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+    try:
+        print(f"[TIME] lama-create={time.time() - _t69:.1f}s", flush=True)
+    except Exception:
+        pass
+    return _s69
+
+
 _ORT_CUDA_OK = None
 
 
@@ -1113,6 +1226,8 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
             ep, ep_ab = None, False
         elif _cached in _EP_SHORT2FULL:
             ep, ep_ab = _EP_SHORT2FULL[_cached], False
+    elif ep and not ep_ab:
+        pass  # EPِ اجباری (MANGA_ORT_EP) — کشِ opt خودش بر اساسِ EP کلید می‌خورد
 
     if ep:
         try:
@@ -1139,8 +1254,8 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
                 except Exception:
                     pass
             try:
-                s_ep = ort.InferenceSession(model_path, sess_options=so_ep,
-                                            providers=[ep, "CPUExecutionProvider"])
+                s_ep = _lama_session_cached(model_path, so_ep,
+                                            [ep, "CPUExecutionProvider"])
                 if _ort_probe_ok(s_ep, threads if threads > 0 else 0):
                     try:
                         print(f"[+] شتاب سخت‌افزاری ORT فعال شد: {ep} "
@@ -1179,7 +1294,9 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
         providers = ["CPUExecutionProvider"]
 
     try:
-        sess = ort.InferenceSession(model_path, sess_options=so, providers=providers)
+        # v1.14.69 — کشِ مدلِ بهینه‌شده (گوشی: createSession تا 67s طول
+        # می‌کشد؛ بارهایِ بعدی از فایلِ بهینه‌شده ساخته می‌شوند)
+        sess = _lama_session_cached(model_path, so, providers)
     except Exception as e:
         print(f"[!] InferenceSession GPU ناموفق ({e}) → CPU")
         _ORT_CUDA_OK = False
@@ -1512,10 +1629,10 @@ class LamaMangaONNX:
             t_hw = _ep_ab_time(self.session)
             if not (t_hw < float("inf")):
                 return
-            s_cpu = ort.InferenceSession(
+            s_cpu = _lama_session_cached(
                 self.model_path,
-                sess_options=_ort_session_options(threads),
-                providers=["CPUExecutionProvider"])
+                _ort_session_options(threads),
+                ["CPUExecutionProvider"])
             t_cpu = _ep_ab_time(s_cpu)
             try:
                 print(f"    [*] A/Bِ واقعیِ {_side}²: xnnpack {t_hw:.2f}s | "
@@ -15860,7 +15977,43 @@ class MangaTranslator:
             except Exception:
                 _empty_max68 = 8
             _empty_streak68 = 0
+            # v1.14.69 — سقفِ زمانیِ جارو (MANGA_BANNER_TLIMIT ثانیه؛
+            # ‎0=خاموش). OCRِ خالی رویِ PC (RapidOCR) ~۲.۳s است و ۱۲+
+            # کاندید = ~۳۰s فقط جارو؛ گوشی (ML Kit) سریع است و سقف
+            # نمی‌خورد. کاندیدهایِ رتبهٔ بالا (لبه/تراکم) اول مصرف
+            # می‌شوند پس بنرِ واقعی همیشه در اولین‌هاست.
+            try:
+                _tlimit69 = float(os.environ.get(
+                    "MANGA_BANNER_TLIMIT", "0") or 0)
+            except Exception:
+                _tlimit69 = 0.0
+            if _tlimit69 <= 0:
+                try:
+                    if _on_android():
+                        _tlimit69 = 0.0
+                    else:
+                        # PC: کاندیدهایِ هر کاشی به نوبت مصرف می‌شوند؛ سقف
+                        # با تعدادِ کاشی‌ها می‌سد تا بنرِ دورِ نوارِ بلند
+                        # (نوبتِ کاشیِ آخر) قربانیِ نشود، ولی جارو هم
+                        # بی‌نهایت OCRِ خالی (RapidOCR ~۱.۹s/فراخوانی)
+                        # خرج نکند.
+                        _nt69 = max(1, int((h + _tile - 1)
+                                           // max(1, _tile - _ovl)))
+                        _tlimit69 = max(8.0, 3.0 * _nt69)
+                except Exception:
+                    _tlimit69 = 8.0
+            _t069 = time.time()
             for (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) in _ordered:
+                if _tlimit69 > 0 and time.time() - _t069 > _tlimit69:
+                    if self.debug:
+                        try:
+                            print(f"  [🔍] جارویِ بنر: سقفِ زمانیِ "
+                                  f"{_tlimit69:.0f}s — {_ocr_calls} "
+                                  f"فراخوانی از {len(_ordered)} کاندید",
+                                  flush=True)
+                        except Exception:
+                            pass
+                    break
                 if _stop_all68:
                     if self.debug:
                         try:
