@@ -109,6 +109,15 @@ jobs:
           ls -la /dev/kvm
           "${ANDROID_HOME}/emulator/emulator" -accel-check || true
 
+      # v1.14.67 — از ران ۱۸ به بعد `adb` روی PATH نبود (`command not found`)
+      # → حلقهٔ بوت هیچ‌وقت وضعیت را نمی‌خواند و امولاتور هم adb-daemon پیدا نمی‌کرد
+      - name: Install platform-tools (adb)
+        run: |
+          P="$ANDROID_HOME/platform-tools/adb"
+          if [ ! -x "$P" ]; then yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" > /dev/null 2>&1 || true; fi
+          "$P" version
+          "$P" start-server
+
       # v1.14.67 — امولاتورِ دستی (۴ هسته — AVDِ پیش‌فرضِ اکشن ۲ هسته است
       # و ORT-androidِ x86_64 با ۲ هسته SIGFPE می‌دهد)
       - name: Create AVD (4 cores)
@@ -131,6 +140,7 @@ jobs:
       - name: Boot emulator
         run: |
           export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
           adb start-server || true
           "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 3072 > /tmp/emu_boot.log 2>&1 &
           EMU_PID=$!
@@ -151,6 +161,7 @@ jobs:
       - name: Run APK on real Android emulator + red-stain gate
         run: |
           export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
           set -x
           adb devices
           mkdir -p /tmp/emulout emul-artifacts
@@ -182,6 +193,7 @@ jobs:
       - name: Shutdown emulator
         if: always()
         run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
           adb emu kill || true
           sleep 5
 
