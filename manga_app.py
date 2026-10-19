@@ -3108,6 +3108,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                             fake_test_v, clean_only_v, web_debug_v, instruction_text_v,
                             glossary_text_v, story_brief_v, api_base_v,
                             *tone_args):
+            _t_prep68 = time.time()  # v1.14.68 — زمانِ آماده‌سازیِ اپ
             sid = (sid or sid_box_v or "").strip()
             sid = _find_active_sid(sid) or sid
             if not sid:
@@ -3294,6 +3295,11 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 cmd += ["--no-brief"]
 
             t0 = time.time()
+            try:
+                print(f"[TIME] app-prep={time.time() - _t_prep68:.1f}s",
+                      flush=True)  # v1.14.68
+            except Exception:
+                pass
             with job["lock"]:
                 job["result_visible"] = False
                 job["download_path"] = None

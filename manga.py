@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-APP_VER = "1.14.66"
+import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
+_T0_IMPORT = _time_t0.time()
+APP_VER = "1.14.68"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3958,7 +3960,15 @@ class MangaTranslator:
             self._lama_preload_started = False
 
     def _get_lama(self, threads: int = 0, force: bool = False):
+        _t_lw68 = time.time()  # v1.14.68 — انتظارِ ساختِ سشن
         with self._lama_lock:
+            try:
+                _lw68 = time.time() - _t_lw68
+                if _lw68 > 0.3:
+                    print(f"[TIME] lama-wait={_lw68:.1f}s "
+                          f"(سشن در نخِ دیگر ساخته می‌شد)", flush=True)
+            except Exception:
+                pass
             _l = self._get_lama_locked()
             # v1.14.45: سرعتِ LaMa — دورِ دوم. وقتی پچِ موازی کم است، تک‌نخی
             # بودنِ هر پچ یعنی بیشترِ هسته‌ها بیکار (لاگِ POCO F4 کاربر:
@@ -15843,7 +15853,24 @@ class MangaTranslator:
                 except Exception:
                     pass
             _ocr_calls = 0
+            _stop_all68 = False  # v1.14.68 — توقفِ زودهنگام
+            try:
+                _empty_max68 = int(os.environ.get(
+                    "MANGA_BANNER_EARLY_STOP", "8") or 0)
+            except Exception:
+                _empty_max68 = 8
+            _empty_streak68 = 0
             for (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) in _ordered:
+                if _stop_all68:
+                    if self.debug:
+                        try:
+                            print("  [🔍] جارویِ بنر: توقفِ زودهنگام — "
+                                  f"{_empty_streak68} فراخوانیِ خالیِ پیاپی "
+                                  f"(اکاندی‌هایِ بعدی هم بافتِ هنرند)",
+                                  flush=True)
+                        except Exception:
+                            pass
+                    break
                 if _ocr_calls >= _max_calls:
                     if self.debug:
                         try:
@@ -15909,6 +15936,18 @@ class MangaTranslator:
                                 except Exception:
                                     continue
                         _txt = " ".join(_txts)
+                        # v1.14.68 — شمارِ فراخوانیِ بی‌متنِ پیاپی؛
+                        # بنرِ واقعی det/OCR را جواب می‌دهد، پس
+                        # زنجیرهٔ خالیِ بلند یعنی بافتِ هنر — صرفه‌جوییِ
+                        # بزرگِ RapidOCRِ کندِ PC (تا ۱۶ فراخوانی کمتر)
+                        if _txt:
+                            _empty_streak68 = 0
+                        else:
+                            _empty_streak68 += 1
+                            if (_empty_max68 > 0
+                                    and _empty_streak68 >= _empty_max68):
+                                _stop_all68 = True
+                                break
                         if self._is_watermark_text(_txt):
                             break
                         # v1.14.67 — متنِ خوانا ولی غیرِتبلیغ → این بلاب
@@ -15917,6 +15956,8 @@ class MangaTranslator:
                         if _txt:
                             break
                     if _txt and self._is_watermark_text(_txt):
+                        break
+                    if _stop_all68:
                         break
                 if not (_txt and self._is_watermark_text(_txt)):
                     # v1.14.64d — فال‌بکِ بدونِ OCR حذف شد: گیتِ گلیف روی
@@ -18344,6 +18385,11 @@ html, body { background: #0a0a0b; }
             self.preload_lama_async()
         except Exception:
             pass
+        try:
+            print(f"[TIME] startup={time.time() - _t_run67:.1f}s "
+                  f"(اماده‌سازی تا اولین صفحه)", flush=True)
+        except Exception:
+            pass
 
         def _extract_one(item):
             page_i, f, out_file = item
@@ -19170,6 +19216,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def main():
+    try:
+        print(f"[TIME] imports={_time_t0.time() - _T0_IMPORT:.1f}s",
+              flush=True)
+    except Exception:
+        pass
     args = build_arg_parser().parse_args()
 
     provider = (args.provider or "gemini").lower().strip()
