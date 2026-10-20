@@ -169,6 +169,36 @@ def _nvidia_gpu_present() -> bool:
     return False
 
 
+def _directx_gpu_present() -> bool:
+    """v1.14.75 — هر GPU-capable (AMD/Intel/графیکِ یکپارچه) رویِ ویندوز:
+    برایِ DirectML. فقط ویندوز؛ لینوکس DirectML ندارد."""
+    if _platform.system().lower() != "windows":
+        return False
+    try:
+        r = subprocess.run(
+            ["wmic", "path", "win32_VideoController", "get", "name"],
+            capture_output=True, text=True, timeout=10)
+        if r.returncode != 0:
+            raise RuntimeError
+        names = (r.stdout or "").lower()
+        if "videocontroller" not in names:
+            return True if "gpu" in names or "radeon" in names or \
+                "nvidia" in names or "intel" in names else False
+        return True
+    except Exception:
+        pass
+    try:
+        r = subprocess.run(
+            ["powershell", "-NoProfile", "-Command",
+             "(Get-CimInstance win32_VideoController).Name"],
+            capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and (r.stdout or "").strip():
+            return True
+    except Exception:
+        pass
+    return False
+
+
 def _ort_has_cuda() -> bool:
     try:
         import onnxruntime as _ort
@@ -311,6 +341,20 @@ def _ensure_all_dependencies() -> None:
     want_gpu = _nvidia_gpu_present()
     has_ort = _can_import("onnxruntime")
     has_cuda = _ort_has_cuda() if has_ort else False
+
+    _is_windows = _platform.system().lower() == "windows"
+    _has_dml = False
+    if has_ort:
+        try:
+            import onnxruntime as _ort
+            _has_dml = "DmlExecutionProvider" in _ort.get_available_providers()
+        except Exception:
+            _has_dml = False
+    # v1.14.75 — GPU-capable رویِ ویندوز (حتی AMD/Intel) ولی بدونِ CUDA:
+    # خودکار onnxruntime-directml نصب شود (DirectML رویِ همهٔ DirectX12
+    # کار می‌کند) تا LaMa رویِ GPU برود؛ CPU به‌عنوانِ فال‌بک.
+    _need_dml = (_is_windows and not want_gpu and not _has_dml
+                 and _directx_gpu_present())
 
     def _torch_cuda_ver() -> str:
         try:
@@ -468,7 +512,30 @@ def _ensure_all_dependencies() -> None:
                     os.environ["_ORT_GPU_REEXEC"] = "1"
                     os.execv(sys.executable, [sys.executable] + sys.argv)
     else:
-        _install_ort_cpu()
+        if _need_dml:
+            # v1.14.75 — GPUِ ویندوزیِ غیرِ CUDA (AMD/Intel): DirectML
+            print("[*] GPU (DirectML) رویِ ویندوز پیدا شد؛ نصبِ onnxruntime-directml ...")
+            _pip_uninstall("onnxruntime", "onnxruntime-gpu")
+            if _pip_install("onnxruntime-directml"):
+                _clear_ort_modules()
+                try:
+                    import onnxruntime as _ort2
+                    prov2 = list(_ort2.get_available_providers())
+                    if "DmlExecutionProvider" in prov2:
+                        if os.environ.get("_ORT_DML_REEXEC") != "1" and \
+                                os.environ.get("_ORT_GPU_REEXEC") != "1":
+                            print("[*] راه‌اندازیِ مجددِ پروسه برایِ بارگذاریِ DirectML DLLs ...")
+                            os.environ["_ORT_DML_REEXEC"] = "1"
+                            os.execv(sys.executable, [sys.executable] + sys.argv)
+                    else:
+                        print(f"    [!] DirectML در providers نیست ({prov2}) → CPU")
+                except Exception as e:
+                    print(f"    [!] import ort پسِ DML: {e} → CPU")
+            else:
+                print("    [!] نصبِ onnxruntime-directml ناموفق → onnxruntime (CPU)")
+                _pip_install("onnxruntime")
+        else:
+            _install_ort_cpu()
 
     print("[+] بررسی وابستگی‌ها تمام شد.\n")
 
@@ -7587,6 +7654,42 @@ class MangaTranslator:
                     core = core | (_dark & _nc)
             else:
                 core = _dark
+                # v1.14.75 — متنِ تیره با دورخطِ روشن (حروفِ قهوه‌ایِ
+                # 01.jpg با دورخطِ سفید روی حبابِ زرد): بدنهٔ روشنِ
+                # دورخطِ چسبیده به حروف هم جوهر است؛ وگرنه فقط خطِ
+                # تیره پاک می‌شود و شبحِ سفیدِ دورخطِ حروف می‌ماند
+                # (متریکِ VLM: متنِ خوانا ماند!).
+                if _fb > 0.004:
+                    # v1.14.75c — دورخطِ روشنِ متنِ تیره (حبابِ سفیدِ کلاسیک
+                    # «This is great, Butler-kun!!» در 01.jpg): دیلیتِ ۷
+                    # بدنهٔ سفیدِ دورِ حروفِ تیره را کامل نمی‌گیرد (شبقِ
+                    # سفید در خروجی). هم‌چنین پیکسل‌هایِ روشنِ تنگِ جدا که
+                    # به قطعهٔ حروفِ تیره نزدیک‌اند (فاصلهٔ ≤۱۱px) هم جزو
+                    # نوار — فاصلهٔ بینِ خط‌ها معمولاً ≥۱۴px است.
+                    _nb = cv2.dilate(core.astype(np.uint8) * 255,
+                                     np.ones((5, 5), np.uint8)) > 0
+                    _brw = cv2.dilate(_bright.astype(np.uint8) * 255,
+                                      np.ones((3, 3), np.uint8))
+                    _nz2b, _lab2b, _st2b, _ = cv2.connectedComponentsWithStats(
+                        _brw, connectivity=8)
+                    for _ci2b in range(1, _nz2b):
+                        _a2b = int(_st2b[_ci2b, cv2.CC_STAT_AREA])
+                        _cw2b = int(_st2b[_ci2b, cv2.CC_STAT_WIDTH])
+                        _ch2b = int(_st2b[_ci2b, cv2.CC_STAT_HEIGHT])
+                        if _a2b <= 4 or max(_cw2b, _ch2b) > 3.0 * max(8.0, lh):
+                            continue
+                        _m2b = (_lab2b == _ci2b)
+                        if bool((_m2b & _nb).any()):
+                            core = core | _bright
+                            break
+                        _near2b = cv2.dilate(core.astype(np.uint8) * 255,
+                                             np.ones((11, 11), np.uint8)) > 0
+                        if bool((_m2b & _near2b).any()):
+                            core |= _m2b
+                if _fb > 0.004:
+                    _nc = cv2.dilate(core.astype(np.uint8) * 255,
+                                     np.ones((7, 7), np.uint8)) > 0
+                    core = core | (_dark & _nc)
             # نوارِ خط عمدتاً زمینه است؛ اگر بیشترِ نوار «جوهر» باشد یعنی
             # هنر/بلوکِ تیره است — نه خطِ متن → فال‌بک
             if float(core.mean()) > 0.42:
@@ -8036,53 +8139,60 @@ class MangaTranslator:
                     _ink2 = MangaTranslator._ink_absorb_mask(
                         image, _rm, _polys_raw, band=14,
                         box=tuple([int(v) for v in region.rect]), levels=3)
-                    if _ink2 is not None and np.any(_ink2):
-                        # v1.14.47: همان قانونِ محفظهٔ باکنتراست برای مسیرِ
-                        # پالی‌هایِ معمولی
-                        # v1.14.48: متنِ آزادِ گرادیانی هم ماسکِ تنگ
-                        if self._ink_tight_ok(
-                                image, _rm, _ink2, _polys_raw):
-                            # v1.14.59 — همان قانونِ محفظهٔ تیره برای مسیرِ پالی‌ها
-                            # v1.14.62b — force-box فقط برای زمینهٔ «تیره»؛
-                            # پنجره‌هایِ آبیِ روشن ([SPECIAL CHANGES]) بلوکِ
-                            # کامل نشوند — LaMaِ کلِ بلوک + اسنپ‌شاتِ کثیف
-                            # (که هنوز متن دارد) = متنِ شبح. زمینهٔ روشن →
-                            # مسیرِ عادی با ماسکِ سخاوتمند ∪ جوهر.
-                            if (getattr(self, "use_lama", False)
-                                    and self._clean_level() != "fast"
-                                    and self._ink_bg_dark(image, _ink2)):
-                                _rm = cv2.bitwise_or(_rm, _ink2)
-                                try:
-                                    _ys2, _xs2 = np.nonzero(_rm)
-                                    self._lama_force_rect_boxes.append(
-                                        [int(_xs2.min()), int(_ys2.min()),
-                                         int(_xs2.max()) + 1,
-                                         int(_ys2.max()) + 1])
-                                except Exception:
-                                    pass
-                            elif getattr(self, "use_lama", False):
-                                _rm = cv2.bitwise_or(_rm, _ink2)
-                            else:
-                                _rm = _ink2
-                        elif self._free_text_tight_ok(
-                                image, _rm, _ink2, _polys_raw):
-                            _rm = _ink2
-                        else:
-                            _rm = cv2.bitwise_or(_rm, _ink2)
-                            # v1.14.59 — متنِ روشن روی محفظهٔ تیره → اجباری LaMa
-                            if (getattr(self, "use_lama", False)
-                                    and self._clean_level() != "fast"
-                                    and self._ink_is_light(image, _ink2)):
-                                try:
-                                    _ys2, _xs2 = np.nonzero(_rm)
-                                    self._lama_force_rect_boxes.append(
-                                        [int(_xs2.min()), int(_ys2.min()),
-                                         int(_xs2.max()) + 1,
-                                         int(_ys2.max()) + 1])
-                                except Exception:
-                                    pass
                 except Exception:
-                    pass
+                    _ink2 = None
+                if _ink2 is not None and np.any(_ink2):
+                    # v1.14.47: همان قانونِ محفظهٔ باکنتراست برای مسیرِ
+                    # پالی‌هایِ معمولی
+                    # v1.14.48: متنِ آزادِ گرادیانی هم ماسکِ تنگ
+                    if self._ink_tight_ok(
+                            image, _rm, _ink2, _polys_raw):
+                        # v1.14.59 — همان قانونِ محفظهٔ تیره برای مسیرِ پالی‌ها
+                        # v1.14.62b — force-box فقط برای زمینهٔ «تیره»؛
+                        # پنجره‌هایِ آبیِ روشن ([SPECIAL CHANGES]) بلوکِ
+                        # کامل نشوند — LaMaِ کلِ بلوک + اسنپ‌شاتِ کثیف
+                        # (که هنوز متن دارد) = متنِ شبح. زمینهٔ روشن →
+                        # مسیرِ عادی با ماسکِ سخاوتمند ∪ جوهر.
+                        if (getattr(self, "use_lama", False)
+                                and self._clean_level() != "fast"
+                                and self._ink_bg_dark(image, _ink2)):
+                            _rm = cv2.bitwise_or(_rm, _ink2)
+                            try:
+                                _ys2, _xs2 = np.nonzero(_rm)
+                                self._lama_force_rect_boxes.append(
+                                    [int(_xs2.min()), int(_ys2.min()),
+                                     int(_xs2.max()) + 1,
+                                     int(_ys2.max()) + 1])
+                            except Exception:
+                                pass
+                        elif getattr(self, "use_lama", False):
+                            _rm = cv2.bitwise_or(_rm, _ink2)
+                        else:
+                            _rm = _ink2
+                    elif self._free_text_tight_ok(
+                            image, _rm, _ink2, _polys_raw):
+                        _rm = _ink2
+                    else:
+                        _rm = cv2.bitwise_or(_rm, _ink2)
+                        # v1.14.59 — متنِ روشن روی محفظهٔ تیره → اجباری LaMa
+                        # v1.14.75 — «متنِ روشن» کافی نیست؛ زمینه هم باید
+                        # واقعاً تیره باشد (_ink_bg_dark). حبابِ سفیدِ
+                        # بزرگِ 01.jpg («THE VILLA'S POOL…») متنِ سره
+                        # دارد ولی زمینه حباب «روشن» است → کولرِ
+                        # _ink_is_light کلِ حباب را force-box می‌کرد و
+                        # کامپوز، حباب را کلاً از عکسِ خرابِ اول می‌آورد.
+                        if (getattr(self, "use_lama", False)
+                                and self._clean_level() != "fast"
+                                and self._ink_is_light(image, _ink2)
+                                and self._ink_bg_dark(image, _ink2)):
+                            try:
+                                _ys2, _xs2 = np.nonzero(_rm)
+                                self._lama_force_rect_boxes.append(
+                                    [int(_xs2.min()), int(_ys2.min()),
+                                     int(_xs2.max()) + 1,
+                                     int(_ys2.max()) + 1])
+                            except Exception:
+                                pass
                 # v1.14.48: دیوارِ حباب/کادر از ماسک جدا شود
                 try:
                     _rm = self._carve_structural_walls(
@@ -10020,11 +10130,20 @@ class MangaTranslator:
         نتیجه: دیوار/زمینه/هنرِ دورِ متن همیشه پیکسل‌به‌پیکسل از عکسِ
         اصلیِ دوم می‌ماند و فقط محلِ متن با نسخهٔ پاک‌شده جایگزین می‌شود."""
         try:
+            # v1.14.76 — «صفرِ شوِرَه»: ماسکِ پایه (که enclosure/پرِ فوری
+            # کلِ حباب را دارد) نقطهٔ شروعِ کامپوز نمی‌شود. اگر نقطهٔ
+            # شروعِ «پایهٔ کامل» باشد، هر نواحی از حباب بیرونِ نوارهایِ
+            # خط (دیوار، زمینهٔ گرادیانی) در ماسک می‌ماند و کلِ حباب از
+            # عکسِ پاک‌شده (donor) به عکسِ دوم منتقل می‌شود — اعتراضِ کاربر:
+            # «مگ داری کل حباب انتقال میدی؟؟» (نمونه: حبابِ زردِ img1).
+            # حالا شروع = خالی؛ سپس هر ناحیه دقیقاً نوارهایِ خط‌به‌خط
+            # خودش را می‌گیرد. ناحیه‌هایِ بدونِ نوار (بنر/متنِ آزاد) به
+            # ماسکِ خامِ محدودِ ناحیهٔ خودشان برمی‌گردند.
             base = getattr(self, "_compose_text_mask", None)
-            if base is None or base.shape != mask.shape[:2]:
-                out = (mask > 0)
-            else:
-                out = (base > 0)
+            _raw = (mask > 0) if (base is None
+                                  or base.shape != mask.shape[:2]) \
+                else (base > 0)
+            out = np.zeros_like(_raw)
             h, w = mask.shape[:2]
             # v1.14.70 — «نه بیشتر نه کمتر»: برایِ هر ناحیه‌ای که پالیِ
             # OCR دارد، نوارهایِ خط‌به‌خط (اندازهٔ دقیقِ حروف) جایِ
@@ -10089,6 +10208,9 @@ class MangaTranslator:
                 _x1 = min(w, _rx + _rw2 + 7)
                 _y1 = min(h, _ry + _rh2 + 7)
                 if _x1 > _x0 and _y1 > _y0:
+                    # v1.14.76 — ناحیهٔ بی‌نوار (متنِ آزاد/بنر): ماسکِ خام
+                    # فقط داخلِ ناحیهٔ خودش برمی‌گردد (نه کلِ صفحه).
+                    out[_y0:_y1, _x0:_x1] |= _raw[_y0:_y1, _x0:_x1]
                     _sweep[_y0:_y1, _x0:_x1] |= (out[_y0:_y1, _x0:_x1])
             self._compose_sweep_mask = _sweep
             if _n_str and self.debug:
@@ -10214,6 +10336,7 @@ class MangaTranslator:
         try:
             if mask is None or not np.any(mask):
                 return composed
+            _pdbg = bool(os.environ.get("MANGA_POLISH_DBG"))
             m = (mask > 0).astype(np.uint8)
             n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
             if n <= 1:
@@ -10278,8 +10401,24 @@ class MangaTranslator:
                     rmed = float(np.median(rv))
                     rstd = float(np.std(rv))
                 # v1.14.73 — گیت‌های فلتنِ «کلِ نوار»:
-                #  الف) حلقهٔ اورجینال یکنواخت (rstd≤۱۰ — حبابِ سفید/رنگیِ
-                #     تخت که حلقه‌اش داخلِ حباب است)
+                # v1.14.75e — آمارِ حلقه از «عکسِ اورجینال» گرفته شود نه
+                # خروجی — پرِ LaMa (در خروجی) حلقه را آلوده می‌کند و
+                # متادیتای هر پولیشِ درست را خراب می‌کند.
+                try:
+                    _rimg = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                    _rv_o = _rimg[y0:y1, x0:x1][ring]
+                    if _rv_o.size >= 40:
+                        rmed = float(np.median(_rv_o))
+                        rstd = float(np.std(_rv_o))
+                except Exception:
+                    pass
+                #  الف) حلقهٔ اورجینال یکنواخت — حبابِ سفید/رنگیِ تخت که
+                #     حلقه‌اش داخلِ حباب است.
+                #     v1.14.75 — یکنواختیِ «اکثریتِ» حلقه (≥۷۵٪ در ±۱۲ از
+                #     میانهٔ حلقه) کافی است؛ رینگِ حبابِ سفیدِ بزرگِ 01.jpg
+                #     لبهٔ هنرِ استخر را هم می‌گیرد و rstd کل را بالا می‌برد
+                #     — اقلیتِ هنر نباید فلتِ نوار را بلاک کند وگرنه شبحِ
+                #     محوِ متن زنده می‌ماند.
                 #  ب) خودِ نوار «اکثریت‌یکنواخت» (≥۸۰٪ نزدیکِ میانهٔ خودش)
                 #     — برای بلوک‌هایِ بزرگ (ماسکِ بلوک/حبابِ زرد) که حلقه‌شان
                 #     هنر است و گیتِ الف نمی‌گیرد؛ اقلیتِ باقی‌مانده =
@@ -10287,7 +10426,21 @@ class MangaTranslator:
                 _can_flat = False
                 if rstd is not None and rstd <= 10.0:
                     _can_flat = True
-                else:
+                elif rstd is not None and rstd <= 60.0:
+                    # v1.14.75 — اکثریتِ یکنواختِ حلقه (حباب با لبهٔ هنر):
+                    try:
+                        _rvv = rg[ring]
+                        _rmv = float(np.median(_rvv))
+                        if float((np.abs(_rvv.astype(np.float32) - _rmv)
+                                  <= 12.0).mean()) >= 0.75:
+                            _can_flat = True
+                    except Exception:
+                        pass
+                if not _can_flat and _pdbg:
+                    print(f"  [dbg-polish] comp x={x} y={y} {w}x{h} "
+                          f"rstd={rstd if rstd is None else round(rstd,2)} "
+                          f"ring_n={_ring_n}")
+                if not _can_flat:
                     # v1.14.73b — گیتِ «اکثریت‌یکنواخت» فقط برای نوارهایِ
                     # «داخلِ حباب» (donor box)؛ نوارِ رویِ هنرِ بیرون (راوی
                     # رویِ زمین/پرده) فلت شود = میلهٔ رنگیِ تخت (img4).
@@ -10318,10 +10471,15 @@ class MangaTranslator:
                     # شکلِ حروف) تا ~۱۳px بیرونِ نوار می‌ریزد (نمونهٔ
                     # حبابِ زرد: «Alright! I'll increase…» خوانا ماند) —
                     # با فلت‌کردنِ فقط ۵px زنده می‌ماند.
+                    # v1.14.75 — شبحِ داخلِ نوارهایِ بزرگِ بلوکی حبابِ زرد
+                    # (لکههای تیرهٔ تیره‌تر از زمینه) با ۱۳px هم اسمش نمی‌شد
+                    # چون گیتِ رنگِ ±۲۶ حفره‌ها را نمی‌گرفت — دیلیتِ ۱۷ +
+                    # گیتِ رنگِ آماری: پیکسلی که «آوتلایرِ» توزیعِ سایهٔ
+                    # نوار است (bis basal) هم داخلِ فلتن.
                     _flat_dom = cv2.dilate(
                         subm.astype(np.uint8),
                         cv2.getStructuringElement(
-                            cv2.MORPH_ELLIPSE, (13, 13))) > 0
+                            cv2.MORPH_ELLIPSE, (17, 17))) > 0
                     # v1.14.73d — گیتِ رنگ: فقط پیکسل‌هایِ «هم‌رنگِ نوار»
                     # فلت می‌شوند — دیوارِ ضخیم/خشنِ بیرونِ protect (خطِ
                     # دست‌کشیدهٔ کیمتسو) و هنرِ چسبیده به نوار محفوظ می‌مانند.
@@ -10339,11 +10497,33 @@ class MangaTranslator:
                     except Exception:
                         pass
                     if int(np.count_nonzero(_flat_dom)) >= 20:
-                        # رنگِ فلتن = رنگِ «اکثریتِ» خودِ نوار (میانه) — نه
-                        # حلقه؛ چون نوارهایِ بلوکی حلقه‌شان هنر است. میانه به
-                        # اقلیتِ جوهرِ شبحِ باقی‌مانده مقاوم است. برای نوارهای
-                        # سالم این همان رنگِ حلقهٔ اورجینال درمی‌آید.
-                        fillc = np.median(sub[_flat_dom].astype(np.float32), axis=0)
+                        # v1.14.75 — رنگِ فلتن از «حلقهٔ اورجینال» گرفته می‌شود
+                        # نه از خودِ نوار: اگر LaMa نوار را با رنگِ کمی غلط
+                        # پر کرده باشد (لگهٔ روشنِ حبابِ زردِ 01.jpg / لگهٔ
+                        # سرخِ کارتِ 890fb1)، میانهٔ خودِ نوار همان رنگِ غلط
+                        # را تثبیت می‌کرد. حلقهٔ اورجینال (پیکسل‌هایِ عکسِ
+                        # اصلیِ اطرافِ نوار) = رنگِ واقعیِ زمینهٔ حباب.
+                        # فال‌بک: اگر حلقه‌ی قابلِ اعتماد نبود، همان
+                        # میانهٔ خودِ نوار (رفتارِ قبلی).
+                        _refc = None
+                        try:
+                            _ring_u8 = ring.astype(np.uint8)
+                            if int(_ring_u8.sum()) >= 40:
+                                _ring_med = float(
+                                    np.median(rg[_ring_u8 > 0]))
+                                _ring_ok = float((np.abs(
+                                    rg[_ring_u8 > 0] - _ring_med)
+                                    <= 12.0).mean())
+                                if _ring_ok >= 0.75:
+                                    _refc = np.median(
+                                        sub[_ring_u8 > 0].astype(np.float32),
+                                        axis=0)
+                        except Exception:
+                            _refc = None
+                        if _refc is None:
+                            _refc = np.median(
+                                sub[_flat_dom].astype(np.float32), axis=0)
+                        fillc = _refc
                         _sF = sub.copy()
                         _sF[_flat_dom] = np.clip(
                             np.rint(fillc[None, None, :]), 0, 255).astype(np.uint8)
@@ -10376,7 +10556,8 @@ class MangaTranslator:
             return composed
 
     def _compose_two_image(self, donor: np.ndarray, original: np.ndarray,
-                           mask: np.ndarray) -> np.ndarray:
+                           mask: np.ndarray,
+                           verbose: bool = True) -> np.ndarray:
         """v1.14.54 — ترکیبِ «دو عکس» — عینِ ایدهٔ خودِ کاربر:
         «عکسِ اول متن‌هاش کامل بپاکه؛ اشکال نداره حباب خراب شه یا بیشتر پاک
         شه. بعد این ک کامل پاکیده شده به اندازهٔ همون متن خط به خط برش
@@ -10413,18 +10594,28 @@ class MangaTranslator:
                     _cmp &= (_wbC == 0)
             except Exception:
                 pass
+            try:
+                _dc2 = os.environ.get("MANGA_DUMP_CMP2", "")
+                if _dc2:
+                    cv2.imwrite(_dc2, (_cmp.astype(np.uint8)) * 255)
+                    for _fbX in (getattr(self, "_lama_force_rect_boxes",
+                                         None) or []):
+                        print(f"  [DBG-force] box={list(_fbX)}")
+            except Exception:
+                pass
             if not _cmp.any():
                 return np.ascontiguousarray(original)
             _out = np.ascontiguousarray(
                 np.where(_cmp[..., None], donor, original))
             try:
-                print(f"  [*] دو-عکسی: خروجی = عکسِ اصلی + "
-                      f"{int(_cmp.sum())}px نوارِ متنِ پاک‌شده")
-                # v1.14.74 — انتقالِ «همین لحظه، همین تصویر»: هر عکس بلافاصله
-                # بعد از پاک‌شدنش کامپوز می‌شود (نه اینکه همه در آخر بیایند) —
-                # درخواستِ کاربر: «دفعه اول هر عکس جدا انتقال بده».
-                print(f"  [*] v1.14.74: انتقالِ فوریِ همین صفحه — "
-                      f"عکسِ دوم = خروجیِ نهایی")
+                if verbose:
+                    print(f"  [*] دو-عکسی: خروجی = عکسِ اصلی + "
+                          f"{int(_cmp.sum())}px نوارِ متنِ پاک‌شده")
+                    # v1.14.74 — انتقالِ «همین لحظه، همین تصویر»: هر عکس بلافاصله
+                    # بعد از پاک‌شدنش کامپوز می‌شود (نه اینکه همه در آخر بیایند) —
+                    # درخواستِ کاربر: «دفعه اول هر عکس جدا انتقال بده».
+                    print(f"  [*] v1.14.74: انتقالِ فوریِ همین صفحه — "
+                          f"عکسِ دوم = خروجیِ نهایی")
             except Exception:
                 pass
             return _out
@@ -11551,6 +11742,18 @@ class MangaTranslator:
             print("  [!] Bubble interior sweep error:")
             _tb.print_exc()
 
+        # v1.14.75 — «گارانتیِ کامپوزِ دوباره»: بعدازِ همهٔ سویپ‌ها/سویپ
+        # نجات/پولیش، خروجیِ نهایی دوباره با _compose_two_image روی
+        # ماسکِ «کامپوزِ خط‌به‌خط» فیلتر می‌شود. قبلاً بعضی سویپ‌ها
+        # (بقایا/حباب/نجات) بیرونِ نوارِ متن هم پیکسل عوض می‌کردند و
+        # حباب — که عکسِ اولِ خرابش به خروجی نرسیده بود — برمی‌گشت
+        # (نمونهٔ 01.jpg: حبابِ سفیدِ بزرگِ «THE VILLA'S POOL…»)
+        try:
+            if _cmp2 is not None:
+                cleaned = self._compose_two_image(cleaned, image, _cmp2,
+                                                 verbose=False)
+        except Exception:
+            pass
         # v1.14.73 — پولیشِ نهاییِ نوارها — «بعد از» همهٔ سویپ‌ها:
         # حلقهٔ کاملاً یکنواخت (حبابِ سفید/رنگیِ تخت) → کلِ نوار + ۵px
         # هالهٔ دورِ آن با رنگِ اورجینالِ حلقه هم‌سطح می‌شود → شبحِ
@@ -11566,6 +11769,59 @@ class MangaTranslator:
                 cv2.imwrite(os.path.join(_sd, "post_polish.jpg"), cleaned)
             except Exception:
                 pass
+
+        # v1.14.75g — «پرِ پیازیِ نوارهایِ داخلِ حباب»: نوارهایِ متنِ
+        # داخل حباب (donor box) که پرِ LaMa رنگشان کمی غلط است
+        # (شبحِ سفیدِ «This is great» روی گرادیانِ آبی-سفید)، هم‌چنین
+        # حبابِ زردِ img1 که با TELEA سفید می‌شد (TELEA سفیدیِ شبح را
+        # به داخل پخش می‌کند): پیکسل‌های نوار از «پیکسل‌هایِ
+        # پس‌زمینهٔ اورجینالِ اطرافشان» پر می‌شوند — کامپوزِ گارانتی
+        # تضمین کرده هر پیکسلِ بیرونِ نوارِ داخلِ جعبه پیکسلِ
+        # اورجینال است. fill پیازی (هر دور، حاشیهٔ ناشناخته با
+        # میانگینِ همسایه‌هایِ شناخته 3×3): گرادیانِ رنگِ حباب دست
+        # نخورده ادامه می‌یابد و هیچ سفیدی وارد نمی‌شود. بیرونِ حباب
+        # (متن روی هنر) دست نمی‌خورد.
+        try:
+            if _cmp2 is not None:
+                _instrip = (_cmp2 > 0)
+                _inb = np.zeros(_instrip.shape, dtype=bool)
+                for _dbT in (getattr(self, "_donor_boxes", None) or []):
+                    _tx0, _ty0, _tx1, _ty1 = [int(v) for v in _dbT]
+                    _tx0 = max(0, _tx0); _ty0 = max(0, _ty0)
+                    _tx1 = min(cleaned.shape[1], _tx1)
+                    _ty1 = min(cleaned.shape[0], _ty1)
+                    if _tx1 - _tx0 >= 10 and _ty1 - _ty0 >= 10:
+                        _inb[_ty0:_ty1, _tx0:_tx1] = True
+                _sel = _instrip & _inb
+                if _sel.any():
+                    _known = (_inb & ~_instrip).astype(np.float32)
+                    _vals = cleaned.astype(np.float32).copy()
+                    _unk = _sel.copy()
+                    _it = 0
+                    while int(_unk.sum()) > 0 and _it < 400:
+                        _it += 1
+                        _wsum = cv2.boxFilter(_known, -1, (3, 3),
+                                              normalize=False)
+                        _new = (_wsum > 0) & _unk
+                        if not bool(_new.any()):
+                            break
+                        for _c in range(3):
+                            _sv = cv2.boxFilter(
+                                _vals[:, :, _c] * _known, -1, (3, 3),
+                                normalize=False)
+                            _vals[_new, _c] = (
+                                _sv[_new] / _wsum[_new])
+                        _known = np.maximum(_known, _new.astype(np.float32))
+                        _unk &= ~_new
+                    cleaned[_sel] = np.clip(
+                        np.rint(_vals[_sel]), 0, 255).astype(np.uint8)
+                    if self.debug:
+                        print(f"  [*] v1.14.75g: پرِ پیازیِ حباب = "
+                              f"{int(_sel.sum())}px ({_it} دور)")
+        except Exception:
+            pass
+
+            pass
 
         # v1.14.44: پاسِ K3 حذف شد — درخواستِ کاربر: «این خط خط چیه؛
         # mm خوب می‌پاکه». پاسِ هندسی K3 (v1.14.41) بعد از همهٔ پاس‌ها
