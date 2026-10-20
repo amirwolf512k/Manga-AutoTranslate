@@ -87,14 +87,20 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-x86_64.apk
           ls -la ../dist
 
-      - name: Prepare test assets (img5 webp + models)
+      - name: Prepare test assets (img5 webp + 01.jpg + models)
         run: |
           mkdir -p /tmp/mt/imgs /tmp/models
           UA="Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Mobile Safari/537.36"
           curl -sL --max-time 120 -A "$UA" -o /tmp/mt/imgs/img5.webp \
             "https://cdn.asurascans.com/asura-images/chapters/my-slain-dragon-bride/1/890fb1.webp?v=1787405548" || true
+          # v1.14.73 — درخواستِ کاربر: «این عکس اولی ناقص استخراج میشه و بد
+          # میپاکه رو گوشی — همین عکسو هم تست بزن» → examples/01.jpg هم
+          # روی امولاتور با گیتِ شمارشِ ناحیه‌ها اجرا می‌شود
+          curl -sL --max-time 120 -A "$UA" -o /tmp/mt/imgs/01.jpg \
+            "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/examples/01.jpg" || true
           ls -la /tmp/mt/imgs
           test -s /tmp/mt/imgs/img5.webp
+          test -s /tmp/mt/imgs/01.jpg
           curl -fL --retry 3 --max-time 300 -o /tmp/models/detector-v4-s_int8.onnx \
             "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/download/models/detector-v4-s_int8.onnx" || true
           curl -fL --retry 3 --max-time 600 -o /tmp/models/lama-manga-dyn.onnx \
@@ -201,6 +207,43 @@ jobs:
           sleep 10
           adb shell ls -la /sdcard/Download/manga/ | tee /tmp/emulout/dl_ls_run2.txt || true
           python3 .ci_scripts/check_logs.py
+          cp /tmp/emulout/* emul-artifacts/ || true
+
+      # ── v1.14.73 — گیتِ «استخراجِ کامل» با examples/01.jpg ─────
+      # درخواستِ کاربر: عکسِ اول روی گوشی ناقص استخراج و بد پاک می‌شد؛
+      # اینجا همان عکس روی امولاتورِ واقعی اجرا می‌شود و تعدادِ ناحیه‌های
+      # استخراج‌شده (≥۷ — روی PC با RapidOCR =۸) به‌علاوهٔ سلامتِ
+      # پاکسازی (بدون کرش) گیت می‌شود.
+      - name: Run APK with 01.jpg (extraction-completeness gate)
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          set -x
+          adb devices
+          adb push /tmp/mt/imgs/01.jpg /data/local/tmp/test2.jpg
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/test2.jpg > /data/user/0/com.amirwolf.mangatranslator/files/test2.jpg'"
+          adb shell am force-stop com.amirwolf.mangatranslator || true
+          sleep 3
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0nMS4wJyBlbmNvZGluZz0ndXRmLTgnIHN0YW5kYWxvbmU9J3llcycgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0Mi5qcGc8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX29ubHkiPnRydWU8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0id2ViX2RlYnVnIj50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX21ldGhvZCI+bGFtYS1tYW5nYTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJvdXRfZm10Ij5QREY8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0icmVhZGVyIj5ydGw8L3N0cmluZz4KICAgIDxib29sZWFuIG5hbWU9ImJhdHRlcnlfYXNrZWQiIHZhbHVlPSJ0cnVlIiAvPgogICAgPGJvb2xlYW4gbmFtZT0idmlld2VyX2hpbnRfdjMiIHZhbHVlPSJ0cnVlIiAvPgo8L21hcD4K | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+          adb logcat -c || true
+          adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+          sleep 15
+          adb shell pidof com.amirwolf.mangatranslator > /tmp/emulout/pid2.txt 2>&1 || true
+          adb logcat -d -t 600 > /tmp/emulout/logcat_start2.txt 2>/dev/null || true
+          adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt 2>/dev/null || true
+          sleep 5
+          python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr2_fail.png || true; adb pull /sdcard/scr2_fail.png /tmp/emulout/scr2_fail.png || true; adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_01.log || true; adb logcat -d -t 4000 > /tmp/emulout/logcat_fail2.txt || true; adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          python3 .ci_scripts/wait_done.py 60
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_01.log || true
+          adb shell "run-as com.amirwolf.mangatranslator ls -la files/work/out" | tee /tmp/emulout/out_ls2.txt || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test2.pdf > /tmp/emulout/test2_out.pdf || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test2_debug.pdf > /tmp/emulout/test2_debug.pdf || true
+          adb shell rm -f /data/local/tmp/test2.jpg || true
+          # گیت ۱: استخراجِ کامل (≥۷ ناحیه — PC با Paddle ONNX =۸)
+          python3 .ci_scripts/check_extract.py /tmp/emulout/manga_01.log 7
+          # گیت ۲: خروجی ساخته شده
+          test -s /tmp/emulout/test2_out.pdf
+          echo "[✓] 01.jpg emulator gate passed"
           cp /tmp/emulout/* emul-artifacts/ || true
 
       - name: Capture diagnostics (always on failure)
