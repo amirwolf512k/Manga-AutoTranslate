@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.73"
+APP_VER = "1.14.74"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -6291,35 +6291,131 @@ class MangaTranslator:
         except Exception:
             return None
 
-    def _expand_donor_to_bubble_interiors(self, image: np.ndarray,
-                                         mask: np.ndarray,
-                                         regions) -> np.ndarray:
-        """v1.14.73 — ماسکِ donor (عکسِ اول) برایِ ناحیه‌هایِ حبابی =
-        کلِ داخلِ حباب/جعبه (نه فقط نوارِ متن) — درخواستِ کاربر:
-        «پاکسازیم اول کل حباب پاک کنه بعد خط به خط انتقال بده عکس
-        دومی اینجوری باشه ها تمیز در بیاد».
-        چرا: LaMa با ماسکِ نوارِ تنگ، هاله/جوهرِ لبهٔ ماسک را از بیرون
-        «می‌بیند» و در بازسازی‌اش شبحِ متن را زنده نگه می‌دارد؛ با کلِ
-        داخل، مرزِ ماسک دور از متن است → بازسازیِ یکدست و بدونِ شبح.
-        ماسکِ کامپوز (self._compose_text_mask) جداگانه و خط‌به‌خط
-        می‌ماند → دیوارِ حبابِ عکسِ دوم سالم.
-        v1.14.71 از سیلابِ _bubble_interior_mask استفاده می‌کرد که وقتی
-        باکسِ دیتکتور نازک/ناقص بود (نشتِ سیلاب از لبهٔ کراپ) عملاً روی
-        هیچ حبابی جواب نمی‌داد → کل فیچر مرده بود. حالا: مستطیلِ
-        جمع‌شدهٔ خودِ باکس (پدِ ~۱۰٪) ∩ نزدیکیِ ماسکِ متن − نقشهٔ
-        protect (دیوار) — بدونِ سیلاب، مصون از نشت."""
+    def _expand_donor_text_strips(self, image: np.ndarray,
+                                  mask: np.ndarray,
+                                  regions) -> np.ndarray:
+        """v1.14.74 — ماسکِ donor (عکسِ اول) = «فقط نوارهایِ متن + پدِ
+        سخاوتمندانه» — نه کلِ داخلِ حباب. درخواستِ صریحِ کاربر:
+        «عکسِ اول متن‌هاش کامل بپاکه — اشکال نداره حباب خراب شه یا بیشتر
+        پاک شه. بعد خط به خط برش بخوره به عکسِ دوم بچسونه» +
+        «چرا کل حباب انتقال میدی؟ اگ یک کلمه کل حباب حساب میشه حروف به
+        حروف برش بزنه انتقال بده».
+
+        چرا کلِ داخلِ حباب (v1.14.71/73) بد بود:
+        ۱) LaMa با ماسکِ عظیمِ اینتریور، داخلِ حبابِ رنگی را با خمیرِ
+           خاکستریِ بی‌رنگ پر می‌کند (نمونهٔ 01.jpg: حبابِ زردِ
+           [125,235,253] → خاکستریِ [220,227,220] = «لگه») چون مرزِ ماسک
+           دور از زمینهٔ زرد است و LaMa رنگِ حباب را «زمینه» نمی‌بیند.
+        ۲) ماسکِ ۵-۱۰ برابری = LaMaی کند روی گوشی (لاگِ POCO: 93.9s برای
+           یک صفحه) + موج‌های «parallel rescue / LaMa group rejected».
+        با نوارِ متن + پد، پرِ LaMa از هر طرف با زمینهٔ اورجینالِ خودِ
+        حباب لنگر می‌شود (حبابِ زرد → پرِ زرد) و ماسک کوچک می‌ماند.
+        دیوارِ حباب در donor ممکن است بخورد — اشکالی ندارد: کامپوز فقط
+        نوارِ متن را منتقل می‌کند و دیوار همیشه از عکسِ دوم می‌آید
+        (گارانتیِ _compose_two_image با protect/wall_band).
+
+        نوارهایِ نجاتِ جوهرِ جا‌مانده (`_uncovered_ink_bands` — خطی که OCR
+        پالی‌اش را جا انداخته) مثل قبل به ماسک اضافه می‌شوند تا در donor
+        پاک شوند؛ فقط «افزودنِ کلِ اینتریور» حذف شد."""
         try:
             if mask is None or not np.any(mask):
                 self._donor_skip_ids = set()
                 self._donor_boxes = []
                 return mask
             h_img, w_img = image.shape[:2]
-            out = mask.copy()
+            _base_n = int(np.count_nonzero(mask))
+            # پدِ سخاوتمندانه دورِ نوارها: مرزِ ماسک رویِ زمینهٔ تمیز
+            # بیفتد نه رویِ هالهٔ جوهر → بازسازیِ LaMa شبح نمی‌گیرد.
+            # دیوار در donor آزاد است (بالا) ولی برای پرکننده‌هایِ فوری
+            # همان protect حفظ می‌شود تا پرِ تخت رویِ دیوار نسازد.
+            _pad = np.ones((9, 9), np.uint8)
+            out = cv2.dilate(mask, _pad)
             _protect = getattr(self, "_page_protect", None)
+            if _protect is not None and _protect.shape == out.shape:
+                out = cv2.bitwise_and(out, cv2.bitwise_not(_protect))
+            if not np.any(out):
+                out = mask.copy()
+            _added = int(np.count_nonzero(out)) - _base_n
+            # v1.14.74b — «اگ یک کلمه کل حباب حساب میشه حروف به حروف برش
+            # بزنه»: ناحیه‌هایِ «متنِ متراکم» (≥۳۴٪ پوششِ پالی‌ها — همان
+            # شرطِ _polys_denseِ سازندهٔ ماسک) در ماسکِ خام «مستطیلِ بلوک»
+            # می‌شوند که تقریباً کلِ داخلِ حباب است → LaMa با سوراخِ عظیم،
+            # داخلِ حبابِ زرد را خمیرِ خاکستری می‌کرد (نمونهٔ 01.jpg).
+            # در donor، بلوک با «نوارِ خط‌به‌خطِ جوهر + پد» جایگزین می‌شود
+            # (همان نوارهایی که کامپوز منتقل می‌کند) + جوهرِ واقعیِ اطراف
+            # (تیره یا روشن) تا هیچ مرکبِ جا‌مانده‌ای زنده نماند.
+            try:
+                _k11 = np.ones((11, 11), np.uint8)
+                for region in (regions or []):
+                    try:
+                        _pl74 = []
+                        for _p74 in (getattr(region, "ocr_polys", None)
+                                     or []):
+                            try:
+                                _pp74 = np.asarray(
+                                    _p74, dtype=np.float32).reshape(-1, 2)
+                            except Exception:
+                                continue
+                            if _pp74.shape[0] >= 3:
+                                _pl74.append(_pp74)
+                        if len(_pl74) < 2:
+                            continue
+                        if not MangaTranslator._polys_dense(_pl74):
+                            continue
+                        _res74 = self._compose_region_strips(image, region)
+                        _st74 = None
+                        if _res74:
+                            _m74, _f74 = _res74[0], _res74[1]
+                            if _m74 is None or _m74.shape != out.shape:
+                                _m74 = np.zeros(out.shape, np.uint8)
+                            if _f74 is None or _f74.shape != out.shape:
+                                _f74 = np.zeros(out.shape, np.uint8)
+                            _st74 = (_m74 > 0) | (_f74 > 0)
+                        if _st74 is None or not _st74.any():
+                            continue
+                        _bb74 = MangaTranslator._text_block_box(
+                            _pl74, region.rect, False)
+                        if not _bb74:
+                            continue
+                        # خروجیِ _text_block_box = (x, y, w, h)
+                        _zx0 = max(0, int(_bb74[0]))
+                        _zy0 = max(0, int(_bb74[1]))
+                        _zx1 = min(w_img, _zx0 + int(_bb74[2]))
+                        _zy1 = min(h_img, _zy0 + int(_bb74[3]))
+                        if _zx1 - _zx0 < 24 or _zy1 - _zy0 < 24:
+                            continue
+                        _keep74 = cv2.dilate(
+                            _st74.astype(np.uint8), _k11) > 0
+                        # جوهرِ واقعیِ داخلِ بلوک (تیره یا روشن) که نوارها
+                        # نپوشانده‌اند — نوارِ نجاتِ مکمل؛ دیوار (protect)
+                        # هرگز واردِ donor نمی‌شود.
+                        try:
+                            _oc74 = image[_zy0:_zy1, _zx0:_zx1]
+                            _g74 = cv2.cvtColor(_oc74, cv2.COLOR_BGR2GRAY)
+                            _med74 = float(np.median(_g74))
+                            _ink74 = ((_g74 < _med74 - 28.0)
+                                      | (_g74 > _med74 + 36.0))
+                            _ink74 = cv2.dilate(
+                                _ink74.astype(np.uint8),
+                                np.ones((7, 7), np.uint8)) > 0
+                            if _protect is not None \
+                                    and _protect.shape == out.shape:
+                                _ink74 &= (_protect[_zy0:_zy1,
+                                                    _zx0:_zx1] == 0)
+                            _keep74[_zy0:_zy1, _zx0:_zx1] |= _ink74
+                        except Exception:
+                            pass
+                        # جایگزینی: داخلِ بلوک فقط نوارها + جوهر می‌ماند
+                        out[_zy0:_zy1, _zx0:_zx1] = np.where(
+                            _keep74[_zy0:_zy1, _zx0:_zx1], 255, 0
+                        ).astype(out.dtype)
+                    except Exception:
+                        continue
+            except Exception:
+                pass
+            # جعبه‌هایِ جستجو برایِ نجاتِ جوهرِ جا‌مانده (مثلِ قبل:
+            # ناحیه ∩ داخلِ حباب) — فقط دامنهٔ «جستجو»، نه افزودنِ ماسک.
             _stored = getattr(self, "_page_bubble_boxes", None) or []
-            n_exp = 0
-            _added_total = 0
-            skip_ids = set()
             donor_boxes = []
             for region in (regions or []):
                 try:
@@ -6329,15 +6425,10 @@ class MangaTranslator:
                     if _dc in ("bubble", "text_bubble"):
                         box = (x, y, x + rw, y + rh)
                     else:
-                        # ناحیهٔ بدونِ کلاس (gap-OCR/free-text) → کوچک‌ترین
-                        # باکسِ نگه‌داشته‌شده که آن را دربر می‌گیرد
                         _cx, _cy = x + rw // 2, y + rh // 2
                         _best = None
                         for _sb in _stored:
                             _sx1, _sy1, _sx2, _sy2, _sc = _sb
-                            # v1.14.73b — فقط کلاس‌هایِ «حباب» معتبرند؛
-                            # جعبهٔ text_free (راوی روی هنر) گسترش نمی‌گیرد —
-                            # LaMa روی هنرِ بیرون، لکهٔ راه‌راه می‌سازد (img4)
                             if _sc not in ("bubble", "text_bubble"):
                                 continue
                             if (_sx2 - _sx1) < 24 or (_sy2 - _sy1) < 24:
@@ -6357,62 +6448,39 @@ class MangaTranslator:
                         if _best is not None:
                             box = _best[1]
                     if box is None:
-                        continue
+                        box = (x, y, x + rw, y + rh)
                     bx0, by0, bx1, by1 = box
                     bw, bh = bx1 - bx0, by1 - by0
-                    _pad = int(np.clip(min(bw, bh) * 0.10, 4, 14))
-                    ix0 = max(0, bx0 + _pad)
-                    iy0 = max(0, by0 + _pad)
-                    ix1 = min(w_img, bx1 - _pad)
-                    iy1 = min(h_img, by1 - _pad)
+                    _pad_b = int(np.clip(min(bw, bh) * 0.10, 4, 14))
+                    ix0 = max(0, bx0 + _pad_b)
+                    iy0 = max(0, by0 + _pad_b)
+                    ix1 = min(w_img, bx1 - _pad_b)
+                    iy1 = min(h_img, by1 - _pad_b)
                     if ix1 - ix0 < 24 or iy1 - iy0 < 24:
                         continue
-                    _cur = (out[iy0:iy1, ix0:ix1] > 0)
-                    if not _cur.any():
+                    if not (out[iy0:iy1, ix0:ix1] > 0).any():
                         continue
-                    _dil = cv2.dilate(_cur.astype(np.uint8),
-                                      np.ones((31, 31), np.uint8)) > 0
-                    _add = _dil.copy()
-                    if _protect is not None and _protect.shape == out.shape:
-                        _add &= (_protect[iy0:iy1, ix0:ix1] == 0)
-                    if not _add.any():
-                        continue
-                    _blk = out[iy0:iy1, ix0:ix1]
-                    _blk[_add] = 255
-                    n_exp += 1
-                    _added_total += int(_add.sum())
                     donor_boxes.append((ix0, iy0, ix1, iy1))
-                    # v1.14.73d — نجاتِ جوهرِ پوشش‌داده‌نشده در ماسکِ donor:
-                    # خطی که OCR پالی‌اش را جا انداخته، LaMa هم آن را نمی‌بیند
-                    # → نوارِ نجات به ماسک اضافه می‌شود تا در donor پاک شود.
+                    # نجاتِ جوهرِ پوشش‌داده‌نشده — خطی که OCR ندیده
                     try:
                         _bands = self._uncovered_ink_bands(
                             image, (ix0, iy0, ix1, iy1), out)
                         if _bands is not None:
-                            out[_bands > 0] = 255
-                            _added_total += int((_bands > 0).sum())
+                            _b_n = int((_bands > 0).sum())
+                            if _b_n:
+                                out[_bands > 0] = 255
+                                _added += _b_n
                     except Exception:
                         pass
-                    # v1.14.73b — فقط بلوک‌هایِ «بافت‌مند» پرِ فوری را رد
-                    # می‌کنند (LaMa بافت را بازسازی می‌کند). زمینهٔ صاف/گرادیانی
-                    # (کارتِ تیرهٔ Crimson Dragon): پرِ فوریِ گرادیانی تمیزتر
-                    # است و منطقِ جایگزینیِ v1.14.62 کار می‌کند.
-                    # بافت روی «داخلِ باکس» سنجیده می‌شود نه حلقهٔ دورش —
-                    # جعبهٔ سیاهِ وسطِ هنر: داخل صاف، دور بافت‌مند.
-                    try:
-                        if MangaTranslator._box_bg_textured(
-                                image, bx0, by0, bx1, by1):
-                            skip_ids.add(int(getattr(region, "id", -1)))
-                    except Exception:
-                        skip_ids.add(int(getattr(region, "id", -1)))
                 except Exception:
                     continue
-            self._donor_skip_ids = skip_ids
+            self._donor_skip_ids = set()
             self._donor_boxes = donor_boxes
-            if n_exp and getattr(self, "debug", False):
+            if getattr(self, "debug", False):
                 try:
-                    print(f"  [*] v1.14.73: donor = کلِ داخلِ {n_exp} "
-                          f"حباب/جعبه (+{_added_total}px)")
+                    print(f"  [*] v1.14.74: donor = فقط نوارِ متن + پد "
+                          f"(+{_added}px) — کلِ حباب LaMa نمی‌شود"
+                          f" | {len(donor_boxes)} جعبهٔ نجاتِ جوهر")
                 except Exception:
                     pass
             return out
@@ -10296,62 +10364,13 @@ class MangaTranslator:
                                     ).astype(np.uint8)
                 sub[:] = _s
                 out[y0:y1, x0:x1] = sub
-            # v1.14.73c — «حبابِ تخت = کاملاً تمیز»: برایِ هر حباب/جعبهٔ
-            # donor که زمینهٔ داخلش «تخت» است (سفید/زرد/تینتِ رنگی — بدونِ
-            # گرادیان و بافت)، کلِ داخلِ حباب با رنگِ اورجینالِ خودِ حباب
-            # هم‌سطح می‌شود → هر «اثرِ فشردنِ جوهر»ی (شبحِ ۴-۱۵ سطحی) در
-            # هر جای حباب — بینِ نوارها، دورِ نوارها — صفر می‌شود.
-            # دیوار/دُم/کادر با protect/wall_band بیرون می‌مانند.
-            try:
-                for _db3 in (getattr(self, "_donor_boxes", None) or []):
-                    try:
-                        bx0, by0, bx1, by1 = (int(_db3[0]), int(_db3[1]),
-                                              int(_db3[2]), int(_db3[3]))
-                        if bx1 - bx0 < 24 or by1 - by0 < 24:
-                            continue
-                        if MangaTranslator._box_bg_textured(
-                                image, bx0, by0, bx1, by1):
-                            continue  # بافت/گرادیان → دستِ LaMa
-                        # زمینهٔ تخت؟ — خوشهٔ غالبِ سه‌کاناله (v1.14.73c)
-                        _st3 = MangaTranslator._box_bg_stats(
-                            image, bx0, by0, bx1, by1)
-                        if _st3 is None:
-                            continue
-                        _frac3, _cstd3, _hf3, fillc3 = _st3
-                        if _cstd3 > 8.0:
-                            continue  # گرادیانِ رنگی → فلت نکن
-                        if _hf3 >= 0.05:
-                            continue  # بافت (سکرین‌تون/دات) → فلت نکن
-                        dom3 = np.ones(
-                            (by1 - by0, bx1 - bx0), bool)
-                        # v1.14.73d — «شکلِ حباب» بدون سیلاب: فقط پیکسل‌هایِ
-                        # هم‌رنگِ زمینهٔ حباب (خوشهٔ ±۲۴) فلت می‌شوند —
-                        # گوشه‌های باکسِ بیضی (هنرِ بیرون) و دیوارِ ضخیم،
-                        # رنگ‌شان فرق دارد → محفوظ می‌مانند.
-                        try:
-                            _oc3 = image[by0:by1, bx0:bx1]
-                            _col_ok3 = (np.abs(
-                                _oc3.astype(np.float32)
-                                - fillc3[None, None, :]) <= 24.0).all(axis=2)
-                            dom3 &= _col_ok3
-                        except Exception:
-                            pass
-                        for _pm3 in (getattr(self, "_page_protect", None),
-                                     getattr(self, "_page_wall_band", None)):
-                            if _pm3 is not None \
-                                    and _pm3.shape == out.shape[:2]:
-                                dom3 &= (_pm3[by0:by1, bx0:bx1] == 0)
-                        if int(np.count_nonzero(dom3)) < 200:
-                            continue
-                        sub3 = out[by0:by1, bx0:bx1]
-                        sub3[dom3] = np.clip(
-                            np.rint(fillc3[None, None, :]), 0,
-                            255).astype(np.uint8)
-                        out[by0:by1, bx0:bx1] = sub3
-                    except Exception:
-                        continue
-            except Exception:
-                pass
+            # v1.14.74 — «فلتنِ کلِ داخلِ حباب» (v1.14.73c) حذف شد:
+            # کاربر: «عکسِ دوم حبابش پاک نشه» — در خروجی فقط نوارِ متن
+            # مجاز به تغییر است. فلتنِ کلِ اینتریور حتی با «گیتِ رنگ»،
+            # هرگاه LaMa داخل را با رنگِ غلط پر کرده بود همان رنگِ غلط
+            # را تثبیت می‌کرد (نمونهٔ 01.jpg: حبابِ زرد → خاکستریِ تخت).
+            # شبحِ بینِ نوارها را «پولیشِ نوار + ۱۳px» و جارویِ بقایا
+            # می‌برند؛ زمینهٔ حباب همیشه پیکسلِ اورجینال می‌ماند.
             return out
         except Exception:
             return composed
@@ -10401,6 +10420,11 @@ class MangaTranslator:
             try:
                 print(f"  [*] دو-عکسی: خروجی = عکسِ اصلی + "
                       f"{int(_cmp.sum())}px نوارِ متنِ پاک‌شده")
+                # v1.14.74 — انتقالِ «همین لحظه، همین تصویر»: هر عکس بلافاصله
+                # بعد از پاک‌شدنش کامپوز می‌شود (نه اینکه همه در آخر بیایند) —
+                # درخواستِ کاربر: «دفعه اول هر عکس جدا انتقال بده».
+                print(f"  [*] v1.14.74: انتقالِ فوریِ همین صفحه — "
+                      f"عکسِ دوم = خروجیِ نهایی")
             except Exception:
                 pass
             return _out
@@ -10535,30 +10559,22 @@ class MangaTranslator:
         # متن را می‌گیرد، نه کلِ حباب/محفظه/پیکسل‌هایِ تغییرکردهٔ پراکنده.
         self._compose_text_mask = mask.copy()
 
-        # v1.14.71 — درخواستِ کاربر: «پاکسازیم اول کل حباب پاک کنه بعد خط
-        # به خط انتقال بده عکس دومی» — ماسکِ تمیزکاریِ عکسِ اول (donor)
-        # برایِ ناحیه‌هایِ حبابی = کلِ داخلِ حباب (نه فقط نوارِ متن) تا
-        # «لگِ سیاه/متنِ قبلیِ» لبهٔ ماسک نماند و نوارِ برش‌خورده کاملاً
-        # تمیز باشد. ماسکِ کامپوز (خط‌به‌خط، فقط جایِ متن) دست‌نخورده
-        # می‌ماند → حبابِ عکسِ دوم سالم.
+        # v1.14.74 — درخواستِ نهاییِ کاربر: «عکسِ اول متن‌هاش کامل بپاکه —
+        # اشکال نداره حباب خراب شه یا بیشتر پاک شه. بعد خط به خط برش
+        # بخوره به عکسِ دوم بچسونه جایِ متن‌هایِ اصلی‌شون. عکسِ دوم باید
+        # خروجی بشه» + «چرا کل حباب انتقال میدی؟ حروف به حروف برش بزنه».
+        # ماسکِ donor = فقط نوارِ متن + پدِ سخاوتمندانه (+ نجاتِ جوهرِ
+        # جا‌مانده). «کلِ داخلِ حباب» (v1.14.71/73) حذف شد: LaMa داخلِ
+        # حبابِ رنگی را خمیرِ خاکستری می‌کرد («لگه») و روی گوشی کند بود.
         try:
-            mask = self._expand_donor_to_bubble_interiors(
+            mask = self._expand_donor_text_strips(
                 image, mask, regions)
         except Exception:
             pass
-        # v1.14.73 — در حالتِ کیفی (LaMa)، ناحیه‌هایِ donor-گسترش‌یافته
-        # پرکردنِ فوری نمی‌گیرند → کلِ داخل با LaMa بازسازی می‌شود
-        # (بافت/گرادیان حفظ می‌شود — «لگِ سیاهِِ پرکنندهٔ تخت» نمی‌ماند)
-        # و اسنپ‌شاتِ ضدلکهٔ v1.14.62 هم «متنِ اصلی» را دارد نه پرِ فوری را
+        # v1.14.74 — donor دیگر اینتریور ندارد → هیچ ناحیه‌ای از پرکردنِ
+        # فوری مستثنا نیست (پرِ فلت برای حبابِ تخت، LaMa برای بافت —
+        # همان مسیرِ همیشگیِ سبکِ پاکسازی).
         _donor_skip = None
-        try:
-            _donor_skip = (getattr(self, "_donor_skip_ids", None)
-                           if (getattr(self, "_donor_skip_ids", None)
-                               and bool(getattr(self, "use_lama", False))
-                               and self._clean_level() != "fast")
-                           else None)
-        except Exception:
-            _donor_skip = None
 
         # v1.14.59 — بلوک‌هایِ «متنِ روشن روی محفظهٔ تیره» (کارتِ عنوانِ
         # Crimson Dragon و امثالش): هرچه کارو/کلیپِ حباب/پروتکت از ماسک
@@ -11466,10 +11482,18 @@ class MangaTranslator:
         _kern_r = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (9, 9))
         try:
             _n_res = 0
+            # v1.14.74 — «سریع بپاکه بره دیگ»: بعد از کامپوزِ دو-عکسی،
+            # دیگر هیچ «نجاتِ LaMa»ای اجرا نمی‌شود (موج‌هایِ «parallel
+            # rescue patches» و «LaMa group rejected … منتظر می‌مونه» روی
+            # گوشی ۵ دقیقه معطل می‌کردند). کیفیتِ نوارها در donor، قبل
+            # از کامپوز تضمین شده (پرکنندهٔ فلت/LaMa + پولیشِ نوار)؛
+            # جارویِ بقایا فقط با TELEA/پرِ فلتِ سریع کار می‌کند.
+            # برای آزمایشِ قدیمی: MANGA_RESCUE_LAMA=1
+            _rescue_lama = (os.environ.get("MANGA_RESCUE_LAMA", "0") == "1"
+                            and bool(getattr(self, "use_lama", False))
+                            and self._clean_level() != "fast")
             for _pass in range(3):
-                _want_lama = (_pass >= 1
-                              and bool(getattr(self, "use_lama", False))
-                              and self._clean_level() != "fast")
+                _want_lama = (_pass >= 1 and _rescue_lama)
                 _rboxes: List[Tuple[int, int, int, int, np.ndarray]] = []
                 # v1.14.63 — جاروی بقایا با «ماسکِ متنِ خام» نه ماسکِ
                 # کِیل‌شده: پرکننده‌هایِ فوری ماسک را کِیل می‌کنند و سویپ
