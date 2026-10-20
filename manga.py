@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.74"
+APP_VER = "1.14.80"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3268,6 +3268,11 @@ class TextRegion:
     det_class: str = ""
 
     ocr_polys: List[np.ndarray] = field(default_factory=list)
+
+    # v1.14.80 — وقتی راستی‌آزماییِ جوهر گفت «خطِ واقعی مسطح است»،
+    # رندر حق ندارد زاویه را دوباره از پالی‌ها بازنویسی کند (متنِ
+    # استایل‌دار/درخشان زاویهٔ کاذب می‌سازد؛ BLUE MOON/PURPLE MOON)
+    angle_flat_veto: bool = False
 
 
 class BalloonToneClassifier:
@@ -7350,6 +7355,33 @@ class MangaTranslator:
             # comp سوراخ‌اند!) تا ماسکِ حالتِ LaMaِ کیفیت توپر باشد — نه پنیرِ
             # سوری که حروفِ قدیمی را بیرون بگذارد (کارتِ عنوانِ Crimson Dragon)
             _crop_c = comp.astype(np.uint8) * 255
+            # v1.14.80 — stroke/glow رنگی دورِ حروف (RED MOON: حروفِ سفید
+            # با stroke قرمز روی texture آبی): enclosure فقط کامپوننتِ
+            # «تیره» را می‌گیرد و strokeِ رنگیِ وسطِ روشن جا می‌ماند →
+            # بقایای قرمز در خروجی. پیکسل‌هایِ رنگیِ «غیرِ پس‌زمینه»
+            # (فاصلهٔ hue از رنگِ اطرافِ متن) به محفظه اضافه می‌شوند.
+            try:
+                _hsv = cv2.cvtColor(image[wy0:wy1, wx0:wx1], cv2.COLOR_BGR2HSV)
+                _hue = _hsv[:, :, 0].astype(np.float32)
+                _sat = _hsv[:, :, 1]
+                _near13 = cv2.dilate(polyf, np.ones((13, 13), np.uint8))
+                _bg_m = ((_near13 > 0) & (polyf == 0) & (_sat > 60))
+                if np.count_nonzero(_bg_m) >= 50:
+                    _hue_bg = float(np.median(_hue[_bg_m]))
+                    _dh = np.abs(_hue - _hue_bg)
+                    _dh = np.minimum(_dh, 180.0 - _dh)
+                    _colorful = (((_sat > 80) & (_dh > 40.0)
+                                  & (_near13 > 0)).astype(np.uint8) * 255)
+                    _colorful = cv2.morphologyEx(
+                        _colorful, cv2.MORPH_CLOSE,
+                        np.ones((5, 5), np.uint8))
+                    _add = cv2.bitwise_and(
+                        _colorful,
+                        cv2.dilate(_crop_c, np.ones((15, 15), np.uint8)))
+                    if int(cv2.countNonZero(_add)) >= 40:
+                        _crop_c = cv2.bitwise_or(_crop_c, _add)
+            except Exception:
+                pass
             _ff = _crop_c.copy()
             _fm2 = np.zeros((_ff.shape[0] + 2, _ff.shape[1] + 2), np.uint8)
             cv2.floodFill(_ff, _fm2, (0, 0), 255)
@@ -10192,6 +10224,46 @@ class MangaTranslator:
                 out |= (_failed > 0)
                 _sweep |= (_strips > 0)
                 _sweep |= (_failed > 0)
+                # v1.14.78f — «بلوکِ باندِ تیره»: اگر متن روی باندِ
+                # نیمه‌شفافِ تیره باشد (PARAGRAPHهایِ img4 روی حصار)،
+                # donor کلِ باند را بازسازی کرده (پرکننده‌هایِ فوری/
+                # LaMa) ولی کامپوزِ فقط-نوار، باندِ تیرهٔ اورجینال را
+                # بینِ نوارها زنده نگه می‌دارد → «بلوک‌هایِ قاطیِ
+                # تکه‌تکه». راه‌حل: اگر زمینهٔ بلوک (بیرونِ نوارها)
+                # تیره باشد، کلِ مستطیلِ بلوک از donor می‌آید —
+                # حباب‌هایِ سفید (زمینهٔ روشن) هرگز وارد این مسیر
+                # نمی‌شوند (اعتراضِ «کلِ حباب را منتقل نکن» محفوظ است).
+                try:
+                    _brx, _bry, _brw, _brh = [int(v) for v in _rg.rect]
+                    _bx0 = max(0, _brx)
+                    _by0 = max(0, _bry)
+                    _bx1 = min(w, _brx + _brw)
+                    _by1 = min(h, _bry + _brh)
+                    if _bx1 - _bx0 >= 24 and _by1 - _by0 >= 14:
+                        _bl = (_strips[_by0:_by1, _bx0:_bx1] > 0) | \
+                              (_failed[_by0:_by1, _bx0:_bx1] > 0)
+                        _bld = cv2.dilate(
+                            _bl.astype(np.uint8),
+                            np.ones((7, 7), np.uint8)) > 0
+                        _bgo = cv2.cvtColor(
+                            image[_by0:_by1, _bx0:_bx1],
+                            cv2.COLOR_BGR2GRAY)
+                        _outb = (~_bld)
+                        if int(np.count_nonzero(_outb)) >= 200:
+                            _medb = float(np.median(_bgo[_outb]))
+                            if _medb < 140.0:
+                                out[_by0:_by1, _bx0:_bx1] = True
+                                _sweep[_by0:_by1, _bx0:_bx1] = True
+                                if self.debug:
+                                    try:
+                                        print(f"  [*] v1.14.78f: بلوکِ "
+                                              f"باندِ تیره (med={_medb:.0f})"
+                                              f" → کلِ بلوک از donor "
+                                              f"({_bx1-_bx0}x{_by1-_by0})")
+                                    except Exception:
+                                        pass
+                except Exception:
+                    pass
                 _n_str += 1
             # ناحیه‌هایی که نوار ندارند (متنِ آزاد/بنر) → ماسکِ خامِ آن‌ها
             for _rg in _regions:
@@ -11785,16 +11857,100 @@ class MangaTranslator:
             if _cmp2 is not None:
                 _instrip = (_cmp2 > 0)
                 _inb = np.zeros(_instrip.shape, dtype=bool)
+                # v1.14.78d — «گیتِ پیازی»: پیازی فقط برایِ زمینهٔ
+                # تخت/گرادیانی (حباب/کارت) — جایی که donor رنگِ غلط
+                # گرفته. رویِ هنرِ بافت‌مند (نرده/صورت/کت — img4)
+                # پیازی بافتِ LaMa را به «ابر» تبدیل می‌کند
+                # (1.9Mpx = ۲۴٪ صفحه!). معیار: کسری از حلقهٔ
+                # اطرافِ جعبه که محله‌هایِ ۱۱px آن تخت است (std<12)
+                # باید ≥۰٫۵ باشد؛ وگرنه جعبه از پیازی مستثنا می‌شود
+                # و بافتِ بازسازیِ LaMa می‌ماند.
+                try:
+                    _g78o = cv2.cvtColor(
+                        image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                    _m78a = cv2.blur(_g78o, (11, 11))
+                    _m78b = cv2.blur(_g78o * _g78o, (11, 11))
+                    _std78 = np.sqrt(np.maximum(
+                        _m78b - _m78a * _m78a, 0))
+                    # v1.14.78e — علاوه بر «تخت»، «بی‌لبه» هم لازم است:
+                    # پس‌زمینهٔ بوکهٔ ساختمان/نرده محلی-تخت است ولی
+                    # لبه‌هایِ ساختاری دارد (میلهٔ نرده، قاب پنجره) —
+                    # پیازی آن لبه‌ها را می‌بَرد (img4 PARAGRAPH2).
+                    # تخت + بدونِ لبه = حباب/گرادیانِ نرم → پیازی اوکی.
+                    _lap78 = np.abs(cv2.Laplacian(
+                        _g78o, cv2.CV_32F))
+                    _edgef78 = cv2.blur(
+                        (_lap78 > 25.0).astype(np.float32),
+                        (31, 31))
+                    _flatf78 = ((cv2.blur(
+                        (_std78 < 12.0).astype(np.float32),
+                        (31, 31)) > 0.55)
+                        & (_edgef78 < 0.06))
+                except Exception:
+                    _flatf78 = None
                 for _dbT in (getattr(self, "_donor_boxes", None) or []):
                     _tx0, _ty0, _tx1, _ty1 = [int(v) for v in _dbT]
                     _tx0 = max(0, _tx0); _ty0 = max(0, _ty0)
                     _tx1 = min(cleaned.shape[1], _tx1)
                     _ty1 = min(cleaned.shape[0], _ty1)
                     if _tx1 - _tx0 >= 10 and _ty1 - _ty0 >= 10:
+                        if _flatf78 is not None:
+                            try:
+                                _ry0, _ry1 = max(0, _ty0 - 12), min(
+                                    _flatf78.shape[0], _ty1 + 12)
+                                _rx0, _rx1 = max(0, _tx0 - 12), min(
+                                    _flatf78.shape[1], _tx1 + 12)
+                                _rg = np.zeros(
+                                    (_ry1 - _ry0, _rx1 - _rx0),
+                                    dtype=bool)
+                                _rg[:, :] = _flatf78[_ry0:_ry1,
+                                                     _rx0:_rx1]
+                                _rg[_ty0 - _ry0:_ty1 - _ry0,
+                                    _tx0 - _rx0:_tx1 - _rx0] = False
+                                if _rg.size < 30 or float(
+                                        _rg.mean()) < 0.5:
+                                    continue  # زمینهٔ بافت‌مند
+                            except Exception:
+                                pass
                         _inb[_ty0:_ty1, _tx0:_tx1] = True
                 _sel = _instrip & _inb
                 if _sel.any():
                     _known = (_inb & ~_instrip).astype(np.float32)
+                    # v1.14.78b — «سدِ دیوار»: اگر donor یک ساختارِ تیرهٔ
+                    # اورجینال (دورِ حباب/دُم/کادر) را *حفظ* کرده باشد
+                    # (تیره در اورجینال ≈ تیره در خروجی)، آن پیکسل‌ها
+                    # نباید دوباره پیازی پر شوند — وگرنه پرِ پیازی از دو
+                    # طرفِ مرزِ سفید↔کرم قاطی می‌شود: دورِ حباب می‌شکند و
+                    # رنگِ بیرون به داخل نشت می‌کند (نمونه: حبابِ YEP!
+                    # img7). آن پیکسل‌ها «شناخته» با مقدارِ خودشان
+                    # می‌مانند → هم سالم می‌مانند، هم سدِ جلوگیریِ نشت
+                    # هستند. پیکسلِ متنِ پاک‌شده (تیره در اورجینال، روشن
+                    # در خروجی) باز هم «ناشناخته» می‌ماند و پر می‌شود.
+                    try:
+                        _gO78 = cv2.cvtColor(
+                            image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                        _gC78 = cv2.cvtColor(
+                            cleaned, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                        _bg78 = cv2.medianBlur(
+                            _gO78.astype(np.uint8), 31).astype(np.float32)
+                        _drk78 = (_gO78 < 120.0) | (
+                            (_bg78 - _gO78) > 45.0)
+                        _keep78 = cv2.dilate(
+                            (_drk78 & (np.abs(_gC78 - _gO78) < 22.0)
+                             ).astype(np.uint8),
+                            np.ones((3, 3), np.uint8)) > 0
+                        _keep78 &= _sel
+                        if bool(_keep78.any()):
+                            _sel = _sel & (~_keep78)
+                            _known = np.maximum(
+                                _known,
+                                _keep78.astype(np.float32))
+                            if self.debug:
+                                print(f"  [🛡] v1.14.78b: "
+                                      f"{int(_keep78.sum())}px دیوارِ "
+                                      f"حفظ‌شده = سدِ پیازی")
+                    except Exception:
+                        pass
                     _vals = cleaned.astype(np.float32).copy()
                     _unk = _sel.copy()
                     _it = 0
@@ -11844,6 +12000,120 @@ class MangaTranslator:
             print("  [!] K3 polygon clean error:")
             _tb.print_exc()
 
+
+        # v1.14.78c — «تیکِ جامانده»: جوهرِ کوچکِ ریز (نقطهٔ !، تیکِ جدا،
+        # خشِ کوتاه) که ماسکِ نوار ندیده بود و در خروجی دست‌نخورده ماند
+        # (نمونه: تیکِ 4x17 در (533,965) img7 کنارِ «ME BOMB..!»). فقط
+        # داخلِ نوارهایِ متن، فقط لُختهٔ کوچکِ مستقل (≤300px، جعبه≤30)،
+        # فقط اگر در اورجینال هم بخشی از ساختارِ کوچکِ مستقل باشد (نه
+        # مو/هنرِ متصل) و نزدیکِ متنی که پاک شده → پیازی از اطرافِ
+        # خروجی پر می‌شود. «به اندازهٔ متن» — چیزی اضافه پاک نمی‌شود.
+        try:
+            if _cmp2 is not None and int(np.count_nonzero(_cmp2)) > 40:
+                _gO78c = cv2.cvtColor(
+                    image, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                _gC78c = cv2.cvtColor(
+                    cleaned, cv2.COLOR_BGR2GRAY).astype(np.float32)
+                _bg78c = cv2.medianBlur(
+                    _gO78c.astype(np.uint8), 31).astype(np.float32)
+                _inkO = (_gO78c < 120.0) | ((_bg78c - _gO78c) > 45.0)
+                # نوارِ گشادشده: تیکِ ندیده‌شده *داخلِ* ماسک نیست ولی در
+                # باندِ همان خطِ متن است
+                _zone78c = cv2.dilate(
+                    _cmp2, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (25, 25))) > 0
+                _unch = _inkO & _zone78c & (
+                    np.abs(_gC78c - _gO78c) < 18.0)
+                _nA, _labA, _stA, _ = cv2.connectedComponentsWithStats(
+                    _unch.astype(np.uint8), 8)
+                _nB, _labB = cv2.connectedComponents(
+                    _inkO.astype(np.uint8), 8)
+                _fix_m = np.zeros(_unch.shape, dtype=bool)
+                _n_ok = 0
+                for _ci in range(1, _nA):
+                    if _n_ok >= 6 or int(np.count_nonzero(
+                            _fix_m)) > 1200:
+                        break
+                    _aA = int(_stA[_ci, cv2.CC_STAT_AREA])
+                    _wA = int(_stA[_ci, cv2.CC_STAT_WIDTH])
+                    _hA = int(_stA[_ci, cv2.CC_STAT_HEIGHT])
+                    if _aA > 300 or _wA > 30 or _hA > 30 or _aA < 6:
+                        continue
+                    _cyb = int(_stA[_ci, cv2.CC_STAT_TOP]) \
+                        + max(0, int(_hA) // 2)
+                    _cxb = int(_stA[_ci, cv2.CC_STAT_LEFT]) \
+                        + max(0, int(_wA) // 2)
+                    _lbB = int(_labB[_cyb, _cxb])
+                    if _lbB <= 0:
+                        continue
+                    _mB = (_labB == _lbB)
+                    if int(np.count_nonzero(_mB)) > 400:
+                        continue  # به ساختارِ بزرگِ هنر وصل است
+                    _ys, _xs = np.where(_mB)
+                    _bx0, _bx1 = int(_xs.min()), int(_xs.max()) + 1
+                    _by0, _by1 = int(_ys.min()), int(_ys.max()) + 1
+                    _pad = 22
+                    _vx0, _vx1 = max(0, _bx0 - _pad), min(
+                        cleaned.shape[1], _bx1 + _pad)
+                    _vy0, _vy1 = max(0, _by0 - _pad), min(
+                        cleaned.shape[0], _by1 + _pad)
+                    _win_cleaned = ((_inkO[_vy0:_vy1, _vx0:_vx1])
+                                    & (_zone78c[_vy0:_vy1, _vx0:_vx1])
+                                    & ~_unch[_vy0:_vy1, _vx0:_vx1])
+                    if int(np.count_nonzero(_win_cleaned)) < 30:
+                        continue  # متنِ همسایه پاک نشده → بخشی از آن متن
+                    # زمینهٔ اطراف در اورجینال باید روشن و یکنواخت باشد
+                    # (حباب/کادر) — نه بافتِ اسکرین‌تون/هنرِ پرنقطه
+                    _ry0, _ry1 = max(0, _by0 - 7), min(
+                        image.shape[0], _by1 + 7)
+                    _rx0, _rx1 = max(0, _bx0 - 7), min(
+                        image.shape[1], _bx1 + 7)
+                    _ring78 = ~cv2.dilate(
+                        _mB.astype(np.uint8),
+                        np.ones((5, 5), np.uint8)).astype(bool)
+                    _ring78[:_ry0, :] = False
+                    _ring78[_ry1:, :] = False
+                    _ring78[:, :_rx0] = False
+                    _ring78[:, _rx1:] = False
+                    _rgv = _gC78c[_ring78]  # v1.14.78c2 — زمینه از
+                    # «خروجیِ پاک‌شده» نه اورجینال؛ وگرنه گلیف‌های
+                    # اطرافِ متن std را منفجر می‌کنند و تیکِ واقعی
+                    # رد می‌شد. اسکرین‌تون/هنر در خروجی هم ناهموار
+                    # می‌ماند → باز هم رد می‌شود.
+                    if _rgv.size < 40 or float(
+                            np.median(_rgv)) < 150.0 or float(
+                            np.std(_rgv)) > 34.0:
+                        continue
+                    _fix_m |= _mB
+                    _n_ok += 1
+                if bool(_fix_m.any()):
+                    _knownM = (~_fix_m).astype(np.float32)
+                    _valsM = cleaned.astype(np.float32).copy()
+                    _unkM = _fix_m.copy()
+                    _itM = 0
+                    while bool(_unkM.any()) and _itM < 200:
+                        _itM += 1
+                        _wsumM = cv2.boxFilter(
+                            _knownM, -1, (3, 3), normalize=False)
+                        _newM = (_wsumM > 0) & _unkM
+                        if not bool(_newM.any()):
+                            break
+                        for _cM in range(3):
+                            _svM = cv2.boxFilter(
+                                _valsM[:, :, _cM] * _knownM, -1, (3, 3),
+                                normalize=False)
+                            _valsM[_newM, _cM] = (
+                                _svM[_newM] / _wsumM[_newM])
+                        _knownM = np.maximum(
+                            _knownM, _newM.astype(np.float32))
+                        _unkM &= ~_newM
+                    cleaned[_fix_m] = np.clip(
+                        np.rint(_valsM[_fix_m]), 0, 255).astype(np.uint8)
+                    if self.debug:
+                        print(f"  [*] v1.14.78c: {int(_fix_m.sum())}px "
+                              f"تیکِ جامانده پاک شد ({_itM} دور)")
+        except Exception:
+            pass
 
         if self.debug:
             print(f"  - Cleanup: {counts}")
@@ -15950,17 +16220,70 @@ class MangaTranslator:
 
     @staticmethod
     def _ink_slant_angle(crop_bgr) -> float:
+        return MangaTranslator._ink_slant_measure(crop_bgr)[0]
+
+    @staticmethod
+    def _ink_slant_measure(crop_bgr) -> Tuple[float, bool]:
+        """v1.14.79 — (زاویه، قابل‌اتکا) + قطب‌آگاهیِ تیره/روشن.
+
+        قبلاً فقط جوهرِ تیره سنجیده می‌شد؛ متنِ روشن/درخشان روی زمینهٔ
+        تیره (تیترهای BLUE MOON / RED MOON و…) اصلاً سنجیده نمی‌شد و
+        وتویِ «جوهرِ مسطح» ممکن نبود — حروفِ استایل‌دار زاویهٔ کاذبِ
+        ±۱۵..۲۰° می‌ساختند و متنِ افقی کج رندر می‌شد. حالا قطبِ جوهر
+        با جرمِ معقولِ متن (۱٪..۴۵٪) انتخاب می‌شود. خروجیِ دوم یعنی
+        «سنجش به نتیجه رسید» (حتی وقتی جواب «مسطح» است) تا caller
+        بتواند کجیِ کاذب را صفر کند."""
         try:
             if crop_bgr is None or getattr(crop_bgr, "size", 0) == 0:
-                return 0.0
+                return 0.0, False
             h_c, w_c = crop_bgr.shape[:2]
             if w_c < 40 or h_c < 14:
-                return 0.0
+                return 0.0, False
             g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
             med = float(np.median(g))
-            ink = (g < max(60, med - 45)).astype(np.uint8)
+            # قطبِ تیره اول (رفتارِ قدیمی)؛ اگر جرمش در بازهٔ متن نبود،
+            # قطبِ روشن (متنِ سفید/درخشان روی زمینهٔ تیره) سنجیده می‌شود
+            _dark = (g < max(60.0, med - 45.0))
+            # v1.14.80 — آستانهٔ روشن حداقل ۱۵۰: با زمینهٔ تیره، آستانهٔ
+            # قبلیِ (med+45) هالهٔ گلو و ستاره‌ها را هم «جوهر» می‌گرفت و
+            # جرم از بازهٔ مجاز بیرون می‌زد → سنجش شکست → کجیِ کاذبِ
+            # عنوان‌های درخشان (BLUE/RED/PURPLE MOON) وتو نمی‌شد
+            _bright = (g > min(195.0, max(med + 45.0, 150.0)))
+            _fd = float(_dark.mean())
+            _fb = float(_bright.mean())
+            _cands = []
+            if 0.010 <= _fd <= 0.45:
+                _cands.append(_dark.astype(np.uint8))
+            if 0.010 <= _fb <= 0.45:
+                _cands.append(_bright.astype(np.uint8))
+            if not _cands:
+                # بیرونِ بازه: جرمِ تیرهٔ پر (۰.۴۵..۰.۶۰) مثلِ قبل مجاز
+                if 0.45 < _fd <= 0.60:
+                    _cands.append(_dark.astype(np.uint8))
+                elif 0.010 <= _fb <= 0.60:
+                    _cands.append(_bright.astype(np.uint8))
+                else:
+                    return 0.0, False
+            # v1.14.80 — قطبِ کم‌جرم‌تر اول: خودِ متن تقریباً همیشه
+            # کم‌جرم‌تر از پس‌زمینه است (متنِ روشن روی تیره: bright ~۳۰٪
+            # در برابر نویزِ تیره ~۴۳٪). قبلاً قطبِ تیره (نویزِ ستاره‌های
+            # پس‌زمینه) زودتر سنجیده می‌شد و کجیِ کاذبِ مرزیِ (-۱۵°)
+            # برمی‌گرداند و قطبِ متنِ واقعی هرگز دیده نمی‌شد
+            # (BLUE MOON روی تصویرِ normalized)
+            _cands.sort(key=lambda _b: float(_b.mean()))
+            for _ink_b in _cands:
+                _res = MangaTranslator._ink_slant_core(_ink_b, h_c, w_c)
+                if _res is not None:
+                    return _res
+            return 0.0, False
+        except Exception:
+            return 0.0, False
+
+    @staticmethod
+    def _ink_slant_core(ink, h_c: int, w_c: int) -> Optional[Tuple[float, bool]]:
+        try:
             if float(ink.mean()) < 0.010 or float(ink.mean()) > 0.60:
-                return 0.0
+                return None
             n, lab, st, _cents = cv2.connectedComponentsWithStats(ink, connectivity=8)
             crop_area = float(max(1.0, h_c * w_c))
             clean = np.zeros_like(ink)
@@ -15997,10 +16320,10 @@ class MangaTranslator:
                 except Exception:
                     pass
             if float(clean.mean()) < 0.008:
-                return 0.0
+                return None
             ys_, xs_ = np.nonzero(clean)
             if len(ys_) < 60:
-                return 0.0
+                return None
             ys_f = ys_.astype(np.float64)
             xs_f = xs_.astype(np.float64)
 
@@ -16023,19 +16346,22 @@ class MangaTranslator:
                     best_s, best_t = s_, float(td)
             try:
                 if best_s < 1.12 * max(1.0, _score(0.0)):
-                    return 0.0
+                    # سنجید و جوابش «مسطح» است — قابل‌اتکا برایِ وتو
+                    return (0.0, True)
             except Exception:
                 pass
             a = float(best_t)
-            if abs(a) < 5.0 or abs(a) > 45.0:
-                return 0.0
+            if abs(a) > 45.0:
+                return None
+            if abs(a) < 5.0:
+                return (0.0, True)
             if len(comp_ang) >= 3:
                 _med = float(np.median(comp_ang))
                 if abs(_med) >= 5.0 and (_med > 0.0) != (a > 0.0):
-                    return _med
-            return a
+                    return (_med, True)
+            return (a, True)
         except Exception:
-            return 0.0
+            return None
 
     @staticmethod
     def _polys_vertical(polys) -> bool:
@@ -16582,11 +16908,38 @@ class MangaTranslator:
                 y2 = min(int(image.shape[0]), int(y2) + 1)
                 if x2 - x1 < 40 or y2 - y1 < 14:
                     continue
-                a_ink = MangaTranslator._ink_slant_angle(image[y1:y2, x1:x2])
-                if abs(a_ink) >= 6.0 and (a_ink > 0.0) != (ang > 0.0):
-                    print(f"    [!] اصلاح علامتِ چرخش [{r.id}]: {ang:+.1f}° → "
-                          f"{a_ink:+.1f}° (راستی‌آزمایی جوهر)")
-                    r.angle = a_ink
+                _a_ink, _a_ok = MangaTranslator._ink_slant_measure(
+                    image[y1:y2, x1:x2])
+                if os.environ.get("MANGA_DBG_VERIFY"):
+                    print(f"    [dbg-verify] {r.id} ang={ang:+.1f} "
+                          f"bbox=({x1},{y1},{x2},{y2}) ok={_a_ok} a={_a_ink:+.1f}")
+                if not _a_ok:
+                    continue
+                if abs(_a_ink) >= 6.0 and (_a_ink > 0.0) != (ang > 0.0):
+                    # v1.14.80 — عاقل‌نگه‌داشتِ مقدار: اگر جوهر با پالی فقط
+                    # «علامت» را عوض کند و مقدارشان نزدیک باشد، جایگزین؛
+                    # اما پرشِ فاحش (>15°) یعنی یکی‌شان خطا کرده (حروفِ
+                    # استایل‌دار) → امن‌ترین: رندرِ مسطح. ARTiCLE-2 واقعیِ
+                    # مسطح بود ولی ‎-7°→+39.8° رندر شد (باگِ «برعکس»)
+                    if abs(abs(_a_ink) - abs(ang)) > 15.0:
+                        print(f"    [!] وتوی کجیِ ناسازگار [{r.id}]: "
+                              f"{ang:+.1f}° ← جوهر {_a_ink:+.1f}° "
+                              "(پرشِ فاحش) → 0.0°")
+                        r.angle = 0.0
+                        r.angle_flat_veto = True
+                    else:
+                        print(f"    [!] اصلاح علامتِ چرخش [{r.id}]: {ang:+.1f}° → "
+                              f"{_a_ink:+.1f}° (راستی‌آزمایی جوهر)")
+                        r.angle = _a_ink
+                elif abs(_a_ink) < 6.0:
+                    # v1.14.79 — جوهر می‌گوید «مسطح» ولی زاویهٔ پالی‌ها
+                    # کجِ ±۶..۴۵° است (حروفِ استایل‌دارِ تیترها زاویهٔ
+                    # کاذب می‌سازند؛ BLUE MOON -15° در حالی‌که واقعی ~0°)
+                    print(f"    [!] حذف کجیِ کاذب [{r.id}]: {ang:+.1f}° → 0.0° "
+                          f"(جوهرِ واقعیِ خط مسطح است)")
+                    r.angle = 0.0
+                    # v1.14.80 — رندر حقِ بازنویسی از پالی‌ها را ندارد
+                    r.angle_flat_veto = True
             except Exception:
                 continue
 
@@ -17622,9 +17975,23 @@ class MangaTranslator:
         raw_image_copy = image.copy()
 
         if getattr(self, "clean_only", False):
-            clean_targets = [r for r in regions if r.kind in ("dialogue", "promo", "sfx", "junk")]
+            # v1.14.78 — درخواستِ کاربر: «متنِ تبلیغِ سایت (ASURASCANS.COM
+            # و…) و SFX نباید پاک شه یا حساب شه — ازش رد شه.» در حالتِ
+            # فقط-پاکسازی فقط دیالوگ (+junk: شمارهٔ صفحه) پاک می‌شود؛
+            # بنرِ تبلیغ و افکتِ صوتی دست‌نخورده می‌مانند.
+            clean_targets = [r for r in regions if r.kind in ("dialogue", "junk")]
             if self.debug and regions:
                 page_debug = self._draw_debug_regions(image, regions)
+                try:
+                    _kc = {}
+                    for _r in regions:
+                        if _r.kind not in ("dialogue", "junk"):
+                            _kc[_r.kind] = _kc.get(_r.kind, 0) + 1
+                    if _kc:
+                        print(f"  [*] v1.14.78: {len(regions) - len(clean_targets)}"
+                              f" ناحیه رد شد (تبلیغ/SFX دست‌نخورده): {_kc}")
+                except Exception:
+                    pass
             if clean_targets:
                 _t0 = time.time()
                 final_image = self.clean_image(image, clean_targets)
@@ -20472,21 +20839,25 @@ html, body { background: #0a0a0b; }
         if abs(angle) > 45.0:
             angle = 0.0
 
-        try:
-            _angs = []
-            for _p in (getattr(region, "ocr_polys", None) or []):
-                _a = self._poly_long_side_angle(_p)
-                if abs(_a) >= 1.0:
-                    _angs.append(float(_a))
-            if len(_angs) >= 2:
-                _med = float(np.median(_angs))
-                _spread = float(np.max(np.abs(np.asarray(_angs) - _med)))
-                # v1.14.70 — کجیِ کوچک (زیر ۵ درجه) نویزِ OCR است نه شیبِ
-                # واقعی؛ فقط شیبِ واضح اعمال می‌شود تا متن «کج» نچسبد
-                if _spread <= 4.0 and abs(_med) >= 5.0:
-                    angle = _med
-        except Exception:
-            pass
+        # v1.14.80 — اگر راستی‌آزماییِ جوهر گفته «مسطح»، پالی‌ها دیگر
+        # حقِ بازنویسیِ زاویه را ندارند (قبلاً وتو با medianِ پالی‌ها
+        # دور زده می‌شد → BLUE MOON/PURPLE MOON کجِ کاذب رندر می‌شد)
+        if not bool(getattr(region, "angle_flat_veto", False)):
+            try:
+                _angs = []
+                for _p in (getattr(region, "ocr_polys", None) or []):
+                    _a = self._poly_long_side_angle(_p)
+                    if abs(_a) >= 1.0:
+                        _angs.append(float(_a))
+                if len(_angs) >= 2:
+                    _med = float(np.median(_angs))
+                    _spread = float(np.max(np.abs(np.asarray(_angs) - _med)))
+                    # v1.14.70 — کجیِ کوچک (زیر ۵ درجه) نویزِ OCR است نه شیبِ
+                    # واقعی؛ فقط شیبِ واضح اعمال می‌شود تا متن «کج» نچسبد
+                    if _spread <= 4.0 and abs(_med) >= 5.0:
+                        angle = _med
+            except Exception:
+                pass
 
         try:
             if abs(angle) >= 6.0 and original_image is not None:
@@ -20507,13 +20878,28 @@ html, body { background: #0a0a0b; }
                 _vx1 = min(int(original_image.shape[1]), int(_vpts[:, 0].max()) + 3)
                 _vy1 = min(int(original_image.shape[0]), int(_vpts[:, 1].max()) + 3)
                 if _vx1 - _vx0 >= 40 and _vy1 - _vy0 >= 14:
-                    _a_ink = MangaTranslator._ink_slant_angle(
+                    _a_ink, _a_ok = MangaTranslator._ink_slant_measure(
                         original_image[_vy0:_vy1, _vx0:_vx1])
-                    if (abs(_a_ink) >= 6.0 and abs(_a_ink) <= 45.0
+                    if _a_ok and abs(_a_ink) < 6.0:
+                        # v1.14.79 — وتویِ جوهرِ مسطح: پالی‌هایِ حروفِ
+                        # استایل‌دار کجیِ کاذب می‌دهند؛ جوهرِ واقعیِ خط
+                        # مسطح است → رندر افقی (نه کجِ برعکس)
+                        print(f"    [!] حذف کجیِ کاذب در رندر [{region.id}]: "
+                              f"{angle:+.1f}° → 0.0° (جوهرِ مسطح)")
+                        angle = 0.0
+                    elif (abs(_a_ink) >= 6.0 and abs(_a_ink) <= 45.0
                             and (_a_ink > 0.0) != (angle > 0.0)):
-                        print(f"    [!] اصلاح جهتِ چرخش در رندر [{region.id}]: "
-                              f"{angle:+.1f}° → {_a_ink:+.1f}°")
-                        angle = _a_ink
+                        # v1.14.80 — همان عاقل‌نگه‌داشتِ مقدارِ verify:
+                        # پرشِ فاحش یعنی سنجش روی حروفِ استایل‌دار خطا
+                        # رفته → مسطح (باگِ ‎-7°→+39.8° در img4)
+                        if abs(abs(_a_ink) - abs(angle)) > 15.0:
+                            print(f"    [!] وتوی کجیِ ناسازگار در رندر [{region.id}]: "
+                                  f"{angle:+.1f}° ← جوهر {_a_ink:+.1f}° → 0.0°")
+                            angle = 0.0
+                        else:
+                            print(f"    [!] اصلاح جهتِ چرخش در رندر [{region.id}]: "
+                                  f"{angle:+.1f}° → {_a_ink:+.1f}°")
+                            angle = _a_ink
         except Exception:
             pass
         if abs(angle) > 45.0:
