@@ -20477,6 +20477,23 @@ html, body { background: #0a0a0b; }
             if im is None:
                 raise RuntimeError(f"خواندن تصویر ناموفق بود؛ صفحه حذف نشد: {f}")
             h, w = im.shape[:2]
+            # v1.14.84 — دستهٔ ترکیبی (مثلاً صفحهٔ ۱۷۶۳px + نوارهای ۸۰۰px):
+            # صفحه‌ای که عرضش خیلی با عرضِ گروهِ فعلی فرق دارد دیگر با
+            # کوچک‌سازی (مثلاً ۱۷۶۳→۸۰۰) داخلِ همان نوار له نمی‌شود —
+            # متنِ ریزش ناخوانا می‌شد و OCR استخراج را از دست می‌داد
+            # (باگِ «حبابِ بالا-چپِ 01.jpg در حالتِ دسته‌ای دومی استخراج نمیشد»).
+            # به‌جایش گروهِ فعلی تمام‌شده حساب می‌شود و صفحه یک گروهِ تازه
+            # با عرضِ خودش می‌سازد → کیفیت/استخراجِ دقیقاً تک-حالتی.
+            if (target_w > 0
+                    and abs(w - target_w) > max(180, int(target_w * 0.18))):
+                if current_pages:
+                    _cut_and_emit(final=True)
+                    current_protected = []
+                    scan_from = 0
+                    _page_spans.clear()
+                    _life[0] = 0
+                    _life[1] = 0
+                target_w = w
             if w != target_w and target_w > 0:
 
                 new_h = max(1, int(round(h * (target_w / float(w)))))
