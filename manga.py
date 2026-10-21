@@ -9208,7 +9208,19 @@ class MangaTranslator:
         except Exception:
             _max_side = 0
         if _max_side <= 0:
-            _max_side = 1024 if _on_android() else 2048
+            # v1.14.85 — تفکیکِ پاکسازیِ اندروید: سقفِ ثابتِ ۱۰۲۴ کراپِ
+            # LaMa را نصف‌مقیاس می‌کرد → لبه/بافتِ کثیف‌تر از PC.
+            # حالا هوشمندِ رم: رمِ آزادِ ≥۳.۵GB → ۲۰۴۸ (= PC)، ≥۲GB →
+            # ۱۵۳۶، کمتر → ۱۰۲۴ (محافظتِ OOM مثلِ قبل). شبیه‌سازِ CI
+            # (۵GB) و گوشی‌هایِ معمول (۴GB+) کیفیتِ کاملِ PC می‌گیرند.
+            if not _on_android():
+                _max_side = 2048
+            else:
+                try:
+                    _av85 = float(self._available_ram_gb() or 0.0)
+                except Exception:
+                    _av85 = 0.0
+                _max_side = 2048 if _av85 >= 3.5 else (1536 if _av85 >= 2.0 else 1024)
         _pl, _ph = int(sub_img.shape[1]), int(sub_img.shape[0])
 
         def _lama_try(si, sm, side):
