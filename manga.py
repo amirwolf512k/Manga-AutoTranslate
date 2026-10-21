@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.82"
+APP_VER = "1.14.83"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -9144,6 +9144,9 @@ class MangaTranslator:
             ey0 = max(0, ey0 - d // 2)
             ey1 = min(img_h, max(96, ey0 + 96))
         if ex1 - ex0 < 32 or ey1 - ey0 < 32:
+            if os.environ.get("MANGA_R11_DBG"):
+                print(f"    [r11dbg] group return: box too small "
+                      f"{ex1-ex0}x{ey1-ey0}", flush=True)
             return
         sub_img = image[ey0:ey1, ex0:ex1]
         sub_msk = np.zeros(sub_img.shape[:2], dtype=np.uint8)
@@ -9178,7 +9181,27 @@ class MangaTranslator:
         except Exception:
             pass
         if not sub_msk.any():
-            return  # v1.14.65: ماسکِ خالی — طبیعی، لاگ لازم نیست
+            # v1.14.65: ماسکِ خالی — طبیعی، لاگ لازم نیست
+            if os.environ.get("MANGA_R11_DBG"):
+                _ppN = getattr(self, "_page_protect", None)
+                _paN = getattr(self, "_prot_all", None)
+                _rawN = 0
+                _ppHit = _paHit = 0
+                for c in members:
+                    _qx0, _qy0, _qx1, _qy1, _qm = c[:5]
+                    _qx1, _qy1 = min(_qx1, img_w), min(_qy1, img_h)
+                    _rawN += int(cv2.countNonZero(cv2.dilate(
+                        _qm, page_kernel)))
+                    if _ppN is not None:
+                        _ppHit += int(np.count_nonzero(
+                            _ppN[_qy0:_qy1, _qx0:_qx1] > 0))
+                    if _paN is not None:
+                        _paHit += int(np.count_nonzero(
+                            _paN[_qy0:_qy1, _qx0:_qx1] > 0))
+                print(f"    [r11dbg] group return: EMPTY MASK "
+                      f"raw={_rawN} pp_hit={_ppHit} pa_hit={_paHit}",
+                      flush=True)
+            return
         sub_bgr = None
         try:
             _max_side = int(os.environ.get("MANGA_LAMA_MAX_SIDE", "0") or 0)
@@ -9303,6 +9326,10 @@ class MangaTranslator:
             else:
                 sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
             if sub_bgr.shape[:2] != sub_img.shape[:2]:
+                if os.environ.get("MANGA_R11_DBG"):
+                    print(f"    [r11dbg] group return: shape mismatch "
+                          f"{sub_bgr.shape[:2]} vs {sub_img.shape[:2]}",
+                          flush=True)
                 return
         try:
             _qc = getattr(self, "_qc_kernel31", None)
@@ -11380,7 +11407,13 @@ class MangaTranslator:
                 _short = float(max(1.0, min(_img_h, _img_w)))
                 if _extreme:
                     _mode = "patch-wise"
-                    groups = pending
+                    # v1.14.83 — باگِ بحرانیِ «لگهٔ قرمز»: با ۱ ناحیهٔ pending
+                    # (یا MANGA_LAMA_GROUP=0) اینجا لیستِ «cropها» به‌جای
+                    # «گروه‌ها» می‌ماند → _lama_run_group رویِ int کرش می‌کرد
+                    # → بی‌صدا → فالبکِ پرِ توپرِ باکس (مستطیلِ تیره + خالِ
+                    # قرمز رویِ کارتِ عنوانِ Crimson Dragon). حالا همیشه
+                    # لیستِ گروه‌ها است.
+                    groups = [[c] for c in pending]
                     if os.environ.get("MANGA_LAMA_GROUP", "1") != "0" and len(pending) > 1:
                         _gap = 24
                         if _long >= 2.5 * _short:
@@ -11510,8 +11543,11 @@ class MangaTranslator:
                                     _f.result(timeout=600)
                                 except FuturesTimeout:
                                     print("    [!] LaMa patch exceeded 600s → skipped")
-                                except Exception:
-                                    pass
+                                except Exception as _eg:
+                                    if os.environ.get("MANGA_R11_DBG"):
+                                        import traceback as _tb
+                                        print(f"    [r11dbg] group thread EXC: {_eg}", flush=True)
+                                        _tb.print_exc()
                                 _raise_if_stop()
                         except BaseException:
                             for _f in _futs:
@@ -11524,7 +11560,11 @@ class MangaTranslator:
                             _raise_if_stop()
                             try:
                                 self._lama_run_group(image, grp, lama, page_kernel)
-                            except Exception:
+                            except Exception as _es:
+                                if os.environ.get("MANGA_R11_DBG"):
+                                    import traceback as _tb
+                                    print(f"    [r11dbg] group serial EXC: {_es}", flush=True)
+                                    _tb.print_exc()
                                 continue
                     dt = time.time() - t0
                     _done = sum(1 for c in pending if c[6] == "LaMa")
