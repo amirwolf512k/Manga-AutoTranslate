@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.86"
+APP_VER = "1.14.90"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5566,6 +5566,63 @@ class MangaTranslator:
                     kept[dup_idx] = d
         return kept
 
+    @staticmethod
+    def _column_line_groups(idxs, bbs, rtl: bool = True):
+        """v1.14.90 — ستون‌بندیِ خط‌هایِ OCRِ یک ناحیه.
+
+        وقتی چند خطِ افقی در «دو ستونِ» کنارِ هم‌اند (مثلاً متنِ حباب +
+        متنِ دست‌نویسِ کنارِ حباب در 01.jpg) مرتب‌سازیِ (y,x) آن‌ها را در
+        هم می‌پیچد («THEN PULL I'LL THE 're FLOAT FOR real YOU! action
+        nere.»). اینجا خط‌ها با فاصلهٔ مرکزِ x خوشه می‌شوند؛ فقط وقتی
+        ≥۲ خوشهٔ ≥۲خطی که بازهٔ yشان همپوشانیِ معنادار دارد و همهٔ خط‌ها
+        افقی‌اند، گروه‌بندی معتبر است. خروجی: لیستِ گروه‌ها (هر گروه لیستِ
+        اندیس، ستون‌ها به ترتیبِ جهتِ خواندن) یا None = مرتب‌سازیِ عادی.
+        """
+        try:
+            if len(idxs) < 4:
+                return None
+            lines = []
+            for i in idxs:
+                bb = bbs[i] if (bbs and 0 <= i < len(bbs)) else None
+                if bb is None:
+                    return None
+                bw = float(bb[2] - bb[0])
+                bh = float(bb[3] - bb[1])
+                if bw <= 0 or bh <= 0:
+                    return None
+                if bw < bh * 1.15:
+                    return None  # خطِ عمودی/کوتاه → ستون‌بندی ممنوع
+                lines.append(((float(bb[0]) + float(bb[2])) / 2.0,
+                              float(bb[1]), float(bb[3]), i))
+            lines.sort(key=lambda t: t[0])
+            med_h = sorted(t[2] - t[1] for t in lines)[len(lines) // 2]
+            gap_thr = max(0.85 * med_h, 32.0)
+            clusters = [[lines[0]]]
+            for ln in lines[1:]:
+                if ln[0] - clusters[-1][-1][0] > gap_thr:
+                    clusters.append([ln])
+                else:
+                    clusters[-1].append(ln)
+            clusters = [c for c in clusters if len(c) >= 2]
+            if len(clusters) < 2:
+                return None
+            spans = [(min(t[1] for t in c), max(t[2] for t in c))
+                     for c in clusters]
+            for a in range(len(clusters)):
+                for b in range(a + 1, len(clusters)):
+                    oy = (min(spans[a][1], spans[b][1])
+                          - max(spans[a][0], spans[b][0]))
+                    short = min(spans[a][1] - spans[a][0],
+                                spans[b][1] - spans[b][0])
+                    if short <= 0 or oy < short * 0.35:
+                        return None
+            clusters.sort(
+                key=lambda c: -(sum(t[0] for t in c) / len(c)) if rtl
+                else (sum(t[0] for t in c) / len(c)))
+            return [[t[3] for t in c] for c in clusters]
+        except Exception:
+            return None
+
     def group_into_regions(self, detections: List[dict], y_offset: int = 0) -> List[TextRegion]:
       if not detections:
         return []
@@ -5825,12 +5882,36 @@ class MangaTranslator:
                 kept_idxs = sorted(final, key=lambda i: (rects[i][1], rects[i][0]))
 
         kept_idxs = sorted(kept_idxs, key=lambda i: (rects[i][1], rects[i][0]))
-        text = " ".join(
-            (detections[i].get("text") or "").strip()
-            for i in kept_idxs
-            if (detections[i].get("text") or "").strip()
-        )
-        text = re.sub(r"\s{2,}", " ", text).strip()
+        # v1.14.90 — ستون‌بندیِ خط‌ها (همان منطقِ _ocr_crop): دو ستونِ
+        # کنارِ هم با (y,x) در هم می‌پیچد → هر ستون متنِ خودش، ستون‌ها \n
+        try:
+            _cg89 = MangaTranslator._column_line_groups(
+                kept_idxs,
+                [(rects[i][0], rects[i][1],
+                  rects[i][0] + rects[i][2], rects[i][1] + rects[i][3])
+                 for i in kept_idxs],
+                rtl=(getattr(self, "reading_order", "rtl") == "rtl"))
+        except Exception:
+            _cg89 = None
+        if _cg89 and len(_cg89) > 1:
+            _tparts89 = []
+            for _g89 in _cg89:
+                _gs89 = sorted(_g89, key=lambda k: (rects[k][1], rects[k][0]))
+                _tt89 = " ".join(
+                    (detections[i].get("text") or "").strip()
+                    for i in _gs89
+                    if (detections[i].get("text") or "").strip()
+                ).strip()
+                if _tt89:
+                    _tparts89.append(_tt89)
+            text = "\n".join(_tparts89)
+        else:
+            text = " ".join(
+                (detections[i].get("text") or "").strip()
+                for i in kept_idxs
+                if (detections[i].get("text") or "").strip()
+            )
+        text = re.sub(r"[ \t]{2,}", " ", text).strip()
         text = re.sub(r"\b(\w{2,})\s+\1\b", r"\1", text, flags=re.IGNORECASE)
 
         angles = [float(detections[i].get("angle", 0.0) or 0.0) for i in kept_idxs] or [0.0]
@@ -14577,7 +14658,11 @@ class MangaTranslator:
             return text
         t = text
 
-        t = re.sub(r"\s+", " ", t).strip()
+        # v1.14.90 — \n (جداکنندهٔ دو متنِ جدا در یک ناحیه) حفظ می‌شود؛
+        # فقط فاصله/تبِ افقی فشرده می‌شود. مترجم دو متنِ جدا را با \n
+        # جدا ترجمه می‌کند و رندر هر \n را در خطِ خودش می‌گذارد.
+        t = re.sub(r"[ \t\f\v]+", " ", t).strip()
+        t = re.sub(r"\s*\n\s*", "\n", t)
 
         replacements = [
             (r"\bMUDI[:]?YING\b", "MODIFYING"),
@@ -16116,7 +16201,9 @@ class MangaTranslator:
         except Exception:
             return []
 
-    def _ocr_crop(self, image_bgr: np.ndarray, rect) -> Tuple[str, List[np.ndarray]]:
+    def _ocr_crop(self, image_bgr: np.ndarray, rect,
+                  block_rects: Optional[List[Tuple[int, int, int, int]]] = None) \
+            -> Tuple[str, List[np.ndarray]]:
 
         x1, y1, x2, y2 = [int(v) for v in rect]
         h, w = image_bgr.shape[:2]
@@ -16143,7 +16230,7 @@ class MangaTranslator:
                 ch0, cw0 = crop0.shape[:2]
 
         def _run(crop_bgr, scale: float, apply_offset: bool = True,
-                 ang_corr: float = 0.0):
+                 ang_corr: float = 0.0, origin=None):
             if scale > 1.01:
                 crop_bgr = cv2.resize(
                     crop_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
@@ -16191,7 +16278,8 @@ class MangaTranslator:
                             if scale > 1.01:
                                 poly = poly / scale
                             if apply_offset:
-                                poly = poly + np.array([x1, y1], dtype=np.float32)
+                                _ox86, _oy86 = origin if origin is not None else (x1, y1)
+                                poly = poly + np.array([_ox86, _oy86], dtype=np.float32)
                             polys.append(poly.astype(np.int32))
                             entry_poly = poly.astype(np.float32)
                     entries.append((text, conf, entry_poly,
@@ -16325,6 +16413,120 @@ class MangaTranslator:
                     early_stop = True
                     break
 
+        # ── v1.14.90: نجاتِ خطِ لبه‌بریدهٔ کراپ (متنِ کنارِ حباب) ──
+        # OCRِ کراپِ حباب متنی را که فقط «گوشه‌اش» داخلِ باکس است نصفه
+        # می‌خواند (نمونهٔ 01.jpg: «You're the real attraction here.» کنارِ
+        # حبابِ زرد → تکه‌هایِ «su're / ereal / traction» چسبیده به لبهٔ
+        # کراپ). اگر خطی به لبهٔ چپ/راستِ کراپ چسبیده بود، کراپ در همان سمت
+        # باز می‌شود (سقفِ ۱۱۰px یا ۳۵٪ عرض؛ بدونِ عبور از باکسِ ناحیهٔ
+        # دیگر) و یک پاسِ OCR رویِ کراپِ بازشده زده می‌شود؛ خطِ کامل‌تر
+        # جایگزینِ تکهٔ نصفه می‌شود. فقط خط‌هایی پذیرفته می‌شوند که در
+        # نوارِ عمودیِ همان خطِ بریده باشند (جوهرِ نامربوطِ بالا/پایینِ
+        # نوار جذب نمی‌شود).
+        try:
+            if merged and not _tilted0:
+                _dbg90 = bool(os.environ.get("MANGA_R90_DBG"))
+                _edge86 = 3 + int(inset_used or 0)
+                for _side86 in (0, 1):
+                    if _side86 == 0:
+                        _clip86 = [m for m in merged if m[2] is not None
+                                   and _bb_of(m[2])[0] <= x1 + _edge86]
+                    else:
+                        _clip86 = [m for m in merged if m[2] is not None
+                                   and _bb_of(m[2])[2] >= x2 - _edge86]
+                    if not _clip86:
+                        continue
+                    _ext86 = min(110, int((x2 - x1) * 0.35))
+                    if _ext86 < 12:
+                        continue
+                    if _side86 == 0:
+                        _nb86 = max(0, x1 - _ext86)
+                        if block_rects:
+                            for (_bx1, _by1, _bx2, _by2) in block_rects:
+                                try:
+                                    if (_bx1 < x1 and _bx2 > _nb86
+                                            and _by1 < y2 and _by2 > y1):
+                                        _nb86 = max(_nb86,
+                                                    min(x1 - 2, _bx2 + 6))
+                                except Exception:
+                                    continue
+                        if _nb86 >= x1 - 4:
+                            continue
+                        _crop86 = image_bgr[y1:y2, _nb86:x2]
+                        _org86 = (_nb86, y1)
+                    else:
+                        _nb86 = min(w, x2 + _ext86)
+                        if block_rects:
+                            for (_bx1, _by1, _bx2, _by2) in block_rects:
+                                try:
+                                    if (_bx2 > x2 and _bx1 < _nb86
+                                            and _by1 < y2 and _by2 > y1):
+                                        _nb86 = min(_nb86,
+                                                    max(x2 + 2, _bx1 - 6))
+                                except Exception:
+                                    continue
+                        if _nb86 <= x2 + 4:
+                            continue
+                        _crop86 = image_bgr[y1:y2, x1:_nb86]
+                        _org86 = (x1, y1)
+                    if _crop86.size == 0 or _crop86.shape[0] < 12 \
+                            or _crop86.shape[1] < 12:
+                        continue
+                    _ylo86 = min(_bb_of(m[2])[1] for m in _clip86) - 10
+                    _yhi86 = max(_bb_of(m[2])[3] for m in _clip86) + 10
+                    if _dbg90:
+                        print(f"    [r90] crop=({x1},{y1},{x2},{y2}) side="
+                              f"{'L' if _side86 == 0 else 'R'} → تاِ {_nb86} | "
+                              f"بریده: {[m[0] for m in _clip86]}", flush=True)
+                    _txtE, _polE, _confE, _entE = _run(
+                        _crop86, base_scale, apply_offset=True, origin=_org86)
+                    for _e86 in (_entE or []):
+                        _tE = str(_e86[0] or "").strip()
+                        _pE = _e86[2] if len(_e86) > 2 else None
+                        if not _tE or _pE is None:
+                            continue
+                        _bE = _bb_of(_pE)
+                        if _bE is None or (_bE[3] - _bE[1]) < 8:
+                            continue
+                        _oyE = min(_yhi86, _bE[3]) - max(_ylo86, _bE[1])
+                        if _oyE <= 0.3 * max(1.0, _bE[3] - _bE[1]):
+                            continue
+                        if _side86 == 0 and _bE[0] >= x1 - 2:
+                            continue
+                        if _side86 == 1 and _bE[2] <= x2 + 2:
+                            continue
+                        _hitE = None
+                        for _m86 in merged:
+                            _bM = _bb_of(_m86[2]) if _m86[2] is not None else None
+                            if _bM is not None and _overlap_frac(_bE, _bM) > 0.40:
+                                _hitE = _m86
+                                break
+                        if _hitE is None:
+                            merged.append([_tE, float(_e86[1]), _pE,
+                                           float(_e86[3]) if len(_e86) > 3 else 0.0])
+                            if _dbg90:
+                                print(f"    [r90]   + «{_tE}» "
+                                      f"x[{_bE[0]:.0f}-{_bE[2]:.0f}] "
+                                      f"y[{_bE[1]:.0f}-{_bE[3]:.0f}]", flush=True)
+                        elif _hitE in _clip86 and (
+                                len(_tE) >= len(_hitE[0] or "")):
+                            # تکهٔ بریده جایگزینِ کامل‌تر می‌شود؛ خوانشِ
+                            # کراپِ بازشده کلِ خط را دیده (حتی اگر هم‌طول
+                            # باشد، خوانشِ ناقصِ لبه اعتمادِ کمتری دارد)
+                            if _dbg90:
+                                print(f"    [r90]   ~ «{_hitE[0]}» → «{_tE}»",
+                                      flush=True)
+                            _hitE[0] = _tE
+                            _hitE[1] = float(_e86[1])
+                            _hitE[2] = _pE
+                            if len(_e86) > 3:
+                                _hitE[3] = float(_e86[3])
+                        elif _dbg90 and _hitE is not None:
+                            print(f"    [r90]   . نگهِ «{_hitE[0]}» "
+                                  f"(جدید: «{_tE}»)", flush=True)
+        except Exception:
+            pass
+
         if merged:
             _allow_en, _allow_ko, _allow_ja, _allow_zh = self._ocr_lang_flags()
             if _allow_ja and len(merged) > 1:
@@ -16356,7 +16558,34 @@ class MangaTranslator:
                 ((_bb_of(m_item[2])[1] if m_item[2] is not None else 0.0) // row_h),
                 (_bb_of(m_item[2])[0] if m_item[2] is not None else 0.0),
             ))
-            u_txt = " ".join(m_item[0] for m_item in merged).strip()
+            # v1.14.90 — ستون‌بندیِ خط‌ها: دو ستونِ کنارِ هم (متنِ حباب +
+            # متنِ دست‌نویسِ کنارش) با مرتب‌سازیِ (y,x) در هم می‌پیچد؛
+            # هر ستون متنِ خودش را می‌گیرد و ستون‌ها با \n جدا می‌شوند
+            # (مترجم دو متنِ جدا را با \n ترجمه/رندر می‌کند).
+            try:
+                _cg86 = MangaTranslator._column_line_groups(
+                    list(range(len(merged))),
+                    [_bb_of(m_item[2]) for m_item in merged],
+                    rtl=(getattr(self, "reading_order", "rtl") == "rtl"))
+            except Exception:
+                _cg86 = None
+            if _cg86 and len(_cg86) > 1:
+                _parts86 = []
+                for _g86 in _cg86:
+                    _gs86 = sorted(_g86, key=lambda _k86: (
+                        (_bb_of(merged[_k86][2])[1]
+                         if merged[_k86][2] is not None else 0.0),
+                        (_bb_of(merged[_k86][2])[0]
+                         if merged[_k86][2] is not None else 0.0)))
+                    _tg86 = " ".join(
+                        str(merged[_k86][0] or "").strip() for _k86 in _gs86
+                    ).strip()
+                    if _tg86:
+                        _parts86.append(_tg86)
+                u_txt = "\n".join(_parts86)
+            else:
+                u_txt = " ".join(m_item[0] for m_item in merged).strip()
+            u_txt = u_txt.strip()
             u_conf = float(np.mean([m_item[1] for m_item in merged])) if merged else 0.0
             u_polys = [
                 np.rint(np.asarray(m_item[2], dtype=np.float32)).astype(np.int32)
@@ -17011,17 +17240,25 @@ class MangaTranslator:
         ocr_results: List[Tuple[str, List[np.ndarray], List[float]]] = [
             ("", [], [])] * len(cand)
         if cand:
+            # v1.14.90 — باکس‌هایِ همسایه به _ocr_crop داده می‌شود تا
+            # نجاتِ خطِ لبه‌بریده، کراپ را تا باکسِ ناحیهٔ دیگر باز نکند
+            # (جذبِ متنِ حبابِ مجاور ممنوع).
+            _all_rects90 = [(t[2], t[3], t[4], t[5]) for t in cand]
+
+            def _ocr_one90(k: int):
+                _t90 = cand[k]
+                _blk90 = [_all_rects90[j]
+                          for j in range(len(_all_rects90)) if j != k]
+                return self._ocr_crop(
+                    image, [_t90[2], _t90[3], _t90[4], _t90[5]],
+                    block_rects=_blk90)
+
             n_workers = max(1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
             if n_workers > 1 and isinstance(self.ocr, RapidOCRBackend):
                 with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                    ocr_results = list(ex.map(
-                        lambda t: self._ocr_crop(image, [t[2], t[3], t[4], t[5]]),
-                        cand,
-                    ))
+                    ocr_results = list(ex.map(_ocr_one90, range(len(cand))))
             else:
-                ocr_results = [
-                    self._ocr_crop(image, [t[2], t[3], t[4], t[5]]) for t in cand
-                ]
+                ocr_results = [_ocr_one90(k) for k in range(len(cand))]
 
         if split_groups:
             for idxs, full_rect in split_groups:
@@ -17034,7 +17271,10 @@ class MangaTranslator:
                     any_text = True
                 if any_text:
                     continue
-                full_txt, full_polys, full_angs, _full_lts = self._ocr_crop(image, full_rect)
+                full_txt, full_polys, full_angs, _full_lts = self._ocr_crop(
+                    image, full_rect,
+                    block_rects=[(cand[j][2], cand[j][3], cand[j][4], cand[j][5])
+                                 for j in range(len(cand)) if j not in idxs])
                 if not str(full_txt or "").strip():
                     continue
                 if self.debug:
