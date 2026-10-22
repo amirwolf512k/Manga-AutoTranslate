@@ -1543,7 +1543,7 @@ def run_web():
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}
-.bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;direction:rtl;position:sticky;top:0;z-index:5}
+.bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;direction:rtl}
 .dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
 .dot.off{background:#2e7d4f;animation:none}
 @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
@@ -1573,7 +1573,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 <script>
 (function(){
   var P = "__PREFIX__", D = "__DIR__", DBG = "__DBGDIR__", STAMP = Date.now();
-  var arrived = 0, total = 0, dbgArrived = 0, dbgMode = false, busy = false, probeT = 0;
+  var arrived = 0, total = 0, dbgArrived = 0, dbgMode = false, busy = false;
   var c = document.getElementById('c'), h = document.getElementById('h'),
       b = document.getElementById('n'), dot = document.getElementById('dot'),
       db = document.getElementById('db'), chip = document.getElementById('chip');
@@ -1613,16 +1613,13 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
     if (haveDbg) db.style.display = (arrived > 0 || dbgArrived > 0 || total > 0) ? 'inline-block' : 'none';
   }
   function probe(){
-    if (busy) {
-      if (probeT && (Date.now() - probeT) > 8000) { busy = false; probeT = 0; }
-      else return;
-    }
+    if (busy) return;
     var a = curArrived(), mode = dbgMode;
     if (total > 0 && a >= total) return;
-    busy = true; probeT = Date.now();
+    busy = true;
     var im = new Image();
     im.onload = function(){
-      busy = false; probeT = 0;
+      busy = false;
       if (dbgMode === mode) {
         if (mode) dbgArrived = Math.max(dbgArrived, a + 1);
         else arrived = Math.max(arrived, a + 1);
@@ -1630,8 +1627,8 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
         setTimeout(probe, 60);
       }
     };
-    im.onerror = function(){ busy = false; probeT = 0; };
-    im.src = imgSrc(a) + '&t=' + Date.now();
+    im.onerror = function(){ busy = false; };
+    im.src = imgSrc(a);
   }
   if (haveDbg) {
     db.addEventListener('click', function(){
@@ -1756,7 +1753,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             "overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}"
             ".rdr{background:#000;direction:ltr}"
             ".rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;"
-            "background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2;position:sticky;top:0}"
+            "background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2}"
             ".rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;"
             "padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;"
             "min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}"

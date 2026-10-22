@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.85"
+APP_VER = "1.14.86"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -9144,9 +9144,6 @@ class MangaTranslator:
             ey0 = max(0, ey0 - d // 2)
             ey1 = min(img_h, max(96, ey0 + 96))
         if ex1 - ex0 < 32 or ey1 - ey0 < 32:
-            if os.environ.get("MANGA_R11_DBG"):
-                print(f"    [r11dbg] group return: box too small "
-                      f"{ex1-ex0}x{ey1-ey0}", flush=True)
             return
         sub_img = image[ey0:ey1, ex0:ex1]
         sub_msk = np.zeros(sub_img.shape[:2], dtype=np.uint8)
@@ -9181,46 +9178,14 @@ class MangaTranslator:
         except Exception:
             pass
         if not sub_msk.any():
-            # v1.14.65: ماسکِ خالی — طبیعی، لاگ لازم نیست
-            if os.environ.get("MANGA_R11_DBG"):
-                _ppN = getattr(self, "_page_protect", None)
-                _paN = getattr(self, "_prot_all", None)
-                _rawN = 0
-                _ppHit = _paHit = 0
-                for c in members:
-                    _qx0, _qy0, _qx1, _qy1, _qm = c[:5]
-                    _qx1, _qy1 = min(_qx1, img_w), min(_qy1, img_h)
-                    _rawN += int(cv2.countNonZero(cv2.dilate(
-                        _qm, page_kernel)))
-                    if _ppN is not None:
-                        _ppHit += int(np.count_nonzero(
-                            _ppN[_qy0:_qy1, _qx0:_qx1] > 0))
-                    if _paN is not None:
-                        _paHit += int(np.count_nonzero(
-                            _paN[_qy0:_qy1, _qx0:_qx1] > 0))
-                print(f"    [r11dbg] group return: EMPTY MASK "
-                      f"raw={_rawN} pp_hit={_ppHit} pa_hit={_paHit}",
-                      flush=True)
-            return
+            return  # v1.14.65: ماسکِ خالی — طبیعی، لاگ لازم نیست
         sub_bgr = None
         try:
             _max_side = int(os.environ.get("MANGA_LAMA_MAX_SIDE", "0") or 0)
         except Exception:
             _max_side = 0
         if _max_side <= 0:
-            # v1.14.85 — تفکیکِ پاکسازیِ اندروید: سقفِ ثابتِ ۱۰۲۴ کراپِ
-            # LaMa را نصف‌مقیاس می‌کرد → لبه/بافتِ کثیف‌تر از PC.
-            # حالا هوشمندِ رم: رمِ آزادِ ≥۳.۵GB → ۲۰۴۸ (= PC)، ≥۲GB →
-            # ۱۵۳۶، کمتر → ۱۰۲۴ (محافظتِ OOM مثلِ قبل). شبیه‌سازِ CI
-            # (۵GB) و گوشی‌هایِ معمول (۴GB+) کیفیتِ کاملِ PC می‌گیرند.
-            if not _on_android():
-                _max_side = 2048
-            else:
-                try:
-                    _av85 = float(self._available_ram_gb() or 0.0)
-                except Exception:
-                    _av85 = 0.0
-                _max_side = 2048 if _av85 >= 3.5 else (1536 if _av85 >= 2.0 else 1024)
+            _max_side = 1024 if _on_android() else 2048
         _pl, _ph = int(sub_img.shape[1]), int(sub_img.shape[0])
 
         def _lama_try(si, sm, side):
@@ -9338,10 +9303,6 @@ class MangaTranslator:
             else:
                 sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
             if sub_bgr.shape[:2] != sub_img.shape[:2]:
-                if os.environ.get("MANGA_R11_DBG"):
-                    print(f"    [r11dbg] group return: shape mismatch "
-                          f"{sub_bgr.shape[:2]} vs {sub_img.shape[:2]}",
-                          flush=True)
                 return
         try:
             _qc = getattr(self, "_qc_kernel31", None)
@@ -11419,13 +11380,7 @@ class MangaTranslator:
                 _short = float(max(1.0, min(_img_h, _img_w)))
                 if _extreme:
                     _mode = "patch-wise"
-                    # v1.14.83 — باگِ بحرانیِ «لگهٔ قرمز»: با ۱ ناحیهٔ pending
-                    # (یا MANGA_LAMA_GROUP=0) اینجا لیستِ «cropها» به‌جای
-                    # «گروه‌ها» می‌ماند → _lama_run_group رویِ int کرش می‌کرد
-                    # → بی‌صدا → فالبکِ پرِ توپرِ باکس (مستطیلِ تیره + خالِ
-                    # قرمز رویِ کارتِ عنوانِ Crimson Dragon). حالا همیشه
-                    # لیستِ گروه‌ها است.
-                    groups = [[c] for c in pending]
+                    groups = pending
                     if os.environ.get("MANGA_LAMA_GROUP", "1") != "0" and len(pending) > 1:
                         _gap = 24
                         if _long >= 2.5 * _short:
@@ -11555,11 +11510,8 @@ class MangaTranslator:
                                     _f.result(timeout=600)
                                 except FuturesTimeout:
                                     print("    [!] LaMa patch exceeded 600s → skipped")
-                                except Exception as _eg:
-                                    if os.environ.get("MANGA_R11_DBG"):
-                                        import traceback as _tb
-                                        print(f"    [r11dbg] group thread EXC: {_eg}", flush=True)
-                                        _tb.print_exc()
+                                except Exception:
+                                    pass
                                 _raise_if_stop()
                         except BaseException:
                             for _f in _futs:
@@ -11572,11 +11524,7 @@ class MangaTranslator:
                             _raise_if_stop()
                             try:
                                 self._lama_run_group(image, grp, lama, page_kernel)
-                            except Exception as _es:
-                                if os.environ.get("MANGA_R11_DBG"):
-                                    import traceback as _tb
-                                    print(f"    [r11dbg] group serial EXC: {_es}", flush=True)
-                                    _tb.print_exc()
+                            except Exception:
                                 continue
                     dt = time.time() - t0
                     _done = sum(1 for c in pending if c[6] == "LaMa")
@@ -20489,13 +20437,13 @@ html, body { background: #0a0a0b; }
             if im is None:
                 raise RuntimeError(f"خواندن تصویر ناموفق بود؛ صفحه حذف نشد: {f}")
             h, w = im.shape[:2]
-            # v1.14.84 — دستهٔ ترکیبی (مثلاً صفحهٔ ۱۷۶۳px + نوارهای ۸۰۰px):
+            # v1.14.86 — دستهٔ ترکیبی (مثلاً صفحهٔ ۱۸۰۰px + نوارِ ۸۰۰px):
             # صفحه‌ای که عرضش خیلی با عرضِ گروهِ فعلی فرق دارد دیگر با
-            # کوچک‌سازی (مثلاً ۱۷۶۳→۸۰۰) داخلِ همان نوار له نمی‌شود —
-            # متنِ ریزش ناخوانا می‌شد و OCR استخراج را از دست می‌داد
-            # (باگِ «حبابِ بالا-چپِ 01.jpg در حالتِ دسته‌ای دومی استخراج نمیشد»).
-            # به‌جایش گروهِ فعلی تمام‌شده حساب می‌شود و صفحه یک گروهِ تازه
-            # با عرضِ خودش می‌سازد → کیفیت/استخراجِ دقیقاً تک-حالتی.
+            # کوچک/بزرگ‌سازی داخلِ همان نوار له نمی‌شود — متنِ ریز
+            # (مثلِ متنِ کنارِ حبابِ بالا-چپِ 01.jpg) ناخوانا می‌شد و
+            # تشخیص/OCR در حالتِ دسته‌ای از دست می‌رفت. به‌جایش گروهِ
+            # فعلی جدا می‌شود و صفحه در نوارِ خودش با عرضِ اصلی پردازش
+            # می‌شود = استخراجِ دقیقاً مثلِ حالتِ تکی.
             if (target_w > 0
                     and abs(w - target_w) > max(180, int(target_w * 0.18))):
                 if current_pages:
@@ -20505,6 +20453,8 @@ html, body { background: #0a0a0b; }
                     _page_spans.clear()
                     _life[0] = 0
                     _life[1] = 0
+                print(f"[*] عرضِ {w}px با گروهِ {target_w}px فرق دارد → "
+                      f"نوارِ جدا؛ استخراجِ دقیقاً تک-حالتی (بدونِ له‌شدن)")
                 target_w = w
             if w != target_w and target_w > 0:
 
