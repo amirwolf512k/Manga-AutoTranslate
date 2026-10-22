@@ -17177,6 +17177,96 @@ class MangaTranslator:
             return 0.0
         return float(np.median(angs))
 
+    def _split_mixed_column_regions(self, regions: List["TextRegion"]) -> List["TextRegion"]:
+        """v1.14.92 — ستون‌هایِ x-جدا از هم در یک ناحیه → ناحیه‌هایِ جدا.
+
+        v1.14.90 متنِ کنارِ حباب (کراپِ بازشدهٔ لبه) را با \n داخلِ «همان»
+        ناحیهٔ حباب نگه می‌داشت: جوهرش در ماسکِ حباب پاک می‌شد ولی ترجمه‌اش
+        فقط داخلِ حباب رندر می‌شد → «جایش سفید می‌شود، متنش استخراج
+        نمی‌شود». حالا وقتی خط‌هایِ OCRِ یک ناحیه در ≥۲ ستونِ با فاصلهٔ
+        مرکزیِ واقعی قرار می‌گیرند (خروجیِ _column_line_groups) و متنِ
+        \n-دار دقیقاً همان تعداد بخش دارد، هر ستون → ناحیهٔ مستقل با
+        rect/پالی/ترجمه/رندرِ خودش. تکی و دسته‌ای یکسان.
+        """
+        out: List["TextRegion"] = []
+        for r in regions:
+            try:
+                if getattr(r, "sys_span", None) or getattr(r, "sys_split", False):
+                    out.append(r)
+                    continue
+                if abs(float(getattr(r, "angle", 0.0) or 0.0)) >= 8.0:
+                    out.append(r)
+                    continue
+                if getattr(r, "kind", "dialogue") in (
+                        "system", "promo", "junk", "sfx", "free_text"):
+                    out.append(r)
+                    continue
+                polys = [p for p in (r.ocr_polys or [])
+                         if p is not None and len(np.asarray(p).reshape(-1, 2)) >= 3]
+                txt = (r.source_text or "").strip()
+                if len(polys) < 4 or "\n" not in txt:
+                    out.append(r)
+                    continue
+                parts = [p.strip() for p in txt.split("\n") if p.strip()]
+                if len(parts) < 2:
+                    out.append(r)
+                    continue
+                bbs = []
+                for p in polys:
+                    pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                    bbs.append((float(pp[:, 0].min()), float(pp[:, 1].min()),
+                                float(pp[:, 0].max()), float(pp[:, 1].max())))
+                groups = MangaTranslator._column_line_groups(
+                    list(range(len(polys))), bbs,
+                    rtl=(getattr(self, "reading_order", "rtl") == "rtl"))
+                if not groups or len(groups) < 2 or len(groups) != len(parts):
+                    out.append(r)
+                    continue
+                med_h = float(np.median([bbs[i][3] - bbs[i][1]
+                                         for i in range(len(polys))]))
+                spans = sorted(
+                    [(min(bbs[i][0] for i in g), max(bbs[i][2] for i in g))
+                     for g in groups], key=lambda s: s[0])
+                _ok = True
+                for _a in range(len(spans) - 1):
+                    if spans[_a][1] - spans[_a + 1][0] > max(10.0, 0.45 * med_h):
+                        _ok = False
+                        break
+                if not _ok:
+                    out.append(r)
+                    continue
+                if self.debug:
+                    try:
+                        print("    [*] v1.14.92: ناحیهٔ چندستونی → "
+                              f"{len(groups)} ناحیهٔ جدا: "
+                              + " | ".join(p[:30] for p in parts))
+                    except Exception:
+                        pass
+                for gi, g in enumerate(groups):
+                    xs0 = int(min(bbs[i][0] for i in g)) - 3
+                    ys0 = int(min(bbs[i][1] for i in g)) - 3
+                    xs1 = int(max(bbs[i][2] for i in g)) + 3
+                    ys1 = int(max(bbs[i][3] for i in g)) + 3
+                    nx0, ny0 = max(0, xs0), max(0, ys0)
+                    out.append(TextRegion(
+                        id=-1,
+                        boxes=[np.array([[nx0, ny0], [max(nx0 + 1, xs1), ny0],
+                                         [max(nx0 + 1, xs1), max(ny0 + 1, ys1)],
+                                         [nx0, max(ny0 + 1, ys1)]],
+                                        dtype=np.int32)],
+                        source_text=parts[gi],
+                        rect=(nx0, ny0, max(1, xs1 - nx0), max(1, ys1 - ny0)),
+                        angle=float(getattr(r, "angle", 0.0) or 0.0),
+                        kind=getattr(r, "kind", "dialogue"),
+                        bubble_style=getattr(r, "bubble_style", "normal"),
+                        det_class=getattr(r, "det_class", "") or "",
+                        ocr_polys=[np.asarray(polys[i], dtype=np.int32)
+                                   for i in g],
+                    ))
+            except Exception:
+                out.append(r)
+        return out
+
     def _extract_regions_from_bubbles(self, image: np.ndarray) -> List[TextRegion]:
 
         if self.det is None:
@@ -17552,6 +17642,7 @@ class MangaTranslator:
             pass
 
         before = len(regions)
+        regions = self._split_mixed_column_regions(regions)
         regions = self._merge_overlapping_regions(regions, iou_thresh=0.35, contain_thresh=0.65)
         if self.debug:
             print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
