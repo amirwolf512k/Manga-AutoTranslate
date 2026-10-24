@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.95"
+APP_VER = "1.14.96"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -7122,6 +7122,39 @@ class MangaTranslator:
         except Exception:
             return False
 
+    def _block_bg_stats(self, image: np.ndarray, rect,
+                        ink_b: Optional[np.ndarray]):
+        """v1.14.96 — آمارِ «زمینهٔ بیرونِ جوهر» داخلِ مستطیلِ بلوک.
+
+        «متنِ روشن روی محفظهٔ تیره» (v1.14.59) فقط وقتی مستطیلِ کاملِ
+        بلوک را برای LaMa می‌خواهد که زمینه یکدست باشد (بنرِ صاف). روی
+        گرادیان/برف‌نوی/نقش‌ونگار (412e9e: EXEC + GREEN MOON — std≈۶۷/۵۸
+        در برابرِ باندِ واقعیِ img4 با std≈۱۸) حفرهٔ بزرگِ LaMa پرِ تختِ
+        بی‌بافت می‌سازد. خروجی: (med, std, bright_frac) یا None."""
+        try:
+            h, w = image.shape[:2]
+            bx, by, bw, bh = [int(v) for v in rect]
+            x0, y0 = max(0, bx), max(0, by)
+            x1, y1 = min(w, bx + bw), min(h, by + bh)
+            if x1 - x0 < 24 or y1 - y0 < 14:
+                return None
+            g = cv2.cvtColor(image[y0:y1, x0:x1], cv2.COLOR_BGR2GRAY)
+            if ink_b is None or ink_b.shape != image.shape[:2] \
+                    or not np.any(ink_b):
+                return None
+            ink = cv2.dilate((ink_b[y0:y1, x0:x1] > 0).astype(np.uint8),
+                             np.ones((9, 9), np.uint8)) > 0
+            bg = (~ink)
+            if int(np.count_nonzero(bg)) < 200:
+                return None
+            vals = g[bg].astype(np.float32)
+            med = float(np.median(vals))
+            std = float(vals.std())
+            bright = float((vals > 170.0).mean())
+            return (med, std, bright)
+        except Exception:
+            return None
+
     def _carve_structural_walls(self, image: np.ndarray, rm: np.ndarray,
                                 region: "TextRegion",
                                 polys_raw: list,
@@ -8259,6 +8292,68 @@ class MangaTranslator:
                                                     and self._clean_level() != "fast"
                                                     and self._ink_is_light(
                                                         image, _inkB)):
+                                                # v1.14.96 — گاردِ بافتِ زمینه:
+                                                # مستطیلِ کاملِ بلوک فقط برای
+                                                # محفظهٔ «یکدست» (بنرِ صاف).
+                                                # روی گرادیان/برف‌نوی/نقش‌ونگار
+                                                # حفرهٔ بزرگِ LaMa = پرِ تختِ
+                                                # بی‌بافت (412e9e: EXEC و
+                                                # GREEN MOON) → ماسکِ
+                                                # پالی‌به‌پالی ∪ جوهر.
+                                                _bgst96 = self._block_bg_stats(
+                                                    image,
+                                                    tuple([int(v) for v in
+                                                           region.rect]),
+                                                    _inkB)
+                                                if _bgst96 is not None and (
+                                                        _bgst96[1] > 36.0
+                                                        or _bgst96[2] > 0.12):
+                                                    try:
+                                                        _rm96 = np.zeros_like(m)
+                                                        # v1.14.96e — پالیِ
+                                                        # «خام» (نه ۱.۲×):
+                                                        # گسترشِ ۱.۲× روی
+                                                        # پلاک/قاب‌هایِ تزئینی
+                                                        # قاب را هم ماسک
+                                                        # می‌کند → رگهٔ قاب
+                                                        # در مرجع‌ها (412e9e)
+                                                        for _pl96 in (region.ocr_polys or []):
+                                                            try:
+                                                                _pq96 = np.asarray(
+                                                                    _pl96,
+                                                                    dtype=np.float32).reshape(
+                                                                    -1, 2)
+                                                            except Exception:
+                                                                continue
+                                                            if _pq96.shape[0] < 3:
+                                                                continue
+                                                            cv2.fillPoly(
+                                                                _rm96,
+                                                                [np.rint(
+                                                                    _pq96
+                                                                ).astype(np.int32)],
+                                                                255)
+                                                        _rm = cv2.bitwise_or(
+                                                            _inkB, _rm96)
+                                                    except Exception:
+                                                        _rm = _inkB
+                                                    if _pad_k is not None:
+                                                        _rm = cv2.dilate(
+                                                            _rm, _pad_k)
+                                                    m = cv2.bitwise_or(m, _rm)
+                                                    n_ok += 1
+                                                    if self.debug:
+                                                        try:
+                                                            print(
+                                                                "  [🔍] ماسکِ #مسیر: "
+                                                                "poly-bands∪ink "
+                                                                f"(زمینهٔ بافت‌مند "
+                                                                f"std={_bgst96[1]:.0f} "
+                                                                f"bright={_bgst96[2]:.2f})"
+                                                            )
+                                                        except Exception:
+                                                            pass
+                                                    continue
                                                 try:
                                                     _ys2, _xs2 = np.nonzero(_rm)
                                                     self._lama_force_rect_boxes.append(
@@ -10494,13 +10589,21 @@ class MangaTranslator:
                         _outb = (~_bld)
                         if int(np.count_nonzero(_outb)) >= 200:
                             _medb = float(np.median(_bgo[_outb]))
-                            if _medb < 140.0:
+                            # v1.14.96 — گاردِ بافت: «کلِ بلوک از donor»
+                            # فقط برای باندِ تیرهٔ «یکدست» (std کم —
+                            # PARAGRAPHهایِ img4 روی حصار). روی زمینهٔ
+                            # بافت‌مند (برف‌نوی/نقش‌ونگارِ 412e9e با
+                            # std≈۶۷/۵۸) کلِ بلوک = پرِ تختِ LaMa →
+                            # فقط نوارهایِ خط از donor می‌آیند.
+                            _stdb = float(np.std(_bgo[_outb]))
+                            if _medb < 140.0 and _stdb <= 36.0:
                                 out[_by0:_by1, _bx0:_bx1] = True
                                 _sweep[_by0:_by1, _bx0:_bx1] = True
                                 if self.debug:
                                     try:
                                         print(f"  [*]بلوکِ "
-                                              f"باندِ تیره (med={_medb:.0f})"
+                                              f"باندِ تیره (med={_medb:.0f}"
+                                              f" std={_stdb:.0f})"
                                               f" → کلِ بلوک از donor "
                                               f"({_bx1-_bx0}x{_by1-_by0})")
                                     except Exception:
@@ -10902,10 +11005,207 @@ class MangaTranslator:
         except Exception:
             return composed
 
+    def _texture_refill_donor(self, donor: np.ndarray,
+                              original: np.ndarray,
+                              cmp_mask: np.ndarray) -> None:
+        """v1.14.96 — بازپرِ بافت برای زمینه‌هایِ نویز/نقش‌ونگار.
+
+        LaMa روی برف‌نوی/خال‌خال (EXECِ 412e9e، پلاکِ GREEN MOON) پرِ
+        «تختِ بی‌بافت» می‌دهد — نویزِ ریز میانگین می‌شود و مستطیلِ صاف
+        می‌ماند. برای هر مؤلفهٔ نوارمانندِ ماسک که حلقه‌اش بافت‌مند است
+        (std حلقه > ۳۶):
+          low-freq  = میان‌یابیِ قائمِ ستونی بینِ ردیف‌هایِ تمیزِ
+                      بالا/پایینِ نوار (گرادیانِ واقعی)
+          high-freq = نویزِ واقعیِ نزدیک‌ترین پیکسلِ «تمیزِ بی‌لبه»
+                      (برفِ زمینه بدونِ لبهٔ دیوار/قاب)
+        حباب‌ها/پلاک‌هایِ صاف (std ≤ ۳۶) دست‌نخورده می‌مانند."""
+        try:
+            if donor is None or original is None or cmp_mask is None:
+                return
+            h, w = donor.shape[:2]
+            g = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+            blur_b = cv2.GaussianBlur(original, (0, 0), 3.5).astype(
+                np.float32)
+            resid = original.astype(np.float32) - blur_b
+            resid_max = np.max(np.abs(resid), axis=2)
+            n, lb, stt, _ = cv2.connectedComponentsWithStats(
+                cmp_mask.astype(np.uint8), 8)
+            _dbg96 = bool(os.environ.get("MANGA_TR_DBG"))
+            for i in range(1, n):
+                cx, cy, cw, ch, _a = [int(v) for v in stt[i]]
+                if cw < 24 or ch > 380 or ch < 6:
+                    continue
+                x0, y0 = max(0, cx - 6), max(0, cy - 6)
+                x1, y1 = min(w, cx + cw + 6), min(h, cy + ch + 6)
+                comp = (lb[y0:y1, x0:x1] == i)
+                mall = cmp_mask[y0:y1, x0:x1]
+                ring = (cv2.dilate(comp.astype(np.uint8),
+                                   np.ones((13, 13), np.uint8)) > 0) \
+                    & (~comp) & (~mall)
+                if int(np.count_nonzero(ring)) < 200:
+                    continue
+                rvals = g[y0:y1, x0:x1][ring].astype(np.float32)
+                if float(rvals.std()) <= 36.0:
+                    continue
+                # پیکسل‌هایِ «تمیزِ بی‌لبه» برای برداشتِ نویز — لبه‌های
+                # تیز (دیوار/قاب) با resid بزرگ حذف می‌شوند
+                clean = ring & (resid_max[y0:y1, x0:x1] <= 45.0)
+                if int(np.count_nonzero(clean)) < 200:
+                    continue
+                crop_o = blur_b[y0:y1, x0:x1]
+                crop_d = donor[y0:y1, x0:x1]
+                # v1.14.96f — فقط پیکسل‌هایِ «واقعاً پرشده» (پرِ LaMa)
+                # بازپر می‌شوند؛ جایی که donor = اصلِ عکس است (ماسکِ
+                # تنگِ پالی‌به‌پالی) بافتِ اورجینال دست‌نخورده می‌ماند —
+                # نویزِ مصنوعی هرگز جایِ بافتِ واقعی را نمی‌گیرد.
+                _chg96 = (np.abs(crop_d.astype(np.int16)
+                                 - original[y0:y1, x0:x1].astype(np.int16))
+                          .max(axis=2) > 6)
+                _chg96 = cv2.dilate(_chg96.astype(np.uint8),
+                                    np.ones((5, 5), np.uint8)) > 0
+                _tgt96 = comp & _chg96
+                if int(np.count_nonzero(_tgt96)) < 300:
+                    continue
+                if int(np.count_nonzero(_tgt96)) < \
+                        0.25 * max(1, int(np.count_nonzero(comp))):
+                    # تغییراتِ جزئی → donor همین‌جا سالم است
+                    continue
+                lowf = cv2.GaussianBlur(crop_d.astype(np.float32),
+                                        (0, 0), 3.5)
+                ys_i = np.nonzero(comp.any(axis=1))[0]
+                if ys_i.size == 0:
+                    continue
+                ymin, ymax = int(ys_i.min()), int(ys_i.max())
+                span = float(max(1, ymax - ymin))
+                # v1.14.96b — مرجعِ هموارشده در محورِ x: میانگینِ ۵ ردیفِ
+                # هر ستون «رگهٔ عمودی» می‌سازد؛ ابتدا ستون‌هایِ آلوده به
+                # ماسک حذف و با میان‌یابیِ افقی پر، بعد نرمِ گاوسیِ ۱بعدی.
+                W96 = x1 - x0
+                ty0, ty1 = max(0, ymin - 6), ymin
+                by0b, by1b = ymax + 1, min(mall.shape[0], ymax + 7)
+                tband = crop_o[ty0:ty1] if ty1 > ty0 else None
+                bband = crop_o[by0b:by1b] if by1b > by0b else None
+                tvalid = (~mall[ty0:ty1]) if ty1 > ty0 else None
+                bvalid = (~mall[by0b:by1b]) if by1b > by0b else None
+
+                def _band_ref(band, valid):
+                    if band is None or valid is None:
+                        return None
+                    vals = np.where(valid[..., None], band, np.nan)
+                    with np.errstate(invalid="ignore"):
+                        # v1.14.96g — میانهٔ跨-ردیف (مقاوم به خالِ بافت)
+                        ref = np.nanmedian(vals, axis=0)
+                    bad = ~np.isfinite(ref).all(axis=-1)
+                    if bool(bad.all()):
+                        return None
+                    if bad.any():
+                        xs_ok = np.nonzero(~bad)[0]
+                        for cc in np.nonzero(bad)[0]:
+                            j = xs_ok[np.argmin(np.abs(xs_ok - cc))]
+                            ref[cc] = ref[j]
+                    # v1.14.96c — GaussianBlur رویِ (W,3) کانال‌هایِ رنگ را
+                    # با هم قاطی می‌کند (خاکستری!) → شکلِ (1,W,3) لازم است
+                    # v1.14.96g — میانهٔ پهنِ跨-ستون (۴۱): نوارِ تیره/روشنِ
+                    # قاب و شیارها (۱۰–۲۵px) را حذف می‌کند
+                    ref96 = np.clip(ref, 0, 255).astype(
+                        np.uint8).reshape(1, -1, 3)
+                    ref96 = cv2.medianBlur(ref96, 41)
+                    ref96 = cv2.GaussianBlur(ref96, (0, 0), 3.0)
+                    return ref96.reshape(-1, 3).astype(np.float32)
+
+                tref_full = _band_ref(tband, tvalid)
+                bref_full = _band_ref(bband, bvalid)
+                if tref_full is None and bref_full is None:
+                    continue
+                # v1.14.96g — اگر یک باندِ مرجع «آلودهٔ ساختار» است
+                # (قاب/شیار از باند عبور می‌کند — پلاکِ GREEN MOON:
+                # tref std=35 در برابرِ bref std=13) فقط باندِ پایدار
+                # ملاک می‌شود؛ وگرنه میان‌یابیِ قائمِ کامل.
+                _tstd96 = float(np.std(tref_full.mean(axis=1))) \
+                    if tref_full is not None else 1e9
+                _bstd96 = float(np.std(bref_full.mean(axis=1))) \
+                    if bref_full is not None else 1e9
+                if min(_tstd96, _bstd96) > 0 and \
+                        max(_tstd96, _bstd96) > 1.8 * min(_tstd96, _bstd96) \
+                        and min(_tstd96, _bstd96) <= 20.0:
+                    _const96 = bref_full if _bstd96 <= _tstd96 else tref_full
+                else:
+                    _const96 = None
+                _ref_fail = False
+                for x in np.nonzero(_tgt96.any(axis=0))[0]:
+                    yy = np.nonzero(_tgt96[:, x])[0]
+                    if yy.size == 0:
+                        continue
+                    if _const96 is not None:
+                        lowf[yy, x] = _const96[x][None, :]
+                        continue
+                    tref = tref_full[x] if tref_full is not None else None
+                    bref = bref_full[x] if bref_full is not None else None
+                    t = (yy.astype(np.float32) - float(ymin)) / span
+                    if tref is not None and bref is not None:
+                        lowf[yy, x] = ((1.0 - t)[:, None] * tref[None, :]
+                                       + t[:, None] * bref[None, :])
+                    elif tref is not None:
+                        lowf[yy, x] = tref[None, :]
+                    else:
+                        lowf[yy, x] = bref[None, :]
+                if _ref_fail:
+                    continue
+                # نویزِ واقعی از نزدیک‌ترین پیکسلِ تمیزِ بی‌لبه
+                dist, lab = cv2.distanceTransformWithLabels(
+                    (~clean).astype(np.uint8), cv2.DIST_L2, 5,
+                    labelType=cv2.DIST_LABEL_PIXEL)
+                cy_i, cx_i = np.nonzero(clean)
+                mys, mxs = np.nonzero(_tgt96)
+                idx = np.clip(lab[mys, mxs] - 1, 0, cy_i.size - 1)
+                hf_map = np.zeros_like(lowf)
+                hf_map[mys, mxs] = \
+                    resid[y0:y1, x0:x1][cy_i[idx], cx_i[idx]]
+                # v1.14.96d — نمونه‌برداریِ نزدیک‌ترین‌همسایه «قفلِ ستونی»
+                # می‌سازد (رگهٔ عمودی)؛ بلورِ ریز آن را می‌شکند
+                hf_map = cv2.GaussianBlur(hf_map, (0, 0), 0.8)
+                fill = np.clip(lowf + hf_map, 0, 255).astype(np.uint8)
+                sub = crop_d.copy()
+                sub[_tgt96] = fill[_tgt96]
+                donor[y0:y1, x0:x1] = sub
+                try:
+                    _trd96 = os.environ.get("MANGA_TR_DUMP", "")
+                    if _trd96:
+                        cv2.imwrite(os.path.join(
+                            _trd96, f"comp_{cx}_{cy}_before.png"),
+                            crop_d.astype(np.uint8))
+                        cv2.imwrite(os.path.join(
+                            _trd96, f"comp_{cx}_{cy}_fill.png"), fill)
+                        if tref_full is not None:
+                            cv2.imwrite(os.path.join(
+                                _trd96, f"comp_{cx}_{cy}_tref.png"),
+                                np.clip(tref_full, 0, 255).astype(
+                                    np.uint8).reshape(1, -1, 3))
+                        if bref_full is not None:
+                            cv2.imwrite(os.path.join(
+                                _trd96, f"comp_{cx}_{cy}_bref.png"),
+                                np.clip(bref_full, 0, 255).astype(
+                                    np.uint8).reshape(1, -1, 3))
+                except Exception:
+                    pass
+                if _dbg96:
+                    try:
+                        print(f"  [🔍]texture-refill comp@({cx},{cy}) "
+                              f"{cw}x{ch} ring_std="
+                              f"{float(g[cy:cy+ch, cx:cx+cw].std()):.0f}")
+                    except Exception:
+                        pass
+        except Exception:
+            if _dbg96:
+                import traceback as _tb96
+                print("  [!]texture-refill error:")
+                _tb96.print_exc()
+
     def _compose_two_image(self, donor: np.ndarray, original: np.ndarray,
 
                            mask: np.ndarray,
-                           verbose: bool = True) -> np.ndarray:
+                           verbose: bool = True,
+                           refill: bool = False) -> np.ndarray:
         try:
             _dd81z = os.environ.get("MANGA_DUMP_DONOR", "")
             if _dd81z:
@@ -10934,10 +11234,29 @@ class MangaTranslator:
             # v1.14.64 — دیوارِ حباب/قوس/کادرِ پنل (نقشهٔ ساختاریِ محافظت)
             # هرگز از عکسِ پاک‌شده به خروجی نمی‌رود — حتی اگر لبهٔ نوارِ متن
             # به آن چسبیده باشد. این «قوسِ ناپدیدشده» را ریشه‌کن می‌کند.
+            # v1.14.96j — استثنا: گلیفِ تنهاِ جاافتاده (Wِ WICKED) که
+            # نقشهٔ حفاظت آن را «قاب» خوانده — اجزایِ کوچکِ هم‌اندازهٔ
+            # حرفِ محافظت‌شده که کاملاً داخلِ نوارِ متن‌اند = بقایایِ
+            # حرف‌اند → مثلِ بقیهٔ نوار منتقل می‌شوند. قاب/خطِ کشیده
+            # محافظت می‌ماند.
             try:
                 _ppC = getattr(self, "_page_protect", None)
                 if _ppC is not None and _ppC.shape == _cmp.shape:
-                    _cmp &= (_ppC == 0)
+                    _excl96 = (_ppC > 0) & _cmp
+                    if int(_excl96.sum()) > 0:
+                        _nE96, _lE96, _sE96, _ = \
+                            cv2.connectedComponentsWithStats(
+                                _excl96.astype(np.uint8), 8)
+                        _keep96 = np.zeros_like(_cmp)
+                        for _jE96 in range(1, _nE96):
+                            _aE96 = int(_sE96[_jE96, cv2.CC_STAT_AREA])
+                            _wE96 = int(_sE96[_jE96, cv2.CC_STAT_WIDTH])
+                            _hE96 = int(_sE96[_jE96, cv2.CC_STAT_HEIGHT])
+                            if _aE96 <= 1200 and max(_wE96, _hE96) <= 90:
+                                _keep96 |= (_lE96 == _jE96)
+                        _cmp &= ~((_ppC > 0) & (~_keep96))
+                    else:
+                        _cmp &= (_ppC == 0)
             except Exception:
                 pass
             # v1.14.73 — دیوارِ ریز (حباب‌هایِ کوچک — YEP!/OH BOY که دیوارشان
@@ -10960,6 +11279,15 @@ class MangaTranslator:
                 pass
             if not _cmp.any():
                 return np.ascontiguousarray(original)
+            # v1.14.96 — بازپرِ بافت (آزمایشی): روی زمینهٔ برف‌نوی/نقش‌ونگار
+            # پرِ LaMa «تختِ بی‌بافت» است → نواری که حلقه‌اش بافت‌مند است
+            # با low-freqِ میان‌یابی‌شده + نویزِ واقعی بازپر می‌شود.
+            # v1.14.96h — پیش‌فرضِ «خاموش»: در تستِ A/B، نسخهٔ بدونِ
+            # بازپر برنده بود (ماسکِ پالی‌باندیِ v1.14.96 خودش پرِ
+            # لایما را آن‌قدر تنگ کرده که بازپرِ نویزِ مصنوعی نوار
+            # می‌سازد). فقط با MANGA_TEXTURE_REFILL=1 فعال شود.
+            if refill and os.environ.get("MANGA_TEXTURE_REFILL", "0") == "1":
+                self._texture_refill_donor(donor, original, _cmp)
             _out = np.ascontiguousarray(
                 np.where(_cmp[..., None], donor, original))
             try:
@@ -11705,7 +12033,8 @@ class MangaTranslator:
             # v1.14.54/63: در این مسیر هم خروجی = عکسِ اصلی + فقط نوارِ متن
             try:
                 _cmp = self._compose_strip_mask(image, mask)
-                cleaned = self._compose_two_image(cleaned, image, _cmp)
+                cleaned = self._compose_two_image(cleaned, image, _cmp,
+                                                  refill=True)
             except Exception:
                 pass
             return cleaned
@@ -12803,13 +13132,21 @@ class MangaTranslator:
                                 _ringV = _gOW[_ringW]
                                 _rstdW = float(_ringV.std())
                                 _rbriW = float((_ringV >= 140).mean())
-                                if _rstdW > 34.0 or _rbriW > 0.30:
+                                # v1.14.96i — معیارِ stdِ حلقه حذف شد:
+                                # حلقهٔ باکس‌هایِ داخلِ صحنهٔ پرجزئیات
+                                # (سکه/قابِ WICKEDِ 012_p1) همیشه
+                                # بافت‌مند است ولی «محفظهٔ» خودِ باکس
+                                # سیاهِ یکنواخت است — سویپ فقط
+                                # پیکسل‌هایِ روشنِ داخل را با رنگِ
+                                # تیرهٔ محلی پر می‌کند. گاردِ واقعی =
+                                # یکنواختیِ محفظهٔ تیره (پایین‌تر) +
+                                # حلقهٔ روشن (کارتِ سفید).
+                                if _rbriW > 0.30:
                                     if self.debug:
                                         print(f"  [✓]سویپِ جوهرِ "
-                                              f"روشن رد شد — زمینهٔ "
-                                              f"بافت‌مند/روشن "
-                                              f"(std={_rstdW:.0f} "
-                                              f"bright={_rbriW:.2f})",
+                                              f"روشن رد شد — حلقهٔ "
+                                              f"روشن (کارتِ سفید؟) "
+                                              f"bright={_rbriW:.2f}",
                                               flush=True)
                                     continue
                     except Exception:
@@ -12822,6 +13159,34 @@ class MangaTranslator:
                     if _protW is not None:
                         _bright = _bright & (
                             _protW[_wy0:_wy1, _wx0:_wx1] == 0)
+                        # v1.14.96j — حبابیِ OCR گاهی یک گلیف را از قلم
+                        # می‌اندازد (Wِ «WICKED» در 012_p1) و نقشهٔ
+                        # حفاظتِ ساختاری آن گلیفِ تنها را «قاب/خطِ
+                        # روشن» می‌خواند و همیشه زنده نگهش می‌دارد.
+                        # اجزایِ کوچکِ هم‌اندازهٔ حرف (<۱۲۰۰px و
+                        # <۹۰px درازا) که داخلِ محفظهٔ تیرهٔ یکدست
+                        # قفس شده‌اند = بقایایِ حرف‌اند، نه قاب —
+                        # به سویپ برگردانده می‌شوند. قاب/پرتوِ
+                        # کشیده دست‌نخورده می‌ماند.
+                        try:
+                            _bP96 = (_sub >= 140) & (
+                                _protW[_wy0:_wy1, _wx0:_wx1] > 0)
+                            if int(_bP96.sum()) > 0:
+                                _nP96, _lP96, _sP96, _ = \
+                                    cv2.connectedComponentsWithStats(
+                                        _bP96.astype(np.uint8), 8)
+                                for _jP96 in range(1, _nP96):
+                                    _aP96 = int(_sP96[_jP96,
+                                                      cv2.CC_STAT_AREA])
+                                    _wP96 = int(_sP96[_jP96,
+                                                      cv2.CC_STAT_WIDTH])
+                                    _hP96 = int(_sP96[_jP96,
+                                                      cv2.CC_STAT_HEIGHT])
+                                    if _aP96 <= 1200 and \
+                                            max(_wP96, _hP96) <= 90:
+                                        _bright |= (_lP96 == _jP96)
+                        except Exception:
+                            pass
                     _bright = cv2.morphologyEx(
                         _bright.astype(np.uint8), cv2.MORPH_OPEN,
                         np.ones((3, 3), np.uint8)) > 0
@@ -12829,6 +13194,20 @@ class MangaTranslator:
                         continue
                     if float(_bright.mean()) > 0.5:
                         continue  # بلوک عمدتاً روشن؟ → این کارتِ تیره نیست
+                    # v1.14.96i — گاردِ یکنواختیِ محفظه: سویپ فقط وقتی
+                    # امن است که پیکسل‌هایِ تیرهٔ داخلِ باکس یکدست باشند
+                    # (کارتِ سیاه/سرخِ صاف). محفظهٔ بافت‌مند/گرادیانی
+                    # (نئبولای EXEC) با std تیره‌هایِ بالا رد می‌شود.
+                    _darkM96 = ((_sub < 120).astype(np.uint8))
+                    _dkV96 = _sub[_darkM96 > 0]
+                    if _dkV96.size >= 200 and \
+                            float(_dkV96.std()) > 30.0:
+                        if self.debug:
+                            print(f"  [✓]سویپِ جوهرِ روشن رد شد — "
+                                  f"محفظهٔ یکدست نیست "
+                                  f"(std={float(_dkV96.std()):.0f})",
+                                  flush=True)
+                        continue
                     _subC = cleaned[_wy0:_wy1, _wx0:_wx1]
                     _darkM = ((_sub < 120).astype(np.uint8)
                               & (~_bright).astype(np.uint8))
@@ -13011,15 +13390,40 @@ class MangaTranslator:
                 # v1.14.81 — قبل از کامپوزِ نهایی: پیکسل‌هایِ قفل‌شده
                 # (خطِ حباب/قاب/تابِ نور) از اصل ترمیم می‌شوند تا نوارها
                 # بُرشِ سالم ببرند — نه سیاهیِ LaMa، نه پرشِ فوری.
+                # v1.14.96j — استثنا: گلیفِ تنهاِ جاافتاده (Wِ «WICKED»)
+                # که نقشهٔ حفاظت آن را قاب خوانده — اگر از اصل ترمیم
+                # شود، کامپوزِ نهایی خودِ متنِ اصلی را منتقل می‌کند!
+                # اجزایِ کوچکِ هم‌اندازهٔ حرفِ محافظت‌شده که داخلِ
+                # نوارهایِ کامپوز‌اند ترمیم «نمی‌شوند» تا پاک‌شدهٔ
+                # سویپ/LaMa زنده بماند. قاب/خطِ کشیده مثلِ قبل ترمیم.
                 try:
                     _pa81f = getattr(self, "_prot_all", None)
                     if _pa81f is not None and int(cv2.countNonZero(_pa81f)):
                         _sel81f = _pa81f > 0
+                        try:
+                            _ins96 = _sel81f & (_cmp2 > 0)
+                            if int(_ins96.sum()) > 0:
+                                _nG96, _lG96, _sG96, _ = \
+                                    cv2.connectedComponentsWithStats(
+                                        _ins96.astype(np.uint8), 8)
+                                for _jG96 in range(1, _nG96):
+                                    _aG96 = int(_sG96[_jG96,
+                                                      cv2.CC_STAT_AREA])
+                                    _wG96 = int(_sG96[_jG96,
+                                                      cv2.CC_STAT_WIDTH])
+                                    _hG96 = int(_sG96[_jG96,
+                                                      cv2.CC_STAT_HEIGHT])
+                                    if _aG96 <= 1200 and \
+                                            max(_wG96, _hG96) <= 90:
+                                        _sel81f &= ~(_lG96 == _jG96)
+                        except Exception:
+                            pass
                         cleaned[_sel81f] = image[_sel81f]
                 except Exception:
                     pass
                 cleaned = self._compose_two_image(cleaned, image, _cmp2,
-                                                 verbose=False)
+                                                 verbose=False,
+                                                 refill=True)
                 try:
                     _sdd81z = os.environ.get("MANGA_STAGE_DUMP", "")
                     if _sdd81z:
