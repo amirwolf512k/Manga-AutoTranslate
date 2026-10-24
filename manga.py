@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.94"
+APP_VER = "1.14.95"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -2573,6 +2573,23 @@ class RapidOCRBackend:
             if not _ensure_rapidocr_pkg():
                 raise ImportError("rapidocr نصب نیست و نصب خودکار ناموفق بود")
             from rapidocr import RapidOCR as NewRapidOCR
+            # v1.14.95 — سکوتِ لاگِ RapidOCR: هر کراپِ خالی یک خطِ
+            # [WARNING] «The text detection result is empty» می‌نوشت و
+            # کنسول/وب را پر می‌کرد (شکایتِ «لاگِ اضافه» کاربر).
+            # نکته: موتور در init خودش level را INFO می‌کند → setLevel
+            # کافی نیست؛ «فیلتر» رویِ همان لاگر ماندگار است.
+            try:
+                import logging as _lg
+
+                class _QuietRapidOCR(_lg.Filter):
+                    def filter(self, rec):
+                        return rec.levelno >= _lg.ERROR
+
+                for _ln in ("RapidOCR", "rapidocr"):
+                    _lg.getLogger(_ln).addFilter(_QuietRapidOCR())
+                    _lg.getLogger(_ln).propagate = False
+            except Exception:
+                pass
             _low = str(lang).lower()
             _rec_params = None
             if _low in ("korean", "ko"):
@@ -6542,20 +6559,72 @@ class MangaTranslator:
                         # جوهرِ واقعیِ داخلِ بلوک (تیره یا روشن) که نوارها
                         # نپوشانده‌اند — نوارِ نجاتِ مکمل؛ دیوار (protect)
                         # هرگز واردِ donor نمی‌شود.
+                        #
+                        # v1.14.95 — گاردِ «ساختار»: معیارِ «هرچه از میانه
+                        # دور است = جوهر» رویِ بلوک‌هایِ نیمه‌شفاف/قاب‌دار
+                        # فاجعه می‌ساخت: قابِ سفیدِ باکس (روشنِ واضح مقابلِ
+                        # میانهٔ تیره) و بافتِ پشتِ شیشه هر دو «جوهر» خوانده
+                        # می‌شدند → ماسکِ donor = کلِ بلوک + قاب → LaMa کلِ
+                        # باکس را بازسازی می‌کرد (لبهٔ دوبلِ قاب + لکهٔ تخت +
+                        # «MONSTERS..»). پس: فقط «قطعه‌هایِ حرفیِ» فشرده —
+                        # نه خط‌هایِ بلند/حلقه‌ای — و اگر باز هم بیش از
+                        # ~۴۵٪ بلوک شد، یعنی معیار جوهر نیست، بافت است →
+                        # کلِ نجاتِ جوهر رد می‌شود (فقط نوارها می‌مانند).
                         try:
                             _oc74 = image[_zy0:_zy1, _zx0:_zx1]
                             _g74 = cv2.cvtColor(_oc74, cv2.COLOR_BGR2GRAY)
                             _med74 = float(np.median(_g74))
-                            _ink74 = ((_g74 < _med74 - 28.0)
-                                      | (_g74 > _med74 + 36.0))
-                            _ink74 = cv2.dilate(
-                                _ink74.astype(np.uint8),
-                                np.ones((7, 7), np.uint8)) > 0
-                            if _protect is not None \
-                                    and _protect.shape == out.shape:
-                                _ink74 &= (_protect[_zy0:_zy1,
-                                                    _zx0:_zx1] == 0)
-                            _keep74[_zy0:_zy1, _zx0:_zx1] |= _ink74
+                            # v1.14.95b — فقط «بقایایِ پرکنتراست»: بازماندهٔ
+                            # واقعیِ جوهر (آپاستروف/خطِ جاافتاده) در برابر
+                            # زمینهٔ بلوک خیلی دور است (≥۹۰). بافتِ پشتِ
+                            # شیشه/گرادیانِ پلاک در همین بازه نیست → دیگر
+                            # واردِ ماسکِ LaMa نمی‌شود و لکهٔ سایه نمی‌سازد.
+                            _ink74 = ((_g74 < _med74 - 90.0)
+                                      | (_g74 > _med74 + 90.0))
+                            _ink_u8 = _ink74.astype(np.uint8)
+                            _nz74 = int(_ink_u8.sum())
+                            _blk_area = max(1, (_zx1 - _zx0) * (_zy1 - _zy0))
+                            _wall_ok74 = True
+                            if _nz74 >= max(400, int(0.45 * _blk_area)):
+                                # بافت/گرادیان — نه جوهر؛ کلِ نجات رد.
+                                _wall_ok74 = False
+                            else:
+                                try:
+                                    _n74, _lb74, _stt74, _ = \
+                                        cv2.connectedComponentsWithStats(
+                                            _ink_u8, 8)
+                                    _okc74 = np.zeros_like(_ink_u8)
+                                    for _i74 in range(1, _n74):
+                                        _cw74 = int(_stt74[_i74,
+                                                          cv2.CC_STAT_WIDTH])
+                                        _ch74 = int(_stt74[_i74,
+                                                          cv2.CC_STAT_HEIGHT])
+                                        _mx74 = max(_cw74, _ch74)
+                                        _mn74 = max(1, min(_cw74, _ch74))
+                                        # خطِ بلندِ نازک = دیوار/قاب، نه حرف
+                                        if _mx74 >= 64 and _mn74 <= max(
+                                                12, int(0.09 * _mx74)):
+                                            continue
+                                        # حلقه/قاب: کادرِ بزرگ با پرشدگیِ کم
+                                        _fa74 = _cw74 * _ch74
+                                        _px74 = int(_stt74[_i74,
+                                                          cv2.CC_STAT_AREA])
+                                        if _mx74 >= 96 and _fa74 > 0 and \
+                                                _px74 / _fa74 < 0.38:
+                                            continue
+                                        _okc74[_lb74 == _i74] = 1
+                                    _ink_u8 = _okc74
+                                except Exception:
+                                    pass
+                            if _wall_ok74:
+                                _ink74 = cv2.dilate(
+                                    _ink_u8,
+                                    np.ones((5, 5), np.uint8)) > 0
+                                if _protect is not None \
+                                        and _protect.shape == out.shape:
+                                    _ink74 &= (_protect[_zy0:_zy1,
+                                                        _zx0:_zx1] == 0)
+                                _keep74[_zy0:_zy1, _zx0:_zx1] |= _ink74
                         except Exception:
                             pass
                         # جایگزینی: داخلِ بلوک فقط نوارها + جوهر می‌ماند
@@ -6631,7 +6700,7 @@ class MangaTranslator:
             self._donor_boxes = donor_boxes
             if getattr(self, "debug", False):
                 try:
-                    print(f"  [*] v1.14.74: donor = فقط نوارِ متن + پد "
+                    print(f"  [*]donor = فقط نوارِ متن + پد "
                           f"(+{_added}px) — کلِ حباب LaMa نمی‌شود"
                           f" | {len(donor_boxes)} جعبهٔ نجاتِ جوهر")
                 except Exception:
@@ -8153,7 +8222,8 @@ class MangaTranslator:
                                                     self._lama_force_rect_boxes.append(
                                                         [int(_xs2.min()), int(_ys2.min()),
                                                          int(_xs2.max()) + 1,
-                                                         int(_ys2.max()) + 1])
+                                                         int(_ys2.max()) + 1,
+                                                         int(getattr(region, "id", -1))])
                                                 except Exception:
                                                     pass
                                             elif getattr(self, "use_lama", False):
@@ -8194,7 +8264,8 @@ class MangaTranslator:
                                                     self._lama_force_rect_boxes.append(
                                                         [int(_xs2.min()), int(_ys2.min()),
                                                          int(_xs2.max()) + 1,
-                                                         int(_ys2.max()) + 1])
+                                                         int(_ys2.max()) + 1,
+                                                         int(getattr(region, "id", -1))])
                                                 except Exception:
                                                     pass
                                                 if _pad_k is not None:
@@ -8281,7 +8352,8 @@ class MangaTranslator:
                                 self._lama_force_rect_boxes.append(
                                     [int(_xs2.min()), int(_ys2.min()),
                                      int(_xs2.max()) + 1,
-                                     int(_ys2.max()) + 1])
+                                     int(_ys2.max()) + 1,
+                                     int(getattr(region, "id", -1))])
                             except Exception:
                                 pass
                         elif getattr(self, "use_lama", False):
@@ -8309,7 +8381,8 @@ class MangaTranslator:
                                 self._lama_force_rect_boxes.append(
                                     [int(_xs2.min()), int(_ys2.min()),
                                      int(_xs2.max()) + 1,
-                                     int(_ys2.max()) + 1])
+                                     int(_ys2.max()) + 1,
+                                     int(getattr(region, "id", -1))])
                             except Exception:
                                 pass
                 # v1.14.48: دیوارِ حباب/کادر از ماسک جدا شود
@@ -10426,7 +10499,7 @@ class MangaTranslator:
                                 _sweep[_by0:_by1, _bx0:_bx1] = True
                                 if self.debug:
                                     try:
-                                        print(f"  [*] v1.14.78f: بلوکِ "
+                                        print(f"  [*]بلوکِ "
                                               f"باندِ تیره (med={_medb:.0f})"
                                               f" → کلِ بلوک از donor "
                                               f"({_bx1-_bx0}x{_by1-_by0})")
@@ -10457,7 +10530,7 @@ class MangaTranslator:
             self._compose_sweep_mask = _sweep
             if _n_str and self.debug:
                 try:
-                    print(f"  [*] v1.14.70: کامپوز = {_n_str} ناحیه با "
+                    print(f"  [*]کامپوز = {_n_str} ناحیه با "
                           f"نوارِ خط‌به‌خط (اندازهٔ دقیقِ متن)")
                 except Exception:
                     pass
@@ -10896,7 +10969,7 @@ class MangaTranslator:
                     # v1.14.74 — انتقالِ «همین لحظه، همین تصویر»: هر عکس بلافاصله
                     # بعد از پاک‌شدنش کامپوز می‌شود (نه اینکه همه در آخر بیایند) —
                     # درخواستِ کاربر: «دفعه اول هر عکس جدا انتقال بده».
-                    print(f"  [*] v1.14.74: انتقالِ فوریِ همین صفحه — "
+                    print(f"  [*]انتقالِ فوریِ همین صفحه — "
                           f"عکسِ دوم = خروجیِ نهایی")
             except Exception:
                 pass
@@ -11054,7 +11127,7 @@ class MangaTranslator:
             if _mask66 is not mask:
                 mask = _mask66
                 if self.debug:
-                    print(f"  [+] v1.14.66: هالهٔ گلو → ماسک "
+                    print(f"  [+]هالهٔ گلو → ماسک "
                           f"(+{int((mask > 0).sum()) - _n66}px, "
                           f"{time.time() - _t66:.2f}s)", flush=True)
         except Exception:
@@ -11108,7 +11181,7 @@ class MangaTranslator:
                 if int(cv2.countNonZero(_pb81)):
                     self._prot_bright = _pb81
                     if self.debug:
-                        print(f"  [✓] v1.14.81: حفاظتِ ساختارِ روشن — "
+                        print(f"  [✓]حفاظتِ ساختارِ روشن — "
                               f"{int(cv2.countNonZero(_pb81))}px قفل شد")
                 # v1.14.81b — قفلِ «تابِ نورِ پس‌زمینه»: مؤلفهٔ روشنِ (≥۱۰۰)
                 # که بخشِ بزرگی‌اش (≥۲۰۰۰px) بیش از ~۱۰۰px از متن فاصله
@@ -11141,7 +11214,7 @@ class MangaTranslator:
                             if int(cv2.countNonZero(_pg81)):
                                 self._prot_glow = _pg81
                                 if self.debug:
-                                    print(f"  [✓] v1.14.81b: قفلِ تابِ نور — "
+                                    print(f"  [✓]قفلِ تابِ نور — "
                                           f"{int(cv2.countNonZero(_pg81))}px "
                                           f"({len(_keep)} مؤلفه)")
                 except Exception:
@@ -11203,7 +11276,7 @@ class MangaTranslator:
                         self._prot_all = cv2.bitwise_or(
                             self._prot_all, _slk94)
                     if self.debug:
-                        print(f"  [✓] v1.14.94: قفلِ ساختارِ روشن — "
+                        print(f"  [✓]قفلِ ساختارِ روشن — "
                               f"{int(cv2.countNonZero(_slk94))}px از "
                               f"{len(_fbs94)} بلوک محافظت شد", flush=True)
         except Exception:
@@ -11262,8 +11335,165 @@ class MangaTranslator:
                 # می‌کند (فلسفهٔ «خط به خط» کاربر) و جعبه‌هایِ
                 # اسنپ‌شات/مقایسه هم نواریند.
                 _strips = []
+                _p94 = 12
                 try:
+                    # v1.14.95 — جدایشِ خطی از پالی‌هایِ OCR: پروفیلِ جوهر
+                    # وقتی هالهٔ درخشش بینِ خط‌ها پُرش کند (نمونهٔ «The
+                    # Crimson Dragon,» رویِ پلاک) هر دو خط را یک باند
+                    # می‌کند → حفرهٔ LaMa غول می‌شود و لبهٔ تختِ محسوس
+                    # رویِ گرادیان می‌ماند. مرزِ باند از مرکزِ پالی‌ها،
+                    # ولی گسترهٔ باند از «جوهرِ خامِ» همان باند — وگرنه
+                    # پالیِ فونتِ تزئینی (بلندیِ ۱۳۲px) باز کلِ بلوک را
+                    # می‌پوشاند (v1.14.95c).
+                    _src94 = None
                     if _sub94 is not None and _ys94.size >= 400:
+                        _src94 = _sub94
+                        try:
+                            _rawS94 = getattr(
+                                self, "_page_raw_text_mask", None)
+                            if (_rawS94 is not None
+                                    and _rawS94.shape == mask.shape[:2]):
+                                _rsub94 = _rawS94[
+                                    _fy0:_fy1, _fx0:_fx1]
+                                if int(cv2.countNonZero(_rsub94)) >= 400:
+                                    _src94 = _rsub94
+                        except Exception:
+                            pass
+                    _pl94 = []
+                    try:
+                        _rid94 = int(_fb[4]) if len(_fb) > 4 else -1
+                        if _rid94 >= 0:
+                            for _r94o in (getattr(self, "_page_regions",
+                                                  None) or []):
+                                if int(getattr(_r94o, "id", -2)) == _rid94:
+                                    for _p94b in (
+                                            getattr(_r94o, "ocr_polys",
+                                                    None) or []):
+                                        try:
+                                            _pp94 = np.asarray(
+                                                _p94b,
+                                                dtype=np.float32).reshape(-1, 2)
+                                            if _pp94.shape[0] >= 3:
+                                                _pl94.append(_pp94)
+                                        except Exception:
+                                            continue
+                                    break
+                    except Exception:
+                        _pl94 = []
+                    if len(_pl94) >= 2:
+                        # بازهٔ خامِ y (بدونِ پد) — اگر پدِ قبل از ادغام
+                        # اضافه شود، خط‌هایِ نزدیک (پلاکِ «The Crimson
+                        # Dragon,») در هم می‌لغزند و یک باند می‌شوند.
+                        # مختصاتِ پالی = مطلق؛ بازه‌ها نسبت به باکس‌اند.
+                        _ivs94 = []
+                        for _pp94 in _pl94:
+                            _iy0 = max(0, int(np.floor(
+                                _pp94[:, 1].min())) - _fy0)
+                            _iy1 = min(_fy1 - _fy0, int(np.ceil(
+                                _pp94[:, 1].max())) + 1 - _fy0)
+                            _ix0 = max(0, int(np.floor(
+                                _pp94[:, 0].min())) - _fx0 - _p94)
+                            _ix1 = min(_fx1 - _fx0, int(np.ceil(
+                                _pp94[:, 0].max())) + 1 - _fx0 + _p94)
+                            if _iy1 - _iy0 >= 8 and _ix1 - _ix0 >= 8:
+                                _ivs94.append([_iy0, _iy1, _ix0, _ix1])
+                        _ivs94.sort(key=lambda _v: (_v[0], _v[1]))
+                        _mrg94 = []
+                        for _iv in _ivs94:
+                            if _mrg94 and _iv[0] < _mrg94[-1][1]:
+                                _mrg94[-1][1] = max(_mrg94[-1][1], _iv[1])
+                                _mrg94[-1][2] = min(_mrg94[-1][2], _iv[2])
+                                _mrg94[-1][3] = max(_mrg94[-1][3], _iv[3])
+                            else:
+                                _mrg94.append(list(_iv))
+                        if not (2 <= len(_mrg94) <= 12):
+                            # تلاشِ ۲ — شکافِ مرکزها: فونت‌هایِ تزئینی پالیِ
+                            # بلند می‌سازند و بازه‌هایِ y خط‌ها همپوشانی
+                            # دارند (پلاک: [5-137]/[76-205]). مرزِ خط‌ها =
+                            # میانهٔ بزرگ‌ترینِ شکافِ بینِ مرکزِ خط‌ها؛
+                            # هر باند در مرز کِیل می‌شود.
+                            try:
+                                _cents94 = sorted(
+                                    (v[0] + v[1]) / 2.0 for v in _ivs94)
+                                _gaps94 = [(_cents94[_i94 + 1]
+                                            - _cents94[_i94], _i94)
+                                           for _i94
+                                           in range(len(_cents94) - 1)]
+                                if _gaps94:
+                                    _gmax94, _gi94 = max(
+                                        _gaps94, key=lambda t: t[0])
+                                    if _gmax94 >= 14.0:
+                                        _bnd94 = (_cents94[_gi94]
+                                                  + _cents94[_gi94 + 1]) / 2.0
+                                        _up94 = [v for v in _ivs94
+                                                 if (v[0] + v[1]) / 2.0 < _bnd94]
+                                        _dn94 = [v for v in _ivs94
+                                                 if (v[0] + v[1]) / 2.0 >= _bnd94]
+                                        if _up94 and _dn94:
+                                            _mrg94 = [
+                                                [min(v[0] for v in _up94),
+                                                 min(_bnd94,
+                                                     max(v[1] for v in _up94)),
+                                                 min(v[2] for v in _up94),
+                                                 max(v[3] for v in _up94)],
+                                                [max(_bnd94,
+                                                     min(v[0] for v in _dn94)),
+                                                 max(v[1] for v in _dn94),
+                                                 min(v[2] for v in _dn94),
+                                                 max(v[3] for v in _dn94)]]
+                            except Exception:
+                                _mrg94 = []
+                        if 2 <= len(_mrg94) <= 12:
+                            # v1.14.95c — گسترهٔ باند از «جوهرِ خامِ همان
+                            # باند» نه از bboxِ پالی (فونتِ تزئینی پالیِ
+                            # بلند می‌سازد → نوارها همپوشان می‌شوند و
+                            # حفرهٔ LaMa باز کلِ بلوک می‌شود).
+                            _profC94 = None
+                            if _src94 is not None:
+                                _profC94 = (_src94 > 0).sum(axis=1)
+                                _thrC94 = max(3.0, 0.04 * (_fx1 - _fx0))
+                            for (_ay94, _qy94, _ax94, _qx94) in _mrg94:
+                                _ay94 = int(round(_ay94))
+                                _qy94 = int(round(_qy94))
+                                _ax94 = int(round(_ax94))
+                                _qx94 = int(round(_qx94))
+                                if _profC94 is not None:
+                                    _seg94 = _profC94[_ay94:_qy94]
+                                    _rr94 = np.nonzero(
+                                        _seg94 >= _thrC94)[0]
+                                    if _rr94.size >= 8:
+                                        _ny0 = max(0, _ay94
+                                                   + int(_rr94.min()) - 6)
+                                        _ny1 = min(_fy1 - _fy0,
+                                                   _ay94
+                                                   + int(_rr94.max()) + 7)
+                                        if _ny1 - _ny0 >= 10:
+                                            _ay94, _qy94 = _ny0, _ny1
+                                # v1.14.95f — پدِ ۲۰px: هالهٔ درخششِ
+                                # متن تا ~۲۰px بیرونِ جوهر می‌رود؛ اگر
+                                # نوار تنگ باشد، هاله دورِ پرِ تازه
+                                # می‌ماند و «قابِ روشنِ» محسوس می‌سازد
+                                # (اسکرین‌شاتِ پلاکِ کاربر).
+                                _ay94 = max(0, _ay94 - 20)
+                                _qy94 = min(_fy1 - _fy0, _qy94 + 20)
+                                if _qy94 - _ay94 < 10:
+                                    continue
+                                _strips.append([_fx0 + _ax94, _fy0 + _ay94,
+                                                _fx0 + _qx94, _fy0 + _qy94])
+                            if self.debug and _strips:
+                                print(f"  [🔍] bands از پالیِ OCR: "
+                                      f"{len(_strips)} خط")
+                        elif self.debug:
+                            try:
+                                _ivs_dbg = [f"[{v[0]}-{v[1]}]"
+                                            for v in _ivs94]
+                            except Exception:
+                                _ivs_dbg = []
+                            print(f"  [🔍] poly-bands رد شد: rid={_rid94 if len(_fb) > 4 else '-'} "
+                                  f"polys={len(_pl94)} mrg={len(_mrg94)} "
+                                  f"iv={' '.join(_ivs_dbg)}")
+                    if not _strips and _sub94 is not None \
+                            and _ys94.size >= 400:
                         # v1.14.94d — پروفیلِ سطر/ستون از «جوهرِ خام»
                         # (قبلِ هاله‌گیریِ v1.14.66) — هاله، سطرها را به
                         # هم می‌چسباند و جدایشِ خطی را می‌کُشد
@@ -11318,18 +11548,22 @@ class MangaTranslator:
                                 continue
                             _strips.append([_fx0 + _ax94, _fy0 + _ay94,
                                             _fx0 + _qx94, _fy0 + _qy94])
-                except Exception:
+                except Exception as _e95s:
+                    if self.debug:
+                        import traceback as _tb95
+                        print(f"  [!] strips builder error: {_e95s}")
+                        _tb95.print_exc()
                     _strips = []
                 if len(_strips) < 1 or len(_strips) > 12:
                     if self.debug:
-                        print(f"  [🔍] v1.14.94c: strips={len(_strips)} "
+                        print(f"  [🔍]strips={len(_strips)} "
                               f"→ fallback box", flush=True)
                     _strips = [[_bx0, _by0, _bx1, _by1]]
                 if self.debug:
                     try:
                         _sbs = " | ".join(
                             f"({s[0]},{s[1]},{s[2]},{s[3]})" for s in _strips)
-                        print(f"  [🔍] v1.14.94c: force strips: {_sbs}",
+                        print(f"  [🔍]force strips: {_sbs}",
                               flush=True)
                     except Exception:
                         pass
@@ -11345,7 +11579,7 @@ class MangaTranslator:
                                 if int(_sub81.sum()):
                                     mask[_sy0:_sy1, _sx0:_sx1][_sub81] = 0
                                     if self.debug:
-                                        print(f"  [✓] v1.14.81: "
+                                        print(f"  [✓]"
                                               f"{int(_sub81.sum())}px ساختارِ "
                                               f"روشن از بلوکِ اجباری خارج شد")
                         except Exception:
@@ -11357,7 +11591,7 @@ class MangaTranslator:
                 self._page_raw_text_mask = mask.copy()
                 if self.debug:
                     try:
-                        print(f"  [✓] v1.14.59: {len(_fb_new)} بلوکِ محفظهٔ تیره توپر شد")
+                        print(f"  [✓]{len(_fb_new)} بلوکِ محفظهٔ تیره توپر شد")
                     except Exception:
                         pass
         except Exception:
@@ -11388,7 +11622,7 @@ class MangaTranslator:
                 _sel81 = _pa81 > 0
                 cleaned[_sel81] = image[_sel81]
                 if self.debug:
-                    print(f"  [✓] v1.14.81: {int(_sel81.sum())}px قفلِ روشن "
+                    print(f"  [✓]{int(_sel81.sum())}px قفلِ روشن "
                           f"بعد از پرکنندهٔ فوری ترمیم شد")
                 try:
                     _pv81r = os.environ.get("MANGA_PROBE", "")
@@ -11480,7 +11714,7 @@ class MangaTranslator:
             try:
                 _nf = len(getattr(self, "_lama_force_rect_boxes", None) or [])
                 if _nf:
-                    print(f"  [*] v1.14.59: {_nf} محفظهٔ تیره → اجباری LaMa با ماسکِ کامل")
+                    print(f"  [*]{_nf} محفظهٔ تیره → اجباری LaMa با ماسکِ کامل")
             except Exception:
                 pass
         _wall_cache = {"tried": False, "val": None}
@@ -11562,7 +11796,7 @@ class MangaTranslator:
                                     crop_msk = crop_msk.copy()
                                     crop_msk[_subc] = 0
                                     if self.debug:
-                                        print(f"  [✓] v1.14.81: "
+                                        print(f"  [✓]"
                                               f"{int(_subc.sum())}px قفل از "
                                               f"پرکنندهٔ رنگی خارج شد")
                         except Exception:
@@ -11886,7 +12120,7 @@ class MangaTranslator:
                                             _mB81 = float(np.median(_gB81[_bg81]))
                                             if abs(_mA81 - _mB81) > 30.0:
                                                 _keep81 = False
-                                                print(f"  [!] v1.14.81: LaMa زمینه را "
+                                                print(f"  [!]LaMa زمینه را "
                                                       f"{_mB81:.0f} → {_mA81:.0f} تغییرِ شدید داد "
                                                       f"→ اسنپ‌شاتْ مرجع",
                                                       flush=True)
@@ -11895,7 +12129,7 @@ class MangaTranslator:
                                     if _keep81:
                                         if self.debug:
                                             try:
-                                                print(f"  [✓] v1.14.73b: بلوکِ "
+                                                print(f"  [✓]بلوکِ "
                                                       f"بافت‌مند → نتیجهٔ "
                                                       f"LaMa نگه داشته شد",
                                                       flush=True)
@@ -11933,7 +12167,7 @@ class MangaTranslator:
                             - _ml62.astype(np.int16)) > 30).mean())
                         if _fs62 > _fl62 * 1.6 + 0.02:
                             if self.debug:
-                                print(f"  [✓] v1.14.62b: اسنپ‌شاتِ بلوک هنوز "
+                                print(f"  [✓]اسنپ‌شاتِ بلوک هنوز "
                                       f"متن دارد (جوهرِ اسنپ={_fs62:.3f} > "
                                       f"LaMa={_fl62:.3f}) → نتیجهٔ LaMa "
                                       f"نگه داشته شد (جلوگیری از متنِ شبح)",
@@ -11952,7 +12186,7 @@ class MangaTranslator:
                                        _ix0 - _sn[0]:_ix1 - _sn[0]]
                             result = _res2
                             if self.debug:
-                                print(f"  [✓] v1.14.62: لکهٔ بلوکیِ LaMa روی "
+                                print(f"  [✓]لکهٔ بلوکیِ LaMa روی "
                                       f"بلوکِ تیره (Δμ={_dm_mean:.1f}, "
                                       f"Δ>{_dm_big:.2f}) → پرکنندهٔ فوریِ "
                                       f"گرادیانی جایگزین شد", flush=True)
@@ -11994,7 +12228,7 @@ class MangaTranslator:
                 if _res65 is not None:
                     result = _res65
                     if self.debug:
-                        print(f"  [✓] v1.14.65: LaMaِ بلوکِ تیره در دسترس "
+                        print(f"  [✓]LaMaِ بلوکِ تیره در دسترس "
                               f"نبود → پرِ گرادیانیِ توپرِ باکس (ضدِ لکهٔ "
                               f"قرمز)", flush=True)
             if result is None:
@@ -12188,7 +12422,7 @@ class MangaTranslator:
                                              else 99.0)
                                     _go94 = (_rs94 <= 34.0)
                                     if self.debug:
-                                        print(f"  [🔍] v1.14.94f: LFCM "
+                                        print(f"  [🔍]LFCM "
                                               f"gate crop@({cx0},{cy0}) "
                                               f"ring_std={_rs94:.0f} → "
                                               f"{'RUN' if _go94 else 'skip'}",
@@ -12201,7 +12435,14 @@ class MangaTranslator:
                         if _go94 and _nMB94 >= 2000:
                             _th94 = float(cv2.distanceTransform(
                                 _mB94.astype(np.uint8), cv2.DIST_L2, 3).max())
-                            _k94 = int(np.clip(round(_th94 * 3.0), 41, 161))
+                            # v1.14.95d — پنجرهٔ LFCM باید نسبت به «پهنایِ
+                            # نوار» هم مقیاس شود؛ وگرنه در انتهایِ نوارهایِ
+                            # عریض (پلاکِ ۶۰۰px) پروفیلِ افقیِ وینیت را
+                            # نمی‌گیرد و لبهٔ روشن/تیرهٔ نوار پیدا می‌ماند.
+                            _cw94 = int(crop_msk.shape[1])
+                            _k94 = int(np.clip(
+                                round(max(_th94 * 3.0, _cw94 * 0.45)),
+                                41, 331))
                             if _k94 % 2 == 0:
                                 _k94 += 1
                             _img94 = image[cy0:cy1, cx0:cx1].astype(
@@ -12269,12 +12510,109 @@ class MangaTranslator:
                                 try:
                                     _dm94 = float(np.abs(
                                         _d94 * _w94).mean())
-                                    print(f"  [✓] v1.14.94: LFCM "
+                                    print(f"  [✓]LFCM "
                                           f"crop@({cx0},{cy0}) "
                                           f"k={_k94} |Δ|={_dm94:.1f}",
                                           flush=True)
                                 except Exception:
                                     pass
+                    except Exception:
+                        pass
+                    # v1.14.95e — هم‌سازِ ستونیِ نوارهایِ عریض رویِ
+                    # زمینهٔ تیرهٔ صاف (پلاکِ «Crimson Dragon»): پرِ
+                    # LaMa پروفیلِ قائمِ وینیت را ادامه نمی‌دهد →
+                    # باندِ تیره‌تر/روشن‌تر با لبهٔ واضح (اسکرین‌شاتِ
+                    # کاربر). هدف = میان‌یابیِ خطیِ حلقهٔ بالا/پایینِ
+                    # هر ستون (v1.14.95g: به‌جایِ corrِ ثابت، شیبِ
+                    # کاملِ قائم جایگزینِ فرکانسِ پایینِ پر می‌شود —
+                    # بافتِ فرکانس‌بالا دست‌نخورده می‌ماند).
+                    try:
+                        _mB95 = (crop_msk > 0)
+                        _h95, _w95 = _mB95.shape
+                        if int(_mB95.sum()) >= 8000 and _w95 >= 260:
+                            _ysB95, _xsB95 = np.nonzero(_mB95)
+                            _ty95, _by95 = (int(_ysB95.min()),
+                                            int(_ysB95.max()))
+                            _gO95 = cv2.cvtColor(
+                                image[cy0:cy1, cx0:cx1],
+                                cv2.COLOR_BGR2GRAY).astype(np.float32)
+                            _top95 = max(0, _ty95 - 16)
+                            _top95b = max(1, _ty95 - 3)
+                            _bot95 = min(_h95, _by95 + 4)
+                            _bot95b = min(_h95, _by95 + 17)
+                            if (_by95 - _ty95) >= 40 and \
+                                    (_top95b - _top95) >= 6 and \
+                                    (_bot95b - _bot95) >= 6:
+                                _res95f = result.astype(np.float32)
+                                _corr95 = np.zeros(
+                                    (_h95, _w95, 3), dtype=np.float32)
+                                _nok95 = 0
+                                for _x95 in range(_w95):
+                                    if not _mB95[_ty95:_by95 + 1,
+                                                 _x95].any():
+                                        continue
+                                    if _mB95[_top95:_top95b, _x95].any() \
+                                            or _mB95[_bot95:_bot95b,
+                                                     _x95].any():
+                                        continue
+                                    _rt95 = _gO95[_top95:_top95b, _x95]
+                                    _rb95 = _gO95[_bot95:_bot95b, _x95]
+                                    if _rt95.size < 4 or _rb95.size < 4:
+                                        continue
+                                    if max(_rt95.std(), _rb95.std()) > 22.0:
+                                        continue
+                                    _yy95 = np.linspace(
+                                        0.0, 1.0, _by95 - _ty95 + 1,
+                                        dtype=np.float32)[:, None]
+                                    for _c95 in range(3):
+                                        _mt95 = float(np.median(
+                                            image[cy0 + _top95:
+                                                  cy0 + _top95b,
+                                                  cx0 + _x95,
+                                                  _c95]).astype(np.float32))
+                                        _mb95 = float(np.median(
+                                            image[cy0 + _bot95:
+                                                  cy0 + _bot95b,
+                                                  cx0 + _x95,
+                                                  _c95]).astype(np.float32))
+                                        _tgt95 = (_mt95 * (1.0 - _yy95)
+                                                  + _mb95 * _yy95)
+                                        _lo95 = cv2.GaussianBlur(
+                                            _res95f[_ty95:_by95 + 1,
+                                                    _x95, _c95],
+                                            (0, 0), 0.02 * max(
+                                                8.0, _by95 - _ty95))
+                                        _corr95[_ty95:_by95 + 1, _x95,
+                                                _c95] = np.clip(
+                                            _tgt95 - _lo95, -26.0, 26.0
+                                        ).reshape(-1)
+                                    _nok95 += 1
+                                if _nok95 >= max(40, int(0.35 * _w95)):
+                                    _corr95[:, :, 0] = cv2.GaussianBlur(
+                                        _corr95[:, :, 0], (0, 0), 9.0)
+                                    _corr95[:, :, 1] = cv2.GaussianBlur(
+                                        _corr95[:, :, 1], (0, 0), 9.0)
+                                    _corr95[:, :, 2] = cv2.GaussianBlur(
+                                        _corr95[:, :, 2], (0, 0), 9.0)
+                                    _wcol95 = (cv2.GaussianBlur(
+                                        (cv2.dilate(
+                                            _mB95.astype(np.uint8),
+                                            np.ones((3, 3),
+                                                    np.uint8)) * 255),
+                                        (0, 0), 3.0
+                                    ).astype(np.float32) / 255.0)
+                                    _res95e = _res95f + _corr95 \
+                                        * _wcol95[..., None]
+                                    result = np.clip(
+                                        _res95e, 0, 255).astype(np.uint8)
+                                    if self.debug:
+                                        _act95 = float(np.abs(
+                                            _corr95).mean())
+                                        print(f"  [✓]col-harmonize "
+                                              f"crop@({cx0},{cy0}) "
+                                              f"cols={_nok95} "
+                                              f"|corr|={_act95:.1f}",
+                                              flush=True)
                     except Exception:
                         pass
                     _m8 = (crop_msk if crop_msk.dtype == np.uint8
@@ -12394,7 +12732,7 @@ class MangaTranslator:
                     cleaned[_qy0:_qy1, _qx0:_qx1] = _roiC2
                     if self.debug:
                         try:
-                            print(f"  [✓] v1.14.65: {_nC}px رنگِ بنرِ "
+                            print(f"  [✓]{_nC}px رنگِ بنرِ "
                                   f"تبلیغ در خروجی ماند → TELEA re-scrub",
                                   flush=True)
                         except Exception:
@@ -12467,7 +12805,7 @@ class MangaTranslator:
                                 _rbriW = float((_ringV >= 140).mean())
                                 if _rstdW > 34.0 or _rbriW > 0.30:
                                     if self.debug:
-                                        print(f"  [✓] v1.14.94: سویپِ جوهرِ "
+                                        print(f"  [✓]سویپِ جوهرِ "
                                               f"روشن رد شد — زمینهٔ "
                                               f"بافت‌مند/روشن "
                                               f"(std={_rstdW:.0f} "
@@ -12518,7 +12856,7 @@ class MangaTranslator:
                     cleaned[_wy0:_wy1, _wx0:_wx1] = _subC
                     _nW += int(_bright.sum())
                 if _nW and self.debug:
-                    print(f"  [✓] v1.14.62: {_nW}px جوهرِ روشنِ باقی‌مانده "
+                    print(f"  [✓]{_nW}px جوهرِ روشنِ باقی‌مانده "
                           f"داخلِ بلوک‌هایِ تیره پاک شد", flush=True)
         except Exception:
             pass
@@ -12811,7 +13149,7 @@ class MangaTranslator:
                                 _known,
                                 _keep78.astype(np.float32))
                             if self.debug:
-                                print(f"  [🛡] v1.14.78b: "
+                                print(f"  [🛡]"
                                       f"{int(_keep78.sum())}px دیوارِ "
                                       f"حفظ‌شده = سدِ پیازی")
                     except Exception:
@@ -12837,7 +13175,7 @@ class MangaTranslator:
                     cleaned[_sel] = np.clip(
                         np.rint(_vals[_sel]), 0, 255).astype(np.uint8)
                     if self.debug:
-                        print(f"  [*] v1.14.75g: پرِ پیازیِ حباب = "
+                        print(f"  [*]پرِ پیازیِ حباب = "
                               f"{int(_sel.sum())}px ({_it} دور)")
         except Exception:
             pass
@@ -12975,7 +13313,7 @@ class MangaTranslator:
                     cleaned[_fix_m] = np.clip(
                         np.rint(_valsM[_fix_m]), 0, 255).astype(np.uint8)
                     if self.debug:
-                        print(f"  [*] v1.14.78c: {int(_fix_m.sum())}px "
+                        print(f"  [*]{int(_fix_m.sum())}px "
                               f"تیکِ جامانده پاک شد ({_itM} دور)")
         except Exception:
             pass
@@ -17637,7 +17975,7 @@ class MangaTranslator:
                     continue
                 if self.debug:
                     try:
-                        print("    [*] v1.14.92: ناحیهٔ چندستونی → "
+                        print("    [*]ناحیهٔ چندستونی → "
                               f"{len(groups)} ناحیهٔ جدا: "
                               + " | ".join(p[:30] for p in parts))
                     except Exception:
@@ -19187,7 +19525,7 @@ class MangaTranslator:
                         if _r.kind not in ("dialogue", "junk"):
                             _kc[_r.kind] = _kc.get(_r.kind, 0) + 1
                     if _kc:
-                        print(f"  [*] v1.14.78: {len(regions) - len(clean_targets)}"
+                        print(f"  [*]{len(regions) - len(clean_targets)}"
                               f" ناحیه رد شد (تبلیغ/SFX دست‌نخورده): {_kc}")
                 except Exception:
                     pass
@@ -19209,8 +19547,12 @@ class MangaTranslator:
         _ocr_empty_regions = [r for r in dialogue_regions
                               if not r.translated_text
                               and getattr(r, "ocr_empty", False)]
-        _clean_regions = (translated_regions + _ocr_empty_regions
-                          + promo_regions)
+        # v1.14.95 — قانونِ نهاییِ کاربر: «متنِ تبلیغِ سایت حسابش نکن —
+        # ازش رد شه.» بنرِ تبلیغ/واترمارک دیگر در هیچ حالتی پاک نمی‌شود
+        # (قبلاً در حالتِ ترجمه‌دار کلِ بنر توپر ماسک و LaMa می‌شد که
+        # هم خودش ریسکِ لکّه داشت و هم خلافِ خواستهٔ تازهٔ کاربر بود).
+        # ترجمه/رندر هم رویش نمی‌نشیند (فقطِ dialogue ترجمه می‌شود).
+        _clean_regions = (translated_regions + _ocr_empty_regions)
         # v1.14.70 — با --clean-sfx، افکت‌های صوتی هم پاک می‌شوند
         # (ترجمه نمی‌شوند؛ فقط حذف)
         if getattr(self, "clean_sfx", False) and sfx_regions:
@@ -19222,7 +19564,7 @@ class MangaTranslator:
             print(f"[!] {missing_n} حباب ترجمه نشد")
         if self.debug:
             if promo_regions:
-                print(f"  [*] {len(promo_regions)} تبلیغ → پاکسازیِ کاملِ بنر")
+                print(f"  [*] {len(promo_regions)} تبلیغ → دست‌نخورده «ازش رد شه»")
             if sfx_regions:
                 # v1.14.70 — با --clean-sfx پاک می‌شوند، وگرنه دست‌نخورده
                 _sfx70 = "پاک شدند" if getattr(self, "clean_sfx", False) else "دست‌نخورده"
