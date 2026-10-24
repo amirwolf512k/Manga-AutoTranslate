@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.90"
+APP_VER = "1.14.94"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -9601,8 +9601,17 @@ class MangaTranslator:
                         # fcov=۰.۵۲ ولی m_in_c=۰.۳۲ → رد ✓)
                         _m_in_c = (float(np.count_nonzero(mm & _fb_comp))
                                    / max(1, _n_mm))
+                        # v1.14.94e — آستانهٔ uni: ۰.۷۵ → ۰.۶۰. کارت‌هایِ
+                        # معرفی رویِ پنلِ عکس‌دار (GLENDA HOLLY — img1018)
+                        # اینتریورِ کاملاً یکنواخت ندارند (لبهٔ عکس/سایه در
+                        # کامپوننت‌ هست → uni≈۰.۶۶) و اعتبارسنجیِ
+                        # ضدتوهم رد می‌شد → لکهٔ سیاهِ LaMa در باکسِ سفید
+                        # می‌ماند. بقیهٔ گیت‌ها (med≥۲۲۵، fcov≥۰.۴۵،
+                        # m_in_c≥۰.۵۵) و خودِ آستانهٔ badf≥۰.۱۰ سرِ
+                        # جایشان‌اند؛ این فقط «اجازهٔ سنجش» است نه اجازهٔ
+                        # پر کردن.
                         _lr_ok = (_ca >= max(600, 0.55 * _n_mm)
-                                  and _cm >= 225.0 and _cu >= 0.75
+                                  and _cm >= 225.0 and _cu >= 0.60
                                   and _fcov >= 0.45 and _m_in_c >= 0.55)
                         if _dbg:
                             print(f"      [🛡dbg] leak-fallback "
@@ -11178,6 +11187,28 @@ class MangaTranslator:
                       f"({cleaned[_qy81p, _qx81p]})", flush=True)
         except Exception:
             pass
+        # v1.14.94 — قفلِ ساختارِ روشنِ نازک (قابِ تزئینی/نوارِ لبه) که
+        # باکسِ بلوکِ اجباری از رویش عبور می‌کند — قبل از توپرشدنِ ماسک،
+        # وگرنه LaMa قاب را له می‌کند (GREEN MOON). در `_prot_all`
+        # ادغام می‌شود تا همهٔ مسیرها (پرکنندهٔ فوری، LaMa، paste) آن را
+        # محترم بشمارند.
+        try:
+            _fbs94 = (getattr(self, "_lama_force_rect_boxes", None) or [])
+            if _fbs94:
+                _slk94 = self._rect_structure_lock(image, _fbs94)
+                if _slk94 is not None and int(cv2.countNonZero(_slk94)):
+                    if getattr(self, "_prot_all", None) is None:
+                        self._prot_all = _slk94
+                    else:
+                        self._prot_all = cv2.bitwise_or(
+                            self._prot_all, _slk94)
+                    if self.debug:
+                        print(f"  [✓] v1.14.94: قفلِ ساختارِ روشن — "
+                              f"{int(cv2.countNonZero(_slk94))}px از "
+                              f"{len(_fbs94)} بلوک محافظت شد", flush=True)
+        except Exception:
+            pass
+
         # v1.14.59 — بلوک‌هایِ «متنِ روشن روی محفظهٔ تیره» (کارتِ عنوانِ
         # Crimson Dragon و امثالش): هرچه کارو/کلیپِ حباب/پروتکت از ماسک
         # کم کرده باشد بی‌اثر — ماسک در این بلوک‌ها اجباری توپر می‌شود تا
@@ -11188,33 +11219,145 @@ class MangaTranslator:
         try:
             _fb_list = (getattr(self, "_lama_force_rect_boxes", None) or [])
             _h59, _w59 = mask.shape[:2]
+            _fb_new = []
             for _fb in _fb_list:
                 _fx0 = max(0, int(_fb[0]) - 4)
                 _fy0 = max(0, int(_fb[1]) - 4)
                 _fx1 = min(_w59, int(_fb[2]) + 5)
                 _fy1 = min(_h59, int(_fb[3]) + 5)
-                if (_fx1 - _fx0 >= 8 and _fy1 - _fy0 >= 8
-                        and os.environ.get("MANGA_NO_FORCE_LAMA", "0") != "1"):
-                    mask[_fy0:_fy1, _fx0:_fx1] = 255
-                    # v1.14.81 — ساختارِ روشن/تابِ نور از بلوکِ اجباری خارج
+                if _fx1 - _fx0 < 8 or _fy1 - _fy0 < 8:
+                    _fb_new.append([int(_fb[0]), int(_fb[1]),
+                                    int(_fb[2]), int(_fb[3])])
+                    continue
+                # v1.14.94b — سنجشِ باکس به «متنِ واقعی»: باکسِ ناحیهٔ
+                # دیتکتور تا مرزِ پنل می‌رود و LaMa قابِ تزئینی را له
+                # می‌کند (نمونه: GREEN MOON). باکسِ پرشده = bboxِ
+                # جوهر+هالهٔ داخلِ باکس + پدِ ۱۲px — ساختارِ بیرونِ متن
+                # هرگز بلعیده نمی‌شود؛ تضمینِ v1.14.59 («پیکسلِ بینِ
+                # حروف از اصل نماند») همچنان برقرار است چون کلِ بلوکِ
+                # متن پوشیده می‌شود.
+                _nx0, _ny0 = _fx0, _fy0
+                _nx1, _ny1 = _fx1, _fy1
+                _bx0, _by0 = _fx0, _fy0
+                _bx1, _by1 = _fx1, _fy1
+                try:
+                    _sub94 = mask[_fy0:_fy1, _fx0:_fx1]
+                    _ys94, _xs94 = np.nonzero(_sub94)
+                    if _ys94.size >= 400:
+                        _p94 = 12
+                        _nx0 = max(0, _fx0 + int(_xs94.min()) - _p94)
+                        _ny0 = max(0, _fy0 + int(_ys94.min()) - _p94)
+                        _nx1 = min(_w59,
+                                   _fx0 + int(_xs94.max()) + 1 + _p94)
+                        _ny1 = min(_h59,
+                                   _fy0 + int(_ys94.max()) + 1 + _p94)
+                        _bx0, _by0, _bx1, _by1 = _nx0, _ny0, _nx1, _ny1
+                except Exception:
+                    pass
+                # v1.14.94c — پرِ بلوکِ اجباری «خط‌به‌خط»: به‌جایِ یک
+                # مستطیلِ توپرِ چندخطی (حفرهٔ غول = خمیرِ LaMa + لکهٔ
+                # تخت روی گرادیان)، هر خطِ متن نوارِ خودش را می‌گیرد
+                # (bboxِ سطر + پد). بینِ خط‌ها = پس‌زمینهٔ اصل می‌ماند —
+                # LaMa هر نوار را از بافتِ واقعیِ بالا/پایین بازسازی
+                # می‌کند (فلسفهٔ «خط به خط» کاربر) و جعبه‌هایِ
+                # اسنپ‌شات/مقایسه هم نواریند.
+                _strips = []
+                try:
+                    if _sub94 is not None and _ys94.size >= 400:
+                        # v1.14.94d — پروفیلِ سطر/ستون از «جوهرِ خام»
+                        # (قبلِ هاله‌گیریِ v1.14.66) — هاله، سطرها را به
+                        # هم می‌چسباند و جدایشِ خطی را می‌کُشد
+                        _src94 = _sub94
+                        try:
+                            _rawS94 = getattr(
+                                self, "_page_raw_text_mask", None)
+                            if (_rawS94 is not None
+                                    and _rawS94.shape == mask.shape[:2]):
+                                _rsub94 = _rawS94[
+                                    _fy0:_fy1, _fx0:_fx1]
+                                if int(cv2.countNonZero(_rsub94)) >= 400:
+                                    _src94 = _rsub94
+                        except Exception:
+                            _src94 = _sub94
+                        _prof94 = (_src94 > 0).sum(axis=1)
+                        _thr94 = max(3.0, 0.04 * (_fx1 - _fx0))
+                        _rows94 = _prof94 >= _thr94
+                        _bands94 = []
+                        _s94 = None
+                        _g94 = 0
+                        for _r94 in range(_rows94.size):
+                            if _rows94[_r94]:
+                                if _s94 is None:
+                                    _s94 = _r94
+                                _g94 = 0
+                            elif _s94 is not None:
+                                _g94 += 1
+                                if _g94 > 6:
+                                    _bands94.append(
+                                        (_s94, _r94 - _g94 + 1))
+                                    _s94 = None
+                                    _g94 = 0
+                        if _s94 is not None:
+                            _bands94.append((_s94, _rows94.size))
+                        _pg94 = 8
+                        for (_a94, _b94) in _bands94:
+                            _ay94 = max(0, _a94 - _pg94)
+                            _qy94 = min(_fy1 - _fy0, _b94 + _pg94)
+                            if _qy94 - _ay94 < 10:
+                                continue
+                            _colp94 = (_src94[_a94:_b94] > 0).sum(axis=0)
+                            _cols94 = np.nonzero(_colp94 > 0)[0]
+                            if _cols94.size < 8:
+                                continue
+                            _ax94 = max(0, int(_cols94.min()) - _p94
+                                        if _ys94.size >= 400 else 4)
+                            _qx94 = min(_fx1 - _fx0,
+                                        int(_cols94.max()) + 1 + _p94
+                                        if _ys94.size >= 400 else _fx1 - _fx0)
+                            if _qx94 - _ax94 < 8:
+                                continue
+                            _strips.append([_fx0 + _ax94, _fy0 + _ay94,
+                                            _fx0 + _qx94, _fy0 + _qy94])
+                except Exception:
+                    _strips = []
+                if len(_strips) < 1 or len(_strips) > 12:
+                    if self.debug:
+                        print(f"  [🔍] v1.14.94c: strips={len(_strips)} "
+                              f"→ fallback box", flush=True)
+                    _strips = [[_bx0, _by0, _bx1, _by1]]
+                if self.debug:
                     try:
-                        _pa81 = getattr(self, "_prot_all", None)
-                        if _pa81 is not None:
-                            _sub81 = _pa81[_fy0:_fy1, _fx0:_fx1] > 0
-                            if int(_sub81.sum()):
-                                mask[_fy0:_fy1, _fx0:_fx1][_sub81] = 0
-                                if self.debug:
-                                    print(f"  [✓] v1.14.81: "
-                                          f"{int(_sub81.sum())}px ساختارِ "
-                                          f"روشن از بلوکِ اجباری خارج شد")
+                        _sbs = " | ".join(
+                            f"({s[0]},{s[1]},{s[2]},{s[3]})" for s in _strips)
+                        print(f"  [🔍] v1.14.94c: force strips: {_sbs}",
+                              flush=True)
                     except Exception:
                         pass
+                for (_sx0, _sy0, _sx1, _sy1) in _strips:
+                    _fb_new.append([_sx0, _sy0, _sx1, _sy1])
+                    if os.environ.get("MANGA_NO_FORCE_LAMA", "0") != "1":
+                        mask[_sy0:_sy1, _sx0:_sx1] = 255
+                        # v1.14.81 — ساختارِ روشن/تابِ نور از بلوکِ اجباری خارج
+                        try:
+                            _pa81 = getattr(self, "_prot_all", None)
+                            if _pa81 is not None:
+                                _sub81 = _pa81[_sy0:_sy1, _sx0:_sx1] > 0
+                                if int(_sub81.sum()):
+                                    mask[_sy0:_sy1, _sx0:_sx1][_sub81] = 0
+                                    if self.debug:
+                                        print(f"  [✓] v1.14.81: "
+                                              f"{int(_sub81.sum())}px ساختارِ "
+                                              f"روشن از بلوکِ اجباری خارج شد")
+                        except Exception:
+                            pass
+            if _fb_new:
+                self._lama_force_rect_boxes = _fb_new
             if _fb_list:
                 # سقفِ رنگ‌آمیزی (cap) هم باید کلِ بلوک را بپوشاند
                 self._page_raw_text_mask = mask.copy()
                 if self.debug:
                     try:
-                        print(f"  [✓] v1.14.59: {len(_fb_list)} بلوکِ محفظهٔ تیره توپر شد")
+                        print(f"  [✓] v1.14.59: {len(_fb_new)} بلوکِ محفظهٔ تیره توپر شد")
                     except Exception:
                         pass
         except Exception:
@@ -12012,6 +12155,128 @@ class MangaTranslator:
                                         _res_f, 0, 255).astype(np.uint8)
                     except Exception:
                         pass
+                    # v1.14.94 — تطبیقِ لو-فرکانسِ پرِ LaMa با زمینهٔ
+                    # پیرامون. نکتهٔ مهمِ تستِ واقعی (412e9e/890fb1 رویِ
+                    # CPUِ پچِ ۳۸۴): میدانِ دیفرانسِ باکسِ بزرگ خودش
+                    # «باندِ موج‌دار/بلوکی» می‌سازد — پرکنندهٔ LaMa در
+                    # اکثرِ موارد خودش درست است → پیش‌فرضِ خاموش؛
+                    # فقط با MANGA_LFCM=1 برایِ آزمایش فعال می‌شود.
+                    try:
+                        # v1.14.94f — گیتِ بافتِ LFCM: فقط رویِ زمینهٔ
+                        # «صاف/گرادیانی» (کارتِ عنوان) اجرا شود؛ رویِ
+                        # زمینهٔ بافت‌مند میدانِ دیفرانسِ باکسِ بزرگ خودش
+                        # باندِ موج‌دار می‌سازد (تستِ 412e9e) → خودکار رد.
+                        _go94 = False
+                        if method == "LaMa" \
+                                and os.environ.get(
+                                    "MANGA_NO_LFCM", "0") != "1":
+                            try:
+                                _mbT94 = (crop_msk > 0)
+                                if int(_mbT94.sum()) >= 2000:
+                                    _ri94 = cv2.dilate(
+                                        _mbT94.astype(np.uint8),
+                                        np.ones((19, 19), np.uint8)) > 0
+                                    _ro94 = cv2.dilate(
+                                        _mbT94.astype(np.uint8),
+                                        np.ones((41, 41), np.uint8)) > 0
+                                    _rt94 = _ro94 & (~_ri94)
+                                    _gT94 = cv2.cvtColor(
+                                        image[cy0:cy1, cx0:cx1],
+                                        cv2.COLOR_BGR2GRAY)
+                                    _rs94 = (float(_gT94[_rt94].std())
+                                             if int(_rt94.sum()) >= 200
+                                             else 99.0)
+                                    _go94 = (_rs94 <= 34.0)
+                                    if self.debug:
+                                        print(f"  [🔍] v1.14.94f: LFCM "
+                                              f"gate crop@({cx0},{cy0}) "
+                                              f"ring_std={_rs94:.0f} → "
+                                              f"{'RUN' if _go94 else 'skip'}",
+                                              flush=True)
+                            except Exception:
+                                _go94 = False
+                        _mB94 = (crop_msk > 0) if crop_msk.dtype != np.uint8 \
+                            else (crop_msk > 0)
+                        _nMB94 = int(_mB94.sum())
+                        if _go94 and _nMB94 >= 2000:
+                            _th94 = float(cv2.distanceTransform(
+                                _mB94.astype(np.uint8), cv2.DIST_L2, 3).max())
+                            _k94 = int(np.clip(round(_th94 * 3.0), 41, 161))
+                            if _k94 % 2 == 0:
+                                _k94 += 1
+                            _img94 = image[cy0:cy1, cx0:cx1].astype(
+                                np.float32)
+                            _res94 = result.astype(np.float32)
+                            _wb94 = (~_mB94).astype(np.float32)
+                            try:
+                                _raw94 = getattr(
+                                    self, "_page_raw_text_mask", None)
+                                if (_raw94 is not None
+                                        and _raw94.shape
+                                        == image.shape[:2]):
+                                    _rd94 = cv2.dilate(
+                                        _raw94[cy0:cy1, cx0:cx1],
+                                        np.ones((9, 9), np.uint8))
+                                    _wb94[(_rd94 > 0) & (~_mB94)] = 0.0
+                            except Exception:
+                                pass
+                            # v1.14.94 — پیکسل‌هایِ قفلِ ساختار (قاب/نوارِ
+                            # روشن) هم نمونهٔ زمینه نیستند؛ وگرنه بلورِ
+                            # بزرگ رنگِ نقره‌ایِ قاب را وسطِ حفره می‌کشد
+                            try:
+                                _pa94 = getattr(self, "_prot_all", None)
+                                if (_pa94 is not None
+                                        and _pa94.shape
+                                        == image.shape[:2]):
+                                    _pd94 = cv2.dilate(
+                                        _pa94[cy0:cy1, cx0:cx1],
+                                        np.ones((5, 5), np.uint8))
+                                    _wb94[(_pd94 > 0)
+                                          & (~_mB94)] = 0.0
+                            except Exception:
+                                pass
+                            _den94 = cv2.boxFilter(
+                                _wb94, -1, (_k94, _k94))
+                            _num94 = cv2.boxFilter(
+                                _img94 * _wb94[..., None], -1,
+                                (_k94, _k94))
+                            _bg94 = _num94 / np.maximum(
+                                _den94, 1e-3)[..., None]
+                            _fl94 = cv2.boxFilter(
+                                _res94, -1, (_k94, _k94))
+                            _d94 = np.clip(_bg94 - _fl94, -44.0, 44.0)
+                            _w94 = cv2.GaussianBlur(
+                                (cv2.dilate(
+                                    _mB94.astype(np.uint8),
+                                    np.ones((3, 3), np.uint8)) * 255),
+                                (0, 0), 3.0).astype(np.float32) / 255.0
+                            _w94 = np.clip(_w94, 0.0, 1.0)[..., None]
+                            # v1.14.94 — جاهایی که زمینهٔ نمونه‌گیریِ کافی
+                            # ندارند وزنِ نرمِ پایین (نه cutoffِ بلوکی)
+                            try:
+                                _low94 = (_den94 < 0.05).astype(np.float32)
+                                if float(_low94.mean()) > 0.001:
+                                    _low94 = cv2.GaussianBlur(
+                                        _low94, (31, 31), 8.0)
+                                    _w94 = _w94 * (
+                                        1.0 - 0.65 * _low94[..., None])
+                            except Exception:
+                                pass
+                            _res94 = _res94 + _d94 * _w94
+                            result = np.clip(
+                                _res94, 0, 255).astype(np.uint8)
+                            if self.debug:
+                                try:
+                                    _dm94 = float(np.abs(
+                                        _d94 * _w94).mean())
+                                    print(f"  [✓] v1.14.94: LFCM "
+                                          f"crop@({cx0},{cy0}) "
+                                          f"k={_k94} |Δ|={_dm94:.1f}",
+                                          flush=True)
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                     _m8 = (crop_msk if crop_msk.dtype == np.uint8
                            else (crop_msk > 0).astype(np.uint8) * 255)
                     if _prot_c is not None:
@@ -12160,6 +12425,57 @@ class MangaTranslator:
                     if _wx1 - _wx0 < 12 or _wy1 - _wy0 < 12:
                         continue
                     _sub = _gW[_wy0:_wy1, _wx0:_wx1]
+                    # v1.14.94 — گاردِ زمینه: این سویپ فقط برایِ کارت‌هایِ
+                    # «تیرهٔ یکنواخت» است (کارتِ Crimson). اگر حلقهٔ دورِ
+                    # باکس در عکسِ اصل بافت‌مند/روشن باشد (نئبولا، بافتِ
+                    # پنل، قابِ نقره‌ای)، پیکسل‌هایِ روشنِ داخلِ باکس
+                    # احتمالاً زمینهٔ قانونی‌اند نه جوهرِ جامانده → سویپ
+                    # ممنوع؛ وگرنه نئبولای روشنِ داخلِ نوارِ EXEC
+                    # MEETING با رنگِ تیرهٔ تخت پر می‌شد (بازتولیدِ
+                    # «بلوک‌هایِ تخت»).
+                    try:
+                        _rgW = 14
+                        _rx0W = max(0, int(_fbW[0]) - _rgW)
+                        _ry0W = max(0, int(_fbW[1]) - _rgW)
+                        _rx1W = min(_wW, int(_fbW[2]) + _rgW)
+                        _ry1W = min(_hW, int(_fbW[3]) + _rgW)
+                        if _rx1W - _rx0W >= 20 and _ry1W - _ry0W >= 20:
+                            _gOW = cv2.cvtColor(
+                                image[_ry0W:_ry1W, _rx0W:_rx1W],
+                                cv2.COLOR_BGR2GRAY)
+                            _boxW = np.zeros_like(_gOW)
+                            _boxW[int(_fbW[1]) - _ry0W:int(_fbW[3]) - _ry0W,
+                                  int(_fbW[0]) - _rx0W:int(_fbW[2]) - _rx0W] = 255
+                            _ringW = ((cv2.dilate(_boxW,
+                                                  np.ones((31, 31), np.uint8))
+                                       > 0) & (_boxW == 0))
+                            try:
+                                _rawW94 = getattr(
+                                    self, "_page_raw_text_mask", None)
+                                if (_rawW94 is not None
+                                        and _rawW94.shape
+                                        == image.shape[:2]):
+                                    _ringW &= (cv2.dilate(
+                                        _rawW94[_ry0W:_ry1W,
+                                                _rx0W:_rx1W],
+                                        np.ones((5, 5), np.uint8)) == 0)
+                            except Exception:
+                                pass
+                            if int(_ringW.sum()) >= 120:
+                                _ringV = _gOW[_ringW]
+                                _rstdW = float(_ringV.std())
+                                _rbriW = float((_ringV >= 140).mean())
+                                if _rstdW > 34.0 or _rbriW > 0.30:
+                                    if self.debug:
+                                        print(f"  [✓] v1.14.94: سویپِ جوهرِ "
+                                              f"روشن رد شد — زمینهٔ "
+                                              f"بافت‌مند/روشن "
+                                              f"(std={_rstdW:.0f} "
+                                              f"bright={_rbriW:.2f})",
+                                              flush=True)
+                                    continue
+                    except Exception:
+                        pass
                     # v1.14.65 — آستانهٔ ۱۴۰ دست‌نخورده ماند: آزمایشِ سندباکس
                     # نشان داد آستانهٔ نسبی (med+26) بافتِ اسپَتِر خودِ کارت
                     # را هم می‌گیرد و «شبحِ تیره» می‌سازد. هالهٔ قرمز باید در
@@ -13531,6 +13847,90 @@ class MangaTranslator:
             return np.clip(out, 0, 255).astype(np.uint8)
         except Exception:
             return None
+
+    def _rect_structure_lock(self, image: np.ndarray,
+                             rects) -> Optional[np.ndarray]:
+        """v1.14.94 — قفلِ «ساختارِ روشنِ نازک» در بلوک‌هایِ اجباری-LaMa
+        (v1.14.59). باکسِ توپرِ بلوکِ تیره گاهی از مرزِ پنل عبور می‌کند و
+        قابِ تزئینی/نوارِ لبهٔ پنل (ساختارِ روشنِ نازک) را هم می‌بلعد —
+        LaMa با حفرهٔ بزرگِ رویِ ساختار، قاب را «له» می‌کند (نمونهٔ کاربر:
+        GREEN MOON — قابِ کنارِ متن ذوب شد). معیارِ ساختار: مؤلفهٔ روشن
+        (≥۱۴۸) که ۱) بخشِ معناداری‌اش (≥۲۵٪ یا ≥۴۰۰px) بیرونِ باکس است و
+        ۲) نازک است (ضخامتِ تبدیلِ فاصله ≤ 64px) — یعنی قاب/نوار، نه
+        تودهٔ پس‌زمینه (گلیفِ متن هم کاملاً داخلِ باکس‌اند و هرگز قفل
+        نمی‌شوند). پیکسل‌هایِ قفل از ماسکِ
+        بلوک خارج می‌شوند تا LaMa آن‌ها را «زمینه» ببیند و دستِ
+        پرکننده‌ها هم به آن‌ها نرسد (مکانیزمِ v1.14.81)."""
+        try:
+            if os.environ.get("MANGA_NO_STRUCT_LOCK", "0") == "1":
+                return None
+            g = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            return None
+        h, w = g.shape[:2]
+        out = np.zeros((h, w), dtype=np.uint8)
+        _any = False
+        for _fb in (rects or []):
+            try:
+                x0, y0 = int(_fb[0]), int(_fb[1])
+                x1, y1 = int(_fb[2]), int(_fb[3])
+            except Exception:
+                continue
+            _m = 26
+            ex0, ey0 = max(0, x0 - _m), max(0, y0 - _m)
+            ex1, ey1 = min(w, x1 + _m), min(h, y1 + _m)
+            if ex1 - ex0 < 32 or ey1 - ey0 < 32:
+                continue
+            reg = g[ey0:ey1, ex0:ex1]
+            bright = ((reg >= 148).astype(np.uint8)) * 255
+            if not int(cv2.countNonZero(bright)):
+                continue
+            # پلِ نازکِ گلو بینِ حرف و قاب بشکند
+            try:
+                bright = cv2.morphologyEx(bright, cv2.MORPH_OPEN,
+                                          np.ones((2, 2), np.uint8))
+            except Exception:
+                pass
+            n, lab, st, _ = cv2.connectedComponentsWithStats(bright, 8)
+            if n <= 1:
+                continue
+            # باکسِ توپرِ داخلِ ناحیه (همان +4/-5 مسیرِ v1.14.59)
+            rx0 = max(0, (x0 - 4) - ex0)
+            ry0 = max(0, (y0 - 4) - ey0)
+            rx1 = min(ex1 - ex0, (x1 + 5) - ex0)
+            ry1 = min(ey1 - ey0, (y1 + 5) - ey0)
+            inside = np.zeros_like(bright)
+            inside[ry0:ry1, rx0:rx1] = 255
+            hit = np.zeros_like(bright)
+            for i in range(1, n):
+                a = int(st[i, cv2.CC_STAT_AREA])
+                if a < 150:
+                    continue
+                comp = (lab == i)
+                out_px = int(np.count_nonzero(comp & (inside == 0)))
+                if out_px < max(400, int(0.25 * a)):
+                    continue  # کاملاً داخلِ باکس = گلیفِ متن
+                try:
+                    _dt = cv2.distanceTransform(
+                        comp.astype(np.uint8), cv2.DIST_L2, 3)
+                    _thick = float(_dt.max()) * 2.0
+                except Exception:
+                    _thick = 24.0
+                if _thick > 64.0:
+                    continue  # خیلی ضخیم = تودهٔ پس‌زمینه، نه قاب
+                hit[comp] = 255
+                _any = True
+            if not int(cv2.countNonZero(hit)):
+                continue
+            # حفره‌هایِ بینِ پیچ‌هایِ قاب هم پوشیده شود + رشدِ ملایم
+            hit = cv2.morphologyEx(hit, cv2.MORPH_CLOSE,
+                                   np.ones((13, 13), np.uint8))
+            hit = cv2.dilate(hit, np.ones((7, 7), np.uint8))
+            out[ey0:ey1, ex0:ex1] = np.maximum(
+                out[ey0:ey1, ex0:ex1], hit)
+        if not _any or not int(cv2.countNonZero(out)):
+            return None
+        return out
 
     def _structural_protect_mask(self, image: np.ndarray,
                                  regions: List["TextRegion"],
