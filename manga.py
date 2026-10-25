@@ -899,6 +899,23 @@ def _best_providers_for(kind: str = "generic", prefer_gpu: bool = True):
     return _res or ["CPUExecutionProvider"]
 
 
+def _cudnn_algo_search() -> Optional[str]:
+    """v1.14.98-speed (SRV-H3) — الگوریتمِ جست‌وجویِ cudnn برایِ convها.
+
+    MANGA_CUDNN_ALGO=heuristic → "HEURISTIC": جست‌وجویِ EXHAUSTIVEِ
+    پیش‌فرضِ ORT برایِ «هر شکلِ تازه» (از جمله هر اندازهٔ batchِ تازهٔ
+    بچینگِ پچ‌هایِ LaMa) حذف می‌شود — رویِ میزبانِ gVisor هر re-search
+    صدها میلی‌ثانیه می‌گیرد. هر مقدارِ دیگر/خالی → None → رفتارِ
+    پیش‌فرضِ قبل (EXHAUSTIVE دست‌نخورده)."""
+    try:
+        if (os.environ.get("MANGA_CUDNN_ALGO", "").strip().lower()
+                == "heuristic"):
+            return "HEURISTIC"
+    except Exception:
+        pass
+    return None
+
+
 def _build_provider_options(providers):
     """v1.14.96-speed (SRV-G phase2) — provider options برایِ سشن‌هایِ GPU:
     CUDA → {"cudnn_conv_use_max_workspace": "1"} (صریح؛ پیش‌فرضِ ORT هم 1
@@ -906,7 +923,11 @@ def _build_provider_options(providers):
     نمی‌خورد (EXHAUSTIVE می‌ماند) و CUDA graphs روشن نمی‌شود (شکل‌هایِ
     داینامیک). XNNPACK (فقط MANGA_CPU_EP=xnnpack) → intra_op_num_threads =
     هسته‌هایِ فیزیکی (کانفیگِ رسمی). خروجی None رویِ لیستِ بدونِ CUDA/XNNPACK
-    → دقیقاً رفتارِ قبلی (سشنِ CPU خالص)."""
+    → دقیقاً رفتارِ قبلی (سشنِ CPU خالص).
+    v1.14.98-speed (SRV-H3) — استثنایِ بخشِ algo_search: با
+    MANGA_CUDNN_ALGO=heuristic کلیدِ «cudnn_conv_algo_search»: "HEURISTIC"
+    به دیکشنریِ CUDA اضافه می‌شود (تکِ نقطهٔ مونتاژِ optionsِ CUDA برایِ
+    همهٔ سشن‌ها از همین تابع می‌گذرد)."""
     try:
         if not providers:
             return None
@@ -918,6 +939,12 @@ def _build_provider_options(providers):
         for _i, _p in enumerate(providers):
             if _p == "CUDAExecutionProvider":
                 _opts[_i] = {"cudnn_conv_use_max_workspace": "1"}
+                # v1.14.98-speed (SRV-H3) — MANGA_CUDNN_ALGO=heuristic →
+                # حذفِ re-searchِ EXHAUSTIVE برایِ هر شکلِ تازه (مهم‌ترین
+                # مظنونِ رگرسیونِ GPU: بچینگِ پچ‌هایِ LaMa شکلِ تازه می‌سازد)
+                _algo_h3 = _cudnn_algo_search()
+                if _algo_h3:
+                    _opts[_i]["cudnn_conv_algo_search"] = _algo_h3
             elif _p == "XnnpackExecutionProvider":
                 try:
                     _opts[_i] = {"intra_op_num_threads":
@@ -1473,8 +1500,16 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
                 except Exception:
                     pass
             t0 = time.time()
+            # v1.14.98-speed (SRV-H3) — کاندیدِ CUDA در تورنمنت هم همان
+            # optionsِ سشنِ نهایی را بگیرد (workspace + MANGA_CUDNN_ALGO)
+            # تا A/B با کانفیگِ نهایی قابلِ مقایسه باشد؛ برایِ بقیهٔ EPها
+            # None = دقیقاً رفتارِ قبل.
+            _po_h3 = (_build_provider_options(
+                [cand, "CPUExecutionProvider"])
+                if cand == "CUDAExecutionProvider" else None)
             s_c = ort.InferenceSession(model_path, sess_options=so_c,
-                                       providers=[cand, "CPUExecutionProvider"])
+                                       providers=[cand, "CPUExecutionProvider"],
+                                       provider_options=_po_h3)
             t_make = time.time() - t0
             if not _ort_probe_ok(s_c, threads if threads > 0 else 0,
                                  model_path, cand):
@@ -1634,8 +1669,14 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
                 except Exception:
                     pass
             try:
-                s_ep = _lama_session_cached(model_path, so_ep,
-                                            [ep, "CPUExecutionProvider"])
+                # v1.14.98-speed (SRV-H3) — مسیرِ EPِ اجباری هم optionsِ
+                # CUDAِ مرکزی را می‌گیرد (workspace + MANGA_CUDNN_ALGO) تا
+                # «همهٔ» سشن‌هایِ CUDA یک کانفیگ داشته باشند؛ برایِ epهای
+                # غیرِ CUDA خروجیِ _build_provider_options None است.
+                s_ep = _lama_session_cached(
+                    model_path, so_ep, [ep, "CPUExecutionProvider"],
+                    provider_options=_build_provider_options(
+                        [ep, "CPUExecutionProvider"]))
                 if _ort_probe_ok(s_ep, threads if threads > 0 else 0,
                                  model_path, ep):
                     try:
@@ -2947,6 +2988,12 @@ class RapidOCRBackend:
                     # سشن‌هایِ OCR هم (فقط وقتی مسیرِ GPU فعال است تا فال‌بکِ
                     # CPU را آلوده نکند؛ در فال‌بک حذف می‌شود)
                     _gpu_flags69["EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_use_max_workspace"] = "1"
+                    # v1.14.98-speed (SRV-H3) — OCR هم MANGA_CUDNN_ALGO را
+                    # رعایت کند (سشن‌هایِ det/rec رویِ CUDA بدونِ
+                    # EXHAUSTIVE re-search وقتی heuristic خواسته شده)
+                    _algo_h3 = _cudnn_algo_search()
+                    if _algo_h3:
+                        _gpu_flags69["EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search"] = _algo_h3
                 elif _ocr_head69 == "DmlExecutionProvider":
                     _gpu_flags69["EngineConfig.onnxruntime.use_dml"] = True
                 elif _ocr_head69 == "CoreMLExecutionProvider":
