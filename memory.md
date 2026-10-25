@@ -9,8 +9,8 @@
 ## ۱) اطلاعاتِ کلیدیِ پروژه و کاربر
 
 - **مالکِ ریپو:** امیر (`amirwolf512k`) — فارسی‌زبان. لحنِ گزارش: فارسی، ساده، بدونِ کلمهٔ نجنبه.
-- **ریپو:** `https://github.com/amirwolf512k/Manga-AutoTranslate` — شاخهٔ کاری: **`mail`**
-- **موتور:** `manga.py` (~۱۵هزار خط) — تشخیص حباب (RT-DETR ONNX) + OCR (ML Kit اندروید / RapidOCR) + ترجمه (APIهای مختلف) + پاکسازی (LaMa-Manga ONNX / OpenCV) + رندر فارسی.
+- **ریپو:** `https://github.com/amirwolf512k/Manga-AutoTranslate` — شاخهٔ کاری: **`main`** (شاخهٔ قدیمی `mail` حذف شده). شاخه‌های دیگر: `aaa`، `speed2` (تاریخیِ کمپین سرعت)، `speed-opt`، `pr1`، `fast3`، `v1.14.98-bea6516` (نسخهٔ موازیِ حفظ‌شده). **موضعِ فعلی: `main` = df55e0c = v1.14.99-speed** (جزئیات → راند ۱۶ در پایین همین فایل).
+- **موتور:** `manga.py` (~۲۳.۴هزار خط) — تشخیص حباب (RT-DETR ONNX) + OCR (ML Kit اندروید / RapidOCR) + ترجمه (APIهای مختلف) + پاکسازی (LaMa-Manga ONNX / OpenCV) + رندر فارسی.
 - **اپ اندروید:** پوشهٔ `android/` — نسخه در `VERSION` (`versionCode` + `versionName` + لینک‌های APK).
 - **گوشیِ تستِ کاربر:** POCO F4 — **arm64 (aarch64)، Snapdragon 870، ۸ هسته، رم کل ~۵.۵GB (آزاد موقعِ کار گاهی فقط ۰.۶GB!)** — GPU در دسترسِ اپ نیست؛ همه‌چیز روی CPU.
 - **سلیقه‌های قطعیِ کاربر:**
@@ -18,14 +18,18 @@
   - **هیچ متنی نباید بماند** (حتی هالهٔ محو/شبح).
   - **هیچ لکه/لاجِ سیاه‌سفید نباید بماند** — نه روی زمینه، نه روی هنر.
   - **سرعتِ پاکسازی مهم است** — «یهو فشار بیاره سریع بپاکه بره» — همهٔ هسته‌های CPU درگیر شوند.
-  - ارتباط از **تلگرام** (نه دیسکورد): باتِ `8433967818:AA…Gl8`، chat_id `7322356176` — پیام‌های چت به تلگرام هم mirror شود.
+  - **هدفِ فعال (۲۰۲۶-۱۰-۲۴..۲۶):** استخراج+پاکسازیِ هرچه سریع‌تر روی PC/لینوکس **و اندروید**، بدون تغییر استایل/کیفیت خروجی؛ تازه‌ترین دستور (۲۰۲۶-۱۰-۲۶): «اشکال نداره سیستم اندروید پی‌سی لینوکس هنگ کنه فقط باید سریعترین حالتشون استخراج شه و پاک شه کاری ک k3 کرده» — **پایداری می‌تواند قربانِ سرعت شود؛ الگو = اپ K3**. تأکید ویژه روی مسیرِ اندروید (POCO F4 فقط CPU).
+  - ارتباط از **تلگرام** (نه دیسکورد): باتِ **جدید** `8355514582:AAH-ESk_kmrtRcbJZl_sdHr51iQSMurt3yw`، chat_id `7322356176` — باتِ قدیمی `8433967818:AA…Gl8` **مرده/403** است. چتِ وب (zai-web) پیام‌ها را می‌اندازد → **همهٔ گزارش‌ها/نتایج حتماً mirror به تلگرام** شود.
   - نسخهٔ جدید **فقط با اجازه/درخواستِ کاربر build شود** (GitHub Action `Build.yml` با `workflow_dispatch`).
 - **GitHub Action:** `.github/workflows/build.yml` — اجرای دستی با REST:
-  `POST /repos/amirwolf512k/Manga-AutoTranslate/actions/workflows/Build.yml/dispatches` با `{"ref":"mail"}` — توکن از URL ریموت (`git remote get-url origin`).
+  `POST /repos/amirwolf512k/Manga-AutoTranslate/actions/workflows/Build.yml/dispatches` با `{"ref":"main"}` — توکن از URL ریموت (`git remote get-url origin`).
   خروجی → ریلیزِ تگِ `apk` (سه APK: arm64 ~۹۷MB برای POCO F4، armv7a، universal).
 - **تستِ محلیِ بدونِ API:** `python3 manga.py -i IMAGE --clean-only --font fonts/Vazir-Code.ttf --cpu --debug -o OUTDIR`
   و برای شبیه‌سازیِ مسیرِ گوشی (LaMa): `--lama` هم اضافه شود.
   مدل LaMa کش می‌شود در `~/.cache/manga_translator_models/lama-manga-dyn.onnx`.
+- **سرورِ بنچمارک (فعال):** `ssh -p 23952 root@4.tcp.ngrok.io` (رمز `123456`) — `/root/Manga-AutoTranslate` روی `main` (df55e0c)، venv `/root/venv` (onnxruntime-gpu **1.31.0**)، RTX PRO 6000 Blackwell + 20 هسته x86_64. الگوی اجرا: `cd /root/Manga-AutoTranslate && S=$(date +%s%N); LD_LIBRARY_PATH=/root/venv/lib/python3.13/site-packages/nvidia/*/lib MANGA_PROBE=1 timeout 540 /root/venv/bin/python manga.py -i <img> -o /root/testrun/out/<tag> --clean-only [--cpu] --font fonts/Vazir-Code.ttf --lama --clean-method lama-manga --debug > run.log 2>&1; RC=$?; E=$(date +%s%N); echo "exit=$RC wall_s=$(((E-S)/1000000000))"` — تصاویر: `/root/testrun/imgs` (۷ مرجع: 01.jpg، 012_p1.webp، 412e9e.webp، 890fb1.webp، IMG_20260929.jpg، IMG_20261018.jpg، ch264_9.jpg)؛ لاگ/خروجی: `/root/testrun/out/<tag>/`. اتصال با `scripts/ssh_run.py` (paramiko). ⚠️ bashِ سندباکسِ اصلی گاهی 403/ناپایدار است — کارِ اجرایی را با ایجنتِ فرعی (Task) انجام بده و پرامپت‌های بسیار بزرگ را بخش‌بندی کن.
+- **گیتِ خروجی (byte-gate) — انکر per-host است** (ISA/محیط فرق می‌کند؛ روی میزبان جدید اول انکر بساز). مرجع‌های سرورِ فعلی: 890fb1 CPU = 654,285B / md5 `f15ba1a33e926fd74f66310704cface4` (Cleanup {flat0,color0,LaMa2,OpenCV0})؛ 01.jpg CPU md5 `efe3a165069c6e148b4965865a4215ee` (Cleanup {0,2,9,1}). انکرِ میزبانِ gVisor قدیم: 654,449B / `120d6cd52c2c47d9854d8d16cccfae97`. ORT 1.26→1.31.0 بدون دریفتِ بایت تأیید شده (SRV-M).
+- **قواعدِ سندباکس:** همه‌چیز زیر `/home/z/my-project/`؛ لاگِ مشترکِ ایجنت‌ها `worklog.md` (هر ایجنت قبل از شروع بخواند، بعد از پایان بخشِ خودش را با `---` بپیوندد)؛ خروجی‌های کاربر در `download/`؛ اسکریپت‌ها در `scripts/` (قاعده: اسکریپتِ >10 خطی را اول در فایل بنویس، بعد اجرا کن؛ خرابی → Edit، نه بازنویسی). **هر جلسهٔ جدید: `worklog.md` + همین memory.md را بخوان.**
 
 ---
 
@@ -575,3 +579,48 @@
 5. تبلیغ: در حالتِ ترجمه‌دار هم `_clean_regions` دیگر promo را شامل نمی‌شود — «ازش رد شه» (فقطِ clean-only از قبل بود).
 
 **اثبات:** 012_p1 (باکس: border changed ۱۲۲۳→۳px، fill map = فقط هالهٔ حروف ۲۷.۸k به‌جای ۱۴۸k)؛ 890fb1 (پلاک: ۲ نوارِ خطی + ramp، اسکرین‌شاتِ «مستطیلِ روشن» → لبهٔ محو)؛ رگرسیونِ ۷ عکس (۰۱/۰۹۲۹/۱۰۱۸/۲۶۴ در پچ ۵۱۲، 412e9e در ۳۸۴ چون ۱۶k×۹۰۰ رویِ باکسِ ۴GB در ۵۱۲ OOM می‌شود — محیطی است نه کدی) — همه حداقل هم‌سطحِ v1.14.94؛ رندرِ کاملِ fake-translate + اسکیپِ تبلیغ تأیید شد.
+
+## Round 16 (2026-10-24..26) — کمپینِ سرعت: v1.14.96 → v1.14.99-speed (شاخهٔ speed2 → merge به main)
+**هدفِ کاربر:** «استخراج و پاکسازیِ سریع‌تر روی لینوکس/PC و اندروید، بدون تغییرِ استایل/کیفیت خروجی». کمیتهای اصلی: SRV-H1..H4، SRV-K، SRV-L، SRV-M (لاگ کامل: `worklog.md`).
+
+**نسل‌شجرهٔ کامیت‌ها (main):**
+- `c5cf5f2` v1.14.96 — فیکس‌های پاکسازی (راند ۱۵ ادامه؛ 412e9e/890fb1 سالم در پچِ ۵۱۲).
+- `e32bccf` v1.14.96-speed (فاز ۱): **RapidOCR روی CUDA** برای استخراج (GPU extract 20-42s → 4-12s)، فیکسِ نخِ CPU (intra=4 به‌جای auto روی x86)، RapidOCR → مدل‌های ONNX از ریلیزِ تگ `models`. خروجی بایت‌به‌بایت یکسان. GPU ~−35%، CPU ~−10%.
+- `74bde1e` فاز ۲ اولیه — **معکوس شد**: بچینگِ پچ‌های LaMa + spin tuning + threads=auto → رگرسیون CPU +67% / GPU +37% (SRV-H2/H3). درس: روی این پایپ‌لاین، مسیرِ per-patchِ قدیمیِ LaMa از batch سریع‌تر است؛ spin و XNNPACK کندتر.
+- `af64b0b` v1.14.99-speed (تلفیقِ SRV-H4، merge): برگشتِ رفتارِ e32bccf + تنها بردِ اثبات‌شده به‌عنوان پیش‌فرض: **CUDA HEURISTIC** (`cudnn_conv_algo_search=HEURISTIC` + `cudnn_conv_use_max_workspace=1`) روی همهٔ سشن‌های CUDA. GPU: 01.jpg 23.3→21.0s، 0929 −14%، 1018 −9%، ch264 −9%. CPU بدون تغییر (۴ نخ روی gVisor قدیم بهینه بود).
+- `d0ad05d→54a95c4→df55e0c` SRV-L: **نخِ host-aware** — x86_64 با ≥۸ هسته → ۸ نخِ ORT + OCR intra 8 (بدون آن، 01.jpg CPU=38.8s؛ با آن =32.2s)؛ GPU clamp 16؛ گVisor دیگر threads=4 تحمیل نمی‌کند؛ میزبان‌های کوچک 2..4 می‌مانند. **موضعِ نهایی: df55e0c.**
+
+**دکمه‌های env (همه opt-in، پیش‌فرض خاموش/بهینه):** `MANGA_ORT_THREADS` (نخِ ORT)، `MANGA_OCR_THREADS`، `MANGA_CUDNN_ALGO=heuristic|exhaustive`، `MANGA_LAMA_BATCH=1`، `MANGA_NO_BATCH=1`، `MANGA_SPIN=1`، `MANGA_CPU_EP=xnnpack`. **برنده‌های سرورِ فعلی (20 هسته + RTX PRO 6000): CPU و GPU هر دو `MANGA_ORT_THREADS=8` (batch خاموش).** `MANGA_LAMA_BATCH=1` همیشه کندتر. XNNPACK/SPIN کندتر — خاموش بمانند.
+
+**گاردها/دم‌های شناخته‌شده:**
+- `MANGA_ORT_THREADS=20` روی مسیرِ per-patchِ GPU → **SIGABRT (exit 134)** — هرگز؛ روی GPU سقف 16.
+- اجرای اولِ GPU روی میزبانِ تازه ~60s **TRT engine build** می‌پرد (یک‌بار؛ کش می‌شود) — قبل از تایم‌گیری warm کن.
+- انکرِ بایت per-host است (بخش ۱) — روی میزبان جدید اول انکر بساز.
+- مسیرِ اندروید: شبیه‌سازی با `ANDROID_ROOT=/system ANDROID_DATA=/data` → intra=1 + خروجیِ md5-identical (گیت G تأیید). امولاتورِ واقعی روی سرور ممکن نیست (KVM نیست)؛ روی PC فقط با env تست می‌شود.
+
+**ارتقای وابستگی:** onnxruntime-gpu 1.26.0 → **1.31.0** (SRV-M) — صفر دریفتِ بایت، Cleanup-ها یکسان. OpenVINO جدا در `/root/venv-ov` (1.24.1) نصب/آزموده شد؛ **بدون سیم‌کشیِ EP در manga.py بی‌اثر است** (مرکزِ EP candidates باید گسترش یابد — کارِ آینده).
+
+## Round 17 (2026-10-25..26) — دیکدِ APK رقیب (K3 v4.1.1) + پرامپت‌های Gemini + نسخهٔ بدون-عکس
+**درخواست:** «اینو دیکد کن ببین چکار کرده واسه سرعت… پرامپتش هم ازش بگیر دو نسخه داره flash pro و flash lite هردوشو استخراج کن بهم بفرست تلگرامم» + «فقط قسمت بدون عکسشو میخوام».
+
+**APK:** `K3Manga.AutoTranslate.v4.1.1.apk` (48.1MB) → `download/`؛ استخراج در `apk_extract/`. اپ **.NET MAUI NativeAOT** است (C#؛ بدون پایتون/Chaquopy). اسمبلیها به‌صورت XALZ(LZ4) داخل `lib/arm64-v8a/libassembly-store.so` → 163 DLL در `apk_extract/app_src/` (پارسرِ سفارشی XABA+lz4). لاگ کامل: `worklog.md` بخشِ APK-1.
+
+**چرا K3 سریع است (یافته‌ها):**
+- **مدل‌های کوچک‌تر/کوانتیزه:** `detector_int8.onnx` (INT8)، ch_PP-OCRv4_det/rec، PP-OCRv6_medium_det/rec، PP-OCRv5_korean_rec، noise3، lama، JP_encoder/decoder (transformers 4.52.4، beams=4). دانلودِ رانتایم از GitHub (`K3_Models.zip` + `catalog.dat`، کلید `K3_MANGA_SECRET_MODEL_KEY_2026`).
+- **OCR فاز ۱ = ML Kit on-device** (tfliteهای JP/CN/KR/Latin باندل‌شده در APK) — نه RapidOCR.
+- ORT 1.28 با **CPU EP پیش‌فرض** — هیچ SessionOptions/تعیینِ EP/نخ ندارد (NNAPI/XNNPACK کامپایل شده ولی بلااستفاده). یعنی سرعتش از کدِ SessionOptions نیست.
+- بقیه: وب‌پی‌ری‌انکد برای آپلود، **چندصفحه‌ای per فراخوانِ Gemini**، SSE streaming، تعمیرِ لایمای پلکانی (`_precleaned/_simple/_fastrepair`)، برشِ هوشمندِ مانهوا، NativeAOT.
+- **جمع‌بندی:** K3 با «مدلِ سبک‌تر + OCRِ on-device + بچِ ابری» برنده؛ کدِ ما از نظر EP/threads بسیار تیون‌شده‌تر است — جای کپیِ مستقیم نیست، الگوبرداری باید از «مدل سبک‌تر/INT8» بیاید.
+
+**پرامپت‌ها (عیناً از heap #US؛ فایلها در `download/`، تلگرام 1629-1634):**
+- **Flash Pro** (ویژن — عکسِ با باکس‌های سبز + نامِ فایلِ قرمز در گوشه‌ها): `prompt_flash_pro.txt`. مدل‌ها: gemini-3.8/3.7/3.6/3.5-flash + 3-flash-preview.
+- **Flash Lite** (متنی — OCRِ MLKit → JSON): `prompt_flash_lite.txt`. مدل‌ها: gemini-3.5/3.1-flash-lite.
+- پارامترها (IL-decoded): temp 0.7/topP 0.9؛ اگر نامِ مدل «gemini-3.6-flash» ندارد → 0.4/0.7؛ `response_mime_type=application/json` + schema `pages[{filename, translations[{en_text, fa_text}]}]`؛ `thinkingConfig={thinkingLevel:"high"}`؛ 4× BLOCK_NONE؛ endpointها: `generativelanguage.googleapis.com` | `no-tahrim-gemini.khalilkhko.of.to` | `no-filter-gemini.khalilkhko.of.to`؛ آپلود: `/upload/v1beta/files` (X-Goog-Upload-Protocol: raw) به‌صورت `temp_gemini_upload_N.webp`؛ transport: `:streamGenerateContent?key=…&alt=sse`.
+- **«Pro بدون عکس» در خود اپ وجود ندارد** (Pro ذاتاً تصویری است) — نسخهٔ بدون-عکس ساخته شد: `download/prompt_flash_pro_no_image.txt` (قالبِ متنیِ Lite + systemInstruction و قالبِ فارسیِ Pro؛ حذف: TASK تصویری، قانون ۳ VISUAL PAGE ID، قانون ۴ VISUAL BOUNDING BOXES، پیوستِ عکس) — تلگرام 1647-1649.
+
+**باقی‌مانده برای جلسهٔ جدید (به‌ترتیبِ اولویت):**
+1. **الگوبرداریِ سرعت از K3** (کاربر پایداری را آزاد گذاشته): مدل INT8/سبک‌تر برای detector/OCR (فارسی/ژاپنی)، ارزیابیِ ML Kit جای RapidOCR در مسیرِ اندروید، هر تغییر با گیتِ md5 + بنچمارکِ ۷ عکس.
+2. تأکید کاربر روی **اندروید** (POCO F4، CPU-only) — روی سرور فقط شبیه‌سازیِ env ممکن است؛ گیتِ md5 الزامی.
+3. OpenVINO EP سیم‌کشی نشده — اگر قرار شد، به `_ep_tournament`/`_best_providers_for` اضافه شود و جدا بنچمارک شود.
+4. همهٔ گزارش‌ها → تلگرام (باتِ جدید بخش ۱)؛ این چتِ وب پیام می‌اندازد.
+5. هر جلسه: `worklog.md` + `memory.md` را بخوان؛ در پایان، بخشِ خودت را به هر دو (worklog با Task ID) اضافه کن.
