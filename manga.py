@@ -3085,7 +3085,22 @@ class RapidOCRBackend:
                 # همان رگرسیونِ extract را می‌دهد (SRV-H2) — پروبِ سرور:
                 # 27.5s → 20.4s رویِ 01.jpg با ۴ نخ. اوررایدِ صریح
                 # (MANGA_OCR_THREADS / MANGA_ORT_THREADS) مقدم است.
-                _intra = max(2, min(4, _cpu_n // 2))
+                # v1.14.99-speed (SRV-L) — انحرافِ مستندشده: رویِ میزبانِ
+                # بزرگِ x86_64 (≥۸ هسته، همان هیوریستیکِ
+                # _ort_session_options) پیش‌فرضِ OCR هم ۸ می‌شود — برندهٔ
+                # سوییپِ SRV-K (t8: extract 14.9s) با envِ MANGA_ORT_THREADS=8
+                # به OCR هم اعمال می‌شد؛ بدونِ این، 01.jpg رویِ سرورِ تازه
+                # ~38.8s می‌داد (extract 21.2s با OCR@4) و گیتِ ≤34s
+                # رد می‌شد. میزبانِ کوچک/گوشی: همان ۲..۴.
+                try:
+                    import platform as _pfo
+                    if _pfo.machine().lower() in ("x86_64", "amd64") \
+                            and (_cpu_n or 4) >= 8:
+                        _intra = 8
+                    else:
+                        _intra = max(2, min(4, _cpu_n // 2))
+                except Exception:
+                    _intra = max(2, min(4, _cpu_n // 2))
             _threads = {
                 "EngineConfig.onnxruntime.intra_op_num_threads": int(_intra),
                 "EngineConfig.onnxruntime.inter_op_num_threads": 1,
