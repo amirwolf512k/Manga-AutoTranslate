@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.96"
+APP_VER = "1.14.97"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -676,6 +676,72 @@ def _sys_avail_ram_gb():
     return None
 
 
+def _android_x86_emulator() -> bool:
+    """v1.14.96-speed (SRV-G) — «امولاتورِ» واقعی: محیطِ اندروید + CPU
+    x86_64. همان قراردادِ SRV-F: ANDROID_ROOT/ANDROID_DATA یا import java
+    رویِ x86_64 → True (نخ = ۱). رویِ گوشیِ واقعیِ arm64 و PC همیشه
+    False."""
+    try:
+        import platform as _pfx
+        if _pfx.machine().lower() not in ("x86_64", "amd64"):
+            return False
+    except Exception:
+        return False
+    try:
+        return bool(_on_android() or _android_like_env())
+    except Exception:
+        return False
+
+
+def _cpu_ep_xnnpack() -> bool:
+    """v1.14.96-speed (SRV-G) — A/Bِ XNNPACK: فقط با env
+    MANGA_CPU_EP=xnnpack (پیش‌فرض: خاموش). سشن‌هایِ CPU-EP به‌جای
+    CPU-Only از ["XnnpackExecutionProvider","CPUExecutionProvider"]
+    می‌روند با کانفیگِ رسمی: ORT intra=1 + XNNPACK intra=هسته‌هایِ
+    فیزیکی + spinning خاموش. رویِ اندروید/امولاتور اعمال نمی‌شود تا
+    مسیرِ گوشی دست‌نخورده بماند."""
+    try:
+        if (os.environ.get("MANGA_CPU_EP", "").strip().lower()
+                != "xnnpack"):
+            return False
+    except Exception:
+        return False
+    try:
+        if _on_android() or _android_like_env():
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def _physical_core_count() -> int:
+    """v1.14.96-speed (SRV-G) — هسته‌هایِ فیزیکی (برایِ XNNPACK
+    threadpool). fallback: os.cpu_count()."""
+    try:
+        _phys = set()
+        _pid = _cid = None
+        with open("/proc/cpuinfo", "r", encoding="ascii", errors="ignore") as _f:
+            for _ln in _f:
+                _ln = _ln.strip()
+                if _ln.startswith("physical id"):
+                    _pid = _ln.split(":", 1)[1].strip()
+                elif _ln.startswith("core id"):
+                    _cid = _ln.split(":", 1)[1].strip()
+                elif _ln.startswith("processor") and _ln.endswith(":") is False:
+                    pass
+                if _ln == "" and _pid is not None and _cid is not None:
+                    _phys.add((_pid, _cid))
+                    _pid = _cid = None
+        if _phys:
+            return max(1, len(_phys))
+    except Exception:
+        pass
+    try:
+        return max(1, os.cpu_count() or 1)
+    except Exception:
+        return 1
+
+
 def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     so = ort.SessionOptions()
     so.log_severity_level = 3
@@ -687,17 +753,29 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     # دیتکتور/OCR رویِ PC تک‌نخ می‌شدند و چند برابر کند بودند. حالا فقط
     # وقتی فعال است که واقعاً اندروید باشیم (Chaquopy یا نشانه‌هایِ محیطِ
     # اندروید مثل /system/build.prop یا ANDROID_ROOT) و معماری x86_64
-    # (یعنی امولاتور). رویِ PC، نخِ ۰ یعنی پیش‌فرضِ ORT (auto — همهٔ
-    # هسته‌هایِ فیزیکی)؛ هاردکدِ ۱/۲ نداریم.
-    _cap1_67 = False
+    # (یعنی امولاتور).
+    # v1.14.96-speed (SRV-G phase2) — معنایِ «نخ» رویِ میزبانِ غیرِ
+    # امولاتور: ۰ = ORT auto (همهٔ هسته‌هایِ فیزیکی). SRV-F اثبات کرد
+    # ران‌هایِ واقعی فقط ۴ نخ می‌خواستند (پیش‌فرضِ آرگومان) → رویِ PC/
+    # سرور و گوشیِ واقعی، «همهٔ» سشن‌ها auto می‌شوند؛ امولاتورِ x86_64
+    # همان قراردادِ SRV-F (intra=1). MANGA_ORT_THREADS=N بی‌رحم‌ترین
+    # راهِ برگشت به عددِ صریح است (فقط برایِ دیباگ).
+    _cap1_67 = _android_x86_emulator()
+    _xnn67 = _cpu_ep_xnnpack()
     try:
-        import platform as _pf67
-        _cap1_67 = _pf67.machine().lower() in ("x86_64", "amd64") and (
-            _on_android() or _android_like_env())
+        _env_t67 = int(os.environ.get("MANGA_ORT_THREADS", "0") or 0)
     except Exception:
-        _cap1_67 = False
+        _env_t67 = 0
     if _cap1_67:
         threads = 1
+    elif _env_t67 > 0:
+        threads = _env_t67
+    elif _xnn67:
+        # کانفیگِ رسمیِ XNNPACK: threadpoolِ ORT تک‌نخی؛ XNNPACK خودش
+        # threadpoolِ هسته‌هایِ فیزیکی را می‌سازد (provider option).
+        threads = 1
+    else:
+        threads = 0
     try:
         _t67 = int(threads)
     except Exception:
@@ -709,6 +787,27 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     # v1.14.67 — رویِ x86_64 این کانفیگ SIGFPE می‌دهد (حدس: شمارشِ spin=۰
     # → تقسیم بر صفر در مسیرِ x86) — فقط رویِ arm خاموش می‌شود
     if not _on_x86():
+        try:
+            so.add_session_config_entry(
+                "session.intra_op.allow_spinning", "0")
+        except Exception:
+            pass
+    # v1.14.96-speed (SRV-G phase2) — tuningِ spin برایِ threadpoolِ CPU
+    # چندنخی (کمبوِ رسمیِ مستنداتِ threadingِ onnxruntime):
+    #   spin_duration_us=1000 + spin_backoff_max=8
+    # فقط وقتی pool چندنخی است (auto=۰ یا >۱)، رویِ میزبانِ غیرِ اندروید
+    # و خارج از حالتِ XNNPACK (آن‌جا spinning باید خاموش بماند).
+    if (not _cap1_67) and (not _xnn67) and (not _android_like_env()) \
+            and (_t67 == 0 or _t67 > 1):
+        try:
+            so.add_session_config_entry(
+                "session.intra_op.spin_duration_us", "1000")
+            so.add_session_config_entry(
+                "session.intra_op.spin_backoff_max", "8")
+        except Exception:
+            pass
+    if _xnn67:
+        # کانفیگِ رسمیِ XNNPACK: spinning خاموش (نخِ ORT فقط هماهنگ می‌کند)
         try:
             so.add_session_config_entry(
                 "session.intra_op.allow_spinning", "0")
@@ -782,6 +881,11 @@ def _best_providers_for(kind: str = "generic", prefer_gpu: bool = True):
         # --cpu: x86_64 → فقط CPU (همان EPِ همیشگی، نتیجهٔ بیت‌به‌بیت یکسان)
         if "OpenVINOExecutionProvider" in avail:
             out.append("OpenVINOExecutionProvider")
+        # v1.14.96-speed (SRV-G) — A/Bِ XNNPACK (فقط MANGA_CPU_EP=xnnpack):
+        # سشن‌هایِ CPU-EP از XNNPACK+CPU می‌روند با کانفیگِ رسمی
+        # (ORT intra=1 + XNNPACK intra=فیزیکی + spin خاموش) — پیش‌فرضِ خاموش.
+        if _cpu_ep_xnnpack() and "XnnpackExecutionProvider" in avail:
+            out.append("XnnpackExecutionProvider")
     # امولاتورِ اندرویدِ x86_64: CPU-EPِ ORT-android می‌میرد (SIGFPE)
     # → XNNPACK اجباری (همان رفتارِ v1.14.67)
     if _on_x86() and "XnnpackExecutionProvider" in avail:
@@ -793,6 +897,36 @@ def _best_providers_for(kind: str = "generic", prefer_gpu: bool = True):
             _seen.add(_p)
             _res.append(_p)
     return _res or ["CPUExecutionProvider"]
+
+
+def _build_provider_options(providers):
+    """v1.14.96-speed (SRV-G phase2) — provider options برایِ سشن‌هایِ GPU:
+    CUDA → {"cudnn_conv_use_max_workspace": "1"} (صریح؛ پیش‌فرضِ ORT هم 1
+    است ولی این‌طور به آن اعتماد نمی‌کنیم). cudnn_conv_algo_search دست
+    نمی‌خورد (EXHAUSTIVE می‌ماند) و CUDA graphs روشن نمی‌شود (شکل‌هایِ
+    داینامیک). XNNPACK (فقط MANGA_CPU_EP=xnnpack) → intra_op_num_threads =
+    هسته‌هایِ فیزیکی (کانفیگِ رسمی). خروجی None رویِ لیستِ بدونِ CUDA/XNNPACK
+    → دقیقاً رفتارِ قبلی (سشنِ CPU خالص)."""
+    try:
+        if not providers:
+            return None
+        _gpu_cuda = "CUDAExecutionProvider" in providers
+        _xnn = _cpu_ep_xnnpack() and "XnnpackExecutionProvider" in providers
+        if not (_gpu_cuda or _xnn):
+            return None
+        _opts = [{} for _ in providers]
+        for _i, _p in enumerate(providers):
+            if _p == "CUDAExecutionProvider":
+                _opts[_i] = {"cudnn_conv_use_max_workspace": "1"}
+            elif _p == "XnnpackExecutionProvider":
+                try:
+                    _opts[_i] = {"intra_op_num_threads":
+                                 str(max(1, int(_physical_core_count())))}
+                except Exception:
+                    _opts[_i] = {}
+        return _opts
+    except Exception:
+        return None
 
 
 # ── v1.14.69 — کشِ «مدلِ بهینه‌شده» برایِ LaMa ──────────────────────────
@@ -829,11 +963,13 @@ def _lama_opt_cache_path(model_path: str, providers) -> str:
     return os.path.join(_d, f"{_stem}.opt69-{_v}-{_ep}.onnx")
 
 
-def _lama_session_cached(model_path, so, providers):
+def _lama_session_cached(model_path, so, providers, provider_options=None):
     """سشنِ LaMa با کشِ مدلِ بهینه‌شده + [TIME]ِ زمانِ ساخت.
 
     شکستِ هر مرحله = رفتارِ قبل (بدونِ کش) — هیچ مسیرِ تازه‌ای نباید
-    بتواند ساختِ سشن را خراب کند."""
+    بتواند ساختِ سشن را خراب کند.
+    v1.14.96-speed (SRV-G): provider_options اختیاری است (CUDA EP:
+    cudnn_conv_use_max_workspace=1). None = دقیقاً رفتارِ قبل."""
     _t69 = time.time()
     _opt69 = None
     try:
@@ -846,7 +982,8 @@ def _lama_session_cached(model_path, so, providers):
             and os.path.getsize(_opt69) > 1_000_000:
         try:
             _s69 = ort.InferenceSession(_opt69, sess_options=so,
-                                        providers=providers)
+                                        providers=providers,
+                                        provider_options=provider_options)
             try:
                 print(f"[TIME] lama-create={time.time() - _t69:.1f}s "
                       f"(از کشِ بهینه‌شده)", flush=True)
@@ -882,7 +1019,8 @@ def _lama_session_cached(model_path, so, providers):
             _part69 = None
     try:
         _s69 = ort.InferenceSession(model_path, sess_options=so,
-                                    providers=providers)
+                                    providers=providers,
+                                    provider_options=provider_options)
     finally:
         try:
             if _part69 and os.path.isfile(_part69):
@@ -1531,11 +1669,15 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
     # نصب است + XNNPACKِ امولاتور + CPU همیشه آخر) — به‌جای چکِ
     # هاردکدِ CUDA که بقیهٔ EPهایِ GPU را از قلم می‌انداخت.
     providers = _best_providers_for("lama", prefer_gpu=want)
+    # v1.14.96-speed (SRV-G phase2) — CUDA EP options
+    # (cudnn_conv_use_max_workspace=1) + XNNPACKِ A/B (intra=فیزیکی)
+    _popts = _build_provider_options(providers)
 
     try:
         # v1.14.69 — کشِ مدلِ بهینه‌شده (گوشی: createSession تا 67s طول
         # می‌کشد؛ بارهایِ بعدی از فایلِ بهینه‌شده ساخته می‌شوند)
-        sess = _lama_session_cached(model_path, so, providers)
+        sess = _lama_session_cached(model_path, so, providers,
+                                    provider_options=_popts)
     except Exception as e:
         print(f"[!] InferenceSession GPU ناموفق ({e}) → CPU")
         _ORT_CUDA_OK = False
@@ -1568,8 +1710,10 @@ def _cpu_thread_fallback(session, model_path: str, use_threads: int,
         provs = list(session.get_providers())
         _cap = 4 if _on_android() else 8
         cpu_n = max(1, min(_cap, os.cpu_count() or 4))
+        # v1.14.96-speed (SRV-G): use_threads=0 (auto) یعنی session از قبل
+        # همهٔ هسته‌ها را می‌گیرد → بازسازیِ بی‌مورد ممنوع
         if (allow_bump and "CUDAExecutionProvider" not in provs
-                and use_threads < cpu_n):
+                and use_threads > 0 and use_threads < cpu_n):
             print(f"    [*] اینپینت روی CPU است → threads: {use_threads} → {cpu_n}")
             return _make_ort_session(model_path, prefer_gpu=False, threads=cpu_n), cpu_n
     except Exception:
@@ -1931,7 +2075,10 @@ class LamaMangaONNX:
                     pass
         raise RuntimeError(f"دانلود مدل LaMa ناموفق: {last}")
 
-    def __call__(self, image, mask):
+    def _prep_sample(self, image, mask):
+        """v1.14.96-speed (SRV-G phase2) — آماده‌سازیِ ورودیِ LaMa-Manga:
+        همان کدِ __call__ تا قبل از session.run (بایت‌به‌بایت همان ریاضی).
+        خروجی برایِ runِ تکی و batched مشترک است."""
         if isinstance(image, np.ndarray):
             if image.ndim == 3 and image.shape[2] in (3, 4):
                 img_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
@@ -1949,8 +2096,7 @@ class LamaMangaONNX:
         if mask_u8.shape != img_rgb.shape[:2]:
             raise ValueError("Image and mask dimensions must match")
         original_mask = mask_u8 > 0
-        if not np.any(original_mask):
-            return Image.fromarray(img_rgb.copy())
+        _has_mask = bool(np.any(original_mask))
         oh, ow = img_rgb.shape[:2]
         s = self._dyn_size if self._fixed_size else min(self.SIZE, self._input_cap)
         _mx = max(ow, oh)
@@ -2018,9 +2164,31 @@ class LamaMangaONNX:
         img_np[msk > 0] = 0
         img_in = (img_np.astype(np.float32) / 255.0).transpose(2, 0, 1)[None]
         mask_in = msk.astype(np.float32)[None, None]
-        out = self.session.run(None, {self._in_image: img_in, self._in_mask: mask_in})[0]
+        return {"img_rgb": img_rgb, "original_mask": original_mask,
+                "ow": int(ow), "oh": int(oh), "rw": int(rw), "rh": int(rh),
+                "img_in": img_in, "mask_in": mask_in,
+                "has_mask": _has_mask}
 
-        o = out[0].transpose(1, 2, 0).astype(np.float32)
+    def _run_tensors(self, img_in, mask_in):
+        feeds = {self._in_image: img_in, self._in_mask: mask_in}
+        return self.session.run(None, feeds)[0]
+
+    def run_batch_tensors(self, tensors):
+        """v1.14.96-speed (SRV-G phase2) — یک session.run برایِ N پچِ
+        «هم‌شکل» (بعدِ batch=N؛ همان پدینگ/همان ترتیب). ورودی: لیستِ
+        خروجیِ _prep_sample با tensorهایِ هم‌شکل. خروجی: outِ هر نمونه به
+        ترتیبِ ورودی. شکست → exception (تماس‌گیرنده per-sample می‌رود)."""
+        if not tensors:
+            return []
+        _imgs = np.concatenate([t["img_in"] for t in tensors], axis=0)
+        _msks = np.concatenate([t["mask_in"] for t in tensors], axis=0)
+        _out = self._run_tensors(_imgs, _msks)
+        return [_out[i] for i in range(_out.shape[0])]
+
+    def _finish_sample(self, t, out_elem):
+        """پس‌پردازشِ خروجیِ مدل برایِ «یک» نمونه — دقیقاً همان کدِ
+        __call__ بعد از run (بایت‌به‌بایت)."""
+        o = out_elem.transpose(1, 2, 0).astype(np.float32)
         try:
             if float(np.max(o)) > 1.5:
                 o = o / 255.0
@@ -2028,10 +2196,18 @@ class LamaMangaONNX:
             pass
         o = np.clip(o, 0.0, 1.0)
         o = (o * 255).astype(np.uint8)
-        predicted = cv2.resize(o[:rh, :rw], (ow, oh), interpolation=cv2.INTER_LANCZOS4)
-        result = img_rgb.copy()
-        result[original_mask] = predicted[original_mask]
+        predicted = cv2.resize(o[:t["rh"], :t["rw"]], (t["ow"], t["oh"]),
+                               interpolation=cv2.INTER_LANCZOS4)
+        result = t["img_rgb"].copy()
+        result[t["original_mask"]] = predicted[t["original_mask"]]
         return Image.fromarray(result)
+
+    def __call__(self, image, mask):
+        t = self._prep_sample(image, mask)
+        if not t["has_mask"]:
+            return Image.fromarray(t["img_rgb"].copy())
+        out = self._run_tensors(t["img_in"], t["mask_in"])
+        return self._finish_sample(t, out[0])
 
 
 class LamaTorch:
@@ -2767,6 +2943,10 @@ class RapidOCRBackend:
                                or ["CPUExecutionProvider"])[0]
                 if _ocr_head69 == "CUDAExecutionProvider":
                     _gpu_flags69["EngineConfig.onnxruntime.use_cuda"] = True
+                    # v1.14.96-speed (SRV-G phase2) — CUDA EP options برایِ
+                    # سشن‌هایِ OCR هم (فقط وقتی مسیرِ GPU فعال است تا فال‌بکِ
+                    # CPU را آلوده نکند؛ در فال‌بک حذف می‌شود)
+                    _gpu_flags69["EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_use_max_workspace"] = "1"
                 elif _ocr_head69 == "DmlExecutionProvider":
                     _gpu_flags69["EngineConfig.onnxruntime.use_dml"] = True
                 elif _ocr_head69 == "CoreMLExecutionProvider":
@@ -2784,16 +2964,21 @@ class RapidOCRBackend:
             # v1.14.66 — نخِ OCR: رویِ PC قبلاً سقفِ ۲ بود (کُند!)؛ حالا
             # MANGA_OCR_THREADS یا cores÷2 (تا ۴) — نتیجهٔ OCR عوض نمی‌شود،
             # فقط سریع‌تر. اندروید مثلِ قبل (رم).
+            # v1.14.96-speed (SRV-G phase2) — rapidocr 3.x: ‎-1 یعنی «دستِ
+            # ORT» (auto = همهٔ هسته‌هایِ فیزیکی — همان معنایِ intra=0 در
+            # _ort_session_options؛rapidocr مقادیرِ ‎!=‎-1 را فقط در بازهٔ
+            # ‎1..cpu_count می‌پذیرد). امولاتورِ x86_64 → 1 (قراردادِ SRV-F).
+            # MANGA_OCR_THREADS همچنان مقدم است.
             try:
                 _ocr_th = int(_os2.environ.get("MANGA_OCR_THREADS", "0") or 0)
             except Exception:
                 _ocr_th = 0
             if _ocr_th > 0:
                 _intra = max(1, _ocr_th)
-            elif _on_android():
-                _intra = 1 if _cpu_n <= 4 else 2
+            elif _android_x86_emulator():
+                _intra = 1
             else:
-                _intra = max(2, min(4, _cpu_n // 2))
+                _intra = -1
             _threads = {
                 "EngineConfig.onnxruntime.intra_op_num_threads": int(_intra),
                 "EngineConfig.onnxruntime.inter_op_num_threads": 1,
@@ -9525,8 +9710,13 @@ class MangaTranslator:
                 out.append([pending[i] for i in idxs[k:k + max_members]])
         return out
 
-    def _lama_run_group(self, image: np.ndarray, members: List[list],
-                        lama, page_kernel) -> None:
+    def _lama_group_prep(self, image: np.ndarray, members: List[list],
+                         page_kernel) -> Optional[dict]:
+        """v1.14.96-speed (SRV-G phase2) — فازِ «آماده‌سازی»ِ `_lama_run_group`
+        قبلی: کراپِ گروه + ماسک + پد + داون‌اسکیلِ >max_side — بدونِ هیچ
+        run. خروجی ctx بینِ prep/run/finish مشترک است تا مسیرِ batched
+        بایت‌به‌بایت همان ورودی‌هایِ امروز را بسازد. None = گروهِ ردشده
+        (مثلِ returnهایِ زودهنگامِ قبل)."""
         img_h, img_w = image.shape[:2]
         gx0 = min(c[0] for c in members)
         gy0 = min(c[1] for c in members)
@@ -9599,7 +9789,6 @@ class MangaTranslator:
             pass
         if not sub_msk.any():
             return  # v1.14.65: ماسکِ خالی — طبیعی، لاگ لازم نیست
-        sub_bgr = None
         try:
             _max_side = int(os.environ.get("MANGA_LAMA_MAX_SIDE", "0") or 0)
         except Exception:
@@ -9607,7 +9796,32 @@ class MangaTranslator:
         if _max_side <= 0:
             _max_side = 1024 if _on_android() else 2048
         _pl, _ph = int(sub_img.shape[1]), int(sub_img.shape[0])
+        ctx = {"img_h": int(img_h), "img_w": int(img_w),
+               "ex0": int(ex0), "ey0": int(ey0),
+               "ex1": int(ex1), "ey1": int(ey1),
+               "crop_img": sub_img, "crop_msk": sub_msk,
+               "run_img": sub_img, "run_msk": sub_msk,
+               "pl": _pl, "ph": _ph,
+               "was_resized": False, "nw2": 0, "nh2": 0,
+               "resize_failed": False}
+        if max(_pl, _ph) > _max_side:
+            _sc = float(_max_side) / float(max(_pl, _ph))
+            _nw = max(64, (int(round(_pl * _sc)) // 8) * 8)
+            _nh = max(64, (int(round(_ph * _sc)) // 8) * 8)
+            try:
+                ctx["run_img"] = cv2.resize(sub_img, (_nw, _nh),
+                                            interpolation=cv2.INTER_AREA)
+                ctx["run_msk"] = cv2.resize(sub_msk, (_nw, _nh),
+                                            interpolation=cv2.INTER_NEAREST)
+                ctx["was_resized"], ctx["nw2"], ctx["nh2"] = True, _nw, _nh
+            except Exception:
+                ctx["resize_failed"] = True
+        return ctx
 
+    def _lama_try_fn(self, lama):
+        """v1.14.96-speed (SRV-G phase2) — همان `_lama_try` قبلی (بدنه دست
+        نخورده) به‌صورتِ کارخانهٔ closure تا مسیرِ batched هم دقیقاً همان
+        فال‌بک‌ها (EP-mortal → CPU-safe → resize-retry) را داشته باشد."""
         def _lama_try(si, sm, side):
             # v1.14.65b — حافظهٔ مرگِ EP: بعد از اولین ORT_FAIL واقعی،
             # بقیهٔ پچ‌هایِ همین ران مستقیم با سشنِ امنِ CPU اجرا می‌شوند
@@ -9679,51 +9893,75 @@ class MangaTranslator:
                     pass
                 return None
 
-        if max(_pl, _ph) > _max_side:
-            _sc = float(_max_side) / float(max(_pl, _ph))
-            _nw = max(64, (int(round(_pl * _sc)) // 8) * 8)
-            _nh = max(64, (int(round(_ph * _sc)) // 8) * 8)
+        return _lama_try  # پایانِ closureِ _lama_try_fn
+
+    def _lama_run_group(self, image: np.ndarray, members: List[list],
+                        lama, page_kernel) -> None:
+        """مسیرِ تکیِ امروز: prep → run (همان `_lama_try`) → finish.
+        v1.14.96-speed (SRV-G phase2) — فقط بازچینی شد؛ رفتارِ بایت‌به‌بایت
+        همان قبل است."""
+        ctx = self._lama_group_prep(image, members, page_kernel)
+        if ctx is None:
+            return
+        if ctx.get("resize_failed"):
             try:
-                _si = cv2.resize(sub_img, (_nw, _nh),
-                                 interpolation=cv2.INTER_AREA)
-                _sm = cv2.resize(sub_msk, (_nw, _nh),
-                                 interpolation=cv2.INTER_NEAREST)
-                _out = _lama_try(_si, _sm, 640)
-                if _out is not None:
-                    _ob = _out if isinstance(_out, np.ndarray) else np.array(_out)
-                    if _ob.ndim == 2:
-                        _ob = cv2.cvtColor(_ob, cv2.COLOR_GRAY2BGR)
-                    else:
-                        _ob = cv2.cvtColor(_ob, cv2.COLOR_RGB2BGR)
-                    if _ob.shape[:2] == (_nh, _nw):
-                        sub_bgr = cv2.resize(_ob, (_pl, _ph),
-                                             interpolation=cv2.INTER_LANCZOS4)
+                print(f"    [!] LaMa group skipped: resize-path failed "
+                      f"(box {ctx['pl']}x{ctx['ph']})", flush=True)
             except Exception:
-                sub_bgr = None
-            if sub_bgr is None:
-                # v1.14.65 — سکوتِ ممنوع (لاگِ POCO F4 بدونِ سرنخ ماند)
+                pass
+            return
+        out = self._lama_try_fn(lama)(ctx["run_img"], ctx["run_msk"], 640)
+        sub_bgr = self._lama_group_out_to_bgr(ctx, out)
+        if sub_bgr is None:
+            return
+        self._lama_group_finish(members, ctx, sub_bgr, page_kernel)
+
+    def _lama_group_out_to_bgr(self, ctx, out):
+        """خروجیِ LaMa (PIL/ndarray) → BGRِ کراپ؛ دقیقاً منطقِ شاخه‌هایِ
+        resize/مستقیمِ `_lama_run_group` قبلی (با همان لاگ‌ها/quirkها)."""
+        _pl, _ph = ctx["pl"], ctx["ph"]
+        if ctx["was_resized"]:
+            _ob = None
+            if out is not None:
+                _ob = out if isinstance(out, np.ndarray) else np.array(out)
+                if _ob.ndim == 2:
+                    _ob = cv2.cvtColor(_ob, cv2.COLOR_GRAY2BGR)
+                else:
+                    _ob = cv2.cvtColor(_ob, cv2.COLOR_RGB2BGR)
+            if _ob is None or _ob.shape[:2] != (ctx["nh2"], ctx["nw2"]):
                 try:
                     print(f"    [!] LaMa group skipped: resize-path failed "
                           f"(box {_pl}x{_ph})", flush=True)
                 except Exception:
                     pass
-                return
+                return None
+            return cv2.resize(_ob, (_pl, _ph),
+                              interpolation=cv2.INTER_LANCZOS4)
+        if out is None:
+            try:
+                print(f"    [!] LaMa group skipped: all attempts failed "
+                      f"(box {_pl}x{_ph})", flush=True)
+            except Exception:
+                pass
+            return None
+        sub_bgr = out if isinstance(out, np.ndarray) else np.array(out)
+        if sub_bgr.ndim == 2:
+            sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_GRAY2BGR)
         else:
-            out = _lama_try(sub_img, sub_msk, 640)
-            if out is None:
-                try:
-                    print(f"    [!] LaMa group skipped: all attempts failed "
-                          f"(box {_pl}x{_ph})", flush=True)
-                except Exception:
-                    pass
-                return
-            sub_bgr = out if isinstance(out, np.ndarray) else np.array(out)
-            if sub_bgr.ndim == 2:
-                sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_GRAY2BGR)
-            else:
-                sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
-            if sub_bgr.shape[:2] != sub_img.shape[:2]:
-                return
+            sub_bgr = cv2.cvtColor(sub_bgr, cv2.COLOR_RGB2BGR)
+        if sub_bgr.shape[:2] != ctx["crop_img"].shape[:2]:
+            return None
+        return sub_bgr
+
+    def _lama_group_finish(self, members: List[list], ctx: dict,
+                           sub_bgr, page_kernel) -> None:
+        """v1.14.96-speed (SRV-G phase2) — فازِ «پس‌پردازشِ» `_lama_run_group`
+        قبلی (QCِ dark-fill + اعتبارسنجیِ ضدتوهم + انتسابِ اعضا) — دست
+        نخورده؛ فقط ورودی‌هایش از ctx می‌آید."""
+        img_h, img_w = ctx["img_h"], ctx["img_w"]
+        ex0, ey0 = ctx["ex0"], ctx["ey0"]
+        ex1, ey1 = ctx["ex1"], ctx["ey1"]
+        sub_img, sub_msk = ctx["crop_img"], ctx["crop_msk"]
         try:
             _qc = getattr(self, "_qc_kernel31", None)
             if _qc is None:
@@ -10132,6 +10370,137 @@ class MangaTranslator:
             c[6] = "LaMa"
 
     @staticmethod
+    def _lama_batch_cap() -> int:
+        """v1.14.96-speed (SRV-G phase2) — سقفِ batch برایِ پچ‌هایِ LaMa.
+        MANGA_NO_BATCH=1 → 0 (غیرفعالِ کامل — مسیرِ موازیِ امروز)؛
+        MANGA_LAMA_BATCH=N → سقفِ N؛ PC → 8؛ اندروید/رمِ کم → 2."""
+        try:
+            if str(os.environ.get("MANGA_NO_BATCH", "")).strip() == "1":
+                return 0
+        except Exception:
+            pass
+        try:
+            _n = int(os.environ.get("MANGA_LAMA_BATCH", "0") or 0)
+            if _n > 0:
+                return max(1, _n)
+        except Exception:
+            pass
+        try:
+            if _on_android() or _android_like_env():
+                return 2
+            _av = _sys_avail_ram_gb()
+            if _av is not None and _av < 3.0:
+                return 2
+        except Exception:
+            pass
+        return 8
+
+    def _lama_run_groups_batched(self, image: np.ndarray,
+                                 groups: List[List[list]],
+                                 lama, page_kernel) -> None:
+        """v1.14.96-speed (SRV-G phase2) — اجرایِ دسته‌ایِ پچ‌هایِ LaMa-Manga.
+
+        پچ‌هایی که تنسورِ پدشدهٔ «دقیقاً هم‌شکل» دارند (مثلاً همهٔ
+        1x3x512x512) در «یک» session.run با بعدِ batch=N می‌روند — همان
+        پدینگ/همان ترتیبِ امروز (`_prep_sample` per-sample) و خروجیِ هر
+        نمونه در همان ترتیب برش و به همان QC/انتسابِ قبل می‌رود. باکتِ
+        تک‌نفره و خطایِ batch → مسیرِ تکیِ امروز با تمامِ فال‌بک‌هایش
+        (`_lama_try_fn`). سقفِ batch از `_lama_batch_cap`."""
+        _cap = self._lama_batch_cap()
+        if _cap <= 0 or not (hasattr(lama, "run_batch_tensors")
+                             and hasattr(lama, "_prep_sample")
+                             and hasattr(lama, "_finish_sample")):
+            for grp in groups:
+                try:
+                    self._lama_run_group(image, grp, lama, page_kernel)
+                except Exception:
+                    pass
+            return
+        _try1 = self._lama_try_fn(lama)
+        items = []
+        for grp in groups:
+            _raise_if_stop()
+            try:
+                ctx = self._lama_group_prep(image, grp, page_kernel)
+            except JobCancelled:
+                raise
+            except Exception:
+                continue
+            if ctx is None:
+                continue
+            if ctx.get("resize_failed"):
+                try:
+                    print(f"    [!] LaMa group skipped: resize-path failed "
+                          f"(box {ctx['pl']}x{ctx['ph']})", flush=True)
+                except Exception:
+                    pass
+                continue
+            try:
+                t = lama._prep_sample(ctx["run_img"], ctx["run_msk"])
+            except JobCancelled:
+                raise
+            except Exception:
+                continue
+            if not t.get("has_mask"):
+                continue  # امروز هم گروهِ بی‌ماسک return می‌کرد
+            items.append((ctx, grp, t))
+        if not items:
+            return
+        buckets: Dict[tuple, list] = {}
+        for it in items:
+            buckets.setdefault(tuple(it[2]["img_in"].shape), []).append(it)
+        if getattr(self, "debug", False):
+            try:
+                print(f"  [*] LaMa batched: {len(items)}/{len(groups)} patches "
+                      f"→ {len(buckets)} shape-bucket(s) (cap={_cap})",
+                      flush=True)
+            except Exception:
+                pass
+        for _shape, lst in buckets.items():
+            for _k in range(0, len(lst), _cap):
+                chunk = lst[_k:_k + _cap]
+                if len(chunk) == 1:
+                    _ctx, _grp, _t = chunk[0]
+                    out = _try1(_ctx["run_img"], _ctx["run_msk"], 640)
+                    sub_bgr = self._lama_group_out_to_bgr(_ctx, out)
+                    if sub_bgr is not None:
+                        self._lama_group_finish(_grp, _ctx, sub_bgr,
+                                                page_kernel)
+                    continue
+                try:
+                    outs = lama.run_batch_tensors([c[2] for c in chunk])
+                except JobCancelled:
+                    raise
+                except Exception as _be:
+                    # همان قراردادِ `_lama_try`: مرگِ EP → CPU-safe برایِ
+                    # بقیهٔ ران + ذخیرهٔ «cpu» برایِ ران‌هایِ بعد
+                    self._lama_ep_dead = True
+                    try:
+                        _lama_ep_store(getattr(self, "_lama_model_path", "")
+                                       or "", "cpu")
+                        print(f"    [!] LaMa batch failed "
+                              f"({str(_be)[:90]}) → per-sample fallback",
+                              flush=True)
+                    except Exception:
+                        pass
+                    for _ctx, _grp, _t in chunk:
+                        out = _try1(_ctx["run_img"], _ctx["run_msk"], 640)
+                        sub_bgr = self._lama_group_out_to_bgr(_ctx, out)
+                        if sub_bgr is not None:
+                            self._lama_group_finish(_grp, _ctx, sub_bgr,
+                                                    page_kernel)
+                    continue
+                for (_ctx, _grp, _t), _oe in zip(chunk, outs):
+                    try:
+                        pil = lama._finish_sample(_t, _oe)
+                    except Exception:
+                        continue
+                    sub_bgr = self._lama_group_out_to_bgr(_ctx, pil)
+                    if sub_bgr is not None:
+                        self._lama_group_finish(_grp, _ctx, sub_bgr,
+                                                page_kernel)
+
+    @staticmethod
     def _mask_ink_only(gray_crop: np.ndarray, zone: np.ndarray,
                        thr: float) -> np.ndarray:
         """v1.14.70 — جوهرِ تیرهٔ داخلِ ماسک (بدونِ گیتِ اینتریور).
@@ -10251,7 +10620,12 @@ class MangaTranslator:
             lama = self._get_lama(threads=_rthr) or lama
         except Exception:
             pass
-        if _rw > 1:
+        _no_batch_r = self._lama_batch_cap() <= 0 \
+            or not hasattr(lama, "run_batch_tensors")
+        if not _no_batch_r:
+            # v1.14.96-speed (SRV-G phase2) — بچینگِ rescue هم مثلِ مسیرِ اصلی
+            self._lama_run_groups_batched(cleaned, groups, lama, page_kernel)
+        elif _rw > 1:
             try:
                 _rt = max(1, int(getattr(lama, "thr_used", 1) or 1))
                 print(f"  [🩹] {_rw} parallel rescue patches × {_rt} thread(s)")
@@ -12447,7 +12821,18 @@ class MangaTranslator:
                                 _workers, _cores_n // _thr_eff))
                         except Exception:
                             pass
-                    if _workers > 1:
+                    _no_batch_m = self._lama_batch_cap() <= 0 \
+                        or not hasattr(lama, "run_batch_tensors")
+                    if not _no_batch_m:
+                        # v1.14.96-speed (SRV-G phase2) — پچ‌هایِ هم‌شکلِ پدشده
+                        # در session.runهایِ دسته‌ای می‌روند (سقفِ 8؛ PC) —
+                        # پراللیمِ قبلی حذف می‌شود چون سشنِ auto خودش رویِ
+                        # همهٔ هسته‌ها پارالل می‌کند.
+                        _raise_if_stop()
+                        self._lama_run_groups_batched(image, groups, lama,
+                                                      page_kernel)
+                        _raise_if_stop()
+                    elif _workers > 1:
                         try:
                             _cores = self._cpu_core_count()
                         except Exception:
