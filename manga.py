@@ -742,7 +742,8 @@ def _physical_core_count() -> int:
         return 1
 
 
-def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
+def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None,
+                         prefer_gpu: Optional[bool] = None):
     so = ort.SessionOptions()
     so.log_severity_level = 3
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
@@ -773,11 +774,36 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
         # کانفیگِ رسمیِ XNNPACK (فقط MANGA_CPU_EP=xnnpack): threadpoolِ ORT
         # تک‌نخی؛ XNNPACK خودش threadpoolِ هسته‌هایِ فیزیکی را می‌سازد.
         threads = 1
-    # else: همان threadsِ پاس‌شده (e32bccf) — بدونِ auto
+    else:
+        # v1.14.99-speed (SRV-L) — هیوریستیکِ میزبان به‌جایِ مقدارِ ثابتِ
+        # «پاس‌شده»: رویِ PC/سرورِ واقعیِ x86_64 (غیرِ gVisor) با ≥۸ هسته،
+        # برندهٔ سوییپِ SRV-K (t8: CPU ۳۲.۲s / GPU ۱۸.۷s) پیش‌فرضِ
+        # fastest-mode می‌شود؛ رویِ gVisor/Termux/میزبانِ ضعیف همان
+        # مقدارِ پاس‌شده (۴) می‌ماند. MANGA_ORT_THREADS همچنان اوررایدِ
+        # مطلق است (فقط cap1 امولاتور از آن بالاتر است).
+        try:
+            import platform as _pfl
+            _m_l = _pfl.machine().lower() in ("x86_64", "amd64")
+            _rel_l = os.uname().release.lower() if hasattr(os, "uname") else ""
+            _gv_l = "gvisor" in _rel_l
+            if _m_l and not _gv_l and (os.cpu_count() or 4) >= 8:
+                threads = 8
+            # else: همان threadsِ پاس‌شده (e32bccf) — بدونِ auto
+        except Exception:
+            pass
     try:
         _t67 = int(threads)
     except Exception:
         _t67 = 4
+    # v1.14.99-speed (SRV-L) — گاردِ SIGABRTِ مسیرِ CUDA: با نخِ ۲۰ رویِ
+    # سشن‌هایِ CUDA/TRT، per-patchِ LaMa رویِ سرورِ تازه ORT را با
+    # SIGABRT (exit=134) می‌کشد (SRV-K g20). سقفِ سختِ ۱۶ فقط وقتی
+    # سشنِ GPU خواسته شده؛ مسیرِ CPU دست‌نخورده می‌ماند.
+    try:
+        if prefer_gpu and _t67 > 16:
+            _t67 = 16
+    except Exception:
+        pass
     so.intra_op_num_threads = _t67 if _t67 > 0 else 0
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
@@ -1494,7 +1520,11 @@ def _ep_tournament(model_path: str, threads: int, include_gpu: bool = True):
             continue
         s_c = None
         try:
-            so_c = _ort_session_options(threads)
+            # v1.14.99-speed (SRV-L) — کاندیدِ CUDA تورنمنت هم گاردِ سقفِ
+            # نخِ GPU را می‌گیرد (SIGABRTِ SRV-K g20 در per-patchِ LaMa)
+            so_c = _ort_session_options(
+                threads,
+                prefer_gpu=(cand == "CUDAExecutionProvider"))
             try:
                 so_c.append_execution_provider(cand)
             except Exception:
@@ -1627,8 +1657,11 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
             print(f"[!] x86_64 سشنِ مستقیمِ XNNPACK ناموفق: {str(e)[:110]}")
         except Exception:
             pass
-    so = _ort_session_options(threads)
+    # v1.14.99-speed (SRV-L) — «want» قبل از ساختِ سشن محاسبه می‌شود تا
+    # گاردِ سقفِ نخِ GPU (SIGABRT ≥۲۰ رویِ CUDA/TRT) رویِ سشنِ اصلی هم
+    # اعمال شود؛ مسیرِ CPU بدونِ clamp می‌ماند.
     want = prefer_gpu and (_ORT_CUDA_OK is not False)
+    so = _ort_session_options(threads, prefer_gpu=want)
 
     if want:
         _prepare_ort_cuda_dlls()
@@ -1663,7 +1696,10 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
             except Exception:
                 pass
         elif ep in avail:
-            so_ep = _ort_session_options(threads)
+            # v1.14.99-speed (SRV-L) — مسیرِ EPِ اجباری: اگر CUDA اجباری
+            # است، گاردِ سقفِ نخِ GPU اعمال شود
+            so_ep = _ort_session_options(
+                threads, prefer_gpu=(ep == "CUDAExecutionProvider"))
             try:
                 so_ep.append_execution_provider(ep)
             except Exception:
