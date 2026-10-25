@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.97"
+APP_VER = "1.14.99"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -754,12 +754,11 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     # وقتی فعال است که واقعاً اندروید باشیم (Chaquopy یا نشانه‌هایِ محیطِ
     # اندروید مثل /system/build.prop یا ANDROID_ROOT) و معماری x86_64
     # (یعنی امولاتور).
-    # v1.14.96-speed (SRV-G phase2) — معنایِ «نخ» رویِ میزبانِ غیرِ
-    # امولاتور: ۰ = ORT auto (همهٔ هسته‌هایِ فیزیکی). SRV-F اثبات کرد
-    # ران‌هایِ واقعی فقط ۴ نخ می‌خواستند (پیش‌فرضِ آرگومان) → رویِ PC/
-    # سرور و گوشیِ واقعی، «همهٔ» سشن‌ها auto می‌شوند؛ امولاتورِ x86_64
-    # همان قراردادِ SRV-F (intra=1). MANGA_ORT_THREADS=N بی‌رحم‌ترین
-    # راهِ برگشت به عددِ صریح است (فقط برایِ دیباگ).
+    # v1.14.99 (SRV-H4) — بازگشتِ دقیق به معنایِ e32bccf: مقدارِ «پاس‌شده»
+    # (پیش‌فرضِ ۴) رویِ همهٔ میزبان‌هایِ غیرِ امولاتور استفاده می‌شود؛
+    # «۰ = ORT auto»یِ SRV-G رویِ سرور کندتر بود (SRV-H2: +30..+67٪ CPU)
+    # و حذف شد. امولاتورِ x86_64 همان قراردادِ SRV-F (intra=1).
+    # MANGA_ORT_THREADS=N همچنان اوررایدِ صریح دارد (اولاً بعد از cap1).
     _cap1_67 = _android_x86_emulator()
     _xnn67 = _cpu_ep_xnnpack()
     try:
@@ -771,11 +770,10 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     elif _env_t67 > 0:
         threads = _env_t67
     elif _xnn67:
-        # کانفیگِ رسمیِ XNNPACK: threadpoolِ ORT تک‌نخی؛ XNNPACK خودش
-        # threadpoolِ هسته‌هایِ فیزیکی را می‌سازد (provider option).
+        # کانفیگِ رسمیِ XNNPACK (فقط MANGA_CPU_EP=xnnpack): threadpoolِ ORT
+        # تک‌نخی؛ XNNPACK خودش threadpoolِ هسته‌هایِ فیزیکی را می‌سازد.
         threads = 1
-    else:
-        threads = 0
+    # else: همان threadsِ پاس‌شده (e32bccf) — بدونِ auto
     try:
         _t67 = int(threads)
     except Exception:
@@ -795,10 +793,15 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     # v1.14.96-speed (SRV-G phase2) — tuningِ spin برایِ threadpoolِ CPU
     # چندنخی (کمبوِ رسمیِ مستنداتِ threadingِ onnxruntime):
     #   spin_duration_us=1000 + spin_backoff_max=8
-    # فقط وقتی pool چندنخی است (auto=۰ یا >۱)، رویِ میزبانِ غیرِ اندروید
-    # و خارج از حالتِ XNNPACK (آن‌جا spinning باید خاموش بماند).
-    if (not _cap1_67) and (not _xnn67) and (not _android_like_env()) \
-            and (_t67 == 0 or _t67 > 1):
+    # v1.14.99 (SRV-H4) — پیش‌فرضِ خاموش (رویِ میزبانِ gVisor کندتر بود؛
+    # SRV-H2)؛ فقط با MANGA_SPIN=1 و وقتی pool چندنخی است (۰ یا >۱)،
+    # رویِ میزبانِ غیرِ اندروید و خارج از XNNPACK فعال می‌شود.
+    try:
+        _spin_h4 = str(os.environ.get("MANGA_SPIN", "")).strip() == "1"
+    except Exception:
+        _spin_h4 = False
+    if _spin_h4 and (not _cap1_67) and (not _xnn67) \
+            and (not _android_like_env()) and (_t67 == 0 or _t67 > 1):
         try:
             so.add_session_config_entry(
                 "session.intra_op.spin_duration_us", "1000")
@@ -900,20 +903,21 @@ def _best_providers_for(kind: str = "generic", prefer_gpu: bool = True):
 
 
 def _cudnn_algo_search() -> Optional[str]:
-    """v1.14.98-speed (SRV-H3) — الگوریتمِ جست‌وجویِ cudnn برایِ convها.
+    """v1.14.99 (SRV-H4) — الگوریتمِ جست‌وجویِ cudnn برایِ convها.
 
-    MANGA_CUDNN_ALGO=heuristic → "HEURISTIC": جست‌وجویِ EXHAUSTIVEِ
-    پیش‌فرضِ ORT برایِ «هر شکلِ تازه» (از جمله هر اندازهٔ batchِ تازهٔ
-    بچینگِ پچ‌هایِ LaMa) حذف می‌شود — رویِ میزبانِ gVisor هر re-search
-    صدها میلی‌ثانیه می‌گیرد. هر مقدارِ دیگر/خالی → None → رفتارِ
-    پیش‌فرضِ قبل (EXHAUSTIVE دست‌نخورده)."""
+    پیش‌فرضِ «HEURISTIC» برایِ «همهٔ» سشن‌هایِ CUDA — تنها بردِ اثبات‌
+    شدهٔ speed2 رویِ GPU (SRV-H3: 01.jpg GPU بدونِ batch = 21.3s در
+    برابرِ 23.3s بیس‌لاین). جست‌وجویِ EXHAUSTIVEِ پیش‌فرضِ ORT برایِ هر
+    شکلِ تازه رویِ میزبانِ gVisor صدها میلی‌ثانیه می‌گیرد؛ HEURISTIC آن
+    را حذف می‌کند. opt-out: MANGA_CUDNN_ALGO=exhaustive (یا off/none/0)
+    → None → رفتارِ قدیمیِ EXHAUSTIVE دست‌نخورده."""
     try:
-        if (os.environ.get("MANGA_CUDNN_ALGO", "").strip().lower()
-                == "heuristic"):
-            return "HEURISTIC"
+        _v_h4 = os.environ.get("MANGA_CUDNN_ALGO", "").strip().lower()
+        if _v_h4 in ("exhaustive", "off", "none", "0"):
+            return None
     except Exception:
         pass
-    return None
+    return "HEURISTIC"
 
 
 def _build_provider_options(providers):
@@ -924,10 +928,9 @@ def _build_provider_options(providers):
     داینامیک). XNNPACK (فقط MANGA_CPU_EP=xnnpack) → intra_op_num_threads =
     هسته‌هایِ فیزیکی (کانفیگِ رسمی). خروجی None رویِ لیستِ بدونِ CUDA/XNNPACK
     → دقیقاً رفتارِ قبلی (سشنِ CPU خالص).
-    v1.14.98-speed (SRV-H3) — استثنایِ بخشِ algo_search: با
-    MANGA_CUDNN_ALGO=heuristic کلیدِ «cudnn_conv_algo_search»: "HEURISTIC"
-    به دیکشنریِ CUDA اضافه می‌شود (تکِ نقطهٔ مونتاژِ optionsِ CUDA برایِ
-    همهٔ سشن‌ها از همین تابع می‌گذرد)."""
+    v1.14.99 (SRV-H4) — کلیدِ «cudnn_conv_algo_search»: "HEURISTIC"
+    پیش‌فرض است (MANGA_CUDNN_ALGO=exhaustive حذفش می‌کند) — تکِ نقطهٔ
+    مونتاژِ optionsِ CUDA برایِ همهٔ سشن‌ها از همین تابع می‌گذرد."""
     try:
         if not providers:
             return None
@@ -939,12 +942,12 @@ def _build_provider_options(providers):
         for _i, _p in enumerate(providers):
             if _p == "CUDAExecutionProvider":
                 _opts[_i] = {"cudnn_conv_use_max_workspace": "1"}
-                # v1.14.98-speed (SRV-H3) — MANGA_CUDNN_ALGO=heuristic →
-                # حذفِ re-searchِ EXHAUSTIVE برایِ هر شکلِ تازه (مهم‌ترین
-                # مظنونِ رگرسیونِ GPU: بچینگِ پچ‌هایِ LaMa شکلِ تازه می‌سازد)
-                _algo_h3 = _cudnn_algo_search()
-                if _algo_h3:
-                    _opts[_i]["cudnn_conv_algo_search"] = _algo_h3
+                # v1.14.99 (SRV-H4) — HEURISTIC پیش‌فرض (حذفِ re-searchِ
+                # EXHAUSTIVE برایِ هر شکلِ تازه)؛ MANGA_CUDNN_ALGO=exhaustive
+                # → None → بدونِ این کلید (رفتارِ قدیمی).
+                _algo_h4 = _cudnn_algo_search()
+                if _algo_h4:
+                    _opts[_i]["cudnn_conv_algo_search"] = _algo_h4
             elif _p == "XnnpackExecutionProvider":
                 try:
                     _opts[_i] = {"intra_op_num_threads":
@@ -1751,10 +1754,10 @@ def _cpu_thread_fallback(session, model_path: str, use_threads: int,
         provs = list(session.get_providers())
         _cap = 4 if _on_android() else 8
         cpu_n = max(1, min(_cap, os.cpu_count() or 4))
-        # v1.14.96-speed (SRV-G): use_threads=0 (auto) یعنی session از قبل
-        # همهٔ هسته‌ها را می‌گیرد → بازسازیِ بی‌مورد ممنوع
+        # v1.14.99 (SRV-H4) — شرطِ e32bccf بازگشت (گاردِ use_threads>0یِ
+        # SRV-G حذف شد؛ use_threads در تماس‌گیرنده‌ها همیشه ≥1 clamp شده)
         if (allow_bump and "CUDAExecutionProvider" not in provs
-                and use_threads > 0 and use_threads < cpu_n):
+                and use_threads < cpu_n):
             print(f"    [*] اینپینت روی CPU است → threads: {use_threads} → {cpu_n}")
             return _make_ort_session(model_path, prefer_gpu=False, threads=cpu_n), cpu_n
     except Exception:
@@ -3008,28 +3011,31 @@ class RapidOCRBackend:
                 _cpu_n = _os2.cpu_count() or 4
             except Exception:
                 _cpu_n = 4
-            # v1.14.66 — نخِ OCR: رویِ PC قبلاً سقفِ ۲ بود (کُند!)؛ حالا
-            # MANGA_OCR_THREADS یا cores÷2 (تا ۴) — نتیجهٔ OCR عوض نمی‌شود،
-            # فقط سریع‌تر. اندروید مثلِ قبل (رم).
-            # v1.14.96-speed (SRV-G phase2) — rapidocr 3.x: ‎-1 یعنی «دستِ
-            # ORT» (auto = همهٔ هسته‌هایِ فیزیکی — همان معنایِ intra=0 در
-            # _ort_session_options؛rapidocr مقادیرِ ‎!=‎-1 را فقط در بازهٔ
-            # ‎1..cpu_count می‌پذیرد). امولاتورِ x86_64 → 1 (قراردادِ SRV-F).
-            # MANGA_OCR_THREADS همچنان مقدم است.
+            # v1.14.66 — MANGA_OCR_THREADS همچنان مقدم است (اگر تنظیم شود).
+            # v1.14.99 (SRV-H4) — wiringِ نخِ OCRِ SRV-G (‎-1/emulator=1)
+            # حذف شد: پیش‌فرض «بدونِ کلیدِ intra» = پیکربندیِ خودِ rapidocr
+            # (همین wiring عاملِ رگرسیونِ extract رویِ سرور بود — SRV-H2).
+            # فقط اوررایدِ صریح: MANGA_OCR_THREADS / MANGA_ORT_THREADS
+            # (opt-in tuning — به OCR هم اعمال می‌شود).
             try:
                 _ocr_th = int(_os2.environ.get("MANGA_OCR_THREADS", "0") or 0)
             except Exception:
                 _ocr_th = 0
+            try:
+                _env_ort_h4 = int(_os2.environ.get("MANGA_ORT_THREADS", "0") or 0)
+            except Exception:
+                _env_ort_h4 = 0
+            _intra = None
             if _ocr_th > 0:
                 _intra = max(1, _ocr_th)
-            elif _android_x86_emulator():
-                _intra = 1
-            else:
-                _intra = -1
+            elif _env_ort_h4 > 0:
+                _intra = max(1, _env_ort_h4)
             _threads = {
-                "EngineConfig.onnxruntime.intra_op_num_threads": int(_intra),
                 "EngineConfig.onnxruntime.inter_op_num_threads": 1,
             }
+            if _intra is not None:
+                _threads["EngineConfig.onnxruntime.intra_op_num_threads"] = int(_intra)
+            _intra_disp = _intra if _intra is not None else "rapidocr-default"
             if _rec_params is not None:
                 _p = dict(_rec_params)
                 _p.update(_base)
@@ -3045,7 +3051,7 @@ class RapidOCRBackend:
                     _p2 = {k: v for k, v in _p.items() if k not in _gpu_flags69}
                     self.engine = NewRapidOCR(params=_p2)
                 self._new_api = True
-                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra} | cls=خاموش")
+                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra_disp} | cls=خاموش")
                 return
             _pb = dict(_base)
             _pb.update(_threads)
@@ -3058,7 +3064,7 @@ class RapidOCRBackend:
                 _pb2 = {k: v for k, v in _pb.items() if k not in _gpu_flags69}
                 self.engine = NewRapidOCR(params=_pb2)
             self._new_api = True
-            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra} | cls=خاموش")
+            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra_disp} | cls=خاموش")
             return
         except Exception as e:
             import traceback as _tb
@@ -10418,9 +10424,12 @@ class MangaTranslator:
 
     @staticmethod
     def _lama_batch_cap() -> int:
-        """v1.14.96-speed (SRV-G phase2) — سقفِ batch برایِ پچ‌هایِ LaMa.
-        MANGA_NO_BATCH=1 → 0 (غیرفعالِ کامل — مسیرِ موازیِ امروز)؛
-        MANGA_LAMA_BATCH=N → سقفِ N؛ PC → 8؛ اندروید/رمِ کم → 2."""
+        """v1.14.99 (SRV-H4) — بچینگِ پچ‌هایِ LaMa پیش‌فرضِ خاموش (رویِ
+        سرور در هر دو حالتِ CPU/GPU کندتر بود — SRV-H2/H3؛ مسیرِ موازیِ
+        قدیمیِ per-patch مثلِ e32bccf پیش‌فرض است). opt-in:
+        MANGA_LAMA_BATCH=1 → روشن با سقفِ خودکارِ قدیمی (PC=8؛
+        اندروید/رمِ کم=2)؛ MANGA_LAMA_BATCH=N>1 → سقفِ N.
+        MANGA_NO_BATCH=1 همچنان خاموشِ قهری (برِ بالایِ opt-in)."""
         try:
             if str(os.environ.get("MANGA_NO_BATCH", "")).strip() == "1":
                 return 0
@@ -10429,18 +10438,21 @@ class MangaTranslator:
         try:
             _n = int(os.environ.get("MANGA_LAMA_BATCH", "0") or 0)
             if _n > 0:
-                return max(1, _n)
+                if _n > 1:
+                    return max(1, _n)
+                # =1 → روشن با سقفِ خودکارِ قدیمی (SRV-G)
+                try:
+                    if _on_android() or _android_like_env():
+                        return 2
+                    _av = _sys_avail_ram_gb()
+                    if _av is not None and _av < 3.0:
+                        return 2
+                except Exception:
+                    pass
+                return 8
         except Exception:
             pass
-        try:
-            if _on_android() or _android_like_env():
-                return 2
-            _av = _sys_avail_ram_gb()
-            if _av is not None and _av < 3.0:
-                return 2
-        except Exception:
-            pass
-        return 8
+        return 0
 
     def _lama_run_groups_batched(self, image: np.ndarray,
                                  groups: List[List[list]],
@@ -12871,10 +12883,9 @@ class MangaTranslator:
                     _no_batch_m = self._lama_batch_cap() <= 0 \
                         or not hasattr(lama, "run_batch_tensors")
                     if not _no_batch_m:
-                        # v1.14.96-speed (SRV-G phase2) — پچ‌هایِ هم‌شکلِ پدشده
-                        # در session.runهایِ دسته‌ای می‌روند (سقفِ 8؛ PC) —
-                        # پراللیمِ قبلی حذف می‌شود چون سشنِ auto خودش رویِ
-                        # همهٔ هسته‌ها پارالل می‌کند.
+                        # v1.14.99 (SRV-H4) — بچینگِ هم‌شکلِ پدشده فقط opt-in
+                        # (MANGA_LAMA_BATCH=1/N)؛ پیش‌فرض: مسیرِ موازیِ قدیمیِ
+                        # per-patch (e32bccf).
                         _raise_if_stop()
                         self._lama_run_groups_batched(image, groups, lama,
                                                       page_kernel)
