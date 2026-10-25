@@ -680,15 +680,29 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     so = ort.SessionOptions()
     so.log_severity_level = 3
     so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-    # v1.14.67 — امولاتورِ x86_64: ORT-androidِ x86_64 با نخِ >۱ در
-    # زمان‌بندِ thread-pool تقسیم‌برِصفر (SIGFPE) می‌دهد → تک‌نخ.
+    # v1.14.96-speed — فیکسِ باگِ تک‌نخیِ x86_64: محدودیتِ «نخ=۱» فقط برایِ
+    # اندروید بود (ORT-androidِ x86_64 در زمان‌بندِ thread-pool تقسیم‌برِصفر
+    # /SIGFPE می‌دهد) ولی چون فقط machine را چک می‌کرد، رویِ «همهٔ»
+    # میزبان‌هایِ x86_64 (PC/سرورِ لینوکس/ویندوز) هم اعمال می‌شد → LaMa/
+    # دیتکتور/OCR رویِ PC تک‌نخ می‌شدند و چند برابر کند بودند. حالا فقط
+    # وقتی فعال است که واقعاً اندروید باشیم (Chaquopy یا نشانه‌هایِ محیطِ
+    # اندروید مثل /system/build.prop یا ANDROID_ROOT) و معماری x86_64
+    # (یعنی امولاتور). رویِ PC، نخِ ۰ یعنی پیش‌فرضِ ORT (auto — همهٔ
+    # هسته‌هایِ فیزیکی)؛ هاردکدِ ۱/۲ نداریم.
+    _cap1_67 = False
     try:
         import platform as _pf67
-        if _pf67.machine().lower() in ("x86_64", "amd64"):
-            threads = 1
+        _cap1_67 = _pf67.machine().lower() in ("x86_64", "amd64") and (
+            _on_android() or _android_like_env())
     except Exception:
-        pass
-    so.intra_op_num_threads = max(1, int(threads))
+        _cap1_67 = False
+    if _cap1_67:
+        threads = 1
+    try:
+        _t67 = int(threads)
+    except Exception:
+        _t67 = 4
+    so.intra_op_num_threads = _t67 if _t67 > 0 else 0
     so.inter_op_num_threads = 1
     so.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     # پچ‌های موازی LaMa + OCR هم‌زمان اجرا می‌شوند؛ spin-wait هسته‌ها را می‌سوزاند
@@ -706,6 +720,79 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None):
     so.enable_cpu_mem_arena = (not low_mem)
     so.enable_mem_pattern = (not low_mem)
     return so
+
+
+def _trt_ep_usable() -> bool:
+    """v1.14.96-speed — TensorrtExecutionProvider فقط وقتی «واقعاً» قابلِ
+    استفاده است. حضورش در get_available_providers کافی نیست؛ بدونِ
+    کتابخانهٔ nvinfer ساختِ سشن یا شکست می‌خورد یا برایِ ساختِ engine
+    گیر می‌کند → ماژولِ tensorrt لازم است یا اجباری با MANGA_ALLOW_TRT=1
+    (و انکار با MANGA_NO_TRT=1)."""
+    try:
+        if os.environ.get("MANGA_NO_TRT", "").strip() == "1":
+            return False
+    except Exception:
+        pass
+    try:
+        import tensorrt  # noqa: F401
+        return True
+    except Exception:
+        pass
+    try:
+        return os.environ.get("MANGA_ALLOW_TRT", "").strip() == "1"
+    except Exception:
+        return False
+
+
+def _best_providers_for(kind: str = "generic", prefer_gpu: bool = True):
+    """v1.14.96-speed — انتخابگرِ مرکزیِ EP از آنچه واقعاً نصب/موجود است.
+
+    خروجی: لیستِ مرتبِ providers برایِ ort.InferenceSession — سریع‌ترین
+    EPِ موجود اول و همیشه CPU آخرِ لیست. اولویتِ GPU: TensorRT (فقط
+    usable) → CUDA → ROCm → MIGraphX → Dml (ویندوز) → QNN/NNAPI
+    (اندروید) → CoreML (مک). در حالتِ --cpu فقط CPU (اگر OpenVINOِ واقعی
+    نصب باشد جلوتر می‌آید؛ «Azure» ضمیمهٔ همهٔ بیلدهایِ معمولی ORT است و
+    EPِ شتاب‌دهندهٔ لوکال نیست → هرگز جلو نمی‌آید). انتخابِ EP خروجیِ
+    مدل‌ها را عوض نمی‌کند — فقط سرعتِ اجرا."""
+    try:
+        avail = list(ort.get_available_providers())
+    except Exception:
+        avail = []
+    out = []
+    if prefer_gpu:
+        for _ep in ("TensorrtExecutionProvider", "CUDAExecutionProvider",
+                    "ROCmExecutionProvider", "MIGraphXExecutionProvider",
+                    "DmlExecutionProvider"):
+            if _ep not in avail:
+                continue
+            if _ep == "TensorrtExecutionProvider" and not _trt_ep_usable():
+                continue
+            out.append(_ep)
+        try:
+            if _on_android() or _android_like_env():
+                for _ep in ("QNNExecutionProvider", "NNAPIExecutionProvider"):
+                    if _ep in avail:
+                        out.append(_ep)
+            elif sys.platform == "darwin" \
+                    and "CoreMLExecutionProvider" in avail:
+                out.append("CoreMLExecutionProvider")
+        except Exception:
+            pass
+    else:
+        # --cpu: x86_64 → فقط CPU (همان EPِ همیشگی، نتیجهٔ بیت‌به‌بیت یکسان)
+        if "OpenVINOExecutionProvider" in avail:
+            out.append("OpenVINOExecutionProvider")
+    # امولاتورِ اندرویدِ x86_64: CPU-EPِ ORT-android می‌میرد (SIGFPE)
+    # → XNNPACK اجباری (همان رفتارِ v1.14.67)
+    if _on_x86() and "XnnpackExecutionProvider" in avail:
+        out.append("XnnpackExecutionProvider")
+    out.append("CPUExecutionProvider")
+    _seen, _res = set(), []
+    for _p in out:
+        if _p not in _seen:
+            _seen.add(_p)
+            _res.append(_p)
+    return _res or ["CPUExecutionProvider"]
 
 
 # ── v1.14.69 — کشِ «مدلِ بهینه‌شده» برایِ LaMa ──────────────────────────
@@ -1439,15 +1526,11 @@ def _make_ort_session(model_path: str, prefer_gpu: bool = True, threads: int = 4
             except Exception:
                 pass
 
-    if want and "CUDAExecutionProvider" in ort.get_available_providers():
-        providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    elif _on_x86() and "XnnpackExecutionProvider" in list(
-            ort.get_available_providers()):
-        # v1.14.67 — امولاتورِ x86_64: CPU-EPِ ORT می‌میرد → همهٔ سشن‌ها
-        # (دیتکتور/LaMa) از XNNPACK می‌روند (پروبش سالم بود)
-        providers = ["XnnpackExecutionProvider", "CPUExecutionProvider"]
-    else:
-        providers = ["CPUExecutionProvider"]
+    # v1.14.96-speed — EPها از انتخابگرِ مرکزیِ _best_providers_for
+    # می‌آیند (TensorRT/CUDA/ROCm/MIGraphX/Dml/… بر اساسِ آنچه واقعاً
+    # نصب است + XNNPACKِ امولاتور + CPU همیشه آخر) — به‌جای چکِ
+    # هاردکدِ CUDA که بقیهٔ EPهایِ GPU را از قلم می‌انداخت.
+    providers = _best_providers_for("lama", prefer_gpu=want)
 
     try:
         # v1.14.69 — کشِ مدلِ بهینه‌شده (گوشی: createSession تا 67s طول
@@ -2441,6 +2524,12 @@ class RTDetrV2ONNXDetector:
         return MangaTranslator._drop_contained_boxes(cleaned, contain_thresh=0.68)
 
 
+# v1.14.96-speed — منبعِ اصلیِ مدل‌هایِ OCR = ریلیزِ «models» رویِ GitHub
+# (همان amirwolf512k/Manga-AutoTranslate)؛ assetsها دقیقاً با همین نام‌ها
+# آنجاست: PP-OCRv6_det_small.onnx (det) / PP-OCRv6_rec_small.onnx (rec
+# en+ch) / korean_PP-OCRv5_rec_mobile.onnx / japan_PP-OCRv4_rec_mobile.onnx
+# / ch_ppocr_mobile_v2.0_cls_mobile.onnx (cls — در رانِ عادی استفاده
+# نمی‌شود). مسیرِ دوم فقط فال‌بکِ قطعِ گیت‌هاب است (modelscope).
 _RAPIDOCR_MIRROR = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
                     "releases/download/models/")
 _RAPIDOCR_MS = ("https://www.modelscope.cn/models/RapidAI/RapidOCR/"
@@ -2565,9 +2654,12 @@ def _ensure_rapidocr_models(mdir, files=None):
 class RapidOCRBackend:
 
 
-    def __init__(self, lang: str = "en"):
+    def __init__(self, lang: str = "en", prefer_gpu: Optional[bool] = None):
         self.lang = lang
         self._new_api = False
+        # v1.14.96-speed — prefer_gpu از MangaTranslator.use_gpu می‌آید
+        # (همان تصمیمِ auto/--cpuِ OCR). None = رفتارِ قبل (فقط CPU).
+        self._prefer_gpu = prefer_gpu
         try:
             # v1.14.29: rapidocr فقط همین‌جا (وقتی موتور ONNX واقعاً لازم است) نصب می‌شود
             if not _ensure_rapidocr_pkg():
@@ -2639,6 +2731,51 @@ class RapidOCRBackend:
                     _ensure_rapidocr_models(_mdir, files=_files)
                 except Exception as _e:
                     print(f"[!] پیش‌دانلود مدل‌ها ناموفق: {_e}")
+            # v1.14.96-speed — مدل‌هایِ det/rec (و cls اگر فایلش موجود باشد)
+            # «صریحاً» از فایل‌هایِ دانلودشدهٔ ریلیزِ «models» (GitHub) به
+            # موتور داده می‌شوند: rapidocr دیگر خودش دانلود/بررسیِ SHA از
+            # modelscope انجام نمی‌دهد و دقیقاً همان فایلِ کش‌شده (که از
+            # ریلیزِ models آمده) استفاده می‌شود. فایل نبود؟ → همان رفتارِ
+            # قبل: rapidocr خودش برمی‌دارد (model_root_dir).
+            _gpu_flags69 = {}
+            if _mdir:
+                try:
+                    _rec_name69 = ("korean_PP-OCRv5_rec_mobile.onnx"
+                                   if _low in ("korean", "ko") else
+                                   ("japan_PP-OCRv4_rec_mobile.onnx"
+                                    if _low in ("japan", "ja", "japanese")
+                                    else "PP-OCRv6_rec_small.onnx"))
+                    for _sec69, _fn69 in (
+                            ("Det", "PP-OCRv6_det_small.onnx"),
+                            ("Rec", _rec_name69),
+                            ("Cls", "ch_ppocr_mobile_v2.0_cls_mobile.onnx")):
+                        _mp69 = _os.path.join(_mdir, _fn69)
+                        if _os.path.isfile(_mp69) \
+                                and _os.path.getsize(_mp69) > 100_000:
+                            _base[f"{_sec69}.model_path"] = _mp69
+                except Exception as _e69:
+                    print(f"[!] مسیرِ صریحِ مدلِ OCR نشد ({_e69}) → auto")
+            # v1.14.96-speed — EPِ سشن‌هایِ OCR هم از انتخابگرِ مرکزیِ
+            # _best_providers_for: اگر CUDA/Dml/CoreML واقعاً موجود است و
+            # --cpu نزده، rapidocr هم رویِ همان EP می‌رود (همان مدلِ
+            # PP-OCRv6؛ فقط سریع‌تر). در بیلدِ CPU-only هیچ فرقی با قبل
+            # ندارد و ساختِ سشنِ GPU شکست بخورد → بدونِ GPU دوباره ساخته
+            # می‌شود (فال‌بکِ امن).
+            try:
+                _want69 = bool(prefer_gpu) and (_ORT_CUDA_OK is not False)
+                _ocr_head69 = (_best_providers_for("ocr", prefer_gpu=_want69)
+                               or ["CPUExecutionProvider"])[0]
+                if _ocr_head69 == "CUDAExecutionProvider":
+                    _gpu_flags69["EngineConfig.onnxruntime.use_cuda"] = True
+                elif _ocr_head69 == "DmlExecutionProvider":
+                    _gpu_flags69["EngineConfig.onnxruntime.use_dml"] = True
+                elif _ocr_head69 == "CoreMLExecutionProvider":
+                    _gpu_flags69["EngineConfig.onnxruntime.use_coreml"] = True
+                if _gpu_flags69:
+                    _base.update(_gpu_flags69)
+                    print(f"[*] EPِ OCR: {_ocr_head69}")
+            except Exception:
+                _gpu_flags69 = {}
             try:
                 import os as _os2
                 _cpu_n = _os2.cpu_count() or 4
@@ -2665,13 +2802,29 @@ class RapidOCRBackend:
                 _p = dict(_rec_params)
                 _p.update(_base)
                 _p.update(_threads)
-                self.engine = NewRapidOCR(params=_p)
+                try:
+                    self.engine = NewRapidOCR(params=_p)
+                except Exception as _eg69:
+                    # v1.14.96-speed — اگر ساختِ سشنِ GPU شکست، بدونِ EPِ GPU
+                    # دوباره (تا فال‌بکِ legacyِ PP-OCRv3 فعال نشود)
+                    if not _gpu_flags69:
+                        raise
+                    print(f"[!] EPِ GPU برایِ OCR نشد ({str(_eg69)[:130]}) → CPU")
+                    _p2 = {k: v for k, v in _p.items() if k not in _gpu_flags69}
+                    self.engine = NewRapidOCR(params=_p2)
                 self._new_api = True
                 print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra} | cls=خاموش")
                 return
             _pb = dict(_base)
             _pb.update(_threads)
-            self.engine = NewRapidOCR(params=_pb)
+            try:
+                self.engine = NewRapidOCR(params=_pb)
+            except Exception as _eg69:
+                if not _gpu_flags69:
+                    raise
+                print(f"[!] EPِ GPU برایِ OCR نشد ({str(_eg69)[:130]}) → CPU")
+                _pb2 = {k: v for k, v in _pb.items() if k not in _gpu_flags69}
+                self.engine = NewRapidOCR(params=_pb2)
             self._new_api = True
             print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra} | cls=خاموش")
             return
@@ -2748,6 +2901,24 @@ class RapidOCRBackend:
                 continue
             lines.append([box, (text, float(score))])
         return [lines] if lines else None
+
+
+def _android_like_env() -> bool:
+    """v1.14.96-speed — تشخیصِ مقاومِ محیطِ اندروید (مکملِ import java).
+
+    Chaquopy فقط با import java شناسایی می‌شود؛ بقیهٔ ران‌تایم‌هایِ
+    اندروید (ترماکس و…) با نشانه‌هایِ محیطی: وجودِ /system/build.prop،
+    متغیرهایِ ANDROID_ROOT/ANDROID_DATA یا «android» در release هسته."""
+    try:
+        if os.path.isfile("/system/build.prop"):
+            return True
+        if os.environ.get("ANDROID_ROOT") or os.environ.get("ANDROID_DATA"):
+            return True
+        if "android" in (os.uname().release or "").lower():
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def _on_android() -> bool:
@@ -4139,7 +4310,7 @@ class MangaTranslator:
         if self.ocr is None and _on_android():
             if os.environ.get("MANGA_ANDROID_OCR", "").strip().lower() == "rapidocr":
                 try:
-                    self.ocr = RapidOCRBackend(lang=main_lang)
+                    self.ocr = RapidOCRBackend(lang=main_lang, prefer_gpu=self.use_gpu)
                     self._ocr_backend_name = "rapidocr"
                     print("[*] اندروید: RapidOCR (موتور وب/پی‌سی) به‌صورت دستی فعال شد.")
                 except Exception as e:
@@ -4156,14 +4327,14 @@ class MangaTranslator:
                 except Exception as e:
                     print(f"[!] ML Kit لود نشد ({e}) → RapidOCR ONNX")
                     try:
-                        self.ocr = RapidOCRBackend(lang=main_lang)
+                        self.ocr = RapidOCRBackend(lang=main_lang, prefer_gpu=self.use_gpu)
                         self._ocr_backend_name = "rapidocr"
                     except Exception as e2:
                         print(f"[!] RapidOCR هم لود نشد ({e2})")
 
         if self.ocr is None:
             try:
-                self.ocr = RapidOCRBackend(lang=main_lang)
+                self.ocr = RapidOCRBackend(lang=main_lang, prefer_gpu=self.use_gpu)
                 self._ocr_backend_name = "rapidocr"
             except Exception as e:
                 print(f"[!] RapidOCR هم لود نشد ({e})", file=sys.stderr)
