@@ -3012,11 +3012,11 @@ class RapidOCRBackend:
             except Exception:
                 _cpu_n = 4
             # v1.14.66 — MANGA_OCR_THREADS همچنان مقدم است (اگر تنظیم شود).
-            # v1.14.99 (SRV-H4) — wiringِ نخِ OCRِ SRV-G (‎-1/emulator=1)
-            # حذف شد: پیش‌فرض «بدونِ کلیدِ intra» = پیکربندیِ خودِ rapidocr
-            # (همین wiring عاملِ رگرسیونِ extract رویِ سرور بود — SRV-H2).
-            # فقط اوررایدِ صریح: MANGA_OCR_THREADS / MANGA_ORT_THREADS
-            # (opt-in tuning — به OCR هم اعمال می‌شود).
+            # v1.14.99 (SRV-H4) — wiringِ SRV-G (‎-1/emulator=1) خنثی شد و
+            # wiringِ e32bccf (PC: cores÷2 تا ۴؛ اندروید: ۱/۲) برگشت —
+            # «پیش‌فرضِ خودِ rapidocr» (-1 = ORT auto) همان رگرسیونِ
+            # extract را می‌داد. MANGA_ORT_THREADS فقط با تنظیمِ صریح به
+            # OCR هم اعمال می‌شود (opt-in tuning).
             try:
                 _ocr_th = int(_os2.environ.get("MANGA_OCR_THREADS", "0") or 0)
             except Exception:
@@ -3030,12 +3030,21 @@ class RapidOCRBackend:
                 _intra = max(1, _ocr_th)
             elif _env_ort_h4 > 0:
                 _intra = max(1, _env_ort_h4)
+            elif _on_android():
+                # v1.14.66 — اندروید مثلِ قبل (رم)
+                _intra = 1 if _cpu_n <= 4 else 2
+            else:
+                # v1.14.99 (SRV-H4) — wiringِ e32bccf بازگشت (سقفِ ۲..۴ رویِ
+                # PC): پیش‌فرضِ خودِ rapidocr (-1 = ORT auto = همهٔ هسته‌ها)
+                # همان رگرسیونِ extract را می‌دهد (SRV-H2) — پروبِ سرور:
+                # 27.5s → 20.4s رویِ 01.jpg با ۴ نخ. اوررایدِ صریح
+                # (MANGA_OCR_THREADS / MANGA_ORT_THREADS) مقدم است.
+                _intra = max(2, min(4, _cpu_n // 2))
             _threads = {
+                "EngineConfig.onnxruntime.intra_op_num_threads": int(_intra),
                 "EngineConfig.onnxruntime.inter_op_num_threads": 1,
             }
-            if _intra is not None:
-                _threads["EngineConfig.onnxruntime.intra_op_num_threads"] = int(_intra)
-            _intra_disp = _intra if _intra is not None else "rapidocr-default"
+            _intra_disp = _intra
             if _rec_params is not None:
                 _p = dict(_rec_params)
                 _p.update(_base)
