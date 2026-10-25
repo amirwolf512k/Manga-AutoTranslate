@@ -776,19 +776,29 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None,
         threads = 1
     else:
         # v1.14.99-speed (SRV-L) — هیوریستیکِ میزبان به‌جایِ مقدارِ ثابتِ
-        # «پاس‌شده»: رویِ PC/سرورِ واقعیِ x86_64 (غیرِ gVisor) با ≥۸ هسته،
-        # برندهٔ سوییپِ SRV-K (t8: CPU ۳۲.۲s / GPU ۱۸.۷s) پیش‌فرضِ
-        # fastest-mode می‌شود؛ رویِ gVisor/Termux/میزبانِ ضعیف همان
-        # مقدارِ پاس‌شده (۴) می‌ماند. MANGA_ORT_THREADS همچنان اوررایدِ
-        # مطلق است (فقط cap1 امولاتور از آن بالاتر است).
+        # «پاس‌شده»: رویِ PC/سرورِ واقعیِ x86_64 با ≥۸ هسته، برندهٔ سوییپِ
+        # SRV-K (t8: CPU ۳۲.۲s / GPU ۱۸.۷s) پیش‌فرضِ fastest-mode می‌شود؛
+        # رویِ میزبانِ ضعیف/کم‌هسته همان مقدارِ پاس‌شده (۴) می‌ماند.
+        # MANGA_ORT_THREADS همچنان اوررایدِ مطلق است (فقط cap1 امولاتور
+        # از آن بالاتر است).
+        # انحرافِ مستندشده از اسپک (SRV-L): رشتهٔ «gvisor» در
+        # uname.release دیگر سقفِ ۴ را رویِ میزبانِ بزرگ اعمال نمی‌کند —
+        # سرورِ ۲۰ هسته‌ایِ Azure هم «4.19.0-gvisor» گزارش می‌کند (SRV-K
+        # آن را با AVX512 «بدونِ gVisor» تشخیص داده بود) و سوییپِ خودِ
+        # همان میزبان t8 را برنده داد؛ در داده‌هایِ میزبانِ قبلیِ gVisor
+        # هم CPU با ۸ نخ بهتر بود (SRV-H3: c8nb 34.8s در برابرِ c4nb
+        # 39.0s). گاردِ میزبانِ ضعیف، شرطِ «≥۸ هسته» است (میزبان‌هایِ
+        # gVisorِ کوچک/CI → همان ۴).
         try:
             import platform as _pfl
             _m_l = _pfl.machine().lower() in ("x86_64", "amd64")
-            _rel_l = os.uname().release.lower() if hasattr(os, "uname") else ""
-            _gv_l = "gvisor" in _rel_l
-            if _m_l and not _gv_l and (os.cpu_count() or 4) >= 8:
+            _gv_l = "gvisor" in (os.uname().release.lower()
+                                 if hasattr(os, "uname") else "")
+            if _m_l and (os.cpu_count() or 4) >= 8:
                 threads = 8
-            # else: همان threadsِ پاس‌شده (e32bccf) — بدونِ auto
+            elif _gv_l:
+                threads = 4  # میزبانِ gVisorِ کوچک → صریحاً ۴
+            # else: همان threadsِ پاس‌شده — بدونِ auto
         except Exception:
             pass
     try:
