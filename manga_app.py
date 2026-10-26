@@ -1543,7 +1543,7 @@ def run_web():
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}
-.bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:rgba(12,12,14,.97);border-bottom:1px solid #232326;direction:rtl}
+.bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:#0c0c0e;border-bottom:1px solid #232326;direction:rtl;position:sticky;top:0;z-index:2}
 .dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
 .dot.off{background:#2e7d4f;animation:none}
 @keyframes p{0%,100%{opacity:1}50%{opacity:.25}}
@@ -1745,15 +1745,17 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             str(title).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;")
         )
-        # v1.14.31: نوار بالا دیگر هرگز ثابت نیست — کل صفحه اسکرول طبیعی سند
-        # را دارد (روی WebView اندروید هم مطمئن). فقط نوار پیشرفت پایین ثابت است.
+        # v1.14.103: نوار بالا sticky است — با اسکرولِ پایین هم بالای صفحه
+        # می‌چسبد (خواستهٔ کاربر: روی PC/لینوکس بدون برگشتن به بالا، دکمه‌ها
+        # همیشه دسترس باشند — مثل اپ اندروید). اسکرول همچنان طبیعیِ سند است
+        # و نوار پیشرفتِ پایین هم ثابت می‌ماند.
         css = (
             "*{box-sizing:border-box;margin:0;padding:0}"
             "html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;"
             "overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}"
             ".rdr{background:#000;direction:ltr}"
             ".rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;"
-            "background:rgba(12,12,14,.97);border-bottom:1px solid #232326;z-index:2}"
+            "background:#0c0c0e;border-bottom:1px solid #232326;position:sticky;top:0;z-index:2}"
             ".rdr-btn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;"
             "padding:8px 12px;font-size:.95rem;cursor:pointer;font-family:inherit;"
             "min-width:40px;min-height:40px;touch-action:manipulation;-webkit-tap-highlight-color:transparent}"
@@ -1779,7 +1781,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             "}"
         )
         # v1.14.31: جاوااسکریپت روی اسکرولِ خودِ سند (window) — نه داخل باکس؛
-        # نوار بالا با اسکرول کامل پایین می‌رود (وب + اندروید WebView).
+        # نوار بالا sticky است و با اسکرول، بالای صفحه می‌چسبد (وب + اندروید).
         js = r"""
 (function(){
   const root = document.getElementById('manga_rdr');
@@ -1972,8 +1974,8 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             "</head>\n"
             "<body>\n"
             '<div class="rdr" id="manga_rdr" data-zoom="1">\n'
-            # v1.14.30: نوار بالا داخل ناحیهٔ اسکرول است — با پایین آمدن، خودش هم
-            # پایین می‌رود (ثابت نیست). نوار پیشرفت پایین همچنان همیشه دیده می‌شود.
+            # v1.14.103: نوار بالا sticky (position:sticky;top:0) — با اسکرولِ پایین
+            # هم بالای صفحه می‌ماند. نوار پیشرفت پایین همچنان همیشه دیده می‌شود.
             '  <div class="rdrS">\n'
             '    <div class="rdr-bar">\n'
             '      <button type="button" class="rdr-btn" data-act="close" title="بستن">✕</button>\n'
