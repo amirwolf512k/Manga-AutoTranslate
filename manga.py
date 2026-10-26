@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.103"
+APP_VER = "1.14.104"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -9009,6 +9009,13 @@ class MangaTranslator:
                     continue
         if n_ok <= 0 and n_skip <= 0:
             return None
+        # v1.14.104 — «بالنِ سیستم»: اینتریورِ باکسِ سیستم اینجا به ماسک
+        # اضافه «نمی‌شود» — پرِ فلتِ قطعیِ آن در clean_image انجام می‌شود
+        # (self._fill_system_box_interiors). چرا اینجا نه؟ ماسکِ کلِ
+        # اینتریور، گاردِ ضدتوهمِ LaMa (که به «حلقهٔ روشنِ دورِ ماسک»
+        # تکیه دارد) را کور می‌کند — حلقهٔ دورِ اینتریور = قابِ سیاهِ
+        # باکس است → خروجیِ تیرهٔ توهمیِ LaMa بدونِ اعتبارسنجی می‌ماند
+        # (لگهٔ سیاه — بازتولید در تستِ img1018).
         try:
             _dm2 = os.environ.get("MANGA_DUMP_MASK2")
             if _dm2:
@@ -11084,6 +11091,83 @@ class MangaTranslator:
             self._compose_k9 = _k
         return _k
 
+    @staticmethod
+    def _system_box_interior(image: np.ndarray, cover_rect,
+                             seed_rects=None) -> Optional[np.ndarray]:
+        """v1.14.104 — اینتریورِ «بالنِ سیستم» (باکسِ مشخصاتِ سفید).
+
+        خواستهٔ کاربر: «حبابِ سیستم متن‌هاش جدا حساب شه (رندر) ولی
+        پاکسازیش: متن‌های نزدیک با هم پاک بشه — فقط سیستم اینجور باشه».
+        یعنی در پاکسازی، کلِ داخلِ باکسِ سیستم «یک واحد» پاک می‌شود
+        (نه خط‌به‌خط) تا هیچ لکهٔ سیاه/شبحی بینِ خط‌ها و چسبیده به قاب
+        نماند و LaMa کلِ باکس را با هم ببیند.
+
+        روش: داخلِ cover_rect، مؤلفه‌هایِ «روشنِ» تصویر که به خط‌هایِ
+        متن (seed) می‌رسند = اینتریورِ سفید؛ حفره‌هایِ محبوس (خودِ
+        حروفِ تیره) پر می‌شوند؛ ۱px از قابِ تیره فاصله می‌گیرد.
+        فقط باکسِ «سفید» (میانهٔ روشن ≥۱۸۰) — پنجرهٔ سیستمِ تیره (آبیِ
+        asura) مثلِ قبل خط‌به‌خط پاک می‌شود (رفتارِ فعلی حفظ است).
+
+        خروجی: ماسکِ boolِ تمام‌صفحه؛ None = مسیر سیستمی/سفید نیست."""
+        try:
+            h, w = image.shape[:2]
+            bx0 = max(0, int(cover_rect[0]))
+            by0 = max(0, int(cover_rect[1]))
+            bx1 = min(w, int(cover_rect[2]))
+            by1 = min(h, int(cover_rect[3]))
+            if bx1 - bx0 < 24 or by1 - by0 < 16:
+                return None
+            crop = image[by0:by1, bx0:bx1]
+            g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            bright = (g >= 120).astype(np.uint8)
+            if float(bright.mean()) < 0.30:
+                return None
+            seed = np.zeros_like(bright)
+            n_seed = 0
+            for _sr in (seed_rects or []):
+                try:
+                    _sx0 = max(0, int(_sr[0]) - bx0)
+                    _sy0 = max(0, int(_sr[1]) - by0)
+                    _sx1 = min(bx1 - bx0, int(_sr[2]) - bx0)
+                    _sy1 = min(by1 - by0, int(_sr[3]) - by0)
+                except Exception:
+                    continue
+                if _sx1 - _sx0 >= 6 and _sy1 - _sy0 >= 6:
+                    seed[_sy0:_sy1, _sx0:_sx1] = 1
+                    n_seed += 1
+            if n_seed <= 0:
+                return None
+            n, lab = cv2.connectedComponents(bright, 8)
+            keep = np.zeros_like(bright)
+            _hit = set(int(v) for v in np.unique(lab[seed > 0])) - {0}
+            for _i in _hit:
+                keep[lab == _i] = 1
+            if int(keep.sum()) < 300:
+                return None
+            # فقط باکسِ «سفیدِ سیستم»: میانهٔ روشناییِ اینتریور ≥۱۸۰
+            if float(np.median(g[keep > 0])) < 180.0:
+                return None
+            # حفره‌هایِ محبوس (حروفِ تیره داخلِ سفید) پر شوند
+            inv = (keep == 0).astype(np.uint8)
+            nh, nlab = cv2.connectedComponents(inv, 8)
+            hole = np.zeros_like(inv)
+            for _j in range(1, nh):
+                _cm = (nlab == _j)
+                if (_cm[0, :].any() or _cm[-1, :].any()
+                        or _cm[:, 0].any() or _cm[:, -1].any()):
+                    continue  # به مرزِ کراپ می‌رسد = بیرونِ باکس
+                hole[_cm] = 1
+            interior = ((keep + hole) > 0).astype(np.uint8)
+            # ۱px فاصله از قابِ تیره — قابِ سیستم هرگز واردِ ماسک نشود
+            interior = cv2.erode(interior, np.ones((3, 3), np.uint8))
+            out = np.zeros((h, w), dtype=bool)
+            out[by0:by1, bx0:bx1] = interior > 0
+            if int(out.sum()) < 400:
+                return None
+            return out
+        except Exception:
+            return None
+
     def _compose_region_strips(self, image: np.ndarray,
                                region: "TextRegion") -> Optional[np.ndarray]:
         """v1.14.70 — نوارهایِ خط‌به‌خطِ «اندازهٔ دقیقِ متن» برایِ یک ناحیه.
@@ -11188,6 +11272,9 @@ class MangaTranslator:
                                   or base.shape != mask.shape[:2]) \
                 else (base > 0)
             out = np.zeros_like(_raw)
+            # v1.14.104 — هر فراخوانیِ کامپوز، گروه‌هایِ سیستم را از نو
+            # پردازش کند (کامپوز دوبار صدا می‌شود: اصلی + گارانتیِ نهایی)
+            self._compose_sys_done = set()
             h, w = mask.shape[:2]
             # v1.14.70 — «نه بیشتر نه کمتر»: برایِ هر ناحیه‌ای که پالیِ
             # OCR دارد، نوارهایِ خط‌به‌خط (اندازهٔ دقیقِ حروف) جایِ
@@ -11282,6 +11369,60 @@ class MangaTranslator:
                                               f"({_bx1-_bx0}x{_by1-_by0})")
                                     except Exception:
                                         pass
+                except Exception:
+                    pass
+                # v1.14.104 — «بالنِ سیستم»: اینتریورِ باکسِ سیستم (که در
+                # پاکسازی «یکجا» پاک شد) در کامپوز هم «یکجا» از عکسِ
+                # پاک‌شده منتقل می‌شود — وگرنه شبح/لکهٔ بینِ خط‌ها از
+                # عکسِ اصلی برمی‌گردد. قابِ سیستم بیرونِ اینتریور است و
+                # طبقِ قاعدهٔ همیشگی از عکسِ اصلی می‌ماند.
+                try:
+                    if getattr(_rg, "sys_split", False):
+                        _cov104 = getattr(_rg, "cover_rect", None)
+                        if _cov104 is not None:
+                            _sys_done104 = getattr(
+                                self, "_compose_sys_done", None)
+                            if _sys_done104 is None:
+                                _sys_done104 = set()
+                                self._compose_sys_done = _sys_done104
+                            _key104 = tuple(
+                                int(v) for v in _cov104[:4])
+                            if _key104 not in _sys_done104:
+                                _sys_done104.add(_key104)
+                                _seeds104 = []
+                                for _rgs2 in _regions:
+                                    if not getattr(_rgs2, "sys_split",
+                                                   False):
+                                        continue
+                                    _cv2b = getattr(_rgs2, "cover_rect",
+                                                    None)
+                                    if _cv2b is None or tuple(
+                                            int(v) for v in _cv2b[:4]) \
+                                            != _key104:
+                                        continue
+                                    try:
+                                        _qx, _qy, _qw, _qh = [
+                                            int(v) for v in _rgs2.rect]
+                                    except Exception:
+                                        continue
+                                    _seeds104.append((_qx, _qy,
+                                                      _qx + _qw,
+                                                      _qy + _qh))
+                                if len(_seeds104) >= 2:
+                                    _intr104 = \
+                                        MangaTranslator._system_box_interior(
+                                            image, _key104, _seeds104)
+                                    if _intr104 is not None:
+                                        out |= _intr104
+                                        _sweep |= _intr104
+                                        if self.debug:
+                                            try:
+                                                print(f"  [*]بالنِ سیستم → "
+                                                      f"انتقالِ یکجایِ "
+                                                      f"اینتریور "
+                                                      f"({int(_intr104.sum())}px)")
+                                            except Exception:
+                                                pass
                 except Exception:
                     pass
                 _n_str += 1
@@ -11538,9 +11679,34 @@ class MangaTranslator:
                 #     — برای بلوک‌هایِ بزرگ (ماسکِ بلوک/حبابِ زرد) که حلقه‌شان
                 #     هنر است و گیتِ الف نمی‌گیرد؛ اقلیتِ باقی‌مانده =
                 #     جوهرِ شبحِ متن است.
+                # v1.14.104 — گیتِ رنگی (درسِ v1.14.38): «یکنواختی» فقط در
+                # خاکستری دیده نمی‌شود. کارتِ قرمزِ 890fb1: خاکستریِ حلقه
+                # یکنواختِ ~۱۲ (rstd=4!) ولی کانالِ R گرادیانِ ۵۰→۱۳ دارد
+                # — پولیشِ فلتِ خاکستری‌فکر کلِ بلوک را با «میانهٔ حلقه»
+                # یک‌رنگ می‌کند = لگهٔ قرمزِ مستطیلی. سنجه = بیشینهٔ
+                # stdِ کانال‌هایِ BGR رویِ حلقهٔ اورجینال + اکثریتِ هر کانال.
+                _cstd104 = None
+                try:
+                    _roc104 = image[y0:y1, x0:x1][ring].astype(np.float32)
+                    if _roc104.shape[0] >= 40:
+                        _cstd104 = float(_roc104.std(axis=0).max())
+                except Exception:
+                    _cstd104 = None
+                _cmaj104 = None
+                try:
+                    _roc104b = image[y0:y1, x0:x1][ring].astype(np.float32)
+                    if _roc104b.shape[0] >= 40:
+                        _cmaj104 = min(
+                            float((np.abs(_roc104b[:, _c] -
+                                          np.median(_roc104b[:, _c]))
+                                   <= 12.0).mean())
+                            for _c in range(3))
+                except Exception:
+                    _cmaj104 = None
                 _can_flat = False
                 _gate82 = ""
-                if rstd is not None and rstd <= 10.0:
+                if rstd is not None and rstd <= 10.0 and (
+                        _cstd104 is None or _cstd104 <= 10.0):
                     _can_flat = True
                     _gate82 = "A:rstd<=10"
                 elif rstd is not None and rstd <= 60.0:
@@ -11548,8 +11714,10 @@ class MangaTranslator:
                     try:
                         _rvv = rg[ring]
                         _rmv = float(np.median(_rvv))
-                        if float((np.abs(_rvv.astype(np.float32) - _rmv)
-                                  <= 12.0).mean()) >= 0.75:
+                        if (float((np.abs(_rvv.astype(np.float32) - _rmv)
+                                  <= 12.0).mean()) >= 0.75
+                                and (_cmaj104 is None
+                                     or _cmaj104 >= 0.75)):
                             _can_flat = True
                             _gate82 = "B:ring-majority"
                     except Exception:
@@ -11577,9 +11745,27 @@ class MangaTranslator:
                             _gd = rg[subm]
                             if _gd.size >= 40:
                                 _gmode = float(np.median(_gd))
-                                if float((np.abs(
+                                # v1.14.104 — گیتِ C هم رنگی: کامپوننتِ
+                                # گرادیانِ رنگی (کارتِ 890fb1 در خاکستری
+                                # «اکثریت‌یکنواخت» است!) فلت نشود.
+                                _gdC104 = None
+                                try:
+                                    _subC104 = sub[subm].astype(np.float32)
+                                    if _subC104.shape[0] >= 40:
+                                        _gdC104 = min(
+                                            float((np.abs(
+                                                _subC104[:, _c]
+                                                - np.median(
+                                                    _subC104[:, _c]))
+                                                <= 10.0).mean())
+                                            for _c in range(3))
+                                except Exception:
+                                    _gdC104 = None
+                                if (float((np.abs(
                                         _gd.astype(np.float32) - _gmode)
-                                        <= 10.0).mean()) >= 0.80:
+                                        <= 10.0).mean()) >= 0.80
+                                        and (_gdC104 is None
+                                             or _gdC104 >= 0.80)):
                                     _can_flat = True
                                     _gate82 = "C:comp-majority"
                         except Exception:
@@ -11978,6 +12164,95 @@ class MangaTranslator:
             return _out
         except Exception:
             return donor
+
+    def _fill_system_box_interiors(self, image: np.ndarray,
+                                   regions: List[TextRegion],
+                                   mask: np.ndarray,
+                                   cleaned: np.ndarray) -> int:
+        """v1.14.104 — پرِ فلتِ «قطعیِ» اینتریورِ بالنِ سیستم (باکسِ سفید).
+
+        درخواستِ کاربر: «حبابِ سیستم متن‌هاش جدا حساب شه (رندر)، ولی
+        پاکسازیش: متن‌های نزدیک با هم پاک بشه — فقط سیستم اینجور باشه».
+
+        پیاده‌سازی: کلِ اینتریورِ سفیدِ باکس (خط‌ها + فاصلهٔ بینِ خط‌ها)
+        «یک واحد» با رنگِ خودِ اینتریور فلت پر می‌شود — بدونِ LaMa.
+        چرا بدونِ LaMa؟ ماسکِ کلِ اینتریور، گاردِ ضدتوهمِ LaMa (که به
+        «حلقهٔ روشنِ دورِ ماسک» تکیه دارد) را کور می‌کند: حلقهٔ دورِ
+        اینتریور = قابِ سیاهِ باکس → خروجیِ تیرهٔ توهمیِ LaMa بدونِ
+        اعتبارسنجی می‌ماند (لگهٔ سیاهِ باکس — بازتولیدشده در تست).
+        پرِ فلتِ قطعی = صفرِ ریسک؛ قاب/سایه بیرونِ اینتریور محفوظ
+        (اینتریور با erode از قاب فاصله می‌گیرد)؛ اینتریور از ماسکِ
+        LaMa هم کِیل می‌شود تا هیچ پرکننده‌ای رویش نرود. پنجرهٔ سیستمِ
+        تیره/تصویردار (گیت‌های _system_box_interior) مثلِ قبل خط‌به‌خط
+        پاک می‌شود — فقط باکسِ سفیدِ سیستم این‌گونه است."""
+        n_done = 0
+        try:
+            _groups: Dict[tuple, list] = {}
+            for _rgs in regions:
+                _cov = getattr(_rgs, "cover_rect", None)
+                if _cov is None or not getattr(_rgs, "sys_split", False):
+                    continue
+                try:
+                    _rx, _ry, _rw, _rh = [int(v) for v in _rgs.rect]
+                except Exception:
+                    continue
+                _key = tuple(int(v) for v in _cov[:4])
+                _groups.setdefault(_key, []).append(
+                    (_rx, _ry, _rx + _rw, _ry + _rh))
+            if not _groups:
+                return 0
+            for _key, _seeds in _groups.items():
+                if len(_seeds) < 2:
+                    continue  # باکسِ تک‌خطی: مستطیلِ خودش کافی است
+                _intr = MangaTranslator._system_box_interior(
+                    image, _key, _seeds)
+                if _intr is not None:
+                    # گیتِ «اکثریتِ سفید»: اینتریورِ عکس‌دار/متنیِ سنگین
+                    # فلت نشود (رفتارِ خط‌به‌خطِ قبلی محفوظ)
+                    try:
+                        _g104 = cv2.cvtColor(
+                            image, cv2.COLOR_BGR2GRAY)
+                        _px104 = _g104[_intr]
+                        if float((_px104 >= 180).mean()) < 0.45:
+                            _intr = None
+                    except Exception:
+                        _intr = None
+                if _intr is None or _intr.shape != mask.shape[:2]:
+                    continue
+                # ۲px فاصلهٔ بیشتر از قاب برایِ خودِ پر
+                _intr_w = cv2.erode(
+                    _intr.astype(np.uint8),
+                    np.ones((5, 5), np.uint8)) > 0
+                if int(_intr_w.sum()) < 200:
+                    continue
+                # رنگِ پر = میانهٔ پیکسل‌هایِ «سفیدِ» اینتریور (مصون از
+                # آلودگیِ خودِ حروفِ تیره)
+                try:
+                    _gb = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+                    _wsel = _intr_w & (_gb >= 180)
+                    if int(_wsel.sum()) >= 100:
+                        _fill = np.median(
+                            image[_wsel].astype(np.float32), axis=0)
+                    else:
+                        _fill = np.median(
+                            image[_intr_w].astype(np.float32), axis=0)
+                except Exception:
+                    continue
+                cleaned[_intr_w] = np.clip(_fill, 0, 255).astype(np.uint8)
+                # اینتریور از ماسکِ LaMa/پرکننده‌ها کِیل شود — پرِ فلت
+                # «قطعی» است و هیچ پرکنندهٔ دیگری نباید رویش برود
+                mask[_intr] = 0
+                n_done += 1
+                if self.debug:
+                    try:
+                        print(f"  [*]بالنِ سیستم → پرِ فلتِ یکجایِ "
+                              f"اینتریور ({int(_intr_w.sum())}px, "
+                              f"رنگ={tuple(int(v) for v in _fill)})")
+                    except Exception:
+                        pass
+            return n_done
+        except Exception:
+            return n_done
 
     def _clean_label(self) -> str:
         # نامِ کوتاهِ روشِ پاکسازی برای لاگ
@@ -12601,6 +12876,17 @@ class MangaTranslator:
 
         cleaned = image.copy()
         counts = {"flat": 0, "color": 0, "LaMa": 0, "OpenCV": 0}
+        # v1.14.104 — «بالنِ سیستم»: پرِ فلتِ قطعیِ اینتریورِ باکسِ سفیدِ
+        # سیستم (یک واحد — خط‌ها + بینِ خط‌ها) قبل از هر پرکنندهٔ دیگر.
+        # جزئیاتِ چرایی → docstringِ _fill_system_box_interiors.
+        try:
+            _n_sys104 = self._fill_system_box_interiors(
+                image, regions, mask, cleaned)
+            if _n_sys104 and self.debug:
+                print(f"  [*]{_n_sys104} اینتریورِ بالنِ سیستم → "
+                      f"پرِ فلتِ قطعی (بدونِ LaMa)")
+        except Exception:
+            pass
         try:
             _n_enc = self._enclosure_instant_fill(
                 image, cleaned, regions, mask, skip_ids=_donor_skip)
@@ -23263,14 +23549,15 @@ html, body { background: #0a0a0b; }
                     break
 
                 if not getattr(self, "clean_only", False):
-                    # v1.14.65 — تبلیغ/واترمارک (promo) هم باید درِ پاکسازیِ
-                    # زودهنگام باشد. قبلاً فقط dialogue می‌آمد → درِ مسیرِ
-                    # precleanedِ رندر، clean_image دوباره صدا نمی‌خورد و
-                    # بنرِ تبلیغ «ASURASCANS.COM» دست‌نخورده در خروجی می‌ماند
-                    # (لاگِ POCO F4: «1 تبلیغ → پاکسازیِ کاملِ بنر» ولی
-                    # بنر در PDFِ نهایی سالم بود).
+                    # v1.14.104 — قانونِ قطعیِ کاربر: «متنِ تبلیغ sfx رد
+                    # بشه نه پاک شه نه ترجمه شه». پاکسازیِ زودهنگام فقط
+                    # دیالوگ — بنرِ تبلیغ (promo) دیگر در هیچ حالتی پاک
+                    # نمی‌شود (v1.14.65 آن را اینجا اضافه کرده بود ولی
+                    # v1.14.95 سیاست را به «ازش رد شه» تغییر داد و این
+                    # مسیر از قلم افتاده بود → بنرِ تبلیغ در حالتِ
+                    # ترجمه‌دار تکه‌تکه پاک/اسکراب می‌شد).
                     _dlg = [r for r in regions
-                            if r.kind in ("dialogue", "promo")]
+                            if r.kind == "dialogue"]
                     if _dlg:
                         try:
                             _pc = self.clean_image(image, _dlg)
