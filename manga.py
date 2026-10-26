@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.101"
+APP_VER = "1.14.102"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -20845,7 +20845,10 @@ class MangaTranslator:
     def _expand_input_urls(input_str: str) -> List[str]:
         import requests
 
-        parts = [p.strip() for p in input_str.split(",") if p.strip()]
+        # چند لینک: با اینتر (\n یا \r\n — هرچقدر که کاربر زده باشد)، تب یا
+        # کاما جدا می‌شود. فاصلهٔ ساده جداکننده «نیست» تا سینتکسِ بازهٔ
+        # «…/1 > 14.jpg» (که فاصله دارد) نشکند.
+        parts = [p.strip() for p in re.split(r"[,\n\r\t]+", input_str) if p.strip()]
         if not parts:
             return []
 
@@ -21498,8 +21501,7 @@ class MangaTranslator:
 
         ext = spec.lower()
         raw_in = (input_path or "").strip()
-        if "," in raw_in:
-            raw_in = raw_in.split(",")[0].strip()
+        raw_in = re.split(r"[,\n\r\t]+", raw_in)[0].strip()
         if MangaTranslator._is_url(raw_in):
             from urllib.parse import urlparse, unquote
             path = unquote(urlparse(raw_in).path).strip("/")
@@ -22686,7 +22688,7 @@ html, body { background: #0a0a0b; }
 
         _local_fix_files: Optional[List[str]] = None
         if (not self._is_url(input_path) and "*" not in input_path
-                and "," in input_path):
+                and ("," in input_path or "\n" in input_path.strip())):
             def _local_img(s: str) -> Optional[str]:
                 s = (s or "").strip()
                 if s.lower().startswith("file://"):
@@ -22695,7 +22697,7 @@ html, body { background: #0a0a0b; }
                         and os.path.splitext(s)[1].lower() in IMAGE_EXTS):
                     return s
                 return None
-            _parts = [p for p in input_path.split(",") if p.strip()]
+            _parts = [p for p in re.split(r"[,\n\r\t]+", input_path) if p.strip()]
             _loc = [_local_img(p) for p in _parts]
             if _parts and all(_loc):
                 _local_fix_files = _loc
@@ -22703,7 +22705,8 @@ html, body { background: #0a0a0b; }
         if _local_fix_files is not None:
             image_files = _local_fix_files
             print(f"[*] {len(image_files)} فایل محلی انتخاب شد — بدون دانلود.")
-        elif self._is_url(input_path) or "," in input_path or "*" in input_path:
+        elif (self._is_url(input_path) or "," in input_path
+                or "*" in input_path or "\n" in input_path.strip()):
             urls = self._expand_input_urls(input_path)
 
             if not urls:

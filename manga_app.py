@@ -572,8 +572,8 @@ def smart_output_base(input_path: str) -> str:
     if not raw:
         return "chapter_fa"
     
-    if "," in raw:
-        raw = raw.split(",")[0].strip()
+    # چند لینک (با اینتر/کاما/تب): برای نامِ خروجی فقط اولی ملاک است
+    raw = re.split(r"[,\n\r\t]+", raw)[0].strip()
     is_url = raw.lower().startswith(("http://", "https://"))
     if is_url:
         from urllib.parse import urlparse, unquote
@@ -2033,9 +2033,9 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                                  file_count="multiple", type="filepath",
                                  file_types=[".pdf", ".zip", ".cbz", ".webp", ".jpg", ".jpeg", ".png"],
                                  elem_classes=["compact-upload"])
-            inp_path = gr.Textbox(label="یا URL تصویر/مانهوا",
-                                  placeholder="https://cdn.example.com/chapter/1/001.webp",
-                                  info=("چند لینک = با کاما جدا کن. حالت‌های جدید: "
+            inp_path = gr.Textbox(label="یا URL تصویر/مانهوا (چند لینک = هر لینک در یک خط با اینتر)",
+                                  placeholder="https://cdn.example.com/chapter/1/001.webp\nhttps://cdn.example.com/chapter/1/002.webp",
+                                  info=("چند لینک = هر لینک را در یک خط بگذار (اینتر) — هرچقدر اینتر بزنی خودش می‌خوانَد؛ کاما هم کار می‌کند. حالت‌های دیگر: "
                                         "«…/1 > 14.jpg» از اول تا آخر، "
                                         "«…/1 < 14.jpg» از آخر به اول، "
                                         "«…/*.jpg» هرچه پیدا کند — همه با هم ترجمه می‌شوند."))
