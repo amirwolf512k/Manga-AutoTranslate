@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.99"
+APP_VER = "1.14.101"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -12841,7 +12841,13 @@ class MangaTranslator:
                 _short = float(max(1.0, min(_img_h, _img_w)))
                 if _extreme:
                     _mode = "patch-wise"
-                    groups = pending
+                    # فیکس groups=pending — قبلاً groups=لیستِ تختِ کراپ‌ها بود و وقتی
+                    # فقط «یک» کلاستر در صف بود (صفحهٔ تک‌ناحیه‌ای)، حلقهٔ for grp همان
+                    # «کراپِ تکی» را به‌جای «لیستِ کراپ‌ها» می‌داد → _lama_group_prep
+                    # روی int کرش → استثنایِ بی‌صدا → LaMa کلاً می‌مُرد → پرِ
+                    # گرادیانی/TELEA → شبحِ لکه. در دسته‌ای نوارها چندکلاستری‌اند
+                    # (len>1) و باگ شلیک نمی‌کرد. حالا ساختار از ابتدا درست است.
+                    groups = [[c] for c in pending]
                     if os.environ.get("MANGA_LAMA_GROUP", "1") != "0" and len(pending) > 1:
                         _gap = 24
                         if _long >= 2.5 * _short:
@@ -12995,7 +13001,11 @@ class MangaTranslator:
                             _raise_if_stop()
                             try:
                                 self._lama_run_group(image, grp, lama, page_kernel)
-                            except Exception:
+                            except Exception as _ge:
+                                if os.environ.get("MANGA_LAMA_DBG"):
+                                    import traceback
+                                    print("    [lama-dbg] group crashed:\n"
+                                          + traceback.format_exc(), flush=True)
                                 continue
                     dt = time.time() - t0
                     _done = sum(1 for c in pending if c[6] == "LaMa")
