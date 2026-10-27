@@ -4322,6 +4322,7 @@ class MangaTranslator:
         stitch_max_height: int = 0,
         stitch_short_threshold: int = 0,
         stitch_keep_first: bool = True,
+        stitch_explicit: bool = False,
         debug: bool = False,
         glossary_path: Optional[str] = None,
         story_brief: bool = True,
@@ -4451,6 +4452,17 @@ class MangaTranslator:
         self.stitch_max_height = int(stitch_max_height) if stitch_max_height else 0
         self.stitch_short_threshold = int(stitch_short_threshold) if stitch_short_threshold else 0
         self.stitch_keep_first = bool(stitch_keep_first)
+        # v1.14.106 — کاربرِ CLI خودش --stitch-max-height داده یا پیش‌فرض است؟
+        # در «حالت صفحات مستقل» (چند لینک/فایلِ مستقیم) برش/چسباندن انجام
+        # نمی‌شود مگر کاربر صراحتاً فلگ را داده باشد یا محیط (اندروید) خواسته باشد.
+        self.stitch_explicit = bool(stitch_explicit)
+        # v1.14.106 — حالتِ صفحاتِ مستقل: هر لینک/فایلِ مستقیم = یک رانِ تکی.
+        # باگِ کاربر: در بچِ چند-لینکی، ریسایزِ گروهیِ عرض (900→800) + چسباندنِ
+        # صفحه‌ها + برشِ دوبارهٔ ~8000px باعث می‌شد (۱) متن‌های تایتلی مثل
+        # GREEN MOON نصف/نپاک بمانند (۲) برشِ داخلِ باندِ سیاهِ هنر، لبهٔ سیاه
+        # بسازد (۳) آستانه‌هایِ گاردِ ترمیم که رویِ مقیاسِ بومی کالیبره شده‌اند
+        # رویِ نسخهٔ ریسایزشده درست کار نکنند. در حالتِ تکی هیچ‌کدام رخ نمی‌دهد.
+        self._independent_pages = False
         self.repair_page_seams = bool(repair_page_seams)
         self.debug = bool(debug)
         self._last_debug_image = None
@@ -12522,6 +12534,22 @@ class MangaTranslator:
                     if _pa81 is not None and int(cv2.countNonZero(_pa81)):
                         mask[_pa81 > 0] = 0
                         self._prot_all = _pa81
+                    # v1.14.106 — قفلِ خطِ سراسری (کادرِ پنل) هم در
+                    # _prot_all: ترمیمها/جارو/چسباندنِ LaMa حقِ بازنویسی
+                    # قاب را ندارند
+                    try:
+                        _pgp = getattr(self, "_page_protect", None)
+                        if _pgp is not None \
+                                and _pgp.shape == mask.shape[:2] \
+                                and int(cv2.countNonZero(_pgp)):
+                            mask[_pgp > 0] = 0
+                            if self._prot_all is None:
+                                self._prot_all = _pgp.copy()
+                            else:
+                                self._prot_all = cv2.bitwise_or(
+                                    self._prot_all, _pgp)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
                 # v1.14.81 — پروبِ وضعیتِ قفلِ پیکسل
@@ -15736,6 +15764,10 @@ class MangaTranslator:
                 dark = (g < 120).astype(np.uint8) * 255
             dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE,
                                     np.ones((3, 3), np.uint8))
+            # v1.14.106 — تیرهٔ کاملِ صفحه (قبل از برشِ باندِ ۲۵px) برای
+            # بازِ خطیِ سراسری؛ سرِ کادرِ پنل داخلِ باند است ولی بدنه‌اش
+            # بیرونِ باند — خط باید تا انتها محافظت شود نه فقط سرش.
+            dark_full = dark
             dark = cv2.bitwise_and(dark, near)
             n, lab, st, _ = cv2.connectedComponentsWithStats(dark, 8)
             if n <= 1:
@@ -15753,6 +15785,80 @@ class MangaTranslator:
                                      [np.rint(pp).astype(np.int32)], 255)
             poly_all = cv2.dilate(poly_all, np.ones((9, 9), np.uint8))
             out = np.zeros((h, w), dtype=np.uint8)
+            # v1.14.106 — بازِ خطیِ سراسری: کادرِ پنل/خطِ جدابندِ سرراست
+            # (اجرای ≥۶۰px، ضخامت ≤۱۰px، بیرونِ پالیهایِ OCR) سراسری
+            # محافظت میشود — نه فقط تکهٔ داخلِ باندِ متن. کیسِ ۱۰۱۸:
+            # ماسکِ لوگو/حباب قابِ چپِ پنل را در میان بریده بود و تکههای
+            # یتیم مثل «لبهٔ سیاه» دیده میشدند.
+            try:
+                _vl106 = cv2.morphologyEx(
+                    dark_full, cv2.MORPH_OPEN, np.ones((60, 1), np.uint8))
+                _hl106 = cv2.morphologyEx(
+                    dark_full, cv2.MORPH_OPEN, np.ones((1, 60), np.uint8))
+                if int(cv2.countNonZero(_vl106)) or \
+                        int(cv2.countNonZero(_hl106)):
+                    # v1.14.106b — ضخامتِ بدونِ پخش: erodeِ بدونِ dilate
+                    # تا هستهٔ توپر حذف شود ولی خطِ نازکِ چسبیده به آن زنده
+                    # بماند (dilateِ ±۷px قابِ ۵px کناری را هم میکشت —
+                    # کیسِ ۱۰۱۸: کلِ قابِ چپِ پنل)
+                    _vth = cv2.erode(_vl106, np.ones((1, 15), np.uint8))
+                    _hth = cv2.erode(_hl106, np.ones((15, 1), np.uint8))
+                    _ln = ((_vl106 | _hl106) & ~_vth & ~_hth
+                           & (poly_all == 0)).astype(np.uint8) * 255
+                    _ln = cv2.morphologyEx(_ln, cv2.MORPH_CLOSE,
+                                           np.ones((3, 3), np.uint8))
+                    _n2, _l2, _s2, _ = cv2.connectedComponentsWithStats(
+                        _ln, 8)
+                    for _i2 in range(1, _n2):
+                        _a2 = int(_s2[_i2, cv2.CC_STAT_AREA])
+                        if _a2 < 60:
+                            continue
+                        _bx2 = int(_s2[_i2, cv2.CC_STAT_LEFT])
+                        _by2 = int(_s2[_i2, cv2.CC_STAT_TOP])
+                        _bw2 = int(_s2[_i2, cv2.CC_STAT_WIDTH])
+                        _bh2 = int(_s2[_i2, cv2.CC_STAT_HEIGHT])
+                        _cp2 = (_l2[_by2:_by2 + _bh2,
+                                    _bx2:_bx2 + _bw2] == _i2)
+                        # v1.14.106b — در سطحِ پیکسل: فقط پیکسلهایِ نازک
+                        # (≤۱۰px) محافظت میشوند؛ لبِ ساختارِ توپر که به
+                        # خط چسبیده قربانیِ کلِ کامپوننت نمیشود
+                        try:
+                            # پدِ ۱px — کامپوننتِ توپر (خطِ کامل در باکسِ
+                            # خودش) هیچ پیکسلِ صفر ندارد → dt=FLT_MAX و
+                            # همه رد میشد (کیسِ قابِ ۱۰۱۸)
+                            _pd2 = np.zeros((_cp2.shape[0] + 2,
+                                             _cp2.shape[1] + 2), np.uint8)
+                            _pd2[1:-1, 1:-1] = _cp2.astype(np.uint8)
+                            _dt2 = cv2.distanceTransform(
+                                _pd2, cv2.DIST_L2, 3)[1:-1, 1:-1]
+                            _thin2 = _cp2 & ((_dt2 * 2.0) <= 10.0)
+                        except Exception:
+                            _thin2 = _cp2
+                        if int(_thin2.sum()) < 40:
+                            continue
+                        out[_by2:_by2 + _bh2,
+                            _bx2:_bx2 + _bw2][_thin2] = 255
+                if self.debug:
+                    _nl = int(cv2.countNonZero(out))
+                    if _nl:
+                        print(f"  [✓]قفلِ خطِ سراسری — {_nl}px", flush=True)
+            except Exception:
+                if self.debug:
+                    import traceback as _tb106
+                    print("  [!]قفلِ خط خطا:", flush=True)
+                    _tb106.print_exc()
+            try:
+                import os as _os106
+                _dp = _os106.environ.get("MANGA_DUMP_PROTECT")
+                if _dp:
+                    cv2.imwrite(_dp + "_ln.png", _ln)
+                    cv2.imwrite(_dp + "_vl.png", _vl106)
+                    cv2.imwrite(_dp + "_dark.png", dark_full)
+                    cv2.imwrite(_dp + "_poly.png", poly_all)
+                    cv2.imwrite(_dp + "_out.png", out)
+                    print("[DUMP] protect →", _dp, flush=True)
+            except Exception as _e106:
+                print("[DUMP] fail", _e106, flush=True)
             for i in range(1, n):
                 a = int(st[i, cv2.CC_STAT_AREA])
                 if a < (90 if int(min_len) >= 60 else 48):
@@ -16093,6 +16199,14 @@ class MangaTranslator:
                              image: np.ndarray) -> None:
         u = getattr(self, "_verify_union", None)
         self._verify_union = None
+        import os as _os
+        if _os.environ.get("MANGA_DUMP_UNION") and u is not None:
+            try:
+                import cv2 as _cv
+                _cv.imwrite(_os.environ["MANGA_DUMP_UNION"], (u.astype(np.uint8) * 255))
+                print("[DUMP] union →", _os.environ["MANGA_DUMP_UNION"])
+            except Exception as _e:
+                print("[DUMP] fail", _e)
         if u is None or cleaned is None or image is None:
             return
         if not u.any():
@@ -16138,6 +16252,20 @@ class MangaTranslator:
                 if not np.array_equal(_before, cleaned[Y0:Y1, X0:X1]):
                     n_fix += 1
                     _gc.collect()
+            # v1.14.106 — جاروی بازماندهٔ تیره (لبه/نوارِ سیاهِ کنارِ پاکشدهها)
+            try:
+                _nsw = self._dark_remnant_sweep(cleaned, u)
+                if _nsw and self.debug:
+                    print(f"  [🧹] جاروی بازمانده: {_nsw} خوشهٔ تیره حذف شد",
+                          flush=True)
+            except Exception:
+                if self.debug:
+                    try:
+                        import traceback as _tb2
+                        print("  [!] جاروی بازمانده خطا داد:", flush=True)
+                        _tb2.print_exc()
+                    except Exception:
+                        pass
             if self.debug and n_chk:
                 print(f"  [*]وارسیِ نهاییِ EP: {n_chk} ناحیه سنجیده شد، "
                       f"{n_fix} ترمیم شد", flush=True)
@@ -16150,6 +16278,77 @@ class MangaTranslator:
                 except Exception:
                     pass
             pass
+
+    # v1.14.106 — جاروی بازماندهٔ تیره: لبه/نوارِ سیاهی که بعد از پاکسازی
+    # همسایهٔ مستقیمِ نواحیِ پاکشده میماند (سایهٔ لوگو/بنرِ بیرونِ ماسکِ
+    # متن — کیسِ ۱۰۱۸). فقط خوشهٔ تیرهٔ کوچکِ محصور در سفیدِ صافِ همسایه؛
+    # قاب/سایهٔ جعبههایِ سیستم (دور ازِ نواحیِ LaMa) و خطِ هنریِ بلند هرگز.
+    def _dark_remnant_sweep(self, cleaned: np.ndarray,
+                            union: np.ndarray) -> int:
+        try:
+            if cleaned is None or union is None:
+                return 0
+            if cleaned.shape[:2] != union.shape[:2]:
+                return 0
+            g = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            return 0
+        h, w = g.shape
+        u8 = union if union.dtype == np.uint8 else \
+            (union.astype(np.uint8) * 255)
+        near = cv2.dilate(u8, np.ones((19, 19), np.uint8))
+        zone = cv2.dilate(u8, np.ones((35, 35), np.uint8))
+        dark = ((g < 150) & (zone > 0)).astype(np.uint8)
+        _pa = getattr(self, "_prot_all", None)
+        if _pa is not None and _pa.shape == g.shape:
+            dark[(_pa > 0)] = 0
+        if int(dark.sum()) == 0:
+            return 0
+        dark_d = cv2.dilate(dark * 255, np.ones((5, 5), np.uint8)) > 0
+        try:
+            n_lab, lab, stats, _ = cv2.connectedComponentsWithStats(
+                dark, connectivity=8)
+        except Exception:
+            return 0
+        n_fix = 0
+        for li in range(1, n_lab):
+            area = int(stats[li, cv2.CC_STAT_AREA])
+            if area < 25 or area > 3000:
+                continue
+            bw = int(stats[li, cv2.CC_STAT_WIDTH])
+            bh = int(stats[li, cv2.CC_STAT_HEIGHT])
+            if bw > 180 or bh > 120:
+                continue
+            x0 = int(stats[li, cv2.CC_STAT_LEFT])
+            y0 = int(stats[li, cv2.CC_STAT_TOP])
+            _crop = lab[y0:y0 + bh, x0:x0 + bw]
+            _nc = near[y0:y0 + bh, x0:x0 + bw]
+            if not bool(_nc[_crop == li].any()):
+                continue
+            ex0, ey0 = max(0, x0 - 18), max(0, y0 - 18)
+            ex1, ey1 = min(w, x0 + bw + 18), min(h, y0 + bh + 18)
+            lc = (lab[ey0:ey1, ex0:ex1] == li).astype(np.uint8) * 255
+            ring = (cv2.dilate(lc, np.ones((31, 31), np.uint8)) > 0)
+            ring &= ~(lc > 0) & (~dark_d[ey0:ey1, ex0:ex1])
+            rg = g[ey0:ey1, ex0:ex1][ring]
+            if rg.size < 60:
+                continue
+            if float((rg >= 238).mean()) < 0.70:
+                continue
+            if float(np.percentile(rg, 95)) < 248:
+                continue
+            bright = ring & (g[ey0:ey1, ex0:ex1] >= 238)
+            if int(bright.sum()) < 30:
+                continue
+            col = np.median(cleaned[ey0:ey1, ex0:ex1][bright],
+                            axis=0).astype(np.float32)
+            fm = cv2.dilate(lc, np.ones((3, 3), np.uint8))
+            sub = cleaned[ey0:ey1, ex0:ex1]
+            al = (fm.astype(np.float32) / 255.0)[..., None]
+            sub[:] = (sub.astype(np.float32) * (1.0 - al)
+                      + col[None, None, :] * al).astype(np.uint8)
+            n_fix += 1
+        return n_fix
 
     # v1.14.105 — وارسیِ پس از پاکسازی + ترمیمِ پلکانی (ضدِ خروجیِ بدِ EP)
     # زمینه: رویِ برخی اجراکننده‌ها (CUDA/DML رویِ ویندوز) خروجیِ LaMa ناقص
@@ -16287,7 +16486,31 @@ class MangaTranslator:
             # واقعیِ GPU (۱۰۱۸) گپِ ۳۹ با حلقهٔ ۲۵۵ دارد
             bad_gray = (mask_spread <= 22.0) and (neutr <= 14.0) and \
                 (gap_dark >= 30.0) and (rp90 >= 190.0)
-            if not (bad_ink or bad_gray):
+            # v1.14.106 — دودِ متنِ بازمانده (ghost imprint): پرِ LaMa گاهی
+            # امضایِ کمرنگِ متنِ قبلی (۱۹۵–۲۵۰، اختلافِ فقط ۵–۲۵ از سفید)
+            # را نگه میدارد؛ «جوهرِ» hf≥۲۶ آن را نمیبیند و رویِ صفحهِ گوشی
+            # کاربر دیده میشود (۱۰۱۸: نرخِ دود تا ۰٫۱۴ در حبابِ دولوبه).
+            # فقط در زمینهٔ سفیدِ صاف (white_flat) معنا دارد؛ اندازهگیری روی
+            # هستهٔ فرسودهٔ ماسک تا لبهٔ فِدرِ blend شمرده نشود.
+            _mcore = cv2.erode(m, np.ones((5, 5), np.uint8)) \
+                if min(m.shape[:2]) > 7 else m
+            if int((_mcore > 0).sum()) < 40:
+                _mcore = m
+
+            def _ghost_frac(g_):
+                # (نرخِ دود، روشناییِ نابِ هسته) — دود = 195..252؛
+                # coreW آستانهٔ زمینهٔ سفید است: پرِ بازسازی‌شدهٔ زمینهٔ
+                # بافت‌دار (هاف‌تون) خودش تیره است → coreW کم → گیت نمیگیرد
+                v = g_[_mcore > 0]
+                if v.size < 40:
+                    return 0.0, 0.0
+                gh = float(((v >= 195) & (v <= 252)).mean())
+                cw = float((v >= 253).mean())
+                return gh, cw
+
+            ghost_m, corew_m = _ghost_frac(g)
+            bad_ghost = (ghost_m >= 0.05) and (corew_m >= 0.55)
+            if not (bad_ink or bad_gray or bad_ghost):
                 return
             if self.debug:
                 try:
@@ -16295,8 +16518,10 @@ class MangaTranslator:
                           f"ink={ink_m:.2f}/حلقه={ink_r:.2f} "
                           f"lum={gm:.0f}/p90={gap_dark + gm:.0f} "
                           f"spread={mask_spread:.0f} neutr={neutr:.0f} "
+                          f"دود={ghost_m:.2f} "
                           f"({'جوهر' if bad_ink else ''}"
-                          f"{'+تیرگی' if bad_gray else ''}) → ترمیم",
+                          f"{'+تیرگی' if bad_gray else ''}"
+                          f"{'+دود' if bad_ghost else ''}) → ترمیم",
                           flush=True)
                 except Exception:
                     pass
@@ -16342,7 +16567,9 @@ class MangaTranslator:
             # حباب تقریباً بی‌جوهر است (hf≈0.02)؛ توهمِ متنِ LaMa (وقتی
             # حلقه به متنِ سالمِ اطراف آلوده است) تا 0.20 می‌رسد —
             # گیتِ نسبی آن را نمی‌بیند → سقفِ مطلقِ 0.10
-            _strict = bool(bad_gray)
+            # v1.14.106 — مسیرِ دود هم سختگیریِ مطلق می‌خواهد (جوهرِ دود
+            # زیرِ آستانه است وگرنه گیتِ نسبی زود OK می‌کند)
+            _strict = bool(bad_gray or bad_ghost)
 
             def _quality(g_res, what):
                 im2, ir2 = _ink(g_res, m_eval, ring)
@@ -16352,15 +16579,18 @@ class MangaTranslator:
                     gd2 = float(_rp2[1]) - gm2
                 except Exception:
                     gd2 = 0.0
+                gh2, cw2 = _ghost_frac(g_res)
                 bad2 = (im2 > max(0.15, ir2 * 2.0 + 0.04)) or \
                     ((im2 >= 0.22 and ir2 <= 0.18 and
                       im2 > ir2 * 1.2 + 0.02) or
                      (im2 >= 0.40 and im2 > ir2 * 1.1 + 0.02)) or \
                     ((mask_spread <= 22.0) and (neutr <= 14.0) and \
                      (gd2 >= 30.0) and (rp90 >= 190.0)) or \
-                    (_strict and im2 > 0.10)
-                soft = bool(white_flat and
-                            (im2 > 0.015 or gm2 < rp90 - 16.0))
+                    (_strict and im2 > 0.10) or \
+                    ((gh2 >= 0.05) and (cw2 >= 0.55))
+                soft = bool((white_flat and
+                             (im2 > 0.015 or gm2 < rp90 - 16.0))
+                            or (gh2 > 0.015 and cw2 >= 0.55))
                 if self.debug:
                     try:
                         _tag = 'OK' if not bad2 else 'هنوز بد'
@@ -16476,6 +16706,28 @@ class MangaTranslator:
                     if ok_b5:
                         _blend(flat.astype(np.uint8))
                         return
+            except Exception:
+                pass
+            # ۶ — v1.14.106 — پرِ سفیدِ ناب: زمینهٔ سفیدِ اثباتشده
+            # (coreW≥۰٫۵۵ یعنی پرِ کنونی عمدتاً سفیدِ ناب است و فقط دودِ
+            # متن مانده) → رنگِ میانهٔ پیکسلهایِ روشنِ حلقه (۲۵۵ حباب) کل
+            # ماسک را پر میکند؛ حباب/صفحهٔ سفید را دودِ ناپذیر میکند.
+            # بافت‌ها (coreW کم) هرگز به این مرحله نمی‌رسند.
+            try:
+                if corew_m >= 0.55:
+                    rb = ring & (g >= 245)
+                    if int(rb.sum()) >= 80:
+                        col6 = np.median(out[rb].astype(np.float32),
+                                         axis=0).astype(np.float32)
+                        flat6 = np.repeat(
+                            col6[None, None, :], out.shape[0], axis=0).repeat(
+                                out.shape[1], axis=1)
+                        g6 = cv2.cvtColor(flat6.astype(np.uint8),
+                                          cv2.COLOR_BGR2GRAY)
+                        ok_b6, _s6 = _quality(g6, "پرِ سفیدِ ناب")
+                        if ok_b6:
+                            _blend(flat6.astype(np.uint8))
+                            return
             except Exception:
                 pass
             # هیچ مرحله‌ای بارِ سفیدِ سخت را پاس نکرد — اگر دست‌کم یک
@@ -23422,6 +23674,7 @@ html, body { background: #0a0a0b; }
         self._chapter_brief = ""
         self._brief_corpus = []
         self._brief_attempted = False
+        self._independent_pages = False  # v1.14.106 — ریست در هر ران (run بازگشتی هم دارد)
         _t_run67 = time.time()  # v1.14.67 — کلِ زمانِ ران
         # v1.14.70 — سرعت: ساختِ سشنِ LaMa (۲۰۰MB) از همان اولِ کار شروع
         # می‌شود تا با دانلودِ تصویرها/آماده‌سازیِ صفحه‌ها هم‌پوشانی داشته
@@ -23466,6 +23719,8 @@ html, body { background: #0a0a0b; }
             _loc = [_local_img(p) for p in _parts]
             if _parts and all(_loc):
                 _local_fix_files = _loc
+                # v1.14.106 — فایل‌های محلیِ چندگانه = صفحاتِ مستقل
+                self._independent_pages = True
 
         if _local_fix_files is not None:
             image_files = _local_fix_files
@@ -23521,8 +23776,13 @@ html, body { background: #0a0a0b; }
             if len(urls) == 1:
                 print(f"[*] دانلود تصاویر از لینک: {urls[0]}")
                 image_files = self._download_images_from_url(urls[0], src_dir)
+                # v1.14.106 — صفحه‌های دانلودشده از لینک هم مستقل‌اند (هر فایل = یک صفحه)
+                self._independent_pages = True
             elif all_direct:
                 print(f"[*] {len(urls)} تصویر مستقیم — دانلود یک‌جا به عنوان یک فصل...")
+                # v1.14.106 — هر لینکِ مستقیم = یک صفحهٔ مستقل: مثلِ حالتِ تکی
+                # پردازش می‌شود (بدون ریسایزِ گروهی/چسباندن/برشِ ۸۰۰۰px)
+                self._independent_pages = True
                 os.makedirs(src_dir, exist_ok=True)
                 image_files = []
                 import requests as _req
@@ -23707,7 +23967,16 @@ html, body { background: #0a0a0b; }
                 valid_files.append(f)
                 del im0
             if valid_files:
-                wmap = self._cluster_widths(widths, abs_tol=180, rel_tol=0.18)
+                # v1.14.106 — در حالتِ صفحاتِ مستقل، خوشهٔ عرض فقط از عرضِ خودِ
+                # صفحه ساخته می‌شود (دقیقاً مثلِ رانِ تکی) تا هیچ صفحه‌ای به‌خاطر
+                # صفحاتِ دیگر ریسایز نشود (باگِ 900→800ِ 412e9e در بچ).
+                if (getattr(self, "_independent_pages", False)
+                        and not getattr(self, "stitch_explicit", False)):
+                    wmap = {}
+                    for i, w in enumerate(widths):
+                        wmap[i] = self._cluster_widths([w]).get(0, w)
+                else:
+                    wmap = self._cluster_widths(widths, abs_tol=180, rel_tol=0.18)
                 cap = self.max_output_width if self.max_output_width and self.max_output_width > 0 else 0
                 if cap:
                     for i in list(wmap.keys()):
@@ -23749,7 +24018,17 @@ html, body { background: #0a0a0b; }
                         + (f" (سقف={cap}px)" if cap else "")
                     )
 
-        if len(image_files) > 1 and (self.stitch_max_height > 0 or getattr(self, "repair_page_seams", True)):
+        # v1.14.106 — حالتِ صفحاتِ مستقل: چسباندن/برشِ نوار کلاً رد می‌شود؛
+        # هر صفحه با ابعادِ بومی و جدا از بقیه پردازش می‌شود (= رانِ تکی).
+        # استثنا: کاربرِ CLI خودش --stitch-max-height داده یا اندروید (رمِ کم)
+        # صراحتاً خواسته — در این دو حالت رفتارِ قبلی حفظ می‌شود.
+        _indep_no_stitch = (getattr(self, "_independent_pages", False)
+                            and not getattr(self, "stitch_explicit", False))
+        if _indep_no_stitch and len(image_files) > 1:
+            print(f"[*] حالت صفحات مستقل: {len(image_files)} صفحه هرکدام جدا مثل حالت تکی "
+                  f"پردازش می‌شوند — بدون چسباندن/برشِ نوار (ریسایزِ گروهی هم نیست).")
+        if (len(image_files) > 1 and not _indep_no_stitch
+                and (self.stitch_max_height > 0 or getattr(self, "repair_page_seams", True))):
             stitch_dir = os.path.join(cache_dir, "stitched")
             image_files = self._stitch_pages_for_efficiency(image_files, stitch_dir)
 
@@ -24586,9 +24865,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "اضافی را خودش فیلتر می‌کند)")
     p.add_argument("--max-chunk-height", type=int, default=3500,
                    help="حداکثر ارتفاع هر تکه OCR داخل یک تصویر (پیکسل)")
-    p.add_argument("--stitch-max-height", type=int, default=8000,
-                   help="۰ = بدون برش مجدد ارتفاع (ترمیم مرز متن همچنان فعال است). عدد دیگر = هدف تقریبی ارتفاع نوار؛ "
-                         "برای حفظ متن و حباب ممکن است خروجی بلندتر شود")
+    p.add_argument("--stitch-max-height", type=int, default=None,
+                   help="پیش‌فرضِ خودکار: ۸۰۰۰ برای ورودیِ فصل/آرشیو/zip؛ ورودیِ چند-لینکِ مستقیم اصلاً برش نمی‌خورد "
+                        "(هر صفحه مثل حالتِ تکی). ۰ = بدون برش مجدد ارتفاع (ترمیم مرز متن همچنان فعال است). "
+                        "عدد دیگر = هدف تقریبی ارتفاع نوار؛ برای حفظ متن و حباب ممکن است خروجی بلندتر شود")
     p.add_argument("--no-seam-repair", action="store_true",
                    help="با ارتفاع برش ۰، ترمیم خودکار متن مشترک بین دو تصویر را هم خاموش کن (ممکن است متن نصف شود)")
     p.add_argument("--stitch-short-threshold", type=int, default=0,
@@ -24756,9 +25036,12 @@ def main():
         two_pass_ocr=not args.no_two_pass_ocr,
         translation_temperature=args.temperature,
         max_output_width=(args.max_width or None),
-        stitch_max_height=args.stitch_max_height,
+        stitch_max_height=(8000 if getattr(args, "stitch_max_height", None) is None
+                           else int(args.stitch_max_height)),
         stitch_short_threshold=args.stitch_short_threshold,
         stitch_keep_first=not args.no_stitch_keep_first,
+        # v1.14.106 — اگر کاربرِ CLI خودش فلگ را داده باشد، حالتِ مستقل رد می‌شود
+        stitch_explicit=(getattr(args, "stitch_max_height", None) is not None),
         repair_page_seams=not bool(getattr(args, "no_seam_repair", False)),
         debug=bool(getattr(args, "debug", False)),
         glossary_path=getattr(args, "glossary", None),

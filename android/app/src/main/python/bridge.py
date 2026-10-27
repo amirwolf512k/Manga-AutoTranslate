@@ -847,6 +847,9 @@ def _run(job):
                 if (getattr(manga, "_on_android", lambda: False)()
                         and getattr(tr, "det", None) is not None):
                     tr.stitch_max_height = 4000
+                    # v1.14.106 — اندروید صراحتاً برش می‌خواهد (رمِ کم)؛
+                    # حالتِ صفحاتِ مستقل روی گوشی رد می‌شود (رفتارِ قبلی)
+                    tr.stitch_explicit = True
                 tr.batch_workers = _i("batchw", 3)
 
                 _cm_log = str(getattr(tr, "clean_method", "") or "")
