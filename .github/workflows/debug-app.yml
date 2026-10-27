@@ -1,0 +1,54 @@
+name: debug-app-path
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'diag = dump app code+api | repro = submit bug imgs via app fn | cli = cli baseline'
+        required: false
+        default: 'diag'
+jobs:
+  diag:
+    runs-on: ubuntu-latest
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          pip install -r requirements.txt -q
+          pip install gradio_client -q
+      - name: Dump app code (command builder + cleaning path)
+        run: |
+          echo "===== GREP APP STRUCTURE ====="
+          grep -n "def \|subprocess\|manga.py\|clean.method\|clean_method\|lama\|det_model\|detect" manga_app.py | head -120
+          echo "===== SED 3100-3400 ====="
+          sed -n '3100,3400p' manga_app.py
+          echo "===== SED 1-120 (imports/globals) ====="
+          sed -n '1,120p' manga_app.py
+      - name: CLI baseline on plaque crop (known-good reference)
+        run: |
+          python3 -c "
+          from PIL import Image
+          im = Image.open('412e9e.webp')
+          print('full size', im.size)
+          im.crop((0,3900,900,5700)).convert('RGB').save('/tmp/plaque_page.jpg', quality=95)
+          "
+          python3 manga.py -i /tmp/plaque_page.jpg -o out_cli_plaque --clean-only --font fonts/Vazir-Code.ttf --cpu --lama --debug 2>&1 | tail -60 || true
+          python3 manga.py -i /tmp/plaque_page.jpg -o out_cli_plaque_manga --clean-only --font fonts/Vazir-Code.ttf --cpu --clean-method lama-manga --debug 2>&1 | tail -60 || true
+      - name: Repro via app path (direct fn call, no HTTP)
+        if: ${{ github.event.inputs.mode == 'repro' }}
+        run: |
+          python3 scripts/repro_app.py 2>&1 | tail -80 || true
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diag-out
+          path: |
+            out_cli_plaque/
+            out_cli_plaque_manga/
+            app_repro_out/
+          if-no-files-found: ignore
+          retention-days: 5
