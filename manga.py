@@ -854,7 +854,12 @@ def _ort_session_options(threads: int = 4, low_mem: Optional[bool] = None,
             pass
     if low_mem is None:
         _av = _sys_avail_ram_gb()
-        low_mem = bool(_on_android() or (_av is not None and _av < 3.0))
+        # v1.14.105 — MANGA_LOW_MEM=1: اجبارِ حالتِ کم‌رم (آرنا/الگوی
+        # حافظه خاموش) — برایِ دستگاه‌هایِ ۴GB و نوارهایِ بلندِ وبتون که
+        # به مرزِ OOM می‌رسند
+        low_mem = bool(_on_android()
+                       or (_av is not None and _av < 3.0)
+                       or os.environ.get("MANGA_LOW_MEM", "") == "1")
     so.enable_cpu_mem_arena = (not low_mem)
     so.enable_mem_pattern = (not low_mem)
     return so
@@ -12148,6 +12153,15 @@ class MangaTranslator:
             # می‌سازد). فقط با MANGA_TEXTURE_REFILL=1 فعال شود.
             if refill and os.environ.get("MANGA_TEXTURE_REFILL", "0") == "1":
                 self._texture_refill_donor(donor, original, _cmp)
+            # v1.14.105 — زباله‌روبی قبل از تخصیصِ خروجیِ تمام‌قد: رویِ
+            # نوارهایِ بلندِ وبتون (۹۰۰×۱۶۰۰۰) RSSِ انباشتهٔ پایپ‌لاین به
+            # مرزِ OOM می‌رسد؛ هر MB آزادشده اینجا کمکه (فقط semantics
+            # reference-counting — بدونِ تغییرِ داده)
+            try:
+                import gc as _gc105
+                _gc105.collect()
+            except Exception:
+                pass
             _out = np.ascontiguousarray(
                 np.where(_cmp[..., None], donor, original))
             try:
@@ -12876,6 +12890,10 @@ class MangaTranslator:
 
         cleaned = image.copy()
         counts = {"flat": 0, "color": 0, "LaMa": 0, "OpenCV": 0}
+        # v1.14.105 — ماسکِ اتحادِ وارسی: فقط نواحیِ EP-وابسته (LaMa/OpenCV)
+        # انباشته می‌شوند تا وارسیِ نهاییِ ضدِ خرابیِ GPU دقیقاً روی
+        # همان‌ها برود؛ پرهایِ فلت/رنگیِ قطعی و SFX/تبلیغ خارج‌اند
+        self._verify_union = None
         # v1.14.104 — «بالنِ سیستم»: پرِ فلتِ قطعیِ اینتریورِ باکسِ سفیدِ
         # سیستم (یک واحد — خط‌ها + بینِ خط‌ها) قبل از هر پرکنندهٔ دیگر.
         # جزئیاتِ چرایی → docstringِ _fill_system_box_interiors.
@@ -13981,6 +13999,17 @@ class MangaTranslator:
                     mm = mm & _mm_cap
                 cleaned[cy0:cy1, cx0:cx1][mm] = result[mm]
             counts[method] += 1
+            # v1.14.105 — انباشتنِ ماسکِ وارسی (وارسیِ واقعی یک‌بار در
+            # پایانِ پاکسازی انجام می‌شود — بدونِ تداخل با LFCM/سویپ و
+            # بدونِ فشارِ حافظهٔ LaMa در میانهٔ کار)
+            try:
+                if method in ("LaMa", "OpenCV"):
+                    if self._verify_union is None:
+                        self._verify_union = np.zeros(
+                            image.shape[:2], dtype=bool)
+                    self._verify_union[cy0:cy1, cx0:cx1] |= (crop_msk > 0)
+            except Exception:
+                pass
             # v1.14.81 — پروبِ درونِ حلقه: چه کراپی پیکسلِ قفل‌شده را می‌نویسد؟
             try:
                 _pv81l = os.environ.get("MANGA_PROBE", "")
@@ -14704,6 +14733,24 @@ class MangaTranslator:
 
         if self.debug:
             print(f"  - Cleanup: {counts}")
+        # v1.14.105 — وارسیِ نهاییِ ضدِ خرابیِ EP (یک‌بار برای کلِ صفحه):
+        # خروجیِ ناقص/کثیفِ LaMa رویِ GPUهایِ ویندوزی (CUDA/DML) را روی
+        # نواحیِ پاک‌شده می‌سنجد و پلکانی ترمیم می‌کند
+        try:
+            self._final_verify_repair(cleaned, image)
+        except Exception:
+            pass
+        try:
+            _pp = os.environ.get("MANGA_PROBE_REPAIR", "")
+            if _pp and getattr(self, "_probe_repair_pts", None):
+                for (_px, _py) in self._probe_repair_pts:
+                    cv2.imwrite(f"{_pp}_end_{_px}_{_py}.png",
+                                cleaned[max(0, _py - 200):_py + 200,
+                                        max(0, _px - 200):_px + 200].copy())
+                    print(f"  [PROBE] end-of-clean @{_px},{_py} "
+                          f"val={cleaned[_py, _px]}", flush=True)
+        except Exception:
+            pass
         return cleaned
 
     def _residue_sweep(self, image: np.ndarray, cleaned: np.ndarray,
@@ -16030,6 +16077,429 @@ class MangaTranslator:
             except Exception:
                 continue
         return n_fix
+
+    # v1.14.105 — وارسیِ نهاییِ ضدِ خرابیِ EP — یک‌بار برای کلِ صفحه،
+    # درست قبل از خروجِ clean_image. چرا آخرِ کار و نه بعد از هر باکس:
+    # ۱) وسطِ پایپ‌لاین، منطق‌هایِ بعدی (LFCM، ردِ گروهِ LaMa، سویپِ
+    #    باقی‌مانده، پرِ دونورِ بلوکِ تیره) هنوز کارشان تمام نشده و
+    #    وارسیِ میان‌راهی هم‌پوشانی/تناقض می‌سازد (تریگرهایِ کاذبِ 01)؛
+    # ۲) هر ترمیمِ میان‌راهی یک فراخوانیِ LaMaِ دیگر است → arenaِ ONNX
+    #    رویِ نوارهایِ بلندِ وبتون (۹۰۰×۱۶۰۰۰، باکسِ ۴GB) OOM می‌دهد؛
+    # ۳) آنچه کاربر می‌بیند خروجیِ نهایی است — سنجش هم باید رویِ همان
+    #    انجام شود. ماسکِ اتحادِ (فقط LaMa/OpenCV) از حلقه می‌آید؛
+    #    کامپوننت‌هایِ به‌هم‌چسبیده جدا سنجیده می‌شوند؛ SFX/تبلیغ که هرگز
+    #    پاک نشده‌اند ذاتاً بیرونِ ماسک‌اند و دست نمی‌خورند.
+    def _final_verify_repair(self, cleaned: np.ndarray,
+                             image: np.ndarray) -> None:
+        u = getattr(self, "_verify_union", None)
+        self._verify_union = None
+        if u is None or cleaned is None or image is None:
+            return
+        if not u.any():
+            return
+        if cleaned.shape[:2] != image.shape[:2]:
+            return
+        try:
+            import gc as _gc
+            um = u.astype(np.uint8) * 255
+            # v1.14.105c — خوشه‌بندیِ نزدیک‌ها: حروف/خط‌هایِ یک بلوکِ متن
+            # (تا ۴۱px فاصله) یکی می‌شوند تا مثلِ باکسِ اصلیِ پایپ‌لاین
+            # یک‌جا سنجیده/ترمیم شوند؛ جداکردنِ حرف‌به‌حرف حلقهٔ سنجش را
+            # با خرابیِ همسایه آلوده می‌کند و ترمیم را می‌شکند (تستِ B/C/D)
+            um_d = cv2.dilate(um, np.ones((41, 41), np.uint8))
+            n_lab, lab, stats, _ = cv2.connectedComponentsWithStats(
+                um_d, connectivity=8)
+            pad = 26
+            n_chk = 0
+            n_fix = 0
+            for li in range(1, n_lab):
+                area = int(stats[li, cv2.CC_STAT_AREA])
+                if area < 60:
+                    continue
+                x0 = int(stats[li, cv2.CC_STAT_LEFT])
+                y0 = int(stats[li, cv2.CC_STAT_TOP])
+                w_c = int(stats[li, cv2.CC_STAT_WIDTH])
+                h_c = int(stats[li, cv2.CC_STAT_HEIGHT])
+                X0 = max(0, x0 - pad)
+                Y0 = max(0, y0 - pad)
+                X1 = min(cleaned.shape[1], x0 + w_c + pad)
+                Y1 = min(cleaned.shape[0], y0 + h_c + pad)
+                if (X1 - X0) < 12 or (Y1 - Y0) < 12:
+                    continue
+                # ماسکِ واقعیِ اتحاد (نه دیلیت) — مثلِ crop_mskِ باکس
+                comp = ((lab[Y0:Y1, X0:X1] == li) &
+                        (um[Y0:Y1, X0:X1] > 0)).astype(np.uint8) * 255
+                if int((comp > 0).sum()) < 60:
+                    continue
+                n_chk += 1
+                _before = cleaned[Y0:Y1, X0:X1].copy()
+                self._verify_repair_clean(cleaned, image, X0, Y0, X1, Y1,
+                                          comp, "LaMa")
+                if not np.array_equal(_before, cleaned[Y0:Y1, X0:X1]):
+                    n_fix += 1
+                    _gc.collect()
+            if self.debug and n_chk:
+                print(f"  [*]وارسیِ نهاییِ EP: {n_chk} ناحیه سنجیده شد، "
+                      f"{n_fix} ترمیم شد", flush=True)
+        except Exception:
+            if self.debug:
+                try:
+                    import traceback as _tb
+                    print("  [!]وارسیِ نهاییِ EP خطا داد:", flush=True)
+                    _tb.print_exc()
+                except Exception:
+                    pass
+            pass
+
+    # v1.14.105 — وارسیِ پس از پاکسازی + ترمیمِ پلکانی (ضدِ خروجیِ بدِ EP)
+    # زمینه: رویِ برخی اجراکننده‌ها (CUDA/DML رویِ ویندوز) خروجیِ LaMa ناقص
+    # یا کثیف برمی‌گردد در حالی که همان ورودی رویِ CPU تمیز پاک می‌شود —
+    # دو نمونهٔ واقعیِ v1.14.104:
+    # الف) «GREEN MOON» روی پلاکِ بافت‌مند: نصفِ متن جا مانده (اسیرِ عمودی)
+    # ب) داخلِ حباب/جعبهٔ سفید: پرِ LaMa خاکستریِ کثیف به‌جای سفید
+    # این گارد مستقل از EP بعد از کامپوزِ هر باکس می‌دود. سنجش‌ها:
+    # ۱) جوهرِ باقی‌مانده: نسبتِ «پیکسلِ متن‌نما» (اختلاف از میانهٔ محلی)
+    #    داخلِ ماسک در برابرِ حلقهٔ زمینه — بافتِ خودِ زمینه (نقطه‌چین/
+    #    موزاییک) با نرخِ حلقه خنثی می‌شود؛
+    # ۲) تیرگیِ نسبی: رویِ حلقهٔ صاف، میانهٔ روشناییِ ناحیهٔ پاکشده اگر
+    #    ≥ ۱۸ واحد از حلقه تیره‌تر باشد (نوارِ خاکستریِ حباب).
+    # ترمیمِ پلکانی — هر مرحله دوباره سنجیده می‌شود:
+    # ۱) LaMa دوباره با ماسکِ گشادِ ۱۷px (هاله/گلو هم می‌گیرد)
+    # ۲) LaMa دوباره با ماسکِ گشادِ ۳۳px
+    # ۳) پرِ هموارِ زمینه (_smooth_bg_fill) وگرنه TELEA
+    # ۴) TELEA با ماسکِ گشاد
+    # ۵) پرِ تختِ رنگِ حلقه — فقط وقتی حلقه واقعاً صاف است
+    # هیچ مرحله‌ای بیرونِ ماسک نمی‌نویسد؛ پیکسل‌هایِ قفل (_prot_all) و
+    # سقفِ (_page_raw_text_mask + کپِ ۲۵px) همیشه محترم هستند.
+    def _verify_repair_clean(self, cleaned: np.ndarray, image: np.ndarray,
+                             cx0: int, cy0: int, cx1: int, cy1: int,
+                             crop_msk, method: str = "") -> None:
+        try:
+            if method not in ("LaMa", "OpenCV"):
+                return
+            if cleaned is None or image is None or crop_msk is None:
+                return
+            m0 = (crop_msk > 0)
+            if not m0.any():
+                return
+            h_c, w_c = m0.shape
+            if h_c < 12 or w_c < 12:
+                return
+            pad = 26
+            X0 = max(0, cx0 - pad)
+            Y0 = max(0, cy0 - pad)
+            X1 = min(cleaned.shape[1], cx1 + pad)
+            Y1 = min(cleaned.shape[0], cy1 + pad)
+            out = cleaned[Y0:Y1, X0:X1]
+            orig = image[Y0:Y1, X0:X1]
+            if out.shape[0] < 12 or out.shape[1] < 12:
+                return
+            m = np.zeros(out.shape[:2], np.uint8)
+            m[cy0 - Y0:cy1 - Y0, cx0 - X0:cx1 - X0] = \
+                m0.astype(np.uint8) * 255
+            n_m = int((m > 0).sum())
+            if n_m < 60:
+                return
+            _mk = 21 if min(out.shape[:2]) >= 21 else (
+                15 if min(out.shape[:2]) >= 15 else 9)
+            g = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
+
+            def _ink(g_, m_, r_):
+                med = cv2.medianBlur(g_, _mk)
+                hf = np.abs(g_.astype(np.int16) - med.astype(np.int16))
+                ink_m = float((hf[m_ > 0] >= 26).mean()) \
+                    if int((m_ > 0).sum()) >= 40 else 0.0
+                ink_r = float((hf[r_] >= 26).mean()) \
+                    if int(r_.sum()) >= 80 else 0.0
+                return ink_m, ink_r
+
+            md25 = cv2.dilate(m, np.ones((21, 21), np.uint8))
+            mdin = cv2.dilate(m, np.ones((13, 13), np.uint8))
+            ring = (md25 > 0) & (mdin == 0) & (m == 0)
+            if int(ring.sum()) < 80:
+                return
+            # v1.14.105b — ارزیابی/نوشتن تا ۹px بیرونِ ماسک (هاله/گلو):
+            # اسیرِ سبزِ دورِ «GREEN MOON» بیرونِ هستهٔ ماسک است؛ ارزیابیِ
+            # فقط-داخلِ ماسک آن را نمی‌بیند. نوشتن هم فقط تا همین ۹px است
+            # (داخلِ ماسکِ ترمیمِ ۱۷px) — هنرِ دورتر هرگز دست نمی‌خورد.
+            m_eval = cv2.dilate(m, np.ones((19, 19), np.uint8))
+            ink_m, ink_r = _ink(g, m_eval, ring)
+            gm = float(np.median(g[m_eval > 0]))
+            gr = float(np.median(g[ring]))
+            # گیتِ تیرگیِ پرِ کثیف (نوارِ خاکستریِ GPU در حبابِ سفید):
+            # برای بلوکِ چندخطی، حلقه خط‌هایِ خاکستریِ دیگر را هم می‌گیرد →
+            # میانهٔ حلقه آلوده است. سه سیگنالِ مقاوم:
+            # ۱) یکنواختیِ پر (پرِ خاکستریِ GPU یکدست است؛ بافتِ بازسازی‌شده
+            #    پلاک/اسکری‌تون پهنایِ زیاد دارد)
+            # ۲) خنثاییِ رنگیِ پر (پرِ خرابِ GPU خاکستریِ خنثی است؛ آسمانِ
+            #    گرادیانی آبی، پلاک آبی — B-R بزرگ)
+            # ۳) فاصله از صدک‌هایِ حلقه (p90 حلقه = سفیدِ حباب، p10 = تیرهٔ پنل)
+            # رویِ هستهٔ ماسک سنجیده می‌شود نه m_eval؛ وگرنه گپِ سفیدِ
+            # بینِ خط‌ها spread را می‌شکند
+            _msel = m > 0
+            try:
+                _mp = np.percentile(g[_msel], [10, 90])
+                mask_spread = float(_mp[1] - _mp[0])
+            except Exception:
+                mask_spread = 99.0
+            try:
+                _brc = out[..., 0].astype(np.int16) - \
+                    out[..., 2].astype(np.int16)
+                neutr = float(np.median(np.abs(_brc[_msel])))
+            except Exception:
+                neutr = 99.0
+            try:
+                _rp = np.percentile(g[ring], [10, 90])
+                gap_dark = float(_rp[1]) - gm
+            except Exception:
+                gap_dark = 0.0
+            try:
+                _rq = np.percentile(g[ring], [10, 90])
+                rs = float(_rq[1] - _rq[0])  # گسترهٔ صدکیِ حلقه (گیتِ پرِ تخت)
+                rp90 = float(_rq[1])
+            except Exception:
+                rs = float(g[ring].std())
+                rp90 = float(np.percentile(g[ring], 90))
+            # v1.14.105c — بارِ سفیدِ سخت: داخلِ حباب/جعبهٔ سفیدِ تخت
+            # (حلقهٔ روشن و صاف) ترمیمِ «فقط-بد-نباشد» کافی نیست؛ دودِ
+            # کم‌رنگ (جوهرِ ۰.۰۳) هنوز به چشم می‌آید → مراحل ادامه پیدا
+            # می‌کنند تا پرِ ناب (LaMa گشادتر/هموار/تخت) به دست آید
+            white_flat = (rs <= 16.0) and (rp90 >= 240.0)
+            # سنجشِ جوهر: هم نسبی (حلقه = خطِ پایهٔ بافت) هم tierِ مطلق —
+            # پلاکِ «GREEN MOON»: بافتِ حلقه ink_r≈0.13 است ولی پاکِ سالم
+            # ink_m≈0.01 دارد؛ متنِ نصفه‌پاک ≈0.32 → tierِ مطلقِ 0.22 می‌گیردش
+            # v1.14.105c — tierِ مطلق فقط وقتی که حلقه نسبتاً صاف است
+            # (ink_r≤0.18) فعال است تا زمینه‌هایِ بافت‌مند (ink_r تا 0.22+)
+            # تریگرِ کاذب نسازند؛ خرابیِ پرَخشن با tierِ پرزورِ 0.40 می‌آید
+            # v1.14.105d — کالیبراسیون رویِ رگرسیونِ CPU: tier1 از ۰٫۱۰→۰٫۱۵
+            # (چ264_9 crop@(575,3189) جوهرِ ۰٫۱۳ = بافتِ قانونیِ پنجره بود،
+            # نه باقی‌مانده) — کیس‌هایِ واقعیِ GPU: A=۰٫۲۵+ (tier2)،
+            # B=تیرگی، C=۰٫۳۲ (tier2)، D=تیرگی → همه سرِ جایشان؛
+            # FPِ 01 (جوهرِ ۰٫۲۳ خطِ موج‌دار) با گاردِ فقط-LaMa رویِ بافت
+            # و قفلِ خطِ هنری ردِ ترمیم می‌شود → خروجیِ دست‌نخورده
+            bad_ink = (ink_m > max(0.15, ink_r * 2.0 + 0.04)) or \
+                ((ink_m >= 0.22 and ink_r <= 0.18 and
+                  ink_m > ink_r * 1.2 + 0.02) or
+                 (ink_m >= 0.40 and ink_m > ink_r * 1.1 + 0.02))
+            # v1.14.105c — تیرگیِ نسبیِ آستانه ۲۲→۳۰ + حلقهٔ روشن (rp90≥۱۹۰):
+            # «پرِ کثیفِ سفید» فقط وقتی معنا دارد که اطراف روشن باشد؛ پنلِ
+            # تیرهٔ 012p1 (p90=۱۳۶) تریگرِ کاذب نمی‌سازد؛ نوارِ خاکستریِ
+            # واقعیِ GPU (۱۰۱۸) گپِ ۳۹ با حلقهٔ ۲۵۵ دارد
+            bad_gray = (mask_spread <= 22.0) and (neutr <= 14.0) and \
+                (gap_dark >= 30.0) and (rp90 >= 190.0)
+            if not (bad_ink or bad_gray):
+                return
+            if self.debug:
+                try:
+                    print(f"  [!]وارسیِ پس از پاکسازی crop@({cx0},{cy0}) "
+                          f"ink={ink_m:.2f}/حلقه={ink_r:.2f} "
+                          f"lum={gm:.0f}/p90={gap_dark + gm:.0f} "
+                          f"spread={mask_spread:.0f} neutr={neutr:.0f} "
+                          f"({'جوهر' if bad_ink else ''}"
+                          f"{'+تیرگی' if bad_gray else ''}) → ترمیم",
+                          flush=True)
+                except Exception:
+                    pass
+
+            # ماسکِ گشادِ محدود: قفل‌ها ممنوع، حداکثر ۲۵px از جوهرِ خام
+            def _bounded(dil_k: int):
+                wb = cv2.dilate(
+                    m, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (dil_k, dil_k)))
+                try:
+                    _pa = getattr(self, "_prot_all", None)
+                    if _pa is not None:
+                        _pac = _pa[Y0:Y1, X0:X1]
+                        if _pac.shape == wb.shape:
+                            wb[_pac > 0] = 0
+                except Exception:
+                    pass
+                try:
+                    _raw = getattr(self, "_page_raw_text_mask", None)
+                    if _raw is not None and _raw.shape == image.shape[:2]:
+                        _rc = cv2.dilate(
+                            _raw[Y0:Y1, X0:X1],
+                            cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE, (25, 25)))
+                        wb = cv2.bitwise_and(wb, _rc)
+                except Exception:
+                    pass
+                if int((wb > 0).sum()) < 50:
+                    return None
+                if float((wb > 0).mean()) > 0.92:
+                    return None
+                return wb
+
+            def _blend(res_):
+                alpha = cv2.GaussianBlur(m_eval, (7, 7), 2.0)
+                alpha = np.minimum(alpha, m_eval)
+                a3 = (alpha.astype(np.float32) / 255.0)[..., None]
+                dst = out.astype(np.float32)
+                bl = dst * (1.0 - a3) + res_.astype(np.float32) * a3
+                cleaned[Y0:Y1, X0:X1] = bl.astype(np.uint8)
+
+            # سخت‌گیریِ مطلق برایِ مسیرِ پرِ خاکستری (بد_gray): پرِ سالمِ
+            # حباب تقریباً بی‌جوهر است (hf≈0.02)؛ توهمِ متنِ LaMa (وقتی
+            # حلقه به متنِ سالمِ اطراف آلوده است) تا 0.20 می‌رسد —
+            # گیتِ نسبی آن را نمی‌بیند → سقفِ مطلقِ 0.10
+            _strict = bool(bad_gray)
+
+            def _quality(g_res, what):
+                im2, ir2 = _ink(g_res, m_eval, ring)
+                gm2 = float(np.median(g_res[m_eval > 0]))
+                try:
+                    _rp2 = np.percentile(g[ring], [10, 90])
+                    gd2 = float(_rp2[1]) - gm2
+                except Exception:
+                    gd2 = 0.0
+                bad2 = (im2 > max(0.15, ir2 * 2.0 + 0.04)) or \
+                    ((im2 >= 0.22 and ir2 <= 0.18 and
+                      im2 > ir2 * 1.2 + 0.02) or
+                     (im2 >= 0.40 and im2 > ir2 * 1.1 + 0.02)) or \
+                    ((mask_spread <= 22.0) and (neutr <= 14.0) and \
+                     (gd2 >= 30.0) and (rp90 >= 190.0)) or \
+                    (_strict and im2 > 0.10)
+                soft = bool(white_flat and
+                            (im2 > 0.015 or gm2 < rp90 - 16.0))
+                if self.debug:
+                    try:
+                        _tag = 'OK' if not bad2 else 'هنوز بد'
+                        if (not bad2) and soft:
+                            _tag = 'OK-ولی-دوددار→ادامه'
+                        print(f"    [🔍ترمیم] {what}: "
+                              f"ink={im2:.2f}/حلقه={ir2:.2f} "
+                              f"lum={gm2:.0f} → {_tag}",
+                              flush=True)
+                    except Exception:
+                        pass
+                return (not bad2), (not bad2 and not soft)
+
+            fallback = None  # (res، برچسب) — خوب ولی نه ناب
+
+            # ۱ و ۲ — LaMa دوباره با ماسکِ گشاد
+            # v1.14.105c — کپِ حافظه: برایِ کامپوننت‌هایِ بزرگِ (>۰٫۴Mpx)
+            # LaMaِ مجدد صدا زده نمی‌شود (arenaِ ONNX رویِ نوارهایِ بلندِ
+            # وبتون OOM می‌دهد) → همان مراحلِ OpenCV (هموار/TELEA/تخت)
+            _lama_cap = 400_000
+            lama = None
+            try:
+                if out.shape[0] * out.shape[1] <= _lama_cap * 4:
+                    lama = self._get_lama()
+            except Exception:
+                lama = None
+            if lama is not None:
+                for _dk in (17, 33):
+                    wb = _bounded(_dk)
+                    if wb is None:
+                        break
+                    res1 = None
+                    try:
+                        _o = lama(orig, wb)
+                        _ob = _o if isinstance(_o, np.ndarray) \
+                            else np.array(_o)
+                        if _ob.ndim == 2:
+                            _ob = cv2.cvtColor(_ob, cv2.COLOR_GRAY2BGR)
+                        else:
+                            _ob = cv2.cvtColor(_ob, cv2.COLOR_RGB2BGR)
+                        if _ob.shape[:2] == orig.shape[:2]:
+                            res1 = _ob
+                    except Exception:
+                        res1 = None
+                    if res1 is None:
+                        continue
+                    g1 = cv2.cvtColor(res1, cv2.COLOR_BGR2GRAY)
+                    ok_b, ok_s = _quality(g1, f"LaMa×{_dk}")
+                    if ok_s:
+                        _blend(res1)
+                        return
+                    if ok_b and fallback is None:
+                        fallback = (res1, f"LaMa×{_dk}")
+
+            # ۳ — پرِ هموارِ زمینه، وگرنه TELEA — فقط رویِ حلقهٔ صافِ روشن؛
+            # رویِ بافت (پنجره/کفِ چ264_9) هموار/تخت = پاک‌کنِ بافت‌اند
+            # v1.14.105d
+            if not (rs <= 16.0):
+                res2 = None
+                _via = "skip-بافت"
+            else:
+                wb = _bounded(17)
+                if wb is None:
+                    wb = m
+                res2 = None
+                _via = ""
+                try:
+                    res2 = self._smooth_bg_fill(orig, wb)
+                    if res2 is not None:
+                        _via = "smooth"
+                except Exception:
+                    res2 = None
+                if res2 is None:
+                    try:
+                        res2 = cv2.inpaint(orig, wb, 5, cv2.INPAINT_TELEA)
+                        _via = "TELEA"
+                    except Exception:
+                        res2 = None
+            if res2 is not None:
+                g2 = cv2.cvtColor(res2, cv2.COLOR_BGR2GRAY)
+                ok_b2, ok_s2 = _quality(g2, _via or "fill")
+                if ok_s2:
+                    _blend(res2)
+                    return
+                if ok_b2 and fallback is None:
+                    fallback = (res2, _via or "fill")
+
+            # ۴ — TELEA با ماسکِ گشاد (اگر مرحلهٔ ۳ smooth بود)
+            if _via == "smooth":
+                try:
+                    res3 = cv2.inpaint(orig, wb, 5, cv2.INPAINT_TELEA)
+                    g3 = cv2.cvtColor(res3, cv2.COLOR_BGR2GRAY)
+                    ok_b3, ok_s3 = _quality(g3, "TELEA-گشاد")
+                    if ok_s3:
+                        _blend(res3)
+                        return
+                    if ok_b3 and fallback is None:
+                        fallback = (res3, "TELEA-گشاد")
+                except Exception:
+                    pass
+
+            # ۵ — پرِ تختِ رنگِ حلقه — فقط حلقهٔ واقعاً صاف
+            try:
+                if rs <= 16.0:
+                    col = np.median(out[ring].astype(np.float32),
+                                    axis=0).astype(np.float32)
+                    flat = np.repeat(
+                        col[None, None, :], out.shape[0], axis=0).repeat(
+                            out.shape[1], axis=1)
+                    g5 = cv2.cvtColor(flat.astype(np.uint8),
+                                      cv2.COLOR_BGR2GRAY)
+                    ok_b5, _ok_s5 = _quality(g5, "پرِ تختِ حلقه")
+                    if ok_b5:
+                        _blend(flat.astype(np.uint8))
+                        return
+            except Exception:
+                pass
+            # هیچ مرحله‌ای بارِ سفیدِ سخت را پاس نکرد — اگر دست‌کم یک
+            # نتیجهٔ «بد-نیست» داشتیم، همان را blend می‌کنیم (به‌مراتب
+            # بهتر از خروجیِ کثیفِ اولیهٔ EP)
+            if fallback is not None:
+                _fr, _fw = fallback
+                if self.debug:
+                    try:
+                        print(f"  [*]ترمیمِ crop@({cx0},{cy0}) با «{_fw}» "
+                              f"blend شد (بارِ نابِ سفید برآورده نشد)",
+                              flush=True)
+                    except Exception:
+                        pass
+                _blend(_fr)
+                return
+            if self.debug:
+                try:
+                    print(f"  [!]ترمیمِ کاملِ crop@({cx0},{cy0}) "
+                          f"نشد — خروجیِ فعلی ماند", flush=True)
+                except Exception:
+                    pass
+        except Exception:
+            return
 
     def _scrub_dark_residuals(self, image: np.ndarray, mask: np.ndarray) -> np.ndarray:
         if mask is None or not np.any(mask):
@@ -22009,6 +22479,15 @@ class MangaTranslator:
         ext = os.path.splitext(path)[1].lower()
 
         out_image = image
+        try:
+            _pp = os.environ.get("MANGA_PROBE_REPAIR", "")
+            if _pp and getattr(self, "_probe_repair_pts", None):
+                for (_px, _py) in self._probe_repair_pts:
+                    print(f"  [PROBE] write @{_px},{_py} "
+                          f"val={image[_py, _px]} shape={image.shape} "
+                          f"path={os.path.basename(path)}", flush=True)
+        except Exception:
+            pass
         if os.environ.get("MANGA_DEBUG_LEFTOVER") == "1":
             try:
                 cv2.imwrite("/tmp/ct38/write_input_debug.png", out_image)
