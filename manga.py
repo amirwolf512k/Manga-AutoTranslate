@@ -12083,6 +12083,14 @@ class MangaTranslator:
                            mask: np.ndarray,
                            verbose: bool = True,
                            refill: bool = False) -> np.ndarray:
+        # v1.14.107 — نقشهٔ «چه چیزی واقعاً منتقل شد» برایِ گاردهایِ
+        # پساکامپوز (وارسیِ نهایی/جارویِ بازمانده): هیچ ترمیمی بعد از
+        # کامپوز حقِ نوشتن بیرونِ این مجموعه را ندارد — قراردادِ
+        # دو-عکسی: «بیرونِ نوارِ متن = پیکسلِ اورجینال، همیشه». خطایِ
+        # کاربر (۱۰۱۸/sexyverse): tier6ِ «پرِ سفیدِ ناب» و جارویِ
+        # بازماندهٔ تیره بیرونِ نوار می‌نوشتند → خطِ حباب/نوارِ هدر/قابِ
+        # پنل سفید می‌شد = «کلِ حباب پاکیده».
+        self._compose_final_cmp = None
         try:
             _dd81z = os.environ.get("MANGA_DUMP_DONOR", "")
             if _dd81z:
@@ -12155,6 +12163,7 @@ class MangaTranslator:
             except Exception:
                 pass
             if not _cmp.any():
+                self._compose_final_cmp = np.zeros_like(_cmp)
                 return np.ascontiguousarray(original)
             # v1.14.96 — بازپرِ بافت (آزمایشی): روی زمینهٔ برف‌نوی/نقش‌ونگار
             # پرِ LaMa «تختِ بی‌بافت» است → نواری که حلقه‌اش بافت‌مند است
@@ -12174,6 +12183,7 @@ class MangaTranslator:
                 _gc105.collect()
             except Exception:
                 pass
+            self._compose_final_cmp = _cmp.copy()
             _out = np.ascontiguousarray(
                 np.where(_cmp[..., None], donor, original))
             try:
@@ -16213,6 +16223,18 @@ class MangaTranslator:
             return
         if cleaned.shape[:2] != image.shape[:2]:
             return
+        # v1.14.107 — قراردادِ دو-عکسی: وارسی/ترمیم فقط رویِ چیزی که
+        # «واقعاً» به خروجی منتقل شده معنا دارد؛ بیرونِ نوارِ کامپوز
+        # پیکسلِ اورجینال است و هر «ترمیمی» آن = حذفِ هنر (کلِ حباب
+        # پاکیده — کیسِ ۱۰۱۸). خوشه‌ها و نوشتن‌ها به همین مجموعه قفل
+        # می‌شوند؛ اگر چیزی منتقل نشده، گارد کاری نمیکند.
+        _cmpF = getattr(self, "_compose_final_cmp", None)
+        if _cmpF is not None and _cmpF.shape == u.shape:
+            u = u & (_cmpF > 0)
+            if not u.any():
+                return
+        else:
+            _cmpF = None
         try:
             import gc as _gc
             um = u.astype(np.uint8) * 255
@@ -16248,13 +16270,14 @@ class MangaTranslator:
                 n_chk += 1
                 _before = cleaned[Y0:Y1, X0:X1].copy()
                 self._verify_repair_clean(cleaned, image, X0, Y0, X1, Y1,
-                                          comp, "LaMa")
+                                          comp, "LaMa", limit=_cmpF)
                 if not np.array_equal(_before, cleaned[Y0:Y1, X0:X1]):
                     n_fix += 1
                     _gc.collect()
             # v1.14.106 — جاروی بازماندهٔ تیره (لبه/نوارِ سیاهِ کنارِ پاکشدهها)
+            # v1.14.107 — فقط داخلِ نوارِ کامپوز؛ بیرونِ نوار = اورجینال
             try:
-                _nsw = self._dark_remnant_sweep(cleaned, u)
+                _nsw = self._dark_remnant_sweep(cleaned, u, limit=_cmpF)
                 if _nsw and self.debug:
                     print(f"  [🧹] جاروی بازمانده: {_nsw} خوشهٔ تیره حذف شد",
                           flush=True)
@@ -16283,8 +16306,12 @@ class MangaTranslator:
     # همسایهٔ مستقیمِ نواحیِ پاکشده میماند (سایهٔ لوگو/بنرِ بیرونِ ماسکِ
     # متن — کیسِ ۱۰۱۸). فقط خوشهٔ تیرهٔ کوچکِ محصور در سفیدِ صافِ همسایه؛
     # قاب/سایهٔ جعبههایِ سیستم (دور ازِ نواحیِ LaMa) و خطِ هنریِ بلند هرگز.
+    # v1.14.107 — «limit» = نوارِ کامپوز: هدف‌ها و نوشتن‌ها فقط داخلِ
+    # چیزی که واقعاً به خروجی منتقل شده؛ بیرونِ نوار = اورجینال (خطِ
+    # حباب/دُم/قابِ پنل هرگز هدف نمیشود — کیسِ «کلِ حباب پاکیده»).
     def _dark_remnant_sweep(self, cleaned: np.ndarray,
-                            union: np.ndarray) -> int:
+                            union: np.ndarray,
+                            limit: Optional[np.ndarray] = None) -> int:
         try:
             if cleaned is None or union is None:
                 return 0
@@ -16302,6 +16329,9 @@ class MangaTranslator:
         _pa = getattr(self, "_prot_all", None)
         if _pa is not None and _pa.shape == g.shape:
             dark[(_pa > 0)] = 0
+        # v1.14.107 — قفلِ نوارِ کامپوز رویِ هدف‌ها
+        if limit is not None and limit.shape == g.shape:
+            dark[(limit <= 0)] = 0
         if int(dark.sum()) == 0:
             return 0
         dark_d = cv2.dilate(dark * 255, np.ones((5, 5), np.uint8)) > 0
@@ -16343,8 +16373,15 @@ class MangaTranslator:
             col = np.median(cleaned[ey0:ey1, ex0:ex1][bright],
                             axis=0).astype(np.float32)
             fm = cv2.dilate(lc, np.ones((3, 3), np.uint8))
-            sub = cleaned[ey0:ey1, ex0:ex1]
             al = (fm.astype(np.float32) / 255.0)[..., None]
+            # v1.14.107 — نوشتن هم فقط داخلِ نوارِ کامپوز
+            if limit is not None and limit.shape == g.shape:
+                _limC = (limit[ey0:ey1, ex0:ex1] > 0)
+                if _limC.shape == al.shape[:2]:
+                    al = al * _limC[..., None].astype(np.float32)
+            if not bool((al > 0).any()):
+                continue
+            sub = cleaned[ey0:ey1, ex0:ex1]
             sub[:] = (sub.astype(np.float32) * (1.0 - al)
                       + col[None, None, :] * al).astype(np.uint8)
             n_fix += 1
@@ -16372,7 +16409,11 @@ class MangaTranslator:
     # سقفِ (_page_raw_text_mask + کپِ ۲۵px) همیشه محترم هستند.
     def _verify_repair_clean(self, cleaned: np.ndarray, image: np.ndarray,
                              cx0: int, cy0: int, cx1: int, cy1: int,
-                             crop_msk, method: str = "") -> None:
+                             crop_msk, method: str = "",
+                             limit: Optional[np.ndarray] = None) -> None:
+        # v1.14.107 — «limit» = نقشهٔ نوارِ کامپوز (self._compose_final_cmp):
+        # تمامِ نوشتن‌هایِ ترمیم با آلفایِ صفر بیرونِ آن قفل می‌شوند —
+        # قراردادِ دو-عکسی: بیرونِ نوار = پیکسلِ اورجینال، همیشه.
         try:
             if method not in ("LaMa", "OpenCV"):
                 return
@@ -16509,7 +16550,15 @@ class MangaTranslator:
                 return gh, cw
 
             ghost_m, corew_m = _ghost_frac(g)
-            bad_ghost = (ghost_m >= 0.05) and (corew_m >= 0.55)
+            # v1.14.107 — گیتِ زمینهٔ سفیدِ «واقعی»: دود فقط رویِ زمینهٔ
+            # سفید معنا دارد (بندِ بالای سرش همین را میگوید) ولی سنجهٔ
+            # قبلی corew روشناییِ «پرِ فعلی» بود نه زمینه → رویِ متنِ
+            # سفید-رو-سیاه (هدرِ ۱۰۱۸: پرِ سفیدِ LaMa رویِ نوارِ سیاه)
+            # تریگرِ کاذب می‌ساخت و tier6 کلِ نوار را سفید میکرد. حالا
+            # حلقهٔ واقعی باید روشن باشد (≥۴۵٪ پیکسلِ حلقه ≥۲۴۰).
+            _rgw = float((g[ring] >= 240).mean())
+            bad_ghost = (ghost_m >= 0.05) and (corew_m >= 0.55) and \
+                (_rgw >= 0.45)
             if not (bad_ink or bad_gray or bad_ghost):
                 return
             if self.debug:
@@ -16558,6 +16607,13 @@ class MangaTranslator:
             def _blend(res_):
                 alpha = cv2.GaussianBlur(m_eval, (7, 7), 2.0)
                 alpha = np.minimum(alpha, m_eval)
+                # v1.14.107 — قفلِ نوارِ کامپوز: هیچ ترمیمی بیرونِ نوار
+                # نوشته نمیشود (خطِ حباب/قاب/نوارِ هدر دست‌نخورده)
+                if limit is not None:
+                    _limB = limit[Y0:Y1, X0:X1]
+                    if _limB.shape == alpha.shape:
+                        alpha = alpha * (
+                            (_limB > 0).astype(np.uint8))
                 a3 = (alpha.astype(np.float32) / 255.0)[..., None]
                 dst = out.astype(np.float32)
                 bl = dst * (1.0 - a3) + res_.astype(np.float32) * a3
@@ -16716,7 +16772,11 @@ class MangaTranslator:
             try:
                 if corew_m >= 0.55:
                     rb = ring & (g >= 245)
-                    if int(rb.sum()) >= 80:
+                    # v1.14.107 — سفیدِ حلقه باید «غالب» باشد نه فقط حاضر؛
+                    # رویِ نوارِ سیاهِ هدر، حاشیهٔ سفیدِ صفحه کافی بود که
+                    # rb.sum()≥۸۰ پاس شود و کلِ نوار سفید میشد
+                    if int(rb.sum()) >= 80 and \
+                            float((g[ring] >= 245).mean()) >= 0.45:
                         col6 = np.median(out[rb].astype(np.float32),
                                          axis=0).astype(np.float32)
                         flat6 = np.repeat(
