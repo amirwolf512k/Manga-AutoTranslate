@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.113"
+APP_VER = "1.14.114"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5588,12 +5588,17 @@ class MangaTranslator:
                         # swap: det سولو 1.4s ولی det ۶تایی 146s (لاگِ
                         # 2026-10-28). workers=2؛ فقط با رمِ آزادِ ≥2.5GB به 3
                         # میرود. MANGA_ANDROID_OCR_WORKERS اوررایدِ صریح.
-                        if _on_android() and getattr(self.ocr, "runner_kind", "") == "ort":
+                        if getattr(self.ocr, "runner_kind", "") == "ort":
                             try:
-                                _nw_env = int(os.environ.get("MANGA_ANDROID_OCR_WORKERS", "0") or 0)
+                                # v1.14.114 — MANGA_OCR_WORKERS (عمومی) /
+                                # MANGA_ANDROID_OCR_WORKERS (اندروید) اوررایدِ
+                                # صریح برایِ تست (مثل ARM-CI)؛ unset → رفتارِ قبل
+                                _nw_env = int(os.environ.get(
+                                    "MANGA_OCR_WORKERS",
+                                    os.environ.get("MANGA_ANDROID_OCR_WORKERS", "0")) or 0)
                                 if _nw_env > 0:
                                     self.max_workers = min(8, _nw_env)
-                                else:
+                                elif _on_android():
                                     _av2 = self._available_ram_gb()
                                     _nw = 2 if _av2 < 2.5 else 3
                                     if _nw != self.max_workers:
