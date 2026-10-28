@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.114"
+APP_VER = "1.14.115"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -1971,8 +1971,27 @@ class LamaMangaONNX:
 
     URL = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
            "releases/download/models/lama-manga-dyn.onnx")
+    # v1.14.115 — واریانتِ «بدونِ DFT» (همان وزنهای big-lama؛ بلوکهایِ
+    # Fourier به ماتمولِ کسینوسی/سینوسی صادر شدهاند — فایلِ عمومیِ
+    # K3-Manga-AutoTranslate-Mobile v4.1.1، وزنها Apache-2.0).
+    # وریفایِ عددی (scripts/lama_equiv.py): خروجی در برابرِ lama-manga-dyn
+    # رویِ ورودیِ تصادفی 384×384 → cosine=1.0000 MAE=0.002؛ سرعتِ CPU:
+    # 2.0s در برابرِ 8.2s (~۴×). DFT (144 نود) رویِ CPU/ARM گوشی سم است.
+    NOFFT_URL = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
+                 "releases/download/models/lama-manga-nofft.onnx")
     FALLBACK_URL = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
     SIZE = 512
+
+    @staticmethod
+    def _want_nofft() -> bool:
+        """اندروید: بدونِDFT (پیشفرضِ v1.14.115). PC: رفتارِ قبل (dyn)،
+        مگر MANGA_LAMA_NOFFT=1 (خروجی یکسان است، فقط سریعتر)."""
+        _env = str(os.environ.get("MANGA_LAMA_NOFFT", "") or "").strip()
+        if _env == "1":
+            return True
+        if _env == "0":
+            return False
+        return bool(_on_android())
 
     def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
                  threads: int = 4, cache_dir: Optional[str] = None):
@@ -2180,16 +2199,22 @@ class LamaMangaONNX:
         from pathlib import Path
         cache_root = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "manga_translator_models"
         cache_root.mkdir(parents=True, exist_ok=True)
-        dst = cache_root / "lama-manga-dyn.onnx"
+        # v1.14.115 — واریانتِ بدونِDFT رویِ اندروید (خروجیِ یکسان، CPUِ ARM
+        # بدونِ opِ DFT چند برابر سریعتر)؛ PC همان dynِ قبل برایِ صفرِ تغییر
+        _nofft = cls._want_nofft()
+        dst = cache_root / ("lama-manga-nofft.onnx" if _nofft else "lama-manga-dyn.onnx")
         if dst.is_file() and dst.stat().st_size > 1_000_000:
-            print(f"[*] مدل LaMa-Manga (داینامیک) از کش: {dst}")
+            print(f"[*] مدل LaMa-Manga ({'بدونِDFT' if _nofft else 'داینامیک'}) از کش: {dst}")
             return str(dst)
-        print("[*] دانلود مدل LaMa-Manga ONNX داینامیک (~۲۰۶MB، فقط بار اول) ...")
-        urls = (
-            cls.URL,
-            _RAPIDOCR_MIRROR + "lama_fp32.onnx",
-            cls.FALLBACK_URL,
-        )
+        if _nofft:
+            print("[*] دانلود مدل LaMa-Manga بدونِDFT (~۲۰۶MB، فقط بار اول) ...")
+            urls = (cls.NOFFT_URL, cls.URL,
+                    _RAPIDOCR_MIRROR + "lama_fp32.onnx", cls.FALLBACK_URL)
+        else:
+            print("[*] دانلود مدل LaMa-Manga ONNX داینامیک (~۲۰۶MB، فقط بار اول) ...")
+            urls = (cls.URL,
+                    _RAPIDOCR_MIRROR + "lama_fp32.onnx",
+                    cls.FALLBACK_URL)
         last = None
         for url in urls:
             try:
