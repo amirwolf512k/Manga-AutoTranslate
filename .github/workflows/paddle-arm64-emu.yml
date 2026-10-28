@@ -69,8 +69,18 @@ jobs:
       - name: qemu binfmt برای AAPT2 x86_64 (میزبان arm64)
         run: |
           sudo apt-get update -qq > /dev/null 2>&1 || true
-          sudo apt-get install -y -qq qemu-user-static binfmt-support > /dev/null 2>&1 || true
-          ls /proc/sys/fs/binfmt_misc/ 2>/dev/null | grep -c qemu || true
+          sudo apt-get install -y -qq qemu-user-static binfmt-support \
+            libc6-amd64-cross libstdc++6-amd64-cross libgcc-s1-amd64-cross > /dev/null 2>&1 || true
+          LD=$(find /usr/x86_64-linux-gnu -name 'ld-linux-x86-64.so.2' 2>/dev/null | head -1)
+          echo "loader: $LD"
+          if [ -n "$LD" ]; then
+            sudo mkdir -p /usr/x86_64-linux-gnu/lib64
+            sudo ln -sf "$(readlink -f "$LD")" /usr/x86_64-linux-gnu/lib64/ld-linux-x86-64.so.2
+            echo "QEMU_LD_PREFIX=/usr/x86_64-linux-gnu" >> "$GITHUB_ENV"
+            echo "binfmt qemu ready with x86_64 loader"
+          else
+            echo "::warning::no x86_64 loader found — AAPT2 may fail"
+          fi
 
       - name: Fetch vendored Python packages + Paddle-Lite libs (OpenCL)
         run: |
