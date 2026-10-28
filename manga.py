@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.115"
+APP_VER = "1.14.116"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3511,10 +3511,9 @@ class PaddleOCRLiteBackend:
                 _ensure_rapidocr_models(_mdir, files=_files)
             except Exception as e:
                 raise RuntimeError(f"دانلود مدل‌های OCR ناموفق: {e}")
-            # v1.14.113-speed — رویِ اندروید intra=2 و workers=2 (قیدِ حافظه:
-            # det DBNet رویِ ضلعِ ≥736 با آرنایِ خاموش تخصیصِ گذرایِ سنگین
-            # میسازد؛ 2×2=4 نخِ محاسباتی، امن و سریع — تفصیل در گیتِ workers).
-            _thr = 2 if _on_android() else max(2, min(4, (os.cpu_count() or 4) // 2))
+            # v1.14.116 — اندروید: intra=4 (برندهٔ سوییپِ ARM-CI: W1×4 =
+            # 62.1s در برابرِ W2×2 = 68.0s و W6×2 = 68.4s رویِ رانرِ ARM)
+            _thr = 4 if _on_android() else max(2, min(4, (os.cpu_count() or 4) // 2))
             self.det_runner = _PLOCR_OrtRunner(
                 os.path.join(_mdir, self.DET_ONNX),
                 prefer_gpu=prefer_gpu, threads=_thr)
@@ -5624,12 +5623,10 @@ class MangaTranslator:
                                 if _nw_env > 0:
                                     self.max_workers = min(8, _nw_env)
                                 elif _on_android():
-                                    _av2 = self._available_ram_gb()
-                                    _nw = 2 if _av2 < 2.5 else 3
-                                    if _nw != self.max_workers:
-                                        print(f"[*] OCR workers {self.max_workers}→{_nw} "
-                                              f"(رمِ آزاد {_av2:.1f}GB — ضدِ طوفانِ swap)")
-                                        self.max_workers = _nw
+                                    # v1.14.116 — پیشفرضِ اندروید = سریالِ تک-ورکر
+                                    # (برندهٔ ARM-CI؛ کمترین پیکِ حافظه = طوفانِ swap
+                                    # ناممکن؛ MANGA_ANDROID_OCR_WORKERS اورراید)
+                                    self.max_workers = 1
                             except Exception:
                                 pass
                     except Exception as e:
