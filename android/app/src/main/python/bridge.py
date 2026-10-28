@@ -733,6 +733,14 @@ def _run(job):
         shutil.rmtree(job["live_dbg"], ignore_errors=True)
         os.environ["MANGA_LIVE_DEBUG_DIR"] = job["live_dbg"]
         langs = [x for x in str(p.get("ocr_lang") or "en").split() if x.strip()]
+        # v1.14.106 — انتخابِ موتورِ استخراج از تنظیماتِ اپ (پیش‌فرضِ موتور:
+        # paddlelite) → MANGA_ANDROID_OCR = paddlelite | mlkit | rapidocr
+        try:
+            _oe = str(p.get("ocr_engine") or "").strip().lower()
+            if _oe:
+                os.environ["MANGA_ANDROID_OCR"] = _oe
+        except Exception:
+            pass
         _src0 = str(p.get("src") or "")
         # --- چند فایل انتخاب‌شده (اندروید: با کاما جدا شده) → پوشهٔ دسته‌ای ---
         if ("," in _src0 and "://" not in _src0

@@ -202,6 +202,22 @@ python manga_app.py -- -i input -o out.psd --font fonts/Vazirmatn-Bold.ttf --api
 
 ---
 
+## استخراج متن (PaddleOCRLite) و GPU+CPU همزمان
+
+از **v1.14.106** موتور استخراجِ PaddleOCR (PP-OCR) با دو رانر در اختیار است:
+
+| محیط | رانر | شتاب |
+|---|---|---|
+| اندروید (arm64) | Paddle-Lite | **OpenCL گوشی (GPU) + CPU همزمان** |
+| PC لینوکس/ویندوز/شبیه‌ساز | ONNX Runtime | CUDA/DML/OpenVINO + CPU همزمان |
+
+- زبان‌ها: `en` | `ko` | `ja` | `zh` (مدل مخصوص هر زبان خودکار دانلود می‌شود؛ dict از مدل خوانده می‌شود).
+- تست سریع روی PC: `python3 manga.py --ocr-test examples/01.jpg --ocr-lang en`
+- انتخاب موتور در اندروید: کلید `ocr_engine` در تنظیمات اپ = `paddlelite` (پیش‌فرض) | `mlkit` | `rapidocr` — روی PC با env `MANGA_OCR_BACKEND=paddlelite`.
+- **dual-device** (پیش‌فرض خودکار): وقتی GPU واقعاً در دسترس باشد، پچ‌های پاکسازی و برش‌های rec بین GPU و CPU می‌چرخند → سرعت بیشتر. با `MANGA_DUAL_DEVICE=0` خاموش می‌شود. روی سیستم CPU-خالص هیچ تغییری نمی‌کند (خروجی بیت‌به‌بیت همان قبل).
+
+---
+
 ## لیمیت رایگان Gemini
 
 تیر فری هر مدل flash حدود **۲۰ درخواست در روز** دارد (به‌ازای هر کلید/پروژه). برنامه خودش مدیریت می‌کند:

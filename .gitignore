@@ -12,3 +12,7 @@ nohup.out
 __pycache__/
 out_residue/
 out_*/
+
+# v1.14.106 — کتابخانهٔ Paddle-Lite (دانلودی — با fetch_paddle.py)
+android/app/libs/PaddlePredictor.jar
+android/app/src/main/jniLibs/*/libpaddle_lite_jni.so

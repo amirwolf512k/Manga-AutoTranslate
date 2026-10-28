@@ -88,6 +88,10 @@ dependencies {
     // sess.run تقسیم‌برصفر (SIGFPE) می‌دهد → CI با 1.28 بیلد می‌کند
     // (APIِ جاوایِ shim با 1.28 هم سازگار است؛ گوشی همان 1.31 را می‌گیرد)
     implementation("com.microsoft.onnxruntime:onnxruntime-android:${(findProperty("ortVer") as String?) ?: "1.31.0"}")
+    // v1.14.106 — Paddle-Lite (استخراجِ متن با OpenCL گوشی + CPU) —
+    // jar و so قبل از بیلد با «python3 android/scripts/fetch_paddle.py»
+    // دانلود می‌شوند (CI خودش انجام می‌دهد)
+    implementation(files("libs/PaddlePredictor.jar"))
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     implementation("com.google.mlkit:text-recognition-korean:16.0.1")

@@ -72,6 +72,12 @@ jobs:
           python3 android/scripts/fetch_vendor.py --check || \
             python3 android/scripts/fetch_vendor.py
 
+      # v1.14.106 — کتابخانهٔ Paddle-Lite (OpenCL) برایِ استخراجِ متن —
+      # رویِ شبیه‌سازِ x86_64 لود نمی‌شود (arm64) و پایتون خودش به ONNX
+      # می‌رود؛ رویِ گوشیِ واقعیِ arm64 کرنل‌هایِ OpenCL فعال می‌شوند
+      - name: Fetch Paddle-Lite libs (OpenCL)
+        run: python3 android/scripts/fetch_paddle.py
+
       - name: Sync engine sources into APK
         run: python3 android/scripts/sync_sources.py
 
@@ -240,7 +246,7 @@ jobs:
           adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/test2.jpg > /data/user/0/com.amirwolf.mangatranslator/files/test2.jpg'"
           adb shell am force-stop com.amirwolf.mangatranslator || true
           sleep 3
-          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0nMS4wJyBlbmNvZGluZz0ndXRmLTgnIHN0YW5kYWxvbmU9J3llcycgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0Mi5qcGc8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX29ubHkiPnRydWU8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0id2ViX2RlYnVnIj50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX21ldGhvZCI+bGFtYS1tYW5nYTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJvdXRfZm10Ij5QREY8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0icmVhZGVyIj5ydGw8L3N0cmluZz4KICAgIDxib29sZWFuIG5hbWU9ImJhdHRlcnlfYXNrZWQiIHZhbHVlPSJ0cnVlIiAvPgogICAgPGJvb2xlYW4gbmFtZT0idmlld2VyX2hpbnRfdjMiIHZhbHVlPSJ0cnVlIiAvPgo8L21hcD4K | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiIHN0YW5kYWxvbmU9InllcyIgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0Mi5qcGc8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX29ubHkiPnRydWU8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0id2ViX2RlYnVnIj50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX21ldGhvZCI+bGFtYTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJvdXRfZm10Ij5QREY8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0icmVhZGVyIj5ydGw8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0ib2NyX2VuZ2luZSI+cGFkZGxlbGl0ZTwvc3RyaW5nPgogICAgPGJvb2xlYW4gbmFtZT0iYmF0dGVyeV9hc2tlZCIgdmFsdWU9InRydWUiIC8+CiAgICA8Ym9vbGVhbiBuYW1lPSJ2aWV3ZXJfaGludF92MyIgdmFsdWU9InRydWUiIC8+CjwvbWFwPgo= | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
           adb logcat -c || true
           adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
           sleep 15
@@ -350,3 +356,31 @@ jobs:
             emul-artifacts/**
           if-no-files-found: warn
           retention-days: 10
+
+  # ── v1.14.106 — گیتِ «کیفیتِ استخراجِ PaddleOCRLite رویِ ۴ زبان» ──
+  # درخواستِ کاربر: «Paddle-Lite را تست بزن — کره‌ای/ژاپنی/چینی نمونن».
+  # این جاب host است (شبیه‌ساز نمی‌خواهد): همان خط لوله‌ای که روی گوشی
+  # می‌رود (det DB + rec CTC + dict) با رانرِ ONNX ران و سنجیده می‌شود؛
+  # شبیه‌سازِ x86_64 هم در جابِ بالا همان مسیر را از داخلِ APK تست می‌کند.
+  ocr-multilang-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install onnxruntime opencv-python-headless \
+            numpy pillow pyclipper requests arabic-reshaper python-bidi
+
+      - name: PaddleOCRLite multilingual extraction gate (en/ko/ja/zh + 01.jpg)
+        run: python3 .ci_scripts/paddle_ocr_gate.py

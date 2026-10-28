@@ -701,3 +701,42 @@
 **رگرسیون (CPU/lama-manga/LOW_MEM):** 012p1/890fb1 بیت‌به‌بیت SAME؛ 412e9e بازگشتِ ۱٬۱۹۶px/جدیدِ ۵۴px (پلاک همچنان پاک)؛ ch264_9 خطِ قاب برگشت؛ 0929 سایهٔ دیوار برگشت؛ 1018 = ۲۵٬۷۴۷px هنر برگشت (خطِ حباب‌ها/هدر/قاب‌ها). بچِ کاما-جدا = «صفحاتِ مستقل» و خروجی‌ها بیت‌به‌بیت = تکی. fake-translate rc=0. پوشه هنوز استیچ (طراحیِ 106).
 
 **درس:** هر گارد/ترمیمی که بعد از کامپوزِ دو-عکسی اجرا می‌شود باید به `_compose_final_cmp` قفل باشد؛ «بیرونِ نوار = پیکسلِ اورجینال، همیشه». برایِ سنجشِ تریگرِ گارد، md5ِ تکی‌ها مرجع است نه لاگ (debug-gated).
+
+
+---
+
+## v1.14.108 (2026-10-28) — PaddleOCRLite (جایگزین ML Kit) + dual-device GPU+CPU + بکاپ
+
+**درخواست‌های کاربر:**
+1. «پاکسازیش همینجا کافیه، بهتر هی دست بزنی خراب‌تر میشه» → پاکسازی دست نخورد (اثبات بیت‌به‌بیت: IMG1018 `2b69ee1a…` و 412e9e `5afbecc3…` قبل/بعد MD5 یکسان با MANGA_LOW_MEM=1).
+2. «OpenCL/Vulkan واسه گوشی — هم GPU هم CPU؛ پی‌سی لینوکس هم همین‌جور».
+3. «Paddle-Lite (استخراج متن) — ML Kit خوب استخراج نمی‌زنه؛ کره‌ای/ژاپنی/چینی نمونن؛ تست 01.jpg؛ سرعت مهمه».
+4. «تست اندروید با GitHub Action شبیه‌ساز واقعی».
+5. بکاپ main + همهٔ Branches در repo دیگر.
+
+**بکاپ:** repo جدید `amirwolf512k/Manga-AutoTranslate-backup` — mirror کامل (main + backup + wip-1.14.106-panel-border + ۴ tag). WIP محافظت خط کادر پنل سشن قبل (۲۴۶ خط) روی branch `wip-1.14.106-panel-border` ذخیره شد (main تمیز ماند).
+
+**PaddleOCRLite (manga.py):**
+- خط لولهٔ یکسان برای همهٔ پلتفرم‌ها: det DBNet (نرمال ImageNet روی RGB، limit min=736/max=1600، thresh 0.3/box 0.5/unclip 1.8 با pyclipper + فال‌بک ماسکی) → crop چهارنقطه‌ای با `_order_pts` (ترتیب TL,TR,BR,BL — بدون آن کراپ آینه‌ای می‌شد!) → rec (h=48، batch=8 با pad، نرمال (x-0.5)/0.5، CTC با کالیبراسیون charset از تعداد کلاس) → قرارداد خروجی مثل RapidOCRBackend: `[[box,(t,s)],…]`.
+- دو رانر: `_PLOCR_OrtRunner` (PC/شبیه‌ساز x86_64؛ dict از متادیتای ONNX کلید `character`) و `_PLOCR_LiteRunner` (اندروید arm64؛ PaddlePredictor.jar + libpaddle_lite_jni.so بیلد opencl؛ مدل .nb؛ dict از فایل؛ I/O با jarray(jfloat)→FloatBuffer مثل شیم ORT).
+- فال‌بک اندروید: paddlelite → ML Kit → rapidocr. `MANGA_ANDROID_OCR=mlkit|rapidocr` رفتار قبلی. PC: `MANGA_OCR_BACKEND=paddlelite` یا `--ocr-test IMG --ocr-lang X` (CLI تست مستقیم).
+- مدل‌ها: det=PP-OCRv6_det_small، rec: en/zh=PP-OCRv6_rec_small، ko=korean_PP-OCRv5، ja=japan_PP-OCRv4 (همه از ریلیز models). .nb ها: `pplite_{det,en,ko,ja,zh}_arm64_opencl.nb` در همان ریلیز (با opt_linux_x86 v2.14-rc و valid_targets arm,opencl از مدل‌های paddle رسمی ch/en v4 + ko/ja v3 ساخته شد).
+- **تست ۴ زبان (سندباکس):** en 4/4، ko 4/4، ja 4/4، zh 3/4 (別/别) — همگی conf≥0.93؛ 01.jpg: 44 خط در 1.8s (CPU).
+
+**dual-device (GPU+CPU همزمان):**
+- `MANGA_DUAL_DEVICE` (پیش‌فرض auto=روشن؛ 0=خاموش). فقط وقتی EPِ سرِ سشن GPU-گونه است (CUDA/DML/NNAPI/XNNPACK) فعال می‌شود → **ساختهٔ CPU-خالص بیت‌به‌بیت دست‌نخورده**.
+- پاکسازی: `LamaMangaONNX.session_cpu` (سشن دوم CPU-خالص با `_lama_session_cached`) + `_next_session()` چرخش round-robin بین پچ‌های موازی (`_run_tensors`؛ خطا → سشن اصلی). گیت رم اندروید: MemAvailable<1.5GB → خاموش.
+- استخراج: rec-cropها بین سشن GPU و CPU همزمان (`PaddleOCRLiteBackend.rec_cpu_runner`، ≥۴ کراپ).
+
+**اندروید:**
+- `PaddleLiteBridge.kt` جدید (predict/ready/backend/predictShape؛ کشِ predictor per-path؛ همهٔ خطاها catch → null).
+- `android/scripts/fetch_paddle.py` (دانلود tarball opencl v2.14-rc → app/libs/jniLibs؛ --check). build.gradle.kts: `implementation(files("libs/PaddlePredictor.jar"))`.
+- `ocr_engine` از تنظیمات اپ → MANGA_ANDROID_OCR (bridge.py + MainActivity.kt).
+- شبیه‌ساز x86_64: so لود نمی‌شود → پایتون خودکار به ONNX می‌رود (همان خط لوله) — پس گیت‌های قبلی دست نمی‌خورند.
+
+**CI:**
+- android-emulator.yml: استپ `Fetch Paddle-Lite libs` + prefs گیت 01.jpg با `ocr_engine=paddlelite` + جاب جدید `ocr-multilang-gate` (host؛ `.ci_scripts/paddle_ocr_gate.py` — ۴ زبان + 01.jpg، حداقل ۳/۴ خط انتظاری).
+- android-paddle-arm64.yml جدید (فقط dispatch): امولاتور arm64 واقعی (TCG کند) — گیت: لاگ باید `runner=lite` داشته باشد.
+
+**باقی‌مانده/نکته:** WIP کادر پنل (branch جانبی) تست/ادغام نشده — قبل از merge رگرسیون کامل لازم. امولاتور x86_64 فقط مسیر ONNX را می‌سنجد؛ مسیر Lite/OpenCL فقط روی گوشی واقعی یا جاب arm64 dispatchی. سرعتِ det روی نوار بلند: DET_LIM_MAX=1600 (روی PC بالا بردنی است).
+

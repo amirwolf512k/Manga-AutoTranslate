@@ -1533,6 +1533,9 @@ class MainActivity : AppCompatActivity() {
         map.put("model", firstNonEmpty(o, "manga_model", "model") ?: "")
         map.put("api_base", firstNonEmpty(o, "manga_api_base", "api_base") ?: "")
         map.put("ocr_lang", firstNonEmpty(o, "manga_ocr_lang", "ocr_lang") ?: "en")
+        // v1.14.106 — موتورِ استخراج: paddlelite (پیش‌فرضِ موتور) | mlkit | rapidocr
+        map.put("ocr_engine", firstNonEmpty(o, "ocr_engine")
+            ?: prefs.getString("ocr_engine", null) ?: "")
         map.put("fmt", firstNonEmpty(o, "out_fmt", "fmt") ?: "PDF")
         map.put("quality", optInt(o, "quality", 92))
         map.put("debug", optBool(o, "web_debug", "debug"))

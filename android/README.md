@@ -69,6 +69,8 @@ Android/data/com.amirwolf.mangatranslator/files/updates/
 
 - **فونت‌ها** (وزیرمتن، لاله‌زار و…) بار اول خودکار دانلود می‌شوند → `files/fonts/`
 - **مدل‌های OCR** (~۳۱MB) بار اول موقع ترجمه دانلود می‌شوند → `files/rapidocr_models/`
+- **v1.14.106 — موتور استخراج جدید: Paddle-Lite (پیش‌فرض)** — مدل‌های `.nb` (~۳۵MB) بار اول دانلود می‌شوند → `files/paddle_models/`؛ روی GPU گوشی با **OpenCL** اجرا می‌شود + CPU همزمان. اگر دانلود نشد خودکار به ML Kit برمی‌گردد. با تنظیمات اپ (کلید `ocr_engine`) می‌توانید `mlkit` یا `rapidocr` را اجباری کنید.
+- **بیلد از سورس:** قبل از gradle یک‌بار `python3 android/scripts/fetch_paddle.py` (دانلود کتابخانهٔ Paddle-Lite/OpenCL) — در CI خودکار است.
 - **پکیج‌های پایتون اضافی** (google-genai، openai و…) بار اول خودکار نصب می‌شوند
 
 پس اولین اجرا کمی طول می‌کشد و به اینترنت نیاز دارد — نگران نشو، لودینگ دارد.
