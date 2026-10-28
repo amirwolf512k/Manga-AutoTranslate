@@ -24,6 +24,15 @@ android {
 
     }
 
+    sourceSets {
+        getByName("main") {
+            if (!(file("libs/PaddlePredictor.jar").exists()
+                    && file("libs/PaddlePredictor.jar").length() > 0)) {
+                java.excludes.add("**/PaddleLiteBridge.kt")
+            }
+        }
+    }
+
     packaging {
         // v1.14.67 — رویِ امولاتورِ x86_64 (ترجمهٔ arm64) لودِ .soِ
         // فشرده‌نشده از داخلِ APK ممکن است کار نکند → با -PlegacyJni=true
@@ -83,6 +92,15 @@ chaquopy {
     }
 }
 
+// v1.14.108 — اگر fetch_paddle اجرا نشده باشد (jar غایب):
+// وابستگی و PaddleLiteBridge.kt از کامپایل حذف می‌شوند تا بیلد
+// نشکند؛ runtime jclass نمی‌یابد → پایتون به ONNX/ML Kit می‌رود.
+val paddleJar = file("libs/PaddlePredictor.jar")
+val hasPaddle = paddleJar.exists() && paddleJar.length() > 0
+if (!hasPaddle) {
+    logger.lifecycle("PaddlePredictor.jar missing -> Paddle-Lite disabled (ML Kit fallback)")
+}
+
 dependencies {
     // v1.14.67 — ortVer برایِ CIِ امولاتور: AARِ 1.31 رویِ x86_64 در
     // sess.run تقسیم‌برصفر (SIGFPE) می‌دهد → CI با 1.28 بیلد می‌کند
@@ -91,7 +109,9 @@ dependencies {
     // v1.14.106 — Paddle-Lite (استخراجِ متن با OpenCL گوشی + CPU) —
     // jar و so قبل از بیلد با «python3 android/scripts/fetch_paddle.py»
     // دانلود می‌شوند (CI خودش انجام می‌دهد)
-    implementation(files("libs/PaddlePredictor.jar"))
+    if (hasPaddle) {
+        implementation(files(paddleJar))
+    }
     implementation("com.google.mlkit:text-recognition:16.0.1")
     implementation("com.google.mlkit:text-recognition-japanese:16.0.1")
     implementation("com.google.mlkit:text-recognition-korean:16.0.1")
