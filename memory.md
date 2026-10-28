@@ -740,3 +740,8 @@
 
 **باقی‌مانده/نکته:** WIP کادر پنل (branch جانبی) تست/ادغام نشده — قبل از merge رگرسیون کامل لازم. امولاتور x86_64 فقط مسیر ONNX را می‌سنجد؛ مسیر Lite/OpenCL فقط روی گوشی واقعی یا جاب arm64 dispatchی. سرعتِ det روی نوار بلند: DET_LIM_MAX=1600 (روی PC بالا بردنی است).
 
+
+**افزودنیِ v1.14.108 (بعد از CI):**
+- چهار راند دیباگِ CI: (۱) gradle kts `excludes` نبود → rename-based exclusion + وابستگیِ شرطی؛ (۲) هنگِ شبیه‌ساز = سشنِ دومِ CPU-خالص رویِ x86_64 (CPU EPِ ORT-android = SIGFPE — درسِ v1.14.67) → گاردِ `_android_x86_emulator()` در dual-device پاکسازی/rec؛ (۳) OCR هم رویِ شبیه‌ساز با شکلِ داینامیک می‌میرد (XNNPACK=ORT_FAIL / CPU=SIGFPE) → رویِ همهٔ اندروید سشن‌هایِ OCR فقط CPU و رویِ شبیه‌ساز زنجیرهٔ ML Kit (مثلِ قبل) — paddlelite فقط گوشیِ واقعی/host-gate؛ (۴) امولاتورِ 37.x هیچ arm را رویِ هیچ میزبانی اجرا نمی‌کند → ورک‌فلوی arm64 = بیلدِ APK + وریفایِ زنجیره (نه امولاتور).
+- وضعیتِ نهاییِ CI رویِ bc455ba: Build APK ✅ | Engine Test ✅ | Emulator Test کامل (لکهٔ قرمز + 01.jpg + ۶ نوار) ✅ | ocr-multilang-gate (۴ زبان + 01.jpg) ✅ | Paddle-Lite arm64 APK (dispatch) ✅.
+- مدل‌های .nb (۵ تا) در ریلیزِ models آپلود شدند؛ dictها هم آنجا هستند. تستِ nativeِ C++ (`scripts/plite_runner.cpp`) در سندباکس gVisor سیگآبورت می‌دهد (محدودیتِ میزبان) — رویِ گوشی/مکِ عادی باید سالم باشد.
