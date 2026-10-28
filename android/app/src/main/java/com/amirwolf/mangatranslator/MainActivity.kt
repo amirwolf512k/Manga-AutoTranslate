@@ -351,9 +351,9 @@ class MainActivity : AppCompatActivity() {
 
         Thread {
             try {
+                val plNote = paddleCrashGuard()
                 try {
-    
-                val cl = java.io.File(filesDir, "crash_log.txt")
+                    val cl = java.io.File(filesDir, "crash_log.txt")
                     if (cl.exists()) {
                         val prevTxt = cl.readText().take(4000)
                         ui.post {
@@ -376,8 +376,9 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {
                 }
                 val st = launcher.callAttr("status").toString()
+                val pre = if (plNote != null) "⚡ " + plNote + " "\n\n" else ""
                 ui.post {
-                    logBox.text = if (healthReport.isNotBlank())
+                    logBox.text = pre + if (healthReport.isNotBlank())
                         healthReport + "\n\n—— وضعیت فایل‌ها —\n" + st
                     else st
                 }
@@ -466,6 +467,43 @@ class MainActivity : AppCompatActivity() {
             }
         }
         throw last ?: RuntimeException("همهٔ منابع ناموفق")
+    }
+
+    // v1.14.110 — ردپای کرشِ nativeِ Paddle-Lite: سیگ‌فالت از هندلرِ
+    // UncaughtException رد نمیشود → با فایلِ ردپا (paddle_guard.txt)
+    // تشخیص داده میشود، لاگش نمایش داده و ضبط میشود؛ بعد از یک کرش،
+    // پیشفرضِ خودکار به ML Kit برمیگردد تا اپ کار کند
+    private fun paddleCrashGuard(): String? {
+        return try {
+            val g = java.io.File(filesDir, "paddle_guard.txt")
+            if (!g.isFile) null
+            else {
+                val stage = (try { g.readText().trim() }
+                        catch (_: Exception) { "" })
+                g.delete()
+                val stF = java.io.File(filesDir, "paddle_strikes.txt")
+                val n = ((try { stF.readText().trim().toIntOrNull() }
+                        catch (_: Exception) { null }) ?: 0) + 1
+                try { stF.writeText(n.toString()) } catch (_: Exception) { }
+                try {
+                    java.io.File(filesDir, "paddle_banned.txt").writeText("1")
+                } catch (_: Exception) { }
+                val stageFa = if (stage.startsWith("init"))
+                    "ساختِ predictor" else "inferenceِ استخراجِ متن"
+                val note = ("اجرای قبلی حینِ Paddle-Lite بسته شد " +
+                        "(کرشِ native — مرحله: " + stageFa + "). " +
+                        "این اجرا با موتورِ جایگزین (ML Kit/ONNX) میرود و " +
+                        "Paddle-Lite برایِ پیشفرضِ خودکار غیرفعال شد " +
+                        "(فعالسازیِ دوباره: تنظیمات ← موتورِ استخراج).")
+                try {
+                    java.io.File(filesDir, "crash_log.txt")
+                        .appendText("
+[Paddle-Lite] " + note + "
+")
+                } catch (_: Exception) { }
+                note
+            }
+        } catch (_: Exception) { null }
     }
 
     private fun installedVersionCode(): Int = try {

@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.108"
+APP_VER = "1.14.110"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3440,16 +3440,37 @@ class PaddleOCRLiteBackend:
         # رانر: رویِ اندروید .nb/Lite اول (OpenCL)، بعدِ خطا → ONNX.
         # رویِ PC همیشه ONNX.
         self.runner_kind = "ort"
+        self._pl_guard_on = False
         _lite = None
         if use_lite is None:
             use_lite = _on_android()
         if use_lite:
-            try:
-                _lite = self._make_lite()
-                self.runner_kind = "lite"
-            except Exception as e:
-                print(f"[!] Paddle-Lite آماده نشد ({e}) → ONNX (NNAPI/XNNPACK)")
-                _lite = None
+            # v1.14.110 — اگر اجرایِ قبلی حینِ Paddle-Lite پروسه را کُشت،
+            # پرچمِ ban است → paddle دیگر امتحان نمیشود (مگر کاربر در
+            # تنظیمات صریحاً paddlelite را اجباری کرده باشد)
+            _forced = str(os.environ.get("MANGA_ANDROID_OCR") or "").strip().lower()                 in ("paddlelite", "paddleocr-lite", "plite")
+            _banned, _strikes = _plite_ban_status()
+            if _banned and not _forced:
+                print(f"[!] Paddle-Lite قبلاً {_strikes or 1} بار اپ را وسطِ "
+                      f"استخراج بسته (کرشِ native) → این اجرا با ML Kit/ONNX "
+                      f"میرود (فعالسازیِ دوباره: تنظیمات ← موتورِ استخراج ← "
+                      f"paddlelite)")
+            else:
+                if _banned and _forced:
+                    print("[!] Paddle-Lite ممنوع شده ولی در تنظیمات اجباری "
+                          "است — دوباره امتحان میشود")
+                _pl_guard_write("init")
+                self._pl_guard_on = True
+                try:
+                    _lite = self._make_lite()
+                    self.runner_kind = "lite"
+                    # predictor ساخته شد؛ از اولین inference دوباره خطرناک
+                    _pl_guard_write("run")
+                except Exception as e:
+                    _pl_guard_clear()
+                    self._pl_guard_on = False
+                    print(f"[!] Paddle-Lite آماده نشد ({e}) → ONNX (NNAPI/XNNPACK)")
+                    _lite = None
         _mdir = _model_cache_dir("rapidocr_models")
         if self.runner_kind == "lite":
             self.det_runner, self.rec_runner = _lite
@@ -3616,6 +3637,11 @@ class PaddleOCRLiteBackend:
             if self.lang in ("en",):
                 txt = self._deaccent(txt)
             lines.append([np.asarray(b, dtype=np.float32), (txt, float(sc))])
+        # v1.14.110 — یک دورِ کاملِ det+rec سالم → ردپا برداشته میشود تا
+        # کرشهایِ بعدیِ (نامربوط) به paddle نسبت داده نشوند
+        if getattr(self, "_pl_guard_on", False):
+            self._pl_guard_on = False
+            _pl_guard_clear()
         return lines
 
     # ── det: پیش‌پردازش + run + پس‌پردازشِ DB ────────────────────────────
@@ -3946,6 +3972,45 @@ def _android_like_env() -> bool:
     except Exception:
         pass
     return False
+
+
+# v1.14.110 — گاردِ کرشِ nativeِ Paddle-Lite رویِ گوشی: سیگ‌فالت از
+# لاگ‌گیرِ جاوای اپ رد نمیشود → قبل از کارِ خطرناکِ native ردپا
+# میگذاریم؛ اگر پروسه مرد، استارتِ بعدیِ اپ لاگ را نشان میدهد و
+# موتورِ جایگزین (ML Kit/ONNX) میآید — درخواستِ کاربر: «لاگ بزنه
+# کرش کنه، مجدد اپ باز کردم لاگ کرشش بیاد»
+def _pl_guard_path():
+    return os.path.join(
+        os.environ.get("MANGA_FILES_DIR") or os.getcwd(), "paddle_guard.txt")
+
+
+def _pl_guard_write(stage):
+    if not _on_android():
+        return
+    try:
+        with open(_pl_guard_path(), "w") as f:
+            f.write(str(stage) + "|" + str(int(time.time())))
+    except Exception:
+        pass
+
+
+def _pl_guard_clear():
+    try:
+        os.unlink(_pl_guard_path())
+    except Exception:
+        pass
+
+
+def _plite_ban_status():
+    base = os.environ.get("MANGA_FILES_DIR") or os.getcwd()
+    banned = os.path.isfile(os.path.join(base, "paddle_banned.txt"))
+    strikes = 0
+    try:
+        with open(os.path.join(base, "paddle_strikes.txt")) as f:
+            strikes = int((f.read() or "0").strip() or "0")
+    except Exception:
+        pass
+    return banned, max(0, strikes)
 
 
 def _on_android() -> bool:
