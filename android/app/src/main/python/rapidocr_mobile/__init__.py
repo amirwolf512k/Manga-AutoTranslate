@@ -308,17 +308,24 @@ class RapidOcrMobile:
 
     def _within_bounds(self, img: np.ndarray):
         """عینِ preprocess_img: max_side≤2000، min_side≥30 → (img, rh, rw)
-        که ضربِ مختصات در (rh, rw) به تصویرِ اصلی برمیگردد."""
+        که ضربِ مختصات در (rh, rw) به تصویرِ اصلی برمیگردد. رزایزها
+        به مضربِ ۳۲ گرد میشوند (عینِ reduce/increase_max_side)."""
         h, w = img.shape[:2]
-        ratio = 1.0
         if max(h, w) > 2000:
             ratio = 2000.0 / max(h, w)
-            img = cv2.resize(img, (int(w * ratio), int(h * ratio)))
+            resize_h = int(round((int(h * ratio)) / 32) * 32)
+            resize_w = int(round((int(w * ratio)) / 32) * 32)
+            if resize_w <= 0 or resize_h <= 0:
+                raise ValueError("resize نامعتبر")
+            img = cv2.resize(img, (resize_w, resize_h))
         if min(img.shape[:2]) < 30:
-            r2 = 30.0 / min(img.shape[:2])
-            img = cv2.resize(img, (int(img.shape[1] * r2),
-                                   int(img.shape[0] * r2)))
-            ratio *= r2
+            h2, w2 = img.shape[:2]
+            ratio2 = 30.0 / min(h2, w2)
+            resize_h = int(round((int(h2 * ratio2)) / 32) * 32)
+            resize_w = int(round((int(w2 * ratio2)) / 32) * 32)
+            if resize_w <= 0 or resize_h <= 0:
+                raise ValueError("resize نامعتبر")
+            img = cv2.resize(img, (resize_w, resize_h))
         rh = h / float(img.shape[0])
         rw = w / float(img.shape[1])
         return img, rh, rw
