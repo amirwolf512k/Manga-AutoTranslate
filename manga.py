@@ -3351,6 +3351,12 @@ class _PLOCR_OrtRunner:
     def __init__(self, model_path, prefer_gpu=None, threads=2):
         self.path = str(model_path)
         _thr = max(1, min(4, int(threads or 2)))
+        # v1.14.108 — رویِ اندروید سشن‌هایِ OCR همیشه CPU-خالص: NNAPI/XNNPACK
+        # با شکلِ داینامیکِ det/rec مطمئن نیستند (XNNPACK = ORT_FAILِ شکلِ
+        # داینامیک — درسِ v1.14.66) و CPU EP رویِ arm64 سالم است؛ شتابِ گوشی
+        # از Paddle-Lite می‌آید نه EP. رویِ PC GPU-EP آزاد است (CUDA/DML/…).
+        if _on_android() or _android_like_env():
+            prefer_gpu = False
         self.session = _make_ort_session(
             self.path, prefer_gpu=bool(prefer_gpu), threads=_thr)
         self.in_name = self.session.get_inputs()[0].name
@@ -5370,23 +5376,43 @@ class MangaTranslator:
                     except Exception as e2:
                         print(f"[!] RapidOCR هم لود نشد ({e2})")
             else:  # paddlelite (پیش‌فرضِ v1.14.106) یا هر چیزِ دیگر
-                try:
-                    self.ocr = PaddleOCRLiteBackend(lang=main_lang,
-                                                    prefer_gpu=self.use_gpu)
-                    self._ocr_backend_name = "paddlelite"
-                except Exception as e:
-                    print(f"[!] Paddle-Lite لود نشد ({e}) → ML Kit نیتیو")
+                # v1.14.108 — رویِ شبیه‌سازِ x86_64 مسیرِ paddlelite/ONNX
+                # امن نیست (CPU EP = SIGFPE؛ XNNPACK = ORT_FAILِ شکلِ
+                # داینامیک — هر دو از v1.14.66/67 شناخته‌اند) → همان رفتارِ
+                # قبلِ (ML Kit)؛ با MANGA_ANDROID_OCR=paddlelite صریحاً
+                # می‌توان اجبار کرد (برایِ دیباگ).
+                if _android_x86_emulator() and _aocr != "paddlelite":
+                    _aocr = "mlkit"
+                if _aocr == "mlkit":
                     try:
                         self.ocr = MlKitBackend(lang=main_lang)
                         self._ocr_backend_name = "mlkit"
-                    except Exception as e2:
-                        print(f"[!] ML Kit هم لود نشد ({e2}) → RapidOCR ONNX")
+                    except Exception as e:
+                        print(f"[!] ML Kit لود نشد ({e}) → RapidOCR ONNX")
                         try:
                             self.ocr = RapidOCRBackend(
                                 lang=main_lang, prefer_gpu=self.use_gpu)
                             self._ocr_backend_name = "rapidocr"
-                        except Exception as e3:
-                            print(f"[!] RapidOCR هم لود نشد ({e3})")
+                        except Exception as e2:
+                            print(f"[!] RapidOCR هم لود نشد ({e2})")
+                else:
+                    try:
+                        self.ocr = PaddleOCRLiteBackend(
+                            lang=main_lang, prefer_gpu=self.use_gpu)
+                        self._ocr_backend_name = "paddlelite"
+                    except Exception as e:
+                        print(f"[!] Paddle-Lite لود نشد ({e}) → ML Kit نیتیو")
+                        try:
+                            self.ocr = MlKitBackend(lang=main_lang)
+                            self._ocr_backend_name = "mlkit"
+                        except Exception as e2:
+                            print(f"[!] ML Kit هم لود نشد ({e2}) → RapidOCR ONNX")
+                            try:
+                                self.ocr = RapidOCRBackend(
+                                    lang=main_lang, prefer_gpu=self.use_gpu)
+                                self._ocr_backend_name = "rapidocr"
+                            except Exception as e3:
+                                print(f"[!] RapidOCR هم لود نشد ({e3})")
 
         if self.ocr is None and not _on_android():
             # v1.14.106 — PC: با MANGA_OCR_BACKEND=paddlelite می‌شود موتورِ
