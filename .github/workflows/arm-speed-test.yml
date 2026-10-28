@@ -91,7 +91,7 @@ jobs:
             MANGA_LAMA_NOFFT="$nofft" MANGA_ORT_THREADS=4 MANGA_LOW_MEM=1 \
             MANGA_LAMA_PATCH_SIDE=384 timeout 900 \
               python3 manga.py -i /tmp/mt/imgs/01.jpg -o "$outdir" \
-              --font fonts/Vazir-Code.ttf --cpu --lama \
+              --font fonts/Vazir-Code.ttf --cpu --lama --clean-only \
               --clean-method lama-manga --debug --no-resume \
               > "/tmp/mt/lama_$label.log" 2>&1
             local rc=$?
