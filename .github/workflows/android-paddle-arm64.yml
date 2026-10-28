@@ -106,10 +106,10 @@ jobs:
           AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
           yes | "$SDKM" --licenses > /dev/null 2>&1 || true
           yes | "$SDKM" --channel=3 "emulator" > /dev/null 2>&1 || true
-          "$SDKM" "system-images;android-30;google_apis;arm64-v8a" "platform-tools" "platforms;android-30"
-          IMG="$ANDROID_HOME/system-images/android-30/google_apis/arm64-v8a"
+          "$SDKM" "system-images;android-33;google_apis;arm64-v8a" "platform-tools" "platforms;android-33"
+          IMG="$ANDROID_HOME/system-images/android-33/google_apis/arm64-v8a"
           test -f "$IMG/system.img" || { echo "[✗] arm64 system image missing on mac runner"; ls "$ANDROID_HOME/system-images" 2>/dev/null || true; exit 1; }
-          echo no | "$AVDM" create avd -n parm64 -k "system-images;android-30;google_apis;arm64-v8a" -d pixel_4 --force
+          echo no | "$AVDM" create avd -n parm64 -k "system-images;android-33;google_apis;arm64-v8a" -d pixel_4 --force
           CFG=$("$AVDM" list avd | grep -A5 'Name: parm64' | grep 'Path:' | awk '{print $2}')
           CFG="${CFG:-$HOME/.android/avd/parm64.avd}"
           mkdir -p "$HOME/.android/avd"
@@ -122,6 +122,9 @@ jobs:
         run: |
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          uname -m; file "$ANDROID_HOME/emulator/emulator/emulator" 2>/dev/null | head -1 || true
+          ls "$ANDROID_HOME/emulator/emulator/qemu/" 2>/dev/null || true
+          grep -E "abi.type|image.sysdir" "$HOME/.android/avd/parm64.avd/config.ini" || true
           "$ANDROID_HOME/emulator/emulator" -avd parm64 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 4096 > /tmp/emu_boot.log 2>&1 &
           OK=0
           for i in $(seq 1 60); do
