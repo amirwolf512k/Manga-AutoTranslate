@@ -81,11 +81,13 @@ jobs:
             "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/examples/01.jpg" || true
           # تصویرِ کوچک برایِ بوتِ سریع‌ترِ مسیر — 01.jpg بزرگ است؛ ولی
           # مدلِ nb در اولین اجرا از ریلیز دانلود می‌شود (اینترنتِ رانر آزاد است)
+          curl -fsSL --retry 2 -o /tmp/mt/imgs/NotoSansSC-Regular.otf \
+            "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
           python3 - <<'PY'
           from PIL import Image, ImageDraw, ImageFont
           img = Image.new("RGB", (800, 300), "white")
           d = ImageDraw.Draw(img)
-          f = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 42)
+          f = ImageFont.truetype("/tmp/mt/imgs/NotoSansSC-Regular.otf", 42)
           d.text((30, 40), "PADDLE LITE ARM64", font=f, fill=(10, 10, 10))
           d.text((30, 140), "extraction smoke test", font=f, fill=(10, 10, 10))
           img.save("/tmp/mt/imgs/small.png")
