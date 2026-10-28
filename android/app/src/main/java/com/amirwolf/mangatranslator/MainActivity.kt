@@ -376,7 +376,7 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {
                 }
                 val st = launcher.callAttr("status").toString()
-                val pre = if (plNote != null) "⚡ " + plNote + " "\n\n" else ""
+                val pre = if (plNote != null) "⚡ " + plNote + "\n\n" else ""
                 ui.post {
                     logBox.text = pre + if (healthReport.isNotBlank())
                         healthReport + "\n\n—— وضعیت فایل‌ها —\n" + st
@@ -497,9 +497,7 @@ class MainActivity : AppCompatActivity() {
                         "(فعالسازیِ دوباره: تنظیمات ← موتورِ استخراج).")
                 try {
                     java.io.File(filesDir, "crash_log.txt")
-                        .appendText("
-[Paddle-Lite] " + note + "
-")
+                        .appendText("\n[Paddle-Lite] " + note + "\n")
                 } catch (_: Exception) { }
                 note
             }
