@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.118"
+APP_VER = "1.14.119"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -5724,19 +5724,19 @@ class MangaTranslator:
                 # می‌توان اجبار کرد (برایِ دیباگ).
                 if _android_x86_emulator() and _aocr != "paddlelite":
                     _aocr = "mlkit"
-                # v1.14.117 — GPU-aware: رویِ GPUهایِ غیرِ Adreno (Mali /
-                # PowerVR / نامشخص) JITِ کرنلهایِ OpenCL موقعِ ساختِ
-                # predictor سگفلتِ native میدهد (کرشِ Redmi 22021211RG /
-                # هلیو G96 / Mali-G57، 2026-10-28) → مثلِ شبیهساز، مستقیم
-                # ML Kit نیتیو (همان راهِ سریعِ K3) تا هیچ کرشی رخ ندهد؛
-                # paddlelite/OpenCL فقط رویِ Adreno پیشفرض میماند.
-                # اجباریِ صریح: MANGA_ANDROID_OCR=paddlelite
-                if (_aocr not in ("paddlelite", "mlkit", "rapidocr")
-                        and _gpu_vendor() != "adreno"):
+                # v1.14.119 — پیشفرضِ اندروید = ML Kit نیتیو (دقیقاً موتورِ
+                # K3؛ همان ۴۸ فایلِ مدلِ داخلِ APK). زمینه: دو کرشِ nativeِ
+                # پیدرپیِ paddlelite در RuntimeProgram (2026-10-28، POCO F4 /
+                # Adreno 650؛ و قبلاً Mali) — با nbهایِ سالمِ هم-نسخه هم رویِ
+                # بعضی درایورهایِ GPU ناپایدار است؛ کاربر خودش K3 (فقط
+                # ML Kit) را سریع و بی-کرش تائید کرده. paddlelite با اجباریِ
+                # صریح در دسترس میماند: تنظیمات ← موتورِ استخراج یا
+                # MANGA_ANDROID_OCR=paddlelite (بنِ خود-ترمیمِ v1.14.118 فعال).
+                if _aocr not in ("paddlelite", "mlkit", "rapidocr"):
                     _aocr = "mlkit"
-                    print(f"[*] اندروید: GPU={_gpu_vendor()} (غیرِ Adreno) "
-                          f"→ موتورِ ML Kit نیتیو بدونِ ریسکِ OpenCL "
-                          f"(اجباری: MANGA_ANDROID_OCR=paddlelite)")
+                    print("[*] اندروید: پیشفرضِ OCR = ML Kit نیتیو (موتورِ K3، "
+                          f"GPU={_gpu_vendor()}) — بدونِ ریسکِ کرشِ OpenCL؛ "
+                          "paddlelite: تنظیمات ← موتورِ استخراج")
                 if _aocr == "mlkit":
                     try:
                         self.ocr = MlKitBackend(lang=main_lang)
