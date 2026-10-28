@@ -72,6 +72,7 @@ jobs:
 
       - name: Prepare assets (small test image + OCR nb models not needed — runtime downloads)
         run: |
+          python3 -m pip install --quiet pillow
           mkdir -p /tmp/mt/imgs
           curl -sL --max-time 120 -o /tmp/mt/imgs/01.jpg \
             "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/examples/01.jpg" || true
