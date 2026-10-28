@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.112"
+APP_VER = "1.14.113"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3486,9 +3486,9 @@ class PaddleOCRLiteBackend:
                 _ensure_rapidocr_models(_mdir, files=_files)
             except Exception as e:
                 raise RuntimeError(f"دانلود مدل‌های OCR ناموفق: {e}")
-            # v1.14.112-speed — رویِ اندروید intra=2: موازیسازی از تعدادِ
-            # worker (سشنِ مشترک) میآید نه تردِ داخلِ هر Run؛ 6 worker × 2ترد
-            # از 2 worker × 4ترد خیلی سریعتر است و Over-subscription هم ندارد.
+            # v1.14.113-speed — رویِ اندروید intra=2 و workers=2 (قیدِ حافظه:
+            # det DBNet رویِ ضلعِ ≥736 با آرنایِ خاموش تخصیصِ گذرایِ سنگین
+            # میسازد؛ 2×2=4 نخِ محاسباتی، امن و سریع — تفصیل در گیتِ workers).
             _thr = 2 if _on_android() else max(2, min(4, (os.cpu_count() or 4) // 2))
             self.det_runner = _PLOCR_OrtRunner(
                 os.path.join(_mdir, self.DET_ONNX),
@@ -5582,21 +5582,24 @@ class MangaTranslator:
                         self.ocr = PaddleOCRLiteBackend(
                             lang=main_lang, prefer_gpu=self.use_gpu)
                         self._ocr_backend_name = "paddlelite"
-                        # v1.14.112-speed — گیتِ RAM (workers=2) برایِ سشنِ
-                        # مشترکِ ORT زیادهروی است: سشن‌ها یک‌بار ساخته میشوند
-                        # و Run رویِ آنها thread-safe است؛ worker اضافه فقط
-                        # چند بافرِ کوچک numpy میخواهد. گوشیِ ۸ هستهای با
-                        # ۴-۶ worker حتی با رمِ کم چند برابر سریعتر میشود.
+                        # v1.14.113-speed — واگردِ «workers 2→6»: رویِ Poco F4
+                        # (رمِ آزاد ~1.4GB) شش DBNetِ همزمان با آرنایِ خاموش
+                        # تخصیصهایِ گذرایِ چندصد مگابایتی میسازند → طوفانِ
+                        # swap: det سولو 1.4s ولی det ۶تایی 146s (لاگِ
+                        # 2026-10-28). workers=2؛ فقط با رمِ آزادِ ≥2.5GB به 3
+                        # میرود. MANGA_ANDROID_OCR_WORKERS اوررایدِ صریح.
                         if _on_android() and getattr(self.ocr, "runner_kind", "") == "ort":
                             try:
-                                _av2 = self._available_ram_gb()
-                                _nw = min(6, self._cpu_core_count() or 4)
-                                if _av2 < 0.8:
-                                    _nw = min(_nw, 4)
-                                if _av2 >= 0.35 and _nw > self.max_workers:
-                                    print(f"[⚡] OCR workers {self.max_workers}→{_nw} "
-                                          f"(سشنِ مشترکِ ORT — رمِ هر worker اضافه ~صفر)")
-                                    self.max_workers = _nw
+                                _nw_env = int(os.environ.get("MANGA_ANDROID_OCR_WORKERS", "0") or 0)
+                                if _nw_env > 0:
+                                    self.max_workers = min(8, _nw_env)
+                                else:
+                                    _av2 = self._available_ram_gb()
+                                    _nw = 2 if _av2 < 2.5 else 3
+                                    if _nw != self.max_workers:
+                                        print(f"[*] OCR workers {self.max_workers}→{_nw} "
+                                              f"(رمِ آزاد {_av2:.1f}GB — ضدِ طوفانِ swap)")
+                                        self.max_workers = _nw
                             except Exception:
                                 pass
                     except Exception as e:
@@ -5648,7 +5651,10 @@ class MangaTranslator:
                 prefer_gpu=self.use_gpu,
                 conf_thresh=self.det_confidence,
                 iou_thresh=0.45,
-                threads=max(1, int(self.max_workers or 2)),
+                # v1.14.113-speed — اندروید: 4 نخِ مستقل از workers (فازِ
+                # bubble-det همپوشانی با OCR ندارد؛ قبلاً به workers گره
+                # خورده بود و با workers=2 ناخواسته کند میشد)
+                threads=4 if _on_android() else max(1, int(self.max_workers or 2)),
                 multi_scale=not _IS_ANDROID,
             )
         except Exception as e:
