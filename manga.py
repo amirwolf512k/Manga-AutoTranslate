@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.116"
+APP_VER = "1.14.117"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -691,6 +691,59 @@ def _android_x86_emulator() -> bool:
         return bool(_on_android() or _android_like_env())
     except Exception:
         return False
+
+
+_GPU_VENDOR_CACHE = None
+
+
+def _gpu_vendor() -> str:
+    """v1.14.117 — تشخیصِ فروشندهٔ GPU رویِ اندروید: "adreno" / "mali" /
+    "powervr" / "unknown" (رویِ PC همیشه "unknown" و بدونِ هیچ اثری).
+    با getprop (ro.hardware.egl / ro.soc.model / ro.board.platform).
+    زمینه: کرنلهایِ OpenCLِ مدلهایِ nb موقعِ ساختِ predictor رویِ
+    درایورهایِ Mali JIT میشوند و رویِ بعضی درایورها سگفلتِ native
+    میدهند (کرشِ 2026-10-28، Redmi 22021211RG / هلیو G96 / Mali-G57)
+    — رویِ Adreno سالهاست ثابت است."""
+    global _GPU_VENDOR_CACHE
+    if _GPU_VENDOR_CACHE is not None:
+        return _GPU_VENDOR_CACHE
+    v = "unknown"
+    try:
+        if _on_android():
+            import re as _re
+            import subprocess as _sp
+            props = []
+            for key in ("ro.hardware.egl", "ro.hardware",
+                        "ro.board.platform", "ro.soc.manufacturer",
+                        "ro.soc.model"):
+                try:
+                    props.append(str(_sp.check_output(
+                        ["getprop", key], timeout=5,
+                        stderr=_sp.DEVNULL).decode("utf-8", "replace").strip()))
+                except Exception:
+                    props.append("")
+            _egl = props[0].lower()
+            if "adreno" in _egl:
+                v = "adreno"
+            elif "mali" in _egl:
+                v = "mali"
+            elif "powervr" in _egl:
+                v = "powervr"
+            if v == "unknown":
+                blob = " ".join(props).lower()
+                if (any(t in blob for t in ("adreno", "qcom", "qualcomm"))
+                        or _re.search(r"\b(sm|sdm|qcs)[0-9]", blob)):
+                    v = "adreno"
+                elif ("mali" in blob or "mediatek" in blob
+                        or "helio" in blob or "dimens" in blob
+                        or _re.search(r"\bmt[0-9]", blob)):
+                    v = "mali"
+                elif "powervr" in blob or "imgtec" in blob:
+                    v = "powervr"
+    except Exception:
+        pass
+    _GPU_VENDOR_CACHE = v
+    return v
 
 
 def _cpu_ep_xnnpack() -> bool:
@@ -5589,6 +5642,19 @@ class MangaTranslator:
                 # می‌توان اجبار کرد (برایِ دیباگ).
                 if _android_x86_emulator() and _aocr != "paddlelite":
                     _aocr = "mlkit"
+                # v1.14.117 — GPU-aware: رویِ GPUهایِ غیرِ Adreno (Mali /
+                # PowerVR / نامشخص) JITِ کرنلهایِ OpenCL موقعِ ساختِ
+                # predictor سگفلتِ native میدهد (کرشِ Redmi 22021211RG /
+                # هلیو G96 / Mali-G57، 2026-10-28) → مثلِ شبیهساز، مستقیم
+                # ML Kit نیتیو (همان راهِ سریعِ K3) تا هیچ کرشی رخ ندهد؛
+                # paddlelite/OpenCL فقط رویِ Adreno پیشفرض میماند.
+                # اجباریِ صریح: MANGA_ANDROID_OCR=paddlelite
+                if (_aocr not in ("paddlelite", "mlkit", "rapidocr")
+                        and _gpu_vendor() != "adreno"):
+                    _aocr = "mlkit"
+                    print(f"[*] اندروید: GPU={_gpu_vendor()} (غیرِ Adreno) "
+                          f"→ موتورِ ML Kit نیتیو بدونِ ریسکِ OpenCL "
+                          f"(اجباری: MANGA_ANDROID_OCR=paddlelite)")
                 if _aocr == "mlkit":
                     try:
                         self.ocr = MlKitBackend(lang=main_lang)
