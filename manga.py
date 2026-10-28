@@ -2077,14 +2077,18 @@ class LamaMangaONNX:
         # یک سشنِ CPUِ دوم ساخته می‌شود و پچ‌هایِ موازیِ همزمان بینِ دو
         # دستگاه می‌چرخند. رویِ ساختهٔ CPU-خالص هیچ تغییری نمی‌کند (سشنِ
         # دوم ساخته نمی‌شود → رگرسیونِ بیت‌به‌بیت محفوظ). گیتِ رم رویِ
-        # اندروید: MemAvailable < 1.5GB → نه (دو سشن جا نمی‌شود).
+        # اندروید: MemAvailable < 2.5GB → نه (دو سشن جا نمی‌شود).
         self.session_cpu = None
         self._sess_rr = 0
         self._sess_rr_lock = threading.Lock()
         try:
             _ghead = _gpu_head_of(self.session)
             if _ghead and _dual_device_enabled() \
-                    and (os.cpu_count() or 2) >= 4:
+                    and (os.cpu_count() or 2) >= 4 \
+                    and not _android_x86_emulator():
+                # v1.14.108 — رویِ شبیه‌سازِ x86_64 سشنِ CPU-خالص ممنوع است
+                # (CPU EPِ ORT-android آنجا می‌میرد — درسِ v1.14.67؛ هنگِ
+                # گیتِ شبیه‌ساز)؛ رویِ گوشیِ arm64 و PC مشکلی ندارد.
                 _free_mb = 0
                 try:
                     with open("/proc/meminfo", "r") as _mi:
@@ -2095,7 +2099,7 @@ class LamaMangaONNX:
                 except Exception:
                     _free_mb = 0
                 if (not (_on_android() or _android_like_env())) or \
-                        (not _free_mb or _free_mb >= 1500):
+                        (not _free_mb or _free_mb >= 2500):
                     self.session_cpu = _lama_session_cached(
                         self.model_path,
                         _ort_session_options(max(1, int(use_threads))),
@@ -3462,7 +3466,8 @@ class PaddleOCRLiteBackend:
         self.rec_cpu_runner = None
         try:
             if self.runner_kind == "ort" and _dual_device_enabled() \
-                    and (os.cpu_count() or 2) >= 4:
+                    and (os.cpu_count() or 2) >= 4 \
+                    and not _android_x86_emulator():
                 _head = self.rec_runner.gpu_head
                 if _head:
                     self.rec_cpu_runner = _PLOCR_OrtRunner(
