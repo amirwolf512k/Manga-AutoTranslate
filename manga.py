@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.111"
+APP_VER = "1.14.112"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3436,6 +3436,8 @@ class PaddleOCRLiteBackend:
 
     def __init__(self, lang: str = "en", prefer_gpu: Optional[bool] = None,
                  use_lite: Optional[bool] = None):
+        # v1.14.112-speed — لاگهای [TIME] det/rec (با آستانهٔ ۰.۵s بیسروصدا)
+        self.debug = True
         self.lang = _PADDLE_LANG_MAP.get(str(lang).lower(), "en")
         self._prefer_gpu = prefer_gpu
         # رانر: رویِ اندروید .nb/Lite اول (OpenCL)، بعدِ خطا → ONNX.
@@ -3484,7 +3486,10 @@ class PaddleOCRLiteBackend:
                 _ensure_rapidocr_models(_mdir, files=_files)
             except Exception as e:
                 raise RuntimeError(f"دانلود مدل‌های OCR ناموفق: {e}")
-            _thr = max(2, min(4, (os.cpu_count() or 4) // 2))
+            # v1.14.112-speed — رویِ اندروید intra=2: موازیسازی از تعدادِ
+            # worker (سشنِ مشترک) میآید نه تردِ داخلِ هر Run؛ 6 worker × 2ترد
+            # از 2 worker × 4ترد خیلی سریعتر است و Over-subscription هم ندارد.
+            _thr = 2 if _on_android() else max(2, min(4, (os.cpu_count() or 4) // 2))
             self.det_runner = _PLOCR_OrtRunner(
                 os.path.join(_mdir, self.DET_ONNX),
                 prefer_gpu=prefer_gpu, threads=_thr)
@@ -3652,8 +3657,17 @@ class PaddleOCRLiteBackend:
 
     # ── خط لولهٔ کامل رویِ یک تصویر ──────────────────────────────────────
     def _ocr_single(self, image_bgr):
+        _t_d112 = time.time()  # v1.14.112-speed — زمانسنجِ det/rec برایِ لاگِ گوشی
         prob = self._det(image_bgr)
         boxes = self._det_boxes(prob, image_bgr.shape[:2])
+        _t_det112 = time.time() - _t_d112
+        if getattr(self, "debug", False) and _t_det112 >= 0.5:
+            try:
+                _ih112, _iw112 = image_bgr.shape[:2]
+                print(f"      [TIME] det={_t_det112:.1f}s "
+                      f"crop={_iw112}x{_ih112} boxes={len(boxes)}")
+            except Exception:
+                pass
         if not boxes:
             return []
         pairs = []  # (box, crop) — یک‌بار برش، بدونِ دوباره‌کاری
@@ -3663,7 +3677,14 @@ class PaddleOCRLiteBackend:
                 pairs.append((b, c))
         if not pairs:
             return []
+        _t_r112 = time.time()
         results = self._rec_all([c for _b, c in pairs])
+        _t_rec112 = time.time() - _t_r112
+        if getattr(self, "debug", False) and _t_rec112 >= 0.5:
+            try:
+                print(f"      [TIME] rec={_t_rec112:.1f}s lines={len(pairs)}")
+            except Exception:
+                pass
         lines = []
         for _bi, (b, _c) in enumerate(pairs):
             if _bi >= len(results) or results[_bi] is None:
@@ -5561,6 +5582,23 @@ class MangaTranslator:
                         self.ocr = PaddleOCRLiteBackend(
                             lang=main_lang, prefer_gpu=self.use_gpu)
                         self._ocr_backend_name = "paddlelite"
+                        # v1.14.112-speed — گیتِ RAM (workers=2) برایِ سشنِ
+                        # مشترکِ ORT زیادهروی است: سشن‌ها یک‌بار ساخته میشوند
+                        # و Run رویِ آنها thread-safe است؛ worker اضافه فقط
+                        # چند بافرِ کوچک numpy میخواهد. گوشیِ ۸ هستهای با
+                        # ۴-۶ worker حتی با رمِ کم چند برابر سریعتر میشود.
+                        if _on_android() and getattr(self.ocr, "runner_kind", "") == "ort":
+                            try:
+                                _av2 = self._available_ram_gb()
+                                _nw = min(6, self._cpu_core_count() or 4)
+                                if _av2 < 0.8:
+                                    _nw = min(_nw, 4)
+                                if _av2 >= 0.35 and _nw > self.max_workers:
+                                    print(f"[⚡] OCR workers {self.max_workers}→{_nw} "
+                                          f"(سشنِ مشترکِ ORT — رمِ هر worker اضافه ~صفر)")
+                                    self.max_workers = _nw
+                            except Exception:
+                                pass
                     except Exception as e:
                         print(f"[!] Paddle-Lite لود نشد ({e}) → ML Kit نیتیو")
                         try:
@@ -21178,7 +21216,14 @@ class MangaTranslator:
                     block_rects=_blk90)
 
             n_workers = max(1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
-            if n_workers > 1 and isinstance(self.ocr, RapidOCRBackend):
+            # v1.14.112-speed — PaddleOCRLite با runner=ort هم مجازِ موازی:
+            # سشن‌های det/rec ORT مشترک و thread-safe هستند (RapidOCRBackend
+            # همان شرط را داشت). runner=lite (پدل-لایتِ native) هنوز سریال
+            # میماند چون predictorِ جاوا بینِ ترد‌ها امن نیست.
+            _ocr_ts90 = isinstance(self.ocr, RapidOCRBackend) or (
+                type(self.ocr).__name__ == "PaddleOCRLiteBackend"
+                and getattr(self.ocr, "runner_kind", "") == "ort")
+            if n_workers > 1 and _ocr_ts90:
                 with ThreadPoolExecutor(max_workers=n_workers) as ex:
                     ocr_results = list(ex.map(_ocr_one90, range(len(cand))))
             else:
