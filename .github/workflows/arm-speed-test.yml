@@ -56,7 +56,9 @@ jobs:
             echo "" | tee -a /tmp/mt/speed.log
             echo "########## $label (workers=$workers ort_threads=$othreads) ##########" | tee -a /tmp/mt/speed.log
             local t0=$(date +%s.%N)
-            MANGA_OCR_BACKEND=paddlelite \
+            # v1.14.120 — paddlelite حذف شد؛ این تست حالا موتورِ ONNXِ
+            # هم-مقیاسِ موبایل (RapidOCR — همان زنجیرهٔ فال‌بکِ اندروید) را
+            # میسنجد؛ مدلِ lama و پاکسازی بدونِ تغییر.
             MANGA_OCR_WORKERS="$workers" \
             MANGA_ORT_THREADS="$othreads" \
             MANGA_LOW_MEM=1 \
@@ -69,7 +71,7 @@ jobs:
             local t1=$(date +%s.%N)
             local wall=$(python3 -c "print(f'{$t1-$t0:.1f}')")
             echo "### $label wall=${wall}s exit=$rc" | tee -a /tmp/mt/speed.log
-            grep -E "\[TIME\]|\[+\] OCR گوشی|workers=" "/tmp/mt/run_$label.log" | tail -40 | tee -a /tmp/mt/speed.log
+            grep -E "\[TIME\]|\[\*\] OCR|workers=" "/tmp/mt/run_$label.log" | tail -40 | tee -a /tmp/mt/speed.log
             grep -cE "ناحیه rect=" "/tmp/mt/run_$label.log" | xargs -I{} echo "### $label regions_extracted={}" | tee -a /tmp/mt/speed.log
           }
           run_one W2 2 2

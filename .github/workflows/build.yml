@@ -34,9 +34,6 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Fetch Paddle-Lite libs (OpenCL)
-        run: python3 android/scripts/fetch_paddle.py
-
       - name: Python 3.10 (Chaquopy buildPython)
         uses: actions/setup-python@v5
         with:

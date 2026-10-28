@@ -351,7 +351,6 @@ class MainActivity : AppCompatActivity() {
 
         Thread {
             try {
-                val plNote = paddleCrashGuard()
                 // v1.14.111 — پشتهٔ faulthandlerِ سیگ‌فالتِ پایتون (از launcher)
                 try {
                     val fl = java.io.File(filesDir, "fault_log.txt")
@@ -400,7 +399,6 @@ class MainActivity : AppCompatActivity() {
                     pre.append("مسیرِ فایل: Android/data/").append(packageName)
                         .append("/files/crash_log.txt\n\n")
                 }
-                if (plNote != null) pre.append("⚡ ").append(plNote).append("\n\n")
                 ui.post {
                     logBox.text = pre.toString() + if (healthReport.isNotBlank())
                         healthReport + "\n\n—— وضعیت فایل‌ها —\n" + st
@@ -493,97 +491,7 @@ class MainActivity : AppCompatActivity() {
         throw last ?: RuntimeException("همهٔ منابع ناموفق")
     }
 
-    // v1.14.110/111 — ردپای کرشِ nativeِ Paddle-Lite: سیگ‌فالت از هندلرِ
-    // UncaughtException رد نمیشود → فایلِ ردپا (paddle_guard.txt) خوانده
-    // میشود: خطِ اول = مرحله + زمینه؛ بقیه = پشتهٔ پایتونِ faulthandler.
-    // بعلاوه لاگِ native از بافرِ crashِ logcat گرفته میشود و همه در
-    // crash_log.txt ضبط و در استارتِ بعدی نمایش داده میشود.
-    private fun paddleCrashGuard(): String? {
-        return try {
-            val g = java.io.File(filesDir, "paddle_guard.txt")
-            if (!g.isFile) null
-            else {
-                val raw = try { g.readText() } catch (_: Exception) { "" }
-                g.delete()
-                val first = raw.lineSequence().firstOrNull()?.trim() ?: ""
-                val dump = raw.lineSequence().drop(1).joinToString("\n").trim()
-                val stage = first.split("|").firstOrNull() ?: ""
-                val ctx = first.split("|").getOrNull(2) ?: ""
-                val stF = java.io.File(filesDir, "paddle_strikes.txt")
-                val n = ((try { stF.readText().trim().toIntOrNull() }
-                        catch (_: Exception) { null }) ?: 0) + 1
-                try { stF.writeText(n.toString()) } catch (_: Exception) { }
-                try {
-                    java.io.File(filesDir, "paddle_banned.txt").writeText("1")
-                } catch (_: Exception) { }
-                val stageFa = if (stage.startsWith("init"))
-                    "ساختِ predictor" else "inferenceِ استخراجِ متن"
-                var note = ("اجرای قبلی حینِ Paddle-Lite بسته شد " +
-                        "(کرشِ native — مرحله: " + stageFa + "). " +
-                        "این اجرا با موتورِ جایگزین (ML Kit/ONNX) میرود و " +
-                        "Paddle-Lite برایِ پیشفرضِ خودکار غیرفعال شد " +
-                        "(فعالسازیِ دوباره: تنظیمات ← موتورِ استخراج).")
-                if (ctx.isNotEmpty()) note += "  [زمینه: " + ctx + "]"
-                // لاگِ واقعی: پشتهٔ پایتون (faulthandler) + بافرِ crashِ logcat
-                val nat = captureNativeCrash()
-                val rep = StringBuilder()
-                rep.append("—— کرشِ Paddle-Lite (کرشِ شمارهٔ ").append(n).append(") ——\n")
-                rep.append("زمان: ").append(nowStr()).append("\n")
-                rep.append("مرحله: ").append(stageFa).append("\n")
-                if (ctx.isNotEmpty()) rep.append("زمینه: ").append(ctx).append("\n")
-                rep.append("دستگاه: ").append(devLine()).append("\n")
-                if (dump.isNotEmpty()) {
-                    rep.append("پشتهٔ پایتون (faulthandler):\n")
-                    rep.append(dump.take(3500)).append("\n")
-                } else {
-                    rep.append("پشتهٔ پایتون: ثبت نشد (فقط ردپای مرحله)\n")
-                }
-                rep.append("\nلاگِ native (logcat):\n")
-                if (nat.isNotBlank()) rep.append(nat.take(5000)).append("\n")
-                else rep.append("(از logcat چیزی گرفته نشد — بعد از ریبوتِ گوشی خالی میشود)\n")
-                appendCrashLog(rep.toString())
-                note
-            }
-        } catch (_: Exception) { null }
-    }
 
-    // v1.14.111 — گرفتنِ لاگِ واقعیِ کرش از logd: بافرِ crash شاملِ
-    // خلاصهٔ tombstone (Fatal signal + backtrace) برایِ UIDِ خودِ اپ است
-    private fun captureNativeCrash(): String {
-        return try {
-            val pk = packageName
-            val sb = StringBuilder()
-            for (buf in arrayOf("crash", "main")) {
-                try {
-                    val p = Runtime.getRuntime().exec(
-                        arrayOf("logcat", "-d", "-b", buf, "-t", "900", "-v", "time"))
-                    val txt = p.inputStream.bufferedReader().readText()
-                    try { p.waitFor() } catch (_: Exception) { }
-                    val lines = txt.lines().filter { ln ->
-                        val l = ln.trim()
-                        if (l.isEmpty()) false
-                        else if (buf == "crash")
-                            l.contains(pk) || l.contains("Fatal signal") ||
-                            l.contains("SIGSEGV") || l.contains("SIGBUS") ||
-                            l.contains("SIGABRT") || l.contains("SIGILL") ||
-                            l.contains("SIGFPE") || l.contains(">>> ") ||
-                            l.contains("backtrace") || l.contains("crash_dump") ||
-                            l.contains("Abort message") ||
-                            l.contains("Build fingerprint")
-                        else
-                            l.contains("Fatal signal") || l.contains("DEBUG") ||
-                            l.contains("libc") || l.contains(pk)
-                    }
-                    if (lines.isNotEmpty()) {
-                        sb.append("[بافرِ ").append(buf).append("]\n")
-                        sb.append(lines.takeLast(100).joinToString("\n")).append("\n")
-                        if (buf == "crash") break
-                    }
-                } catch (_: Exception) { }
-            }
-            sb.toString()
-        } catch (_: Exception) { "" }
-    }
 
     private fun nowStr(): String =
         java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
@@ -1699,7 +1607,7 @@ class MainActivity : AppCompatActivity() {
         map.put("model", firstNonEmpty(o, "manga_model", "model") ?: "")
         map.put("api_base", firstNonEmpty(o, "manga_api_base", "api_base") ?: "")
         map.put("ocr_lang", firstNonEmpty(o, "manga_ocr_lang", "ocr_lang") ?: "en")
-        // v1.14.106 — موتورِ استخراج: paddlelite (پیش‌فرضِ موتور) | mlkit | rapidocr
+        // v1.14.120 — موتورِ استخراج: mlkit (پیشفرض = موتورِ K3) | rapidocr
         map.put("ocr_engine", firstNonEmpty(o, "ocr_engine")
             ?: prefs.getString("ocr_engine", null) ?: "")
         map.put("fmt", firstNonEmpty(o, "out_fmt", "fmt") ?: "PDF")
