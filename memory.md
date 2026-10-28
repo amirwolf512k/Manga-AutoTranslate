@@ -745,3 +745,22 @@
 - چهار راند دیباگِ CI: (۱) gradle kts `excludes` نبود → rename-based exclusion + وابستگیِ شرطی؛ (۲) هنگِ شبیه‌ساز = سشنِ دومِ CPU-خالص رویِ x86_64 (CPU EPِ ORT-android = SIGFPE — درسِ v1.14.67) → گاردِ `_android_x86_emulator()` در dual-device پاکسازی/rec؛ (۳) OCR هم رویِ شبیه‌ساز با شکلِ داینامیک می‌میرد (XNNPACK=ORT_FAIL / CPU=SIGFPE) → رویِ همهٔ اندروید سشن‌هایِ OCR فقط CPU و رویِ شبیه‌ساز زنجیرهٔ ML Kit (مثلِ قبل) — paddlelite فقط گوشیِ واقعی/host-gate؛ (۴) امولاتورِ 37.x هیچ arm را رویِ هیچ میزبانی اجرا نمی‌کند → ورک‌فلوی arm64 = بیلدِ APK + وریفایِ زنجیره (نه امولاتور).
 - وضعیتِ نهاییِ CI رویِ bc455ba: Build APK ✅ | Engine Test ✅ | Emulator Test کامل (لکهٔ قرمز + 01.jpg + ۶ نوار) ✅ | ocr-multilang-gate (۴ زبان + 01.jpg) ✅ | Paddle-Lite arm64 APK (dispatch) ✅.
 - مدل‌های .nb (۵ تا) در ریلیزِ models آپلود شدند؛ dictها هم آنجا هستند. تستِ nativeِ C++ (`scripts/plite_runner.cpp`) در سندباکس gVisor سیگآبورت می‌دهد (محدودیتِ میزبان) — رویِ گوشی/مکِ عادی باید سالم باشد.
+
+
+## v1.14.109 (2026-10-28) — فیکسِ «۳۲ bit نداره؟ واسه PaddleOCRLite» + ضدکرشِ استارت
+
+**گزارشِ کاربر:** «اپ کرش میکنه وقتی استارت میزنم بعد ۳۲ bit نداره؟ واسه PaddleOCRLite»
+
+**ریشه‌ها:**
+1. `fetch_paddle.py` فقط بیلدِ openclِ **armv8** را میگرفت → `libpaddle_lite_jni.so` فقط در `jniLibs/arm64-v8a/` → APKهایِ armv7a/universal بدونِ paddle (رویِ گوشیِ ۳۲-بیتی: arm64 APK اصلاً نصب نمیشود؛ بقیه فال‌بک).
+2. ریلیزِ Paddle-Lite v2.14-rc بیلدِ openclِ armv7 هم دارد: `inference_lite_lib.armv7.clang.with_exception.with_extra.with_cv.opencl.tar.gz` (۳.۷MB).
+3. آپدیتکنندهٔ داخلِ اپ کلیدهایِ `apkArm64`/`apkUniversal` را از VERSION میخواند ولی VERSION فقط versionCode/versionName داشت → ردیفِ آپدیت اصلاً نشان داده نمیشد و کاربر دستی APK میگرفت (احتمالاً arm64 رویِ گوشیِ ۳۲-بیتی = «App not installed»).
+
+**فیکس‌ها (981c3c2→amend=59aca9f):**
+- `fetch_paddle.py`: `PLITE_TARGETS` هر دو ABI — arm64-v8a از tarball armv8 + armeabi-v7a از tarball armv7؛ jar از بیلدِ اول (مستقل از ABI)؛ تأییدِ ELF: aarch64/64bit و ARM EABI5/32bit (۷.۴MB و ۴.۶MB).
+- `PaddleLiteBridge.ensureLib()`: `System.loadLibrary("paddle_lite_jni")` صریح با catch(Throwable) و کشِ وضعیت (@Volatile) → اگر so برایِ ABI نباشد `ready()=false` بدونِ هیچ throw؛ `backend()` خالی برمیگرداند؛ predict هم گارد دارد. مدل‌هایِ .nb با `valid_targets="arm,opencl"` هر دو معماری را پوشش میدهند.
+- `MainActivity`: `Python.start` در onCreate گارد شد (pythonStartError → رشتهٔ آماده‌سازی با پیامِ روشن به UI، نه کرشِ پروسه)؛ آپدیتکننده کلیدِ `apkArmv7a` را هم میخواند — گوشیِ بدونِ arm64 حالا APKِ سبکِ armv7a (۸۲MB) میگیرد نه universal (۱۶۵MB).
+- `VERSION`: 110/1.14.109 + سه لینکِ apkArm64/apkArmv7a/apkUniversal → آپدیتکنندهٔ داخلِ اپ دوباره کار میکند.
+- ⚠️ نکتهٔ ابزار: در Write/Edit اگر متنِ `[m` (مثل `predictors[modelPath]`) رد شود ممکن است توسطِ لایهٔ نمایش بلعیده شود — با chr(91) ساخت/چک شد؛ فایل نهایی سالم (شمارش عددی تأیید شد).
+
+**تست:** fetch_paddle محلی اجرا شد (هر دو tarball + ELF check). CI رویِ 59aca9f: Build APK #188 + Emulator #110. محدودیتِ پایدار: امولاتورِ 37.x هیچ ARM (نه arm64 نه armv7a) را اجرا نمیکند → تستِ ۳۲-بیتِ واقعی فقط رویِ گوشی؛ اگر کرش کرد اپ «گزارش کرش قبلی» را در استارتِ بعدی نشان میدهد.
