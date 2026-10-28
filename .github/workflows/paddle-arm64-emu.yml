@@ -52,6 +52,20 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install pymupdf pillow numpy requests opencv-python-headless
 
+      - name: Bootstrap Android SDK (رانر ARM خالی است)
+        run: |
+          if [ ! -d "$HOME/android-sdk/cmdline-tools/latest" ]; then
+            mkdir -p "$HOME/android-sdk/cmdline-tools"
+            curl -fsSL --retry 3 https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -o /tmp/ct.zip
+            python3 -m zipfile -e /tmp/ct.zip "$HOME/android-sdk/cmdline-tools/"
+            mv "$HOME/android-sdk/cmdline-tools/cmdline-tools" "$HOME/android-sdk/cmdline-tools/latest"
+            chmod +x "$HOME/android-sdk/cmdline-tools/latest/bin/"*
+          fi
+          echo "ANDROID_HOME=$HOME/android-sdk" >> "$GITHUB_ENV"
+          yes | "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$HOME/android-sdk" --licenses > /dev/null 2>&1 || true
+          "$HOME/android-sdk/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$HOME/android-sdk" "platform-tools" > /dev/null 2>&1
+          echo "SDK bootstrap done"
+
       - name: Fetch vendored Python packages + Paddle-Lite libs (OpenCL)
         run: |
           python3 android/scripts/fetch_vendor.py --check || \
