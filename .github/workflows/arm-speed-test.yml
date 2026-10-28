@@ -77,6 +77,32 @@ jobs:
           run_one W6 6 2
           cat /tmp/mt/speed.log
 
+      - name: LaMa clean-only sweep (DFT vs noFFT — ARM real)
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          set +e
+          : > /tmp/mt/lama.log
+          lama_one() {
+            local label="$1"; local nofft="$2"
+            local outdir="/tmp/mt/out/$label"
+            mkdir -p "$outdir"
+            echo "########## $label (MANGA_LAMA_NOFFT=$nofft) ##########" | tee -a /tmp/mt/lama.log
+            local t0=$(date +%s.%N)
+            MANGA_LAMA_NOFFT="$nofft" MANGA_ORT_THREADS=4 MANGA_LOW_MEM=1 \
+            MANGA_LAMA_PATCH_SIDE=384 timeout 900 \
+              python3 manga.py -i /tmp/mt/imgs/01.jpg -o "$outdir" \
+              --font fonts/Vazir-Code.ttf --cpu --lama \
+              --clean-method lama-manga --debug --no-resume \
+              > "/tmp/mt/lama_$label.log" 2>&1
+            local rc=$?
+            local t1=$(date +%s.%N)
+            echo "### $label wall=$(python3 -c "print(f'{$t1-$t0:.1f}')")s exit=$rc" | tee -a /tmp/mt/lama.log
+            grep -E "\[TIME\]" "/tmp/mt/lama_$label.log" | tail -8 | tee -a /tmp/mt/lama.log
+          }
+          lama_one DFT 0
+          lama_one NOFFT 1
+          cat /tmp/mt/lama.log
+
       - name: Summary
         if: always()
         run: |
@@ -84,6 +110,10 @@ jobs:
             echo "## ARM (ubuntu-24.04-arm, $(nproc) cores) — 01.jpg — phone-like config"
             echo '```'
             grep -E "##########|wall=|\[TIME\] total=|clean\+render|regions_extracted" /tmp/mt/speed.log || true
+            echo '```'
+            echo "## LaMa clean-only (DFT vs noFFT — ARM)"
+            echo '```'
+            grep -E "##########|wall=|\[TIME\]" /tmp/mt/lama.log || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -94,7 +124,9 @@ jobs:
           name: arm-speed-logs
           path: |
             /tmp/mt/speed.log
+            /tmp/mt/lama.log
             /tmp/mt/run_*.log
+            /tmp/mt/lama_*.log
             /tmp/mt/out/**
           if-no-files-found: warn
           retention-days: 10
