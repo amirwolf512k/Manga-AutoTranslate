@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.120"
+APP_VER = "1.14.121"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3491,7 +3491,13 @@ class MlKitBackend:
         lines = []
         for item in lines_j:
             try:
-                parts = str(item).split("|", 3)
+                # v1.14.121 — فرمتِ ۵فیلدیِ جدید: ang|conf|box|text|blk
+                # (blk = شمارهٔ TextBlockِ ML Kit — همان layout-analysisِ K3).
+                # ابتدا با maxsplit=4؛ اگر الگویِ جدید نیود، با maxsplit=3
+                # (فرمتِ قدیمیِ APKهایِ قبلی) دوبارهِ تقسیم میشود تا متنی که
+                # خودش «|» دارد نشکند.
+                _s_item = str(item)
+                parts = _s_item.split("|", 4)
                 if len(parts) < 3:
                     continue
                 def _is_f(s):
@@ -3506,7 +3512,25 @@ class MlKitBackend:
                         return len(vs) >= 6 and all(np.isfinite(vs))
                     except Exception:
                         return False
-                if (len(parts) == 4 and _is_f(parts[0]) and _is_f(parts[1])
+                def _is_int(s):
+                    try:
+                        int(str(s).strip())
+                        return True
+                    except (TypeError, ValueError):
+                        return False
+                blk = -1
+                if not (len(parts) == 5 and _is_f(parts[0]) and _is_f(parts[1])
+                        and _is_box(parts[2]) and _is_int(parts[4])):
+                    parts = _s_item.split("|", 3)
+                if (len(parts) == 5 and _is_f(parts[0]) and _is_f(parts[1])
+                        and _is_box(parts[2])):
+                    ang = float(parts[0])
+                    score_s, box_s, text = parts[1], parts[2], parts[3]
+                    try:
+                        blk = int(float(parts[4]))
+                    except (TypeError, ValueError):
+                        blk = -1
+                elif (len(parts) == 4 and _is_f(parts[0]) and _is_f(parts[1])
                         and _is_box(parts[2])):
                     ang = float(parts[0])
                     score_s, box_s, text = parts[1], parts[2], parts[3]
@@ -3520,7 +3544,7 @@ class MlKitBackend:
                 box = np.asarray(nums[:8], dtype=np.float32).reshape(4, 2)
                 text = self._clean(text, latin=(self.lang == "latin"))
                 if text:
-                    lines.append([box, (text, score, float(ang))])
+                    lines.append([box, (text, score, float(ang), int(blk))])
             except Exception:
                 continue
         return [lines] if lines else None
@@ -19380,7 +19404,13 @@ class MangaTranslator:
                     lines.append(text)
                     confs.append(conf)
                     box0 = line[0] if len(line) >= 1 else None
-
+                    # v1.14.121 — blk = شمارهٔ بلوکِ ML Kit (فقط بکاندِ mlkit)
+                    _blk_id = -1
+                    if isinstance(pair, (list, tuple)) and len(pair) > 3:
+                        try:
+                            _blk_id = int(pair[3])
+                        except (TypeError, ValueError):
+                            _blk_id = -1
 
                     entry_poly = None
                     if box0 is not None and isinstance(box0, (list, tuple, np.ndarray)) and len(box0) >= 3:
@@ -19394,7 +19424,8 @@ class MangaTranslator:
                             polys.append(poly.astype(np.int32))
                             entry_poly = poly.astype(np.float32)
                     entries.append((text, conf, entry_poly,
-                                    float(eng_ang) + float(ang_corr)))
+                                    float(eng_ang) + float(ang_corr),
+                                    int(_blk_id)))
                 except Exception:
                     continue
             joined = " ".join(lines).strip()
@@ -19472,7 +19503,7 @@ class MangaTranslator:
             return inter / min(aa, ab)
 
         merged: List[List] = []
-        best = ("", [], -1.0, [], [])
+        best = ("", [], -1.0, [], [], [])
         inset_used = inset if core is not crop0 else 0
         early_stop = False
         for name, crop_v, sc in variants:
@@ -19497,14 +19528,19 @@ class MangaTranslator:
                             hit = m_item
                             break
                 if hit is None:
-                    merged.append([text, e_conf, e_poly, e_ang])
+                    merged.append([text, e_conf, e_poly, e_ang,
+                                   (e[4] if len(e) > 4 else -1)])
                 elif e_conf > hit[1]:
                     hit[0], hit[1], hit[3] = text, e_conf, e_ang
+                    if len(hit) > 4:
+                        hit[4] = (e[4] if len(e) > 4 else -1)
 
             scv = _score(txt, conf)
             if scv > best[2]:
                 best = (txt, polys, scv, _poly_angs,
-                        [e[0] for e in entries if e[2] is not None])
+                        [e[0] for e in entries if e[2] is not None],
+                        [(e[4] if len(e) > 4 else -1)
+                         for e in entries if e[2] is not None])
 
             _latin_n = len(re.sub(r"[^A-Za-z]", "", txt or ""))
             if ((not _tilted0)
@@ -19614,7 +19650,8 @@ class MangaTranslator:
                                 break
                         if _hitE is None:
                             merged.append([_tE, float(_e86[1]), _pE,
-                                           float(_e86[3]) if len(_e86) > 3 else 0.0])
+                                           float(_e86[3]) if len(_e86) > 3 else 0.0,
+                                           (int(_e86[4]) if len(_e86) > 4 else -1)])
                             if _dbg90:
                                 print(f"    [r90]   + «{_tE}» "
                                       f"x[{_bE[0]:.0f}-{_bE[2]:.0f}] "
@@ -19632,6 +19669,8 @@ class MangaTranslator:
                             _hitE[2] = _pE
                             if len(_e86) > 3:
                                 _hitE[3] = float(_e86[3])
+                            if len(_hitE) > 4 and len(_e86) > 4:
+                                _hitE[4] = int(_e86[4])
                         elif _dbg90 and _hitE is not None:
                             print(f"    [r90]   . نگهِ «{_hitE[0]}» "
                                   f"(جدید: «{_tE}»)", flush=True)
@@ -19705,9 +19744,11 @@ class MangaTranslator:
             u_angs = [float(m_item[3]) if len(m_item) > 3 else 0.0
                       for m_item in merged if m_item[2] is not None]
             u_texts = [str(m_item[0] or "") for m_item in merged if m_item[2] is not None]
+            u_blks = [int(m_item[4]) if len(m_item) > 4 else -1
+                      for m_item in merged if m_item[2] is not None]
             scv = _score(u_txt, u_conf)
             if scv >= best[2]:
-                best = (u_txt, u_polys, scv, u_angs, u_texts)
+                best = (u_txt, u_polys, scv, u_angs, u_texts, u_blks)
 
 
         best_txt = best[0] or ""
@@ -19762,12 +19803,16 @@ class MangaTranslator:
                                 _desk_angs.append(0.0)
                         _desk_texts = [str(e[0] or "") for e in _entries
                                        if e[2] is not None]
-                        best = (txt, back_polys, scv, _desk_angs, _desk_texts)
+                        _desk_blks = [(int(e[4]) if len(e) > 4 else -1)
+                                      for e in _entries if e[2] is not None]
+                        best = (txt, back_polys, scv, _desk_angs, _desk_texts,
+                                _desk_blks)
             except Exception:
                 pass
 
         return (best[0], best[1], (best[3] if len(best) > 3 else []),
-                (best[4] if len(best) > 4 else []))
+                (best[4] if len(best) > 4 else []),
+                (best[5] if len(best) > 5 else []))
 
 
     @staticmethod
@@ -20459,9 +20504,171 @@ class MangaTranslator:
                     rows[-1].append(ln)
             if len(rows) >= 2 and all(len(c) >= 2 for c in rows):
                 return [[ln["i"] for ln in c] for c in rows]
+
+            # ── ۳) خوشه‌بندیِ همبندِ خط‌ها (v1.14.121 — موردِ قطری) ──
+            # دو حبابِ «قطری» (یکی بالا-راست، یکی پایین-چپ) نه ستونِ تمیزی
+            # دارند (y همپوشان) نه ردیفِ تمیز (x همپوشان) — نمونهٔ 01.jpg:
+            # «THEN I'LL PULL THE FLOAT FOR YOU!» + حبابِ کجِ «You're the
+            # real attraction here.» — دقیقاً چیزی که layout-analysisِ K3
+            # با اجزایِ همبند حل میکند. یالِ همسایگی:
+            #   ستونِ مشترک: همپوشانیِ x ≥ ۴۵٪ و شکافِ y ≤ ۱.۸×بلندیِ میانه
+            #   (فاصلهٔ پاراگرافِ حبابِ سالم را نمی‌شکند)
+            #   ردیفِ مشترک: همپوشانیِ y ≥ ۴۵٪ و شکافِ x ≤ ۰.۴۵×بلندی
+            # حباب‌هایی که هیچ تماسی ندارند → اجزایِ جدا.
+            parent = list(range(n))
+
+            def _find(_a):
+                while parent[_a] != _a:
+                    parent[_a] = parent[parent[_a]]
+                    _a = parent[_a]
+                return _a
+
+            _ygap_c = max(1.8 * mh, 40.0)
+            _xgap_r = max(0.45 * mh, 14.0)
+            _ls = sorted(lines, key=lambda ln: ln["i"])
+            for _a in range(n):
+                for _b in range(_a + 1, n):
+                    la, lb = _ls[_a], _ls[_b]
+                    ox = min(la["x1"], lb["x1"]) - max(la["x0"], lb["x0"])
+                    oy = min(la["y1"], lb["y1"]) - max(la["y0"], lb["y0"])
+                    wa = max(1.0, la["x1"] - la["x0"])
+                    wb = max(1.0, lb["x1"] - lb["x0"])
+                    ha = max(1.0, la["y1"] - la["y0"])
+                    hb = max(1.0, lb["y1"] - lb["y0"])
+                    ygap = (max(la["y0"], lb["y0"])
+                            - min(la["y1"], lb["y1"]))
+                    xgap = (max(la["x0"], lb["x0"])
+                            - min(la["x1"], lb["x1"]))
+                    if ox >= 0.45 * min(wa, wb) and ygap <= _ygap_c:
+                        _ra, _rb = _find(la["i"]), _find(lb["i"])
+                        if _ra != _rb:
+                            parent[_rb] = _ra
+                    elif oy >= 0.45 * min(ha, hb) and xgap <= _xgap_r:
+                        _ra, _rb = _find(la["i"]), _find(lb["i"])
+                        if _ra != _rb:
+                            parent[_rb] = _ra
+            comps: dict = {}
+            for ln in lines:
+                comps.setdefault(_find(ln["i"]), []).append(ln["i"])
+            if len(comps) >= 2:
+                _gl = [sorted(v) for v in comps.values()]
+                _band = max(1.0, 2.0 * mh)
+                if rtl:
+                    _gl.sort(key=lambda g: (
+                        min(lines[i]["y0"] for i in g) // _band,
+                        -float(np.mean([lines[i]["cx"] for i in g]))))
+                else:
+                    _gl.sort(key=lambda g: (
+                        min(lines[i]["y0"] for i in g) // _band,
+                        float(np.mean([lines[i]["cx"] for i in g]))))
+                return _gl
             return None
         except Exception:
             return None
+
+    def _split_mlkit_block_cands(self, cand, ocr_results):
+        """v1.14.121 — تفکیکِ نتایجِ OCRِ هر باکس بر اساسِ شمارهٔ TextBlockِ
+        ML Kit (layout-analysisِ نیتیو — دقیقاً موتورِ K3).
+
+        ورودی: cand (باکس‌هایِ دیتکتور) + ocr_results (خروجیِ _ocr_crop:
+        txt, polys, angs, texts, blks). اگر در یک کراپ ≥۲ بلوکِ متمایزِ ML
+        Kit باشد، هر بلوک به یک cand مستقل (rect = کادرِ پالی‌هایِ همان
+        بلوک) تبدیل میشود تا بقیهٔ خطِ لوله (دسته‌بندی/زاویه/سیستمی‌شناسی)
+        برای هر بلوک جداگانه اجرا شود. اگر هر بلوکی نامعتبر بود یا خطِ
+        بدونِ بلوک (blk=-1 — خطِ نجات‌یافتهٔ r90) در کار بود، همان ناحیهٔ
+        سرِهم حفظ میشود (فال‌بکِ امن؛ بلوک‌بندیِ هندسیِ
+        _split_multiblock_regions هم پشتِ آن هست)."""
+        if len(cand) != len(ocr_results):
+            return cand, ocr_results
+        new_cand: list = []
+        new_res: list = []
+        n_split = 0
+        for cb, cres in zip(cand, ocr_results):
+            try:
+                if not (isinstance(cres, tuple) and len(cres) >= 5
+                        and isinstance(cb, tuple) and len(cb) >= 8):
+                    new_cand.append(cb)
+                    new_res.append(cres)
+                    continue
+                _blks = list(cres[4] or [])
+                _polys = list(cres[1] or [])
+                if (not _blks or len(_blks) != len(_polys)
+                        or any(int(v) < 0 for v in _blks)):
+                    new_cand.append(cb)
+                    new_res.append(cres)
+                    continue
+                _uids = sorted({int(v) for v in _blks})
+                if len(_uids) < 2:
+                    new_cand.append(cb)
+                    new_res.append(cres)
+                    continue
+                _texts = list(cres[3] or [])
+                _angs = list(cres[2] or [])
+                while len(_texts) < len(_polys):
+                    _texts.append("")
+                while len(_angs) < len(_polys):
+                    _angs.append(0.0)
+                _by_blk: dict = {}
+                for _k, _bv in enumerate(_blks):
+                    _by_blk.setdefault(int(_bv), []).append(_k)
+                _cx1, _cy1, _cx2, _cy2 = cb[2], cb[3], cb[4], cb[5]
+                _orig_b = cb[1] if isinstance(cb[1], dict) else {}
+                parts = []
+                for _uid in _uids:
+                    _idxs = _by_blk[_uid]
+                    _pt = " ".join(str(_texts[_k] or "").strip()
+                                   for _k in _idxs
+                                   if str(_texts[_k] or "").strip())
+                    if sum(1 for c in _pt if c.isalnum()) < 2:
+                        parts = None
+                        break
+                    _pp = np.concatenate([
+                        np.asarray(_polys[_k], dtype=np.float32).reshape(-1, 2)
+                        for _k in _idxs])
+                    _bx0 = max(_cx1, int(np.floor(float(_pp[:, 0].min()))) - 6)
+                    _by0 = max(_cy1, int(np.floor(float(_pp[:, 1].min()))) - 6)
+                    _bx1 = min(_cx2, int(np.ceil(float(_pp[:, 0].max()))) + 6)
+                    _by1 = min(_cy2, int(np.ceil(float(_pp[:, 1].max()))) + 6)
+                    if _bx1 - _bx0 < 24 or _by1 - _by0 < 14:
+                        parts = None
+                        break
+                    parts.append((
+                        _uid,
+                        (_bx0, _by0, _bx1, _by1),
+                        [np.rint(np.asarray(_polys[_k],
+                                            dtype=np.float32)).astype(np.int32)
+                         for _k in _idxs],
+                        [str(_texts[_k] or "") for _k in _idxs],
+                        [float(_angs[_k]) for _k in _idxs],
+                        _pt,
+                    ))
+                _orig_alnum = sum(1 for c in str(cres[0] or "")
+                                  if c.isalnum())
+                if (not parts or len(parts) < 2
+                        or sum(sum(1 for c in p[5] if c.isalnum())
+                               for p in parts)
+                        < max(2, int(0.6 * _orig_alnum))):
+                    new_cand.append(cb)
+                    new_res.append(cres)
+                    continue
+                for (_uid, (bx0, by0, bx1, by1), bp, bt, ba, btxt) in parts:
+                    _nb = dict(_orig_b)
+                    _nb["rect"] = (bx0, by0, bx1, by1)
+                    _nb["mask_poly"] = None
+                    if not _nb.get("class_name"):
+                        _nb["class_name"] = "text_bubble"
+                    new_cand.append((len(new_cand), _nb, bx0, by0, bx1, by1,
+                                     bx1 - bx0, by1 - by0))
+                    new_res.append((btxt, bp, ba, bt, [_uid] * len(bp)))
+                n_split += 1
+            except Exception:
+                new_cand.append(cb)
+                new_res.append(cres)
+        if n_split and getattr(self, "debug", False):
+            print(f"    [*]K3-بلوک‌هایِ ML Kit: {n_split} باکسِ درهم → "
+                  f"{len(new_cand)} ناحیهٔ مستقل "
+                  "(layout-analysisِ نیتیو)")
+        return new_cand, new_res
 
     def _split_multiblock_regions(self, image: np.ndarray,
                                   regions: List["TextRegion"]) -> List["TextRegion"]:
@@ -20539,7 +20746,7 @@ class MangaTranslator:
                 new_rs = []
                 for (bx0, by0, bx1, by1) in rects:
                     try:
-                        b_txt, b_polys, b_angs, _bt = self._ocr_crop(
+                        b_txt, b_polys, b_angs, _bt, _bb = self._ocr_crop(
                             image, (bx0, by0, bx1, by1),
                             block_rects=[_o for _o in rects
                                          if _o != (bx0, by0, bx1, by1)])
@@ -20650,7 +20857,7 @@ class MangaTranslator:
                 continue
             cand.append((i, b, x1, y1, x2, y2, bw, bh))
         ocr_results: List[Tuple[str, List[np.ndarray], List[float]]] = [
-            ("", [], [])] * len(cand)
+            ("", [], [], [], [])] * len(cand)
         if cand:
             # v1.14.90 — باکس‌هایِ همسایه به _ocr_crop داده می‌شود تا
             # نجاتِ خطِ لبه‌بریده، کراپ را تا باکسِ ناحیهٔ دیگر باز نکند
@@ -20686,10 +20893,13 @@ class MangaTranslator:
                     any_text = True
                 if any_text:
                     continue
-                full_txt, full_polys, full_angs, _full_lts = self._ocr_crop(
-                    image, full_rect,
-                    block_rects=[(cand[j][2], cand[j][3], cand[j][4], cand[j][5])
-                                 for j in range(len(cand)) if j not in idxs])
+                full_txt, full_polys, full_angs, _full_lts, _full_blks = \
+                    self._ocr_crop(
+                        image, full_rect,
+                        block_rects=[(cand[j][2], cand[j][3], cand[j][4],
+                                      cand[j][5])
+                                     for j in range(len(cand))
+                                     if j not in idxs])
                 if not str(full_txt or "").strip():
                     continue
                 if self.debug:
@@ -20699,9 +20909,28 @@ class MangaTranslator:
                     "class_name": "text_bubble", "confidence": 0.40,
                     "rect": full_rect, "shape_type": "round", "mask_poly": None,
                 }, fx1, fy1, fx2, fy2, fx2 - fx1, fy2 - fy1))
-                ocr_results.append((full_txt, full_polys, full_angs))
+                ocr_results.append((full_txt, full_polys, full_angs,
+                                    _full_lts, _full_blks))
 
-        for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs, line_texts) in zip(
+        # ── v1.14.121 — جداسازیِ بلوک‌هایِ ML Kit (همان layout-analysisِ K3) ──
+        # پلِ Kotlin شمارهٔ TextBlockِ ML Kit را هم میدهد؛ اگر دیتکتور دو
+        # حباب را در «یک» باکس داده باشد، ML Kit داخلِ همان کراپ دو بلوکِ
+        # جدا میسازد (هر حباب = یک TextBlock) → به‌جایِ یک ناحیهٔ درهم،
+        # به ازایِ هر بلوک یک ناحیهٔ مستقل ساخته میشود (متن/پالی/زاویهٔ
+        # مستقل — دقیقاً مسیرِ موتورِ K3). خروجیِ درهمِ نمونهٔ 01.jpg
+        # («THEN I'L PULL THE re FOR FLOAT theredl OU!...») ریشه‌ای حل
+        # میشود. خاموش‌کننده: MANGA_MLKIT_BLOCKS=0
+        if (_on_android()
+                and getattr(self, "_ocr_backend_name", "") == "mlkit"
+                and os.environ.get("MANGA_MLKIT_BLOCKS", "1").strip() != "0"):
+            try:
+                cand, ocr_results = self._split_mlkit_block_cands(
+                    cand, ocr_results)
+            except Exception:
+                pass
+
+        for (i, b, x1, y1, x2, y2, bw, bh), (text, line_polys, line_angs,
+                                             line_texts, line_blks) in zip(
                 cand, ocr_results):
             if not text:
                 _gink = 0.0

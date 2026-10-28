@@ -45,7 +45,13 @@ object MlKitBridge {
             val img = InputImage.fromBitmap(bmp, 0)
             val result = Tasks.await(getClient(lang).process(img))
             val out = ArrayList<String>()
+            // v1.14.121 — شمارهٔ بلوکِ ML Kit هم پاس داده می‌شود (فیلدِ پنجم در انتهایِ هر خط).
+            // موتورِ K3 جداسازیِ حباب‌ها را از همین layout-analysisِ نیتیو میگیرد (هر حباب = یک
+            // TextBlock)؛ قبلاً بلوک‌ها صاف می‌شدند و دو حبابِ چسبیده در یک باکسِ detector متنِ درهم
+            // میداد. فرمت: ang|conf|box|text|blk
+            var blk = -1
             for (block in result.textBlocks) {
+                blk++
                 for (line in block.lines) {
                     val t = line.text.trim()
                     if (t.isEmpty()) continue
@@ -76,7 +82,8 @@ object MlKitBridge {
                                 bb.left + "," + bb.bottom)
                     }
                     val ang = try { line.angle } catch (_: Exception) { 0f }
-                    out.add(String.format("%.2f|%.4f|%s|%s", ang, conf, box, t))
+                    out.add(String.format("%.2f|%.4f|%s|%s|%d",
+                            ang, conf, box, t, blk))
                 }
             }
             out.toTypedArray()
