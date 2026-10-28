@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.110"
+APP_VER = "1.14.111"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3374,7 +3374,7 @@ class _PLOCR_OrtRunner:
 class _PLOCR_LiteRunner:
     """رانرِ Paddle-Lite جاوا (اندرویدِ arm64 — کرنل‌های OpenCL/CPU گوشی)."""
 
-    def __init__(self, model_path, threads=4):
+    def __init__(self, model_path, threads=4, power="HIGH"):
         from java import jclass, jarray
         try:
             from java import jfloat as _jf
@@ -3384,12 +3384,13 @@ class _PLOCR_LiteRunner:
             "com.amirwolf.mangatranslator.PaddleLiteBridge")
         self.path = str(model_path)
         self.threads = max(1, min(8, int(threads or 4)))
+        self.power = str(power or "HIGH").strip().upper()
         self._jarray = jarray
         self._jf = _jf
         if self._jf is None:
             self._jf = jclass("java.lang.Float").TYPE
         # گرم‌کردن: اگر مدل/کتابخانه نبود همین‌جا معلوم می‌شود → فال‌بکِ تمیز
-        if not self._bridge.ready(self.path, self.threads):
+        if not self._bridge.ready(self.path, self.threads, self.power):
             raise RuntimeError("PaddleLiteBridge.ready=False: " + self.path)
 
     @property
@@ -3403,7 +3404,7 @@ class _PLOCR_LiteRunner:
         _x = np.ascontiguousarray(arr.astype(np.float32))
         ja = self._jarray(self._jf)(_x.reshape(-1))
         fb = self._bridge.predict(self.path, [int(v) for v in _x.shape],
-                                  ja, self.threads)
+                                  ja, self.threads, self.power)
         if fb is None:
             raise RuntimeError("PaddleLite predict returns null")
         out = np.frombuffer(memoryview(fb), dtype=np.float32)
@@ -3459,13 +3460,15 @@ class PaddleOCRLiteBackend:
                 if _banned and _forced:
                     print("[!] Paddle-Lite ممنوع شده ولی در تنظیمات اجباری "
                           "است — دوباره امتحان میشود")
-                _pl_guard_write("init")
+                # v1.14.111 — بعد از کرش، پروفایلِ امن: تردِ کمتر + NO_BIND
+                self._lite_profile = "safe" if _banned else "normal"
+                _pl_guard_write("init", self._pl_guard_ctx())
                 self._pl_guard_on = True
                 try:
                     _lite = self._make_lite()
                     self.runner_kind = "lite"
                     # predictor ساخته شد؛ از اولین inference دوباره خطرناک
-                    _pl_guard_write("run")
+                    _pl_guard_write("run", self._pl_guard_ctx())
                 except Exception as e:
                     _pl_guard_clear()
                     self._pl_guard_on = False
@@ -3509,6 +3512,36 @@ class PaddleOCRLiteBackend:
         print(f"[+] OCR گوشی/PC: PaddleOCRLite | lang={self.lang} "
               f"| runner={self.runner_kind} | dev={_dmsg}")
 
+    # ── زمینهٔ دستگاه برایِ ردپای کرش (استارتِ بعدیِ اپ نشان میدهد) ──────
+    def _pl_guard_ctx(self):
+        _bits = ["lang=" + str(getattr(self, "lang", "?"))]
+        try:
+            _bits.append("prof=" + str(getattr(self, "_lite_profile", "normal")))
+        except Exception:
+            pass
+        try:
+            import platform
+            _bits.append("abi=" + str(platform.machine() or "?"))
+        except Exception:
+            pass
+        try:
+            from java import jclass
+            _b = jclass("android.os.Build")
+            _bits.append("dev=" + str(_b.MODEL)[:24])
+            try:
+                _ab = [str(x) for x in list(_b.SUPPORTED_ABIS)[:3]]
+                if _ab:
+                    _bits.append("abis=" + ",".join(_ab))
+            except Exception:
+                pass
+        except Exception:
+            pass
+        try:
+            _bits.append("app=" + str(APP_VER))
+        except Exception:
+            pass
+        return ";".join(_bits)
+
     # ── ساختِ رانرِ Lite ────────────────────────────────────────────────
     def _make_lite(self):
         _pmdir = _model_cache_dir("paddle_models")
@@ -3519,9 +3552,14 @@ class PaddleOCRLiteBackend:
         for _p in (_det, _rec):
             if not (os.path.isfile(_p) and os.path.getsize(_p) > 10_000):
                 raise RuntimeError("مدلِ nb نیست: " + _p)
-        _thr = max(2, min(4, (os.cpu_count() or 4) // 2))
-        _det_r = _PLOCR_LiteRunner(_det, threads=_thr)
-        _rec_r = _PLOCR_LiteRunner(_rec, threads=_thr)
+        # v1.14.111 — پروفایلِ امن بعد از کرش: تردِ کمتر + بدونِ اتصالِ
+        # هسته (NO_BIND) — بعضی کرشهایِ ساختِ predictor با LITE_POWER_HIGH
+        # رویِ cpuهایِ big.LITTLE رخ میدهند
+        _prof = getattr(self, "_lite_profile", "normal")
+        _thr = 2 if _prof == "safe" else max(2, min(4, (os.cpu_count() or 4) // 2))
+        _pw = "NO_BIND" if _prof == "safe" else "HIGH"
+        _det_r = _PLOCR_LiteRunner(_det, threads=_thr, power=_pw)
+        _rec_r = _PLOCR_LiteRunner(_rec, threads=_thr, power=_pw)
         return _det_r, _rec_r
 
     def _dict_charset(self):
@@ -3984,17 +4022,75 @@ def _pl_guard_path():
         os.environ.get("MANGA_FILES_DIR") or os.getcwd(), "paddle_guard.txt")
 
 
-def _pl_guard_write(stage):
+# v1.14.111 — faulthandler: اگر native پروسه را کشت، پشتهٔ پایتونِ همهٔ
+# ترد‌ها دقیقاً بعدِ خطِ مرحله به همین فایل اضافه میشود → استارتِ بعدیِ اپ
+# «لاگِ واقعی» را دارد (خطِ دقیقِ manga.py که داخلِ JNI مرده است)
+_pl_fault_fh = None
+
+
+def _pl_fault_attach():
+    global _pl_fault_fh
+    try:
+        import faulthandler
+        faulthandler.disable()
+    except Exception:
+        pass
+    try:
+        if _pl_fault_fh is not None:
+            _pl_fault_fh.close()
+    except Exception:
+        pass
+    _pl_fault_fh = None
+    try:
+        import faulthandler
+        _pl_fault_fh = open(_pl_guard_path(), "a")
+        faulthandler.enable(file=_pl_fault_fh)
+    except Exception:
+        _pl_fault_fh = None
+
+
+def _pl_fault_detach():
+    global _pl_fault_fh
+    try:
+        import faulthandler
+        faulthandler.disable()
+    except Exception:
+        pass
+    try:
+        if _pl_fault_fh is not None:
+            _pl_fault_fh.close()
+    except Exception:
+        pass
+    _pl_fault_fh = None
+    # برگشت به لاگِ سراسریِ launcher — بدونِ این، بعدِ گاردِ paddle
+    # دیگر هیچ faulthandlerای برایِ سیگ‌فالتهایِ بعدی فعال نمیماند
+    try:
+        import faulthandler
+        _fl = os.path.join(
+            os.environ.get("MANGA_FILES_DIR") or os.getcwd(), "fault_log.txt")
+        _gfh = open(_fl, "a", buffering=1)
+        faulthandler.enable(file=_gfh)
+        globals()["_PL_GLOBAL_FH"] = _gfh
+    except Exception:
+        pass
+
+
+def _pl_guard_write(stage, extra=None):
     if not _on_android():
         return
     try:
+        line = str(stage) + "|" + str(int(time.time()))
+        if extra:
+            line += "|" + str(extra)
         with open(_pl_guard_path(), "w") as f:
-            f.write(str(stage) + "|" + str(int(time.time())))
+            f.write(line + "\n")
+        _pl_fault_attach()
     except Exception:
         pass
 
 
 def _pl_guard_clear():
+    _pl_fault_detach()
     try:
         os.unlink(_pl_guard_path())
     except Exception:

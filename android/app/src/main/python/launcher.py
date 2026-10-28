@@ -262,6 +262,21 @@ def main(files_dir=None):
     except Exception:
         pass
 
+    # v1.14.111 — faulthandlerِ سراسری: هر سیگ‌فالت/SIGABRT در هر نقطه‌ای
+    # از پروسهٔ پایتون، پشتهٔ پایتونِ همهٔ ترد‌ها را در fault_log.txt
+    # مینویسد → استارتِ بعدیِ اپ لاگِ واقعیِ کرش را دارد (درخواستِ کاربر)
+    try:
+        import faulthandler as _fhd
+        try:
+            _fhd.disable()
+        except Exception:
+            pass
+        _FAULT_FH = open(os.path.join(files_dir, "fault_log.txt"),
+                         "a", buffering=1)
+        _fhd.enable(file=_FAULT_FH)
+    except Exception:
+        pass
+
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     try:
         _upd0 = os.path.join(files_dir, "updates")

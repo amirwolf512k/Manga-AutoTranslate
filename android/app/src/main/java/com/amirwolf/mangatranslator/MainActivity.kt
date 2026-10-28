@@ -352,12 +352,28 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 val plNote = paddleCrashGuard()
+                // v1.14.111 — پشتهٔ faulthandlerِ سیگ‌فالتِ پایتون (از launcher)
+                try {
+                    val fl = java.io.File(filesDir, "fault_log.txt")
+                    if (fl.isFile && fl.length() > 0) {
+                        val d = fl.readText().trim()
+                        fl.delete()
+                        if (d.isNotEmpty()) appendCrashLog(
+                            "—— سیگ‌فالتِ پایتون (faulthandler) ——\nزمان: " +
+                            nowStr() + "\n" + d.take(4000))
+                    }
+                } catch (_: Exception) { }
+                // گزارشِ کرشِ قبلی: یک بار به‌ازایِ هر کرش نمایش داده میشود
+                // (قبلاً همینجا فوراً چاپ میشد و بعداً وضعیتِ معمولی بازنویسیاش میکرد)
+                var crashRep = ""
                 try {
                     val cl = java.io.File(filesDir, "crash_log.txt")
-                    if (cl.exists()) {
-                        val prevTxt = cl.readText().take(4000)
-                        ui.post {
-                            logBox.text = "💥 گزارش کرش قبلی (این متن را برای سازنده بفرست):\n$prevTxt"
+                    if (cl.isFile) {
+                        val seen = prefs.getLong("crashlog_seen", -1L)
+                        if (cl.lastModified() != seen) {
+                            crashRep = cl.readText().take(4000)
+                            prefs.edit().putLong("crashlog_seen",
+                                cl.lastModified()).apply()
                         }
                     }
                 } catch (_: Exception) {
@@ -376,9 +392,17 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) {
                 }
                 val st = launcher.callAttr("status").toString()
-                val pre = if (plNote != null) "⚡ " + plNote + "\n\n" else ""
+                // v1.14.111 — همهٔ نکته‌ها در یک متن: گزارشِ کرش + ⚡ + وضعیت
+                val pre = StringBuilder()
+                if (crashRep.isNotBlank()) {
+                    pre.append("💥 گزارشِ کرشِ قبلی (این متن را برایِ سازنده بفرست):\n")
+                    pre.append(crashRep).append("\n\n")
+                    pre.append("مسیرِ فایل: Android/data/").append(packageName)
+                        .append("/files/crash_log.txt\n\n")
+                }
+                if (plNote != null) pre.append("⚡ ").append(plNote).append("\n\n")
                 ui.post {
-                    logBox.text = pre + if (healthReport.isNotBlank())
+                    logBox.text = pre.toString() + if (healthReport.isNotBlank())
                         healthReport + "\n\n—— وضعیت فایل‌ها —\n" + st
                     else st
                 }
@@ -469,18 +493,22 @@ class MainActivity : AppCompatActivity() {
         throw last ?: RuntimeException("همهٔ منابع ناموفق")
     }
 
-    // v1.14.110 — ردپای کرشِ nativeِ Paddle-Lite: سیگ‌فالت از هندلرِ
-    // UncaughtException رد نمیشود → با فایلِ ردپا (paddle_guard.txt)
-    // تشخیص داده میشود، لاگش نمایش داده و ضبط میشود؛ بعد از یک کرش،
-    // پیشفرضِ خودکار به ML Kit برمیگردد تا اپ کار کند
+    // v1.14.110/111 — ردپای کرشِ nativeِ Paddle-Lite: سیگ‌فالت از هندلرِ
+    // UncaughtException رد نمیشود → فایلِ ردپا (paddle_guard.txt) خوانده
+    // میشود: خطِ اول = مرحله + زمینه؛ بقیه = پشتهٔ پایتونِ faulthandler.
+    // بعلاوه لاگِ native از بافرِ crashِ logcat گرفته میشود و همه در
+    // crash_log.txt ضبط و در استارتِ بعدی نمایش داده میشود.
     private fun paddleCrashGuard(): String? {
         return try {
             val g = java.io.File(filesDir, "paddle_guard.txt")
             if (!g.isFile) null
             else {
-                val stage = (try { g.readText().trim() }
-                        catch (_: Exception) { "" })
+                val raw = try { g.readText() } catch (_: Exception) { "" }
                 g.delete()
+                val first = raw.lineSequence().firstOrNull()?.trim() ?: ""
+                val dump = raw.lineSequence().drop(1).joinToString("\n").trim()
+                val stage = first.split("|").firstOrNull() ?: ""
+                val ctx = first.split("|").getOrNull(2) ?: ""
                 val stF = java.io.File(filesDir, "paddle_strikes.txt")
                 val n = ((try { stF.readText().trim().toIntOrNull() }
                         catch (_: Exception) { null }) ?: 0) + 1
@@ -490,18 +518,100 @@ class MainActivity : AppCompatActivity() {
                 } catch (_: Exception) { }
                 val stageFa = if (stage.startsWith("init"))
                     "ساختِ predictor" else "inferenceِ استخراجِ متن"
-                val note = ("اجرای قبلی حینِ Paddle-Lite بسته شد " +
+                var note = ("اجرای قبلی حینِ Paddle-Lite بسته شد " +
                         "(کرشِ native — مرحله: " + stageFa + "). " +
                         "این اجرا با موتورِ جایگزین (ML Kit/ONNX) میرود و " +
                         "Paddle-Lite برایِ پیشفرضِ خودکار غیرفعال شد " +
                         "(فعالسازیِ دوباره: تنظیمات ← موتورِ استخراج).")
-                try {
-                    java.io.File(filesDir, "crash_log.txt")
-                        .appendText("\n[Paddle-Lite] " + note + "\n")
-                } catch (_: Exception) { }
+                if (ctx.isNotEmpty()) note += "  [زمینه: " + ctx + "]"
+                // لاگِ واقعی: پشتهٔ پایتون (faulthandler) + بافرِ crashِ logcat
+                val nat = captureNativeCrash()
+                val rep = StringBuilder()
+                rep.append("—— کرشِ Paddle-Lite (کرشِ شمارهٔ ").append(n).append(") ——\n")
+                rep.append("زمان: ").append(nowStr()).append("\n")
+                rep.append("مرحله: ").append(stageFa).append("\n")
+                if (ctx.isNotEmpty()) rep.append("زمینه: ").append(ctx).append("\n")
+                rep.append("دستگاه: ").append(devLine()).append("\n")
+                if (dump.isNotEmpty()) {
+                    rep.append("پشتهٔ پایتون (faulthandler):\n")
+                    rep.append(dump.take(3500)).append("\n")
+                } else {
+                    rep.append("پشتهٔ پایتون: ثبت نشد (فقط ردپای مرحله)\n")
+                }
+                rep.append("\nلاگِ native (logcat):\n")
+                if (nat.isNotBlank()) rep.append(nat.take(5000)).append("\n")
+                else rep.append("(از logcat چیزی گرفته نشد — بعد از ریبوتِ گوشی خالی میشود)\n")
+                appendCrashLog(rep.toString())
                 note
             }
         } catch (_: Exception) { null }
+    }
+
+    // v1.14.111 — گرفتنِ لاگِ واقعیِ کرش از logd: بافرِ crash شاملِ
+    // خلاصهٔ tombstone (Fatal signal + backtrace) برایِ UIDِ خودِ اپ است
+    private fun captureNativeCrash(): String {
+        return try {
+            val pk = packageName
+            val sb = StringBuilder()
+            for (buf in arrayOf("crash", "main")) {
+                try {
+                    val p = Runtime.getRuntime().exec(
+                        arrayOf("logcat", "-d", "-b", buf, "-t", "900", "-v", "time"))
+                    val txt = p.inputStream.bufferedReader().readText()
+                    try { p.waitFor() } catch (_: Exception) { }
+                    val lines = txt.lines().filter { ln ->
+                        val l = ln.trim()
+                        if (l.isEmpty()) false
+                        else if (buf == "crash")
+                            l.contains(pk) || l.contains("Fatal signal") ||
+                            l.contains("SIGSEGV") || l.contains("SIGBUS") ||
+                            l.contains("SIGABRT") || l.contains("SIGILL") ||
+                            l.contains("SIGFPE") || l.contains(">>> ") ||
+                            l.contains("backtrace") || l.contains("crash_dump") ||
+                            l.contains("Abort message") ||
+                            l.contains("Build fingerprint")
+                        else
+                            l.contains("Fatal signal") || l.contains("DEBUG") ||
+                            l.contains("libc") || l.contains(pk)
+                    }
+                    if (lines.isNotEmpty()) {
+                        sb.append("[بافرِ ").append(buf).append("]\n")
+                        sb.append(lines.takeLast(100).joinToString("\n")).append("\n")
+                        if (buf == "crash") break
+                    }
+                } catch (_: Exception) { }
+            }
+            sb.toString()
+        } catch (_: Exception) { "" }
+    }
+
+    private fun nowStr(): String =
+        java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US)
+            .format(java.util.Date())
+
+    private fun devLine(): String {
+        val abis = try { (Build.SUPPORTED_ABIS ?: arrayOf<String>())
+            .take(2).joinToString(",") } catch (_: Exception) { "?" }
+        return (Build.MANUFACTURER ?: "?") + " " + (Build.MODEL ?: "?") +
+                " | android " + (Build.VERSION.RELEASE ?: "?") +
+                " | abi " + abis
+    }
+
+    // ضبطِ متنِ کرش با سقفِ حجم (۴۸ هزار نویسه) + میرور در حافظهٔ خارجی
+    // → کاربر بدونِ روت از Android/data/<pkg>/files/crash_log.txt میگیرد
+    private fun appendCrashLog(txt: String) {
+        try {
+            val f = java.io.File(filesDir, "crash_log.txt")
+            var cur = try { if (f.isFile) f.readText() else "" }
+                      catch (_: Exception) { "" }
+            cur += txt + "\n"
+            if (cur.length > 48000) cur = cur.substring(cur.length - 48000)
+            f.writeText(cur)
+            try {
+                val dir = getExternalFilesDir(null)
+                if (dir != null) java.io.File(dir, "crash_log.txt").writeText(cur)
+            } catch (_: Exception) { }
+        } catch (_: Exception) { }
     }
 
     private fun installedVersionCode(): Int = try {
@@ -1121,11 +1231,10 @@ class MainActivity : AppCompatActivity() {
             try {
                 val sw = java.io.StringWriter()
                 e.printStackTrace(java.io.PrintWriter(sw))
-                java.io.File(filesDir, "crash_log.txt").writeText(
-                    "زمان: " + java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss",
-                        java.util.Locale.US).format(java.util.Date()) +
-                        "\nthread: " + t.name + "\n" + sw.toString()
-                )
+                // v1.14.111 — append (قبلاً writeText بود و کرشِ قبلی پاک میشد)
+                appendCrashLog("—— کرشِ Java ——\nزمان: " + nowStr() +
+                        "\nدستگاه: " + devLine() +
+                        "\nthread: " + t.name + "\n" + sw.toString())
             } catch (_: Exception) {
             }
             prev?.uncaughtException(t, e)

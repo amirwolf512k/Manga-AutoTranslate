@@ -65,22 +65,36 @@ object PaddleLiteBridge {
     @JvmStatic
     fun libName(): String = "libpaddle_lite_jni.so"
 
+    // v1.14.111 — پروفایلِ اجرا (ترد + حالتِ توان) هم بخشی از کلیدِ کش —
+    // «safe» بعد از کرش: NO_BIND + تردِ کمتر (بعضی کرشهایِ ساختِ
+    // predictor با LITE_POWER_HIGH رویِ cpuهایِ big.LITTLE رخ میدهند)
+    private fun keyOf(modelPath: String, threads: Int, power: String): String =
+        modelPath + "#" + threads + "#" + power
+
+    private fun powerOf(p: String): PowerMode = when (p.trim().uppercase()) {
+        "NO_BIND", "NOBIND" -> PowerMode.LITE_POWER_NO_BIND
+        "LOW" -> PowerMode.LITE_POWER_LOW
+        else -> PowerMode.LITE_POWER_HIGH
+    }
+
     @Synchronized
-    private fun getOrCreate(modelPath: String, threads: Int): PaddlePredictor? {
+    private fun getOrCreate(modelPath: String, threads: Int,
+                            power: String = "HIGH"): PaddlePredictor? {
         if (!ensureLib()) return null
-        predictors[modelPath]?.let { return it }
+        val k = keyOf(modelPath, threads, power)
+        predictors[k]?.let { return it }
         // ساختِ همزمانِ دوباره را جلوگیری کن (قفلِ ساده per-path)
         synchronized(building.getOrPut(modelPath) { Any() }) {
-            predictors[modelPath]?.let { return it }
+            predictors[k]?.let { return it }
             return try {
                 val cfg = MobileConfig()
                 cfg.setModelFromFile(modelPath)
                 cfg.threads = if (threads in 1..8) threads else 4
-                cfg.powerMode = PowerMode.LITE_POWER_HIGH
+                cfg.powerMode = powerOf(power)
                 val p = PaddlePredictor.createPaddlePredictor(cfg)
                 if (p != null) {
-                    predictors[modelPath] = p
-                    Log.i(TAG, "predictor ready: $modelPath (threads=$threads)")
+                    predictors[k] = p
+                    Log.i(TAG, "predictor ready: $modelPath (threads=$threads, pw=$power)")
                 } else {
                     Log.e(TAG, "createPaddlePredictor returned null: $modelPath")
                 }
@@ -94,8 +108,9 @@ object PaddleLiteBridge {
 
     /** آیا این مدل می‌تواند ساخته شود؟ (بدونِ اجرا) */
     @JvmStatic
-    fun ready(modelPath: String, threads: Int = 4): Boolean =
-        getOrCreate(modelPath, threads) != null
+    fun ready(modelPath: String, threads: Int = 4,
+              power: String = "HIGH"): Boolean =
+        getOrCreate(modelPath, threads, power) != null
 
     /** بکاندِ شتابِ این کتابخانه — برایِ لاگِ پایتون (خالی = لود نشده) */
     @JvmStatic
@@ -109,9 +124,9 @@ object PaddleLiteBridge {
      */
     @JvmStatic
     fun predict(modelPath: String, shape: LongArray, data: FloatArray,
-                threads: Int = 4): FloatBuffer? {
+                threads: Int = 4, power: String = "HIGH"): FloatBuffer? {
         if (!ensureLib()) return null
-        val p = getOrCreate(modelPath, threads) ?: return null
+        val p = getOrCreate(modelPath, threads, power) ?: return null
         return try {
             val input = p.getInput(0) ?: return null
             if (!input.resize(shape)) return null
