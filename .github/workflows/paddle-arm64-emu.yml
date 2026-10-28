@@ -99,16 +99,15 @@ jobs:
         run: |
           AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
           echo no | "$AVDM" create avd -n armavd -k "system-images;android-30;google_apis;arm64-v8a" -d pixel_4 --force
-          CFG=$("$AVDM" list avd | grep -A5 'Name: armavd' | grep 'Path:' | awk '{print $2}')
-          CFG="${CFG:-$HOME/.android/avd/armavd.avd}"
+          CFG="$HOME/.android/avd/armavd.avd"
+          test -f "$CFG/config.ini" || { "$AVDM" list avd; exit 1; }
           echo "AVD path: $CFG"
           grep -q "hw.cpu.ncore" "$CFG/config.ini" && sed -i '' 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG/config.ini" || echo "hw.cpu.ncore=4" >> "$CFG/config.ini"
           echo "hw.ramSize=6144MB" >> "$CFG/config.ini"
-          mkdir -p "$HOME/.android/avd"
-          ln -sfn "$CFG" "$HOME/.android/avd/armavd.avd"
-          INI="$(dirname "$CFG")/armavd.ini"
-          if [ -f "$INI" ]; then ln -sfn "$INI" "$HOME/.android/avd/armavd.ini"; else printf 'avd.ini.encoding=UTF-8\npath=%s\n' "$CFG" > "$HOME/.android/avd/armavd.ini"; fi
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          # ⚠️ هیچ symlink ای لازم نیست — avdmanager خودش ini را در مسیر پیشفرض میسازد
+          # (سلف-لینک ln -sfn "$INI" "$INI" قبلاً ini سالم را خراب میکرد → "Failed to process .ini")
+          ls -la "$HOME/.android/avd/" | head -6
+          cat "$HOME/.android/avd/armavd.ini"
           tail -5 "$CFG/config.ini"
 
       - name: Boot arm64 emulator (Hypervisor.framework)
