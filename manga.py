@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.122"
+APP_VER = "1.14.123"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3062,10 +3062,28 @@ def _ensure_rapidocr_models(mdir, files=None):
 
 class RapidOCRBackend:
 
+    # v1.14.123 — مپِ charsetهایِ باندلشدهٔ موبایل (از metadataِ خودِ مدل
+    # استخراج شدهاند — عینِ دیکشنریِ داخلِ فایلِ onnx)
+    _MOBILE_CHARS = {
+        "en": "ppocrv6_chars.txt",
+        "ch": "ppocrv6_chars.txt",
+        "korean": "korean_chars.txt", "ko": "korean_chars.txt",
+        "japan": "japan_chars.txt", "ja": "japan_chars.txt",
+    }
 
     def __init__(self, lang: str = "en", prefer_gpu: Optional[bool] = None):
         self.lang = lang
         self._new_api = False
+        self._mobile = None
+        # v1.14.123 — اندروید: موتورِ PP-OCRv6 ONNX (عینِ PC/K3) از
+        # rapidocr_mobile (بدونِ پکیجِ rapidocr/pyclipper/shapely).
+        # زمینه: دیکدِ K3 v4.1.1 نشان داد K3 رویِ گوشی هم همین پایپلاینِ
+        # ONNX را اجرا میکند (RunRapidOcrPipelineOnCrop + _ppOcrDict +
+        # ppocrv6_dict.txt) و دقیق/سریع استخراج میزند. درخواستِ کاربر:
+        # «استخراجِ مالِ پی‌سی لینوکس هستو رو گوشی اوکی کرد».
+        if _IS_ANDROID:
+            self._init_mobile_engine(lang)
+            return
         # v1.14.96-speed — prefer_gpu از MangaTranslator.use_gpu می‌آید
         # (همان تصمیمِ auto/--cpuِ OCR). None = رفتارِ قبل (فقط CPU).
         self._prefer_gpu = prefer_gpu
@@ -3288,6 +3306,65 @@ class RapidOCRBackend:
         self.engine = RapidOCR()
         print(f"[+] RapidOCR (ONNX, PP-OCRv3 قدیمی) آماده | lang={lang}")
 
+    def _init_mobile_engine(self, lang: str) -> None:
+        """v1.14.123 — موتورِ PP-OCRv6 ONNX رویِ اندروید (rapidocr_mobile).
+
+        همان مدلهایِ PC از همان ریلیزِ models (PP-OCRv6 det/rec mobile)
+        + charset از metadataِ خودِ مدل (باندلشده در rapidocr_mobile).
+        unclip بدونِ pyclipper/shapely (پدِ گوشهایِ rect — معادلِ دقیقِ
+        خروجیِ clipper برایِ minAreaRect). سشن = شیمِ ORT باندلشده
+        (پلِ Java ORT-android با XNNPACK/NNAPI opt-in).
+        خطا → ImportError → زنجیرهٔ OCR به ML Kit برمیگردد."""
+        try:
+            from rapidocr_mobile import RapidOcrMobile
+        except Exception as e:
+            raise ImportError(f"rapidocr_mobile لود نشد: {e}") from e
+        try:
+            _mdir = os.path.join(
+                os.environ.get("MANGA_FILES_DIR") or os.getcwd(),
+                "rapidocr_models")
+            os.makedirs(_mdir, exist_ok=True)
+            _low = str(lang).lower()
+            _det = "PP-OCRv6_det_small.onnx"
+            if _low in ("korean", "ko"):
+                _rec = "korean_PP-OCRv5_rec_mobile.onnx"
+            elif _low in ("japan", "ja", "japanese"):
+                _rec = "japan_PP-OCRv4_rec_mobile.onnx"
+            else:
+                _rec = "PP-OCRv6_rec_small.onnx"
+            _ensure_rapidocr_models(_mdir, files=[_det, _rec])
+            _p_det = os.path.join(_mdir, _det)
+            _p_rec = os.path.join(_mdir, _rec)
+            for _p in (_p_det, _p_rec):
+                if not (os.path.isfile(_p) and os.path.getsize(_p) > 100_000):
+                    raise ImportError(f"مدلِ OCR دانلود نشد: {_p}")
+            _chars = self._MOBILE_CHARS.get(_low, "ppocrv6_chars.txt")
+            try:
+                _cpu_n = os.cpu_count() or 4
+            except Exception:
+                _cpu_n = 4
+            # v1.14.116 — برندهٔ سوییپِ ARM: نخِ بیشتر رویِ ورکرِ کمتر
+            _intra = 4 if _cpu_n > 4 else 2
+            try:
+                _env_th = int(os.environ.get("MANGA_OCR_THREADS", "0") or 0)
+                if _env_th > 0:
+                    _intra = _env_th
+            except Exception:
+                pass
+            self._mobile = RapidOcrMobile(
+                _p_det, _p_rec, charset_path=os.path.join(
+                    os.path.dirname(os.path.abspath(
+                        sys.modules["rapidocr_mobile"].__file__)),
+                    _chars),
+                intra_threads=_intra)
+            print(f"[+] OCR گوشی: PP-OCRv6 ONNX (موتورِ PC/K3) | "
+                  f"lang={lang} | threads={_intra}")
+        except ImportError:
+            raise
+        except Exception as e:
+            self._mobile = None
+            raise ImportError(f"موتورِ موبایلِ PP-OCR ساخته نشد: {e}") from e
+
     @staticmethod
     def _deaccent(txt: str) -> str:
         try:
@@ -3302,6 +3379,26 @@ class RapidOCRBackend:
 
         if image_bgr is None or image_bgr.size == 0:
             return None
+        # v1.14.123 — اندروید: موتورِ PP-OCRv6 ONNX (خروجی هم‌قالبِ
+        # مسیرهایِ دیگر: [ [box, (text, score)], ... ])
+        if self._mobile is not None:
+            try:
+                _out = self._mobile.ocr(image_bgr)
+            except Exception:
+                return None
+            if not _out or not _out[0]:
+                return None
+            _lines = []
+            for _box, _pair in _out[0]:
+                try:
+                    _t = self._deaccent(str(_pair[0])).strip()
+                    if not _t:
+                        continue
+                    _s = float(_pair[1])
+                    _lines.append([_box, (_t, _s)])
+                except Exception:
+                    continue
+            return [_lines] if _lines else None
         if self._new_api:
             try:
                 try:
@@ -3365,7 +3462,7 @@ class RapidOCRBackend:
 #   • گارد/بنِ کرش (_pl_guard_*، _plite_*، _lite_models_refresh)
 #   • PaddleLiteBridge.kt + PaddlePredictor.jar + libpaddle_lite_jni.so
 #     + fetch_paddle.py + گامهایِ CI مربوطه (~۶MB از هر APK)
-# زنجیرهٔ OCR اندروید حالا: ML Kit نیتیو (دقیقاً موتورِ K3) → RapidOCR.
+# زنجیرهٔ OCR اندروید (v1.14.123): PP-OCRv6 ONNX (عینِ PC) → ML Kit.
 # PC کاملاً دستنخورده (PaddleOCR کامل / RapidOCR همان قبل).
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -4655,8 +4752,12 @@ class MangaTranslator:
         self.mag_ratio = mag_ratio
         self.translation_temperature = translation_temperature
         self.two_pass_ocr = bool(two_pass_ocr)
+        # v1.14.123 — پاسِ دومِ OCR رویِ اندروید هم مثلِ PC روشن است
+        # (قبلاً کلاً خاموش بود → «کمتر استخراج شده»). خاموشیِ دستی:
+        # MANGA_ANDROID_TWO_PASS=0
         if _on_android() and os.environ.get(
-                "MANGA_ANDROID_TWO_PASS", "").strip().lower() not in ("1", "true", "yes"):
+                "MANGA_ANDROID_TWO_PASS", "").strip().lower() in (
+                "0", "false", "no"):
             self.two_pass_ocr = False
         self.max_output_width = max_output_width
         self.stitch_max_height = int(stitch_max_height) if stitch_max_height else 0
@@ -4843,24 +4944,24 @@ class MangaTranslator:
                 print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
         if self.ocr is None and _on_android():
-            # v1.14.120 — زنجیرهٔ OCR اندروید: ML Kit نیتیو (موتورِ K3؛
-            # بدونِ ریسکِ کرشِ OpenCL/native) → RapidOCR ONNX. paddlelite
-            # کلاً حذف شد (دو کرشِ RuntimeProgram رویِ Mali و Adreno +
-            # درخواستِ کاربر). اوررایدِ دستی: MANGA_ANDROID_OCR =
-            # mlkit | rapidocr
+            # v1.14.123 — زنجیرهٔ OCR اندروید: PP-OCRv6 ONNX (عینِ PC و
+            # عینِ K3 — دیکدِ K3 v4.1.1: RunRapidOcrPipelineOnCrop +
+            # _ppOcrDict؛ کاربر: «استخراجِ مالِ پی‌سی رو گوشی اوکی کرد»)
+            # → فال‌بکِ ML Kit. paddlelite کلاً حذف شده. اوررایدِ دستی:
+            # MANGA_ANDROID_OCR = rapidocr | mlkit
             _aocr = os.environ.get("MANGA_ANDROID_OCR", "").strip().lower()
             if _aocr and _aocr not in ("mlkit", "rapidocr"):
-                print(f"[!] موتورِ «{_aocr}» حذف/ناشناخته است → ML Kit نیتیو")
+                print(f"[!] موتورِ «{_aocr}» حذف/ناشناخته است → PP-OCR ONNX")
                 _aocr = ""
-            if _aocr == "rapidocr":
+            if _aocr != "mlkit":
                 try:
                     self.ocr = RapidOCRBackend(
                         lang=main_lang, prefer_gpu=self.use_gpu)
                     self._ocr_backend_name = "rapidocr"
-                    print("[*] اندروید: RapidOCR (موتور وب/پی‌سی) "
-                          "به‌صورت دستی فعال شد.")
+                    print("[*] اندروید: موتورِ ONNXِ پی‌سی (PP-OCRv6) "
+                          "پیشفرض شد — همانِ PC لینوکس.")
                 except Exception as e:
-                    print(f"[!] RapidOCR روی اندروید لود نشد ({e}) "
+                    print(f"[!] PP-OCRv6 ONNX روی اندروید لود نشد ({e}) "
                           "→ ML Kit نیتیو")
             if self.ocr is None:
                 try:
@@ -4912,7 +5013,11 @@ class MangaTranslator:
                 # bubble-det همپوشانی با OCR ندارد؛ قبلاً به workers گره
                 # خورده بود و با workers=2 ناخواسته کند میشد)
                 threads=4 if _on_android() else max(1, int(self.max_workers or 2)),
-                multi_scale=not _IS_ANDROID,
+                # v1.14.123 — multi_scale رویِ اندروید هم (عینِ PC) وقتی
+                # موتورِ OCR = PP-OCRv6 ONNX است؛ با ML Kit قبلی پاسِ دوم
+                # کند/بیفایده بود. کیفیتِ تشخیصِ حباب = PC.
+                multi_scale=(not _IS_ANDROID)
+                            or (self._ocr_backend_name == "rapidocr"),
             )
         except Exception as e:
             print(f"[!] RT-DETR لود نشد ({e}) → OCR تمام‌صفحه (بدون تشخیص حباب)")
@@ -18887,9 +18992,14 @@ class MangaTranslator:
             scale = max(scale, 1.8)
         if max(h_p, w_p) < 1600:
             scale = max(scale, 2.2)
-        if _IS_ANDROID:
+        # v1.14.123 — سقفهایِ اپسکیل فقط برایِ ML Kit میمانند؛ با موتورِ
+        # PC (PP-OCRv6 ONNX) مقیاسِ PC کامل اعمال میشود (قبلاً رویِ
+        # اندروید ۱.۳/۱.۰ سقف میخورد → «کمتر استخراج شده»)
+        _k3mlkit = (_IS_ANDROID
+                    and getattr(self, "_ocr_backend_name", "") == "mlkit")
+        if _k3mlkit:
             scale = min(scale, 1.3)
-        if _IS_ANDROID and getattr(self, "_ocr_backend_name", "") == "mlkit":
+        if _k3mlkit:
             scale = 1.0
 
         if scale > 1.01:
@@ -18903,8 +19013,10 @@ class MangaTranslator:
         if self.two_pass_ocr:
             _raise_if_stop()
             _base_n = len(detections)
-            _skip_variants = _IS_ANDROID and _base_n >= 2
-            if not (_IS_ANDROID and _base_n >= 3):
+            # v1.14.123 — واریانتها فقط برایِ ML Kit حذف میشدند؛ با
+            # PP-OCRv6 ONNX مسیرِ کاملِ PC اجرا میشود (استخراجِ بیشتر)
+            _skip_variants = _k3mlkit and _base_n >= 2
+            if not (_k3mlkit and _base_n >= 3):
                 _raise_if_stop()
                 enhanced = self._clahe_enhance(piece_up)
                 detections += self.detect_text(enhanced)
