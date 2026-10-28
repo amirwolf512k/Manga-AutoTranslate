@@ -1,0 +1,260 @@
+name: Paddle-Lite arm64 Emulator — 7 user images (dispatch only)
+
+# v1.14.112 — درخواستِ کاربر: «Paddle-Lite arm arm64 اینم چک کن واسه گوشی
+# ببین کامل میتونه همه عکس هارو در بیاره» + «اگ سرور شبیه ساز نگذاشت کارت
+# رو با GitHub action ادامه بده».
+#
+# رانرِ ubuntu-24.04-arm (arm64 واقعی) + امولاتورِ arm64-v8a (بدونِ KVM —
+# میزبان و مهمان هم‌معماری‌اند) + APKِ arm64 با Paddle-Lite/OpenCL +
+# ocr_engine=paddlelite (اجباری از prefs) → هر ۷ عکسِ کاربر اجرا و
+# شمارشِ ناحیه‌ها/زمان/سلامتِ لاگ گیت می‌شود. OpenCL رویِ امولاتور
+# درایورِ GPU ندارد → کرنل‌های arm (CPU) اجرا می‌شوند؛ مسیرِ OpenCLِ
+# واقعی فقط رویِ گوشی (Adreno/Mali) معنا دارد.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ocr_lang:
+        description: 'زبانِ OCR paddle-lite'
+        type: choice
+        options: [en, ko, ja, zh]
+        default: en
+
+permissions:
+  contents: read
+
+jobs:
+  paddle-arm64-emu:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 240
+    env:
+      PKG: com.amirwolf.mangatranslator
+      LANGIN: ${{ inputs.ocr_lang || 'en' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Python 3.10 (Chaquopy buildPython)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install verify deps (host)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pymupdf pillow numpy requests opencv-python-headless
+
+      - name: Fetch vendored Python packages + Paddle-Lite libs (OpenCL)
+        run: |
+          python3 android/scripts/fetch_vendor.py --check || \
+            python3 android/scripts/fetch_vendor.py
+          python3 android/scripts/fetch_paddle.py
+          python3 android/scripts/fetch_paddle.py --check
+
+      - name: Sync engine sources into APK
+        run: python3 android/scripts/sync_sources.py
+
+      - name: Inject version from VERSION
+        run: |
+          VC=$(sed -n 's/^versionCode=//p' VERSION | tr -d '[:space:]')
+          VN=$(sed -n 's/^versionName=//p' VERSION | tr -d '[:space:]')
+          echo "versionCode=$VC versionName=$VN"
+          sed -i -E "s/versionCode = .*/versionCode = $VC/; s/versionName = .*/versionName = \"$VN\"/" \
+            android/app/build.gradle.kts
+
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build arm64 APK (Paddle-Lite OpenCL libs included)
+        working-directory: android
+        run: |
+          gradle :app:assembleDebug -PappAbis="arm64-v8a" -PlegacyJni=true \
+            -PchaquopyBuildPython="$(command -v python3)"
+          mkdir -p ../dist
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-arm64.apk
+          ls -la ../dist
+
+      - name: SDK — system image arm64 + platform-tools + emulator (aarch64)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+          "$SDKM" --sdk_root="$ANDROID_HOME" "platform-tools" \
+            "system-images;android-30;google_apis;arm64-v8a" > /dev/null 2>&1 || true
+          # emulator: بستهٔ رسمی روی میزبانِ arm64 لینوکس
+          "$SDKM" --sdk_root="$ANDROID_HOME" "emulator" > /dev/null 2>&1 || true
+          if [ ! -x "$ANDROID_HOME/emulator/emulator" ]; then
+            echo "[i] emulator package missing on arm64 → direct fetch"
+            XML=$(mktemp)
+            curl -fsSL https://dl.google.com/android/repository/repository2-3.xml -o "$XML" || true
+            URL=$(grep -o 'emulator-linux_aarch64-[0-9]*\.zip' "$XML" | sort -u | tail -1)
+            if [ -n "$URL" ]; then
+              curl -fsSL "https://dl.google.com/android/repository/$URL" -o /tmp/emu.zip
+              mkdir -p "$ANDROID_HOME/emulator"
+              python3 -m zipfile -e /tmp/emu.zip "$ANDROID_HOME/emulator"
+              chmod +x "$ANDROID_HOME/emulator/emulator" || true
+            else
+              echo "::error::no emulator-linux_aarch64 found"; grep -o 'emulator-linux[^<]*' "$XML" | head; exit 1
+            fi
+          fi
+          "$ANDROID_HOME/emulator/emulator" -version | head -3
+
+      - name: Create AVD (arm64, 4 cores, 4GB)
+        run: |
+          AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          echo no | "$AVDM" create avd -n armavd -k "system-images;android-30;google_apis;arm64-v8a" -d pixel_4 --force
+          CFG=$("$AVDM" list avd | grep -A5 'Name: armavd' | grep 'Path:' | awk '{print $2}')
+          CFG="${CFG:-$HOME/.android/avd/armavd.avd}"
+          echo "AVD path: $CFG"
+          grep -q "hw.cpu.ncore" "$CFG/config.ini" && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG/config.ini" || echo "hw.cpu.ncore=4" >> "$CFG/config.ini"
+          echo "hw.ramSize=4096MB" >> "$CFG/config.ini"
+          mkdir -p "$HOME/.android/avd"
+          ln -sfn "$CFG" "$HOME/.android/avd/armavd.avd"
+          INI="$(dirname "$CFG")/armavd.ini"
+          if [ -f "$INI" ]; then ln -sfn "$INI" "$HOME/.android/avd/armavd.ini"; else printf 'avd.ini.encoding=UTF-8\npath=%s\n' "$CFG" > "$HOME/.android/avd/armavd.ini"; fi
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          tail -5 "$CFG/config.ini"
+
+      - name: Boot arm64 emulator (tcg — بدونِ KVM)
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb start-server || true
+          "$ANDROID_HOME/emulator/emulator" -avd armavd -no-window -gpu swiftshader_indirect \
+            -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 4096 \
+            -no-accel > /tmp/emu_boot.log 2>&1 &
+          EMU_PID=$!
+          echo "emulator pid $EMU_PID"
+          OK=0
+          for i in $(seq 1 150); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then echo "=== emulator DIED at $((i*10))s ==="; break; fi
+            V=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$V" = "1" ]; then OK=1; echo "boot completed after ~$((i*10))s"; break; fi
+            if [ $((i % 6)) = 0 ]; then echo "--- boot wait $((i*10))s ---"; tail -2 /tmp/emu_boot.log; fi
+            sleep 10
+          done
+          if [ "$OK" != "1" ]; then echo "=== boot FAILED — tail ==="; tail -60 /tmp/emu_boot.log; exit 1; fi
+          adb shell input keyevent 82 || true
+          adb devices
+
+      - name: Prepare assets (7 user images + models + paddle .nb)
+        run: |
+          mkdir -p /tmp/mt/imgs /tmp/models /tmp/nb emu-arm-artifacts
+          B1="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${GITHUB_SHA}"
+          B2="https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/main"
+          get() { curl -fsSL --retry 2 --max-time 180 -o "$2" "$1" || curl -fsSL --retry 2 --max-time 180 -o "$2" "${1/$B1/$B2}" || echo "::warning::dl failed: $1"; }
+          # ۷ عکسِ کاربر (نگاشتِ ci_imgs: img2=012_p1 img3=412e9e img4=ch264_9 img5=890fb1 img7=IMG_0929)
+          get "$B1/examples/01.jpg"                          /tmp/mt/imgs/01.jpg
+          get "$B1/ci_imgs/img2.webp"                        /tmp/mt/imgs/012_p1.webp
+          get "$B1/ci_imgs/img3.webp"                        /tmp/mt/imgs/412e9e.webp
+          get "$B1/ci_imgs/img4.jpg"                         /tmp/mt/imgs/ch264_9.jpg
+          get "$B1/ci_imgs/img5.webp"                        /tmp/mt/imgs/890fb1.webp
+          get "$B1/ci_imgs/img7.jpg"                         /tmp/mt/imgs/IMG_0929.jpg
+          get "$B1/ci_imgs/IMG_20261018_140944_899.jpg"      /tmp/mt/imgs/IMG_1018.jpg
+          ls -la /tmp/mt/imgs
+          for F in /tmp/mt/imgs/*; do test -s "$F"; done
+          # مدل‌های اپ (دیتکتور حباب + LaMa) از ریلیزِ models
+          MB="https://github.com/${GITHUB_REPOSITORY}/releases/download/models"
+          curl -fsSL --retry 3 --max-time 300 -o /tmp/models/detector-v4-s_int8.onnx "$MB/detector-v4-s_int8.onnx"
+          curl -fsSL --retry 3 --max-time 600 -o /tmp/models/lama-manga-dyn.onnx    "$MB/lama-manga-dyn.onnx"
+          # مدل‌های paddle-lite (.nb) + دیکشنری‌ها — هر ۴ زبان
+          for F in pplite_det_arm64_opencl.nb pplite_rec_en_arm64_opencl.nb \
+                   pplite_rec_ko_arm64_opencl.nb pplite_rec_ja_arm64_opencl.nb \
+                   pplite_rec_zh_arm64_opencl.nb en_dict.txt korean_dict.txt \
+                   japan_dict.txt ppocr_keys_v1.txt; do
+            curl -fsSL --retry 3 --max-time 300 -o "/tmp/nb/$F" "$MB/$F"
+          done
+          ls -la /tmp/models /tmp/nb
+
+      - name: Install APK + pre-push models
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb install -r -t dist/MangaTranslator-arm64.apk
+          APP=/data/user/0/$PKG/files
+          for F in /tmp/nb/*; do
+            adb push "$F" /data/local/tmp/nb_$(basename "$F") > /dev/null
+            adb shell "run-as $PKG sh -c 'mkdir -p $APP/paddle_models && cat /data/local/tmp/nb_$(basename "$F") > $APP/paddle_models/$(basename "$F")'"
+            adb shell rm -f /data/local/tmp/nb_$(basename "$F")
+          done
+          adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
+          adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
+          adb shell "run-as $PKG sh -c 'mkdir -p $APP/.cache/manga_translator_models && cp /data/local/tmp/det.onnx $APP/.cache/manga_translator_models/detector-v4-s_int8.onnx && cp /data/local/tmp/lama.onnx $APP/.cache/manga_translator_models/lama-manga-dyn.onnx'"
+          adb shell rm -f /data/local/tmp/det.onnx /data/local/tmp/lama.onnx
+          adb shell "run-as $PKG ls -la files/paddle_models" || true
+
+      - name: Run all 7 images with ocr_engine=paddlelite
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          APP=/data/user/0/$PKG/files
+          FAILS=""
+          for PAIR in 01:01.jpg u2:012_p1.webp u3:412e9e.webp u4:ch264_9.jpg u5:890fb1.webp u7:IMG_0929.jpg u8:IMG_1018.jpg; do
+            K="${PAIR%%:*}"; F="${PAIR##*:}"; EXT="${F##*.}"
+            INAME="in.${EXT}"
+            echo "===== [$K] $F — paddlelite lang=$LANGIN ====="
+            adb push "/tmp/mt/imgs/$F" "/data/local/tmp/$INAME" > /dev/null
+            adb shell "run-as $PKG sh -c 'cat /data/local/tmp/$INAME > $APP/$INAME'"
+            adb shell "run-as $PKG sh -c 'rm -f $APP/manga.log'"
+            {
+              echo "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>"
+              echo "<map>"
+              echo "    <string name=\"inp_upload_path\">$APP/$INAME</string>"
+              echo "    <string name=\"file\">$APP/$INAME</string>"
+              echo "    <string name=\"fake_test\">true</string>"
+              echo "    <string name=\"web_debug\">true</string>"
+              echo "    <string name=\"clean_method\">lama-manga</string>"
+              echo "    <string name=\"ocr_engine\">paddlelite</string>"
+              echo "    <string name=\"ocr_lang\">${LANGIN}</string>"
+              echo "    <string name=\"out_fmt\">PDF</string>"
+              echo "    <string name=\"readord\">rtl</string>"
+              echo "    <boolean name=\"battery_asked\" value=\"true\" />"
+              echo "    <boolean name=\"viewer_hint_v3\" value=\"true\" />"
+              echo "</map>"
+            } > /tmp/prefs.xml
+            adb push /tmp/prefs.xml /data/local/tmp/prefs.xml > /dev/null
+            adb shell "run-as $PKG sh -c 'mkdir -p $APP/shared_prefs && cat /data/local/tmp/prefs.xml > $APP/shared_prefs/manga_settings.xml'"
+            adb shell rm -f "/data/local/tmp/$INAME" /data/local/tmp/prefs.xml
+            adb logcat -c || true
+            adb shell am force-stop $PKG || true
+            sleep 2
+            adb shell am start -W -n $PKG/.MainActivity || true
+            sleep 15
+            adb logcat -d > "/tmp/emu_logcat_${K}.txt" 2>/dev/null || true
+            python3 .ci_scripts/tap_run.py || { echo "::error::tap failed [$K]"; FAILS="$FAILS $K(tap)"; continue; }
+            python3 .ci_scripts/wait_done.py 40 || { echo "::error::engine not done [$K]"; FAILS="$FAILS $K(done)"; }
+            adb exec-out run-as $PKG cat files/manga.log > "emu-arm-artifacts/manga_${K}.log" || true
+            adb logcat -d -b crash > "emu-arm-artifacts/crash_${K}.txt" 2>/dev/null || true
+            adb shell "run-as $PKG ls -la files/work/out" || true
+            adb exec-out run-as $PKG cat files/work/out/in.pdf > "emu-arm-artifacts/out_${K}.pdf" || true
+            adb shell "run-as $PKG sh -c 'rm -rf $APP/work'" || true
+            N=$(grep -o 'متن استخراج شد: [0-9]* ناحیه' "emu-arm-artifacts/manga_${K}.log" | grep -o '[0-9]*' | tail -1)
+            echo "[count] $K ($F): regions=${N:-0}"
+            if [ "$K" = "01" ]; then
+              python3 .ci_scripts/check_extract.py "emu-arm-artifacts/manga_${K}.log" 7 || FAILS="$FAILS $K(extract)"
+            else
+              [ -n "$N" ] && [ "$N" -ge 1 ] || FAILS="$FAILS $K(extract)"
+            fi
+            test -s "emu-arm-artifacts/out_${K}.pdf" || FAILS="$FAILS $K(pdf)"
+          done
+          echo "=== PADDLE ARM64 SUMMARY ==="
+          for L in emu-arm-artifacts/manga_*.log; do
+            echo "--- $L"; grep -E "OCR گوشی/PC|runner=|متن استخراج شد|TIME]" "$L" | head -8
+          done
+          if [ -n "$FAILS" ]; then echo "=== FAILED:$FAILS"; exit 1; fi
+          echo "[✓] all 7 images passed with paddle-lite arm64"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: paddle-arm64-emu-logs
+          path: emu-arm-artifacts/
+          if-no-files-found: warn
