@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.121"
+APP_VER = "1.14.122"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -20566,6 +20566,326 @@ class MangaTranslator:
         except Exception:
             return None
 
+    def _mlkit_page_lines(self, image: np.ndarray):
+        """v1.14.122 — OCRِ تمام‌صفحه با ML Kit (دقیقاً راهِ موتورِ K3).
+
+        K3 هرگز کراپ‌به‌کراو OCR نمیکند؛ ML Kit «یک بار رویِ کلِ صفحه»
+        اجرا میشود: دیتکتورِ داخلیِ آن خط‌ها را در بافتِ کاملِ صفحه پیدا
+        میکند، layout-analysisِ نیتیو خط‌ها را بلوک‌بندی میکند و «هر خط
+        جداگانه» خوانده میشود. OCRِ کراپیِ ما (≤1.14.121) دقیقاً جایی
+        میشکست که layout-analysis بافتِ صفحه را نداشت:
+          — حبابِ «Alright! I'll increase the speed more!» به ۳ ناحیه
+            شکست (بلوک‌هایِ کراپ = پاراگراف‌هایِ جدا دیده میشدند)
+          — خطِ «I'll» در ادغامِ variantهایِ کراپ گم شد
+          — دو حبابِ قطریِ یک باکس درهمِ بین‌خطی خوانده شدند
+        خروجی: [(txt, conf, poly(4×2 int32 مختصاتِ صفحه), ang, blk), ...]
+        هر خطی که خوانده نشد RESPONSABILITY کراپِ نجات دارد؛ خاموش‌کنندهٔ
+        کلِ پاسِ صفحه: MANGA_MLKIT_PAGE=0"""
+        if (self.ocr is None or image is None
+                or not isinstance(image, np.ndarray) or image.size == 0):
+            return []
+        try:
+            results = self.ocr.ocr(image)
+        except Exception:
+            return []
+        if not results or not results[0]:
+            return []
+        out = []
+        for line in results[0]:
+            try:
+                if not (isinstance(line, (list, tuple)) and len(line) >= 2):
+                    continue
+                pair = line[1]
+                ang = 0.0
+                blk = -1
+                if isinstance(pair, (list, tuple)):
+                    text = str(pair[0]).strip()
+                    conf = float(pair[1]) if len(pair) > 1 else 1.0
+                    if len(pair) > 2:
+                        try:
+                            ang = float(pair[2])
+                            if ang > 180.0:
+                                ang -= 360.0
+                            if abs(ang) > 45.0:
+                                ang = 0.0
+                        except (TypeError, ValueError):
+                            ang = 0.0
+                    if len(pair) > 3:
+                        try:
+                            blk = int(pair[3])
+                        except (TypeError, ValueError):
+                            blk = -1
+                else:
+                    text, conf = str(pair).strip(), 1.0
+                if not text or conf < self.min_confidence:
+                    continue
+                if self._is_non_english_script(text):
+                    continue
+                box0 = line[0] if len(line) >= 1 else None
+                if not (box0 is not None
+                        and isinstance(box0, (list, tuple, np.ndarray))
+                        and len(box0) >= 3):
+                    continue
+                poly = np.asarray(box0, dtype=np.float32).reshape(-1, 2)
+                if poly.min() < -8 or poly.max() >= 100000:
+                    continue
+                out.append((text, float(conf),
+                            np.rint(poly).astype(np.int32),
+                            float(ang), int(blk)))
+            except Exception:
+                continue
+        return out
+
+    @staticmethod
+    def _page_assign_lines(cand, page_lines):
+        """v1.14.122 — تخصیصِ خط‌هایِ تمام‌صفحه به باکس‌هایِ دیتکتور.
+
+        هر خط با «مرکزِ» خودش به باریک‌ترینِ باکسِ محتوی تخصیص مییابد
+        (باکسِ تودرتو = باکسِ خاص‌تر برنده میشود). خروجی:
+        (ocr_results، used) — ocr_results[k] همان ۵تاییِ _ocr_crop است
+        (txt, polys, angs, texts, blks) با مختصاتِ صفحه؛ ترتیبِ خط‌ها
+        نوارِ y (مثلِ _ocr_crop) و متن با ستون‌بندیِ _column_line_groups
+        (متنِ حباب + دست‌نویسِ کنارش جدا نمیشکند)."""
+        n = len(cand)
+        res = [("", [], [], [], []) for _ in range(n)]
+        used = [False] * n
+        if n <= 0 or not page_lines:
+            return res, used
+        rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
+        areas = [max(1, r[2] - r[0]) * max(1, r[3] - r[1]) for r in rects]
+        _prio = {"text_bubble": 0, "text_free": 1, "bubble": 2}
+        assign: List[List[int]] = [[] for _ in range(n)]
+        for li, ent in enumerate(page_lines):
+            try:
+                poly = ent[2]
+                cx = float(poly[:, 0].mean())
+                cy = float(poly[:, 1].mean())
+            except Exception:
+                continue
+            best_k = -1
+            best_key = None
+            for k in range(n):
+                x1, y1, x2, y2 = rects[k]
+                if x1 - 6 <= cx <= x2 + 6 and y1 - 6 <= cy <= y2 + 6:
+                    _cl = str(cand[k][1].get("class_name")
+                              or "") if isinstance(cand[k][1], dict) else ""
+                    key = (areas[k], _prio.get(_cl, 3))
+                    if best_k < 0 or key < best_key:
+                        best_k, best_key = k, key
+            if best_k >= 0:
+                assign[best_k].append(li)
+        for k in range(n):
+            ls = assign[k]
+            if not ls:
+                continue
+            used[k] = True
+            polys = [page_lines[li][2] for li in ls]
+            try:
+                hts = [float(p[:, 1].max() - p[:, 1].min()) for p in polys]
+                row_h = max(8.0, (float(np.median(hts)) if hts else 8.0) * 1.25)
+                order = sorted(
+                    range(len(ls)),
+                    key=lambda t: (
+                        (float(polys[t][:, 1].min()) // row_h),
+                        float(polys[t][:, 0].min())))
+            except Exception:
+                order = list(range(len(ls)))
+            o_polys = [polys[t] for t in order]
+            o_txts = [str(page_lines[ls[t]][0] or "") for t in order]
+            o_angs = [float(page_lines[ls[t]][3]) for t in order]
+            o_blks = [int(page_lines[ls[t]][4]) for t in order]
+            joined = ""
+            try:
+                bbs = [(float(p[:, 0].min()), float(p[:, 1].min()),
+                        float(p[:, 0].max()), float(p[:, 1].max()))
+                       for p in o_polys]
+                _cg = MangaTranslator._column_line_groups(
+                    list(range(len(o_polys))), bbs, rtl=True)
+            except Exception:
+                _cg = None
+            if _cg and len(_cg) > 1:
+                parts = []
+                for g in _cg:
+                    gs = sorted(g, key=lambda i: (
+                        float(bbs[i][1]), float(bbs[i][0])))
+                    _tg = " ".join(str(o_txts[i] or "").strip()
+                                   for i in gs).strip()
+                    if _tg:
+                        parts.append(_tg)
+                joined = "\n".join(parts)
+            else:
+                joined = " ".join(str(t or "").strip()
+                                  for t in o_txts).strip()
+            res[k] = (joined.strip(), o_polys, o_angs, o_txts, o_blks)
+        return res, used
+
+    def _page_leftover_cands(self, cand, page_lines):
+        """v1.14.122 — خط‌هایِ بیرون از همهٔ باکس‌ها → ناحیهٔ مستقل.
+
+        دلیلِ «کمتر استخراج شده»: هر متنی که دیتکتورِ حباب جا انداخته
+        بود هیچ‌گاه OCR نمیشد. با خط‌هایِ تمام‌صفحه حالا باقی‌مانده‌ها هم
+        ناحیه میشوند (کلاسِ text_free — پاکسازیِ نواریِ متن، همان مسیرِ
+        free-text). خوشه‌بندیِ محافظه‌کار: فقط خط‌هایِ چسبیدهٔ هم‌ستون."""
+        n = len(cand)
+        rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
+        centers = []
+        for ent in page_lines:
+            try:
+                poly = ent[2]
+                centers.append((float(poly[:, 0].mean()),
+                                float(poly[:, 1].mean())))
+            except Exception:
+                centers.append(None)
+        left = []
+        for li, cc in enumerate(centers):
+            if cc is None:
+                continue
+            _in = False
+            for k in range(n):
+                x1, y1, x2, y2 = rects[k]
+                if x1 - 6 <= cc[0] <= x2 + 6 and y1 - 6 <= cc[1] <= y2 + 6:
+                    _in = True
+                    break
+            if not _in:
+                left.append(li)
+        if not left:
+            return [], []
+        _bbs = []
+        for li in left:
+            p = page_lines[li][2]
+            _bbs.append((float(p[:, 0].min()), float(p[:, 1].min()),
+                         float(p[:, 0].max()), float(p[:, 1].max())))
+        _hs = sorted(b[3] - b[1] for b in _bbs) or [10.0]
+        _mh = max(10.0, float(_hs[len(_hs) // 2]))
+        parent = list(range(len(left)))
+
+        def _find(a):
+            while parent[a] != a:
+                parent[a] = parent[parent[a]]
+                a = parent[a]
+            return a
+
+        for a in range(len(left)):
+            for b in range(a + 1, len(left)):
+                ba, bb = _bbs[a], _bbs[b]
+                ox = min(ba[2], bb[2]) - max(ba[0], bb[0])
+                narrow = max(1.0, min(ba[2] - ba[0], bb[2] - bb[0]))
+                gap = max(ba[1], bb[1]) - min(ba[3], bb[3])
+                if ox >= 0.40 * narrow and -0.3 * _mh <= gap <= 1.2 * _mh:
+                    ra, rb = _find(a), _find(b)
+                    if ra != rb:
+                        parent[rb] = ra
+        comps: dict = {}
+        for a in range(len(left)):
+            comps.setdefault(_find(a), []).append(a)
+        extra_cand: List[tuple] = []
+        extra_res: List[tuple] = []
+        for _cid, members in comps.items():
+            try:
+                idxs = [left[m] for m in members]
+                polys = [page_lines[li][2] for li in idxs]
+                texts = [str(page_lines[li][0] or "") for li in idxs]
+                angs = [float(page_lines[li][3]) for li in idxs]
+                blks = [int(page_lines[li][4]) for li in idxs]
+                if sum(1 for t in texts for c in t if c.isalnum()) < 4:
+                    continue
+                x0 = int(np.floor(min(float(p[:, 0].min())
+                                      for p in polys)))
+                y0 = int(np.floor(min(float(p[:, 1].min())
+                                      for p in polys)))
+                x1 = int(np.ceil(max(float(p[:, 0].max())
+                                     for p in polys)))
+                y1 = int(np.ceil(max(float(p[:, 1].max())
+                                     for p in polys)))
+                x0, y0 = max(0, x0 - 8), max(0, y0 - 6)
+                x1, y1 = x1 + 8, y1 + 6
+                if x1 - x0 < 24 or y1 - y0 < 14:
+                    continue
+                bw, bh = x1 - x0, y1 - y0
+                _bd = {"class_name": "text_free", "confidence": 0.50,
+                       "rect": (x0, y0, x1, y1), "shape_type": "rect",
+                       "mask_poly": None}
+                extra_cand.append((len(cand) + len(extra_cand), _bd,
+                                   x0, y0, x1, y1, bw, bh))
+                extra_res.append((" ".join(t.strip() for t in texts).strip(),
+                                  polys, angs, texts, blks))
+            except Exception:
+                continue
+        return extra_cand, extra_res
+
+    def _merge_same_bubble_blocks(self, by_blk, polys):
+        """v1.14.122 — ادغامِ بلوک‌هایِ ML Kit که «یک حباب» اند.
+
+        layout-analysisِ رویِ کراپ (برخلافِ تمام‌صفحه) پاراگراف‌هایِ یک
+        حباب را بلوک‌هایِ جدا میدهد («Alright!» / «increase» / «the speed
+        more!») — تفکیکِ کورکورانهٔ بلوک‌ها در v1.14.121 متنِ نزدیک را
+        جدا میکرد. قاعدهٔ ادغامِ همان‌حباب:
+          x-همپوشانی ≥ ۴۵٪ عرضِ باریک‌تر (با لبهٔ جمعشده) و شکافِ y در
+          [−۰٫۳×mh، ۱٫۱×mh] و (یکیِ تک‌خطی است یا شکاف ≤ ۰٫۵×mh)
+        بلوک‌هایی که در y همپوشانیِ واقعی دارند (دو ستونِ موازی/متنِ
+        دست‌نویسِ کنارِ حباب) هرگز ادغام نمیشوند.
+        خروجی: لیستِ گروه‌ها (هر گروه = اندیس‌هایِ خط)."""
+        try:
+            uids = sorted(by_blk.keys())
+            if len(uids) < 2:
+                return [list(by_blk[u]) for u in uids]
+            info = {}
+            for u in uids:
+                idxs = [k for k in by_blk[u] if 0 <= k < len(polys)
+                        and polys[k] is not None]
+                if not idxs:
+                    return [list(v) for v in by_blk.values()]
+                ps = [np.asarray(polys[k], dtype=np.float32).reshape(-1, 2)
+                      for k in idxs]
+                x0 = min(float(p[:, 0].min()) for p in ps)
+                x1 = max(float(p[:, 0].max()) for p in ps)
+                y0 = min(float(p[:, 1].min()) for p in ps)
+                y1 = max(float(p[:, 1].max()) for p in ps)
+                hs = [float(p[:, 1].max() - p[:, 1].min()) for p in ps]
+                info[u] = (x0, y0, x1, y1,
+                           float(np.median(hs)) if hs else 10.0, len(idxs))
+            parent = {u: u for u in uids}
+
+            def _find(a):
+                while parent[a] != a:
+                    parent[a] = parent[parent[a]]
+                    a = parent[a]
+                return a
+
+            for _i in range(len(uids)):
+                for _j in range(_i + 1, len(uids)):
+                    a, b = uids[_i], uids[_j]
+                    ax0, ay0, ax1, ay1, _ah, _an = info[a]
+                    bx0, by0, bx1, by1, _bh, _bn = info[b]
+                    _aw = max(1.0, ax1 - ax0)
+                    _bw = max(1.0, bx1 - bx0)
+                    asx0, asx1 = ax0 + 0.12 * _aw, ax1 - 0.12 * _aw
+                    bsx0, bsx1 = bx0 + 0.12 * _bw, bx1 - 0.12 * _bw
+                    ox = min(asx1, bsx1) - max(asx0, bsx0)
+                    narrow = max(1.0, min(asx1 - asx0, bsx1 - bsx0))
+                    if ox < 0.45 * narrow:
+                        continue
+                    mh = max(_ah, _bh, 10.0)
+                    gap = max(ay0, by0) - min(ay1, by1)
+                    if gap < -0.3 * mh or gap > 1.1 * mh:
+                        continue
+                    if min(_an, _bn) > 1 and gap > 0.5 * mh:
+                        continue
+                    ra, rb = _find(a), _find(b)
+                    if ra != rb:
+                        parent[rb] = ra
+            groups: dict = {}
+            for u in uids:
+                groups.setdefault(_find(u), []).extend(
+                    k for k in by_blk[u] if 0 <= k < len(polys))
+            _grp = [groups[k] for k in groups]
+            _grp.sort(key=lambda g: min(float(
+                np.asarray(polys[k], dtype=np.float32).reshape(-1, 2)[:, 1].min())
+                for k in g if 0 <= k < len(polys)) if g else 0.0)
+            return _grp
+        except Exception:
+            return [list(v) for v in by_blk.values()]
+
     def _split_mlkit_block_cands(self, cand, ocr_results):
         """v1.14.121 — تفکیکِ نتایجِ OCRِ هر باکس بر اساسِ شمارهٔ TextBlockِ
         ML Kit (layout-analysisِ نیتیو — دقیقاً موتورِ K3).
@@ -20611,11 +20931,19 @@ class MangaTranslator:
                 _by_blk: dict = {}
                 for _k, _bv in enumerate(_blks):
                     _by_blk.setdefault(int(_bv), []).append(_k)
+                # v1.14.122 — بلوک‌هایِ همان‌حباب اول ادغام میشوند (کراپِ
+                # بدونِ بافتِ صفحه پاراگراف‌هایِ یک حباب را بلوکِ جدا
+                # میداد → v1.14.121 متنِ نزدیک را جدا میکرد). اگر بعد از
+                # ادغام فقط یک گروه بماند، همان مسیرِ «بدونِ تفکیک»
+                # ادامه مییابد (گاردِ ضدِ جداشدنِ اضافه).
+                _groups = self._merge_same_bubble_blocks(_by_blk, _polys)
                 _cx1, _cy1, _cx2, _cy2 = cb[2], cb[3], cb[4], cb[5]
                 _orig_b = cb[1] if isinstance(cb[1], dict) else {}
                 parts = []
-                for _uid in _uids:
-                    _idxs = _by_blk[_uid]
+                for _gidxs in _groups:
+                    _idxs = list(_gidxs)
+                    _g_uid = min(int(_blks[_k]) for _k in _idxs
+                                 if 0 <= _k < len(_blks)) if _idxs else -1
                     _pt = " ".join(str(_texts[_k] or "").strip()
                                    for _k in _idxs
                                    if str(_texts[_k] or "").strip())
@@ -20633,7 +20961,7 @@ class MangaTranslator:
                         parts = None
                         break
                     parts.append((
-                        _uid,
+                        _g_uid,
                         (_bx0, _by0, _bx1, _by1),
                         [np.rint(np.asarray(_polys[_k],
                                             dtype=np.float32)).astype(np.int32)
@@ -20659,7 +20987,8 @@ class MangaTranslator:
                         _nb["class_name"] = "text_bubble"
                     new_cand.append((len(new_cand), _nb, bx0, by0, bx1, by1,
                                      bx1 - bx0, by1 - by0))
-                    new_res.append((btxt, bp, ba, bt, [_uid] * len(bp)))
+                    new_res.append((btxt, bp, ba, bt,
+                                    [_uid] * len(bp)))
                 n_split += 1
             except Exception:
                 new_cand.append(cb)
@@ -20858,29 +21187,78 @@ class MangaTranslator:
             cand.append((i, b, x1, y1, x2, y2, bw, bh))
         ocr_results: List[Tuple[str, List[np.ndarray], List[float]]] = [
             ("", [], [], [], [])] * len(cand)
-        if cand:
-            # v1.14.90 — باکس‌هایِ همسایه به _ocr_crop داده می‌شود تا
-            # نجاتِ خطِ لبه‌بریده، کراپ را تا باکسِ ناحیهٔ دیگر باز نکند
-            # (جذبِ متنِ حبابِ مجاور ممنوع).
-            _all_rects90 = [(t[2], t[3], t[4], t[5]) for t in cand]
+        # ── v1.14.122 — پاسِ تمام‌صفحهٔ K3 ─────────────────────────────
+        # OCRِ کراپ‌به‌کراو (≤1.14.121) ریشهٔ دو شکایتِ «استخراجِ ناقص» و
+        # «جداشدنِ متنِ نزدیک» بود: layout-analysisِ ML Kit رویِ کراپِ
+        # بدونِ بافتِ صفحه حباب را پاراگراف‌پاراگراف جدا میکرد، خطِ وسط
+        # در ادغامِ variantها گم میشد و دو حبابِ قطریِ یک باکس درهمِ
+        # بین‌خطی خوانده میشد. K3 دقیقاً به همین دلیل ML Kit را «یک بار
+        # رویِ کلِ صفحه» اجرا میکند. اینجا هم: یک فراخوانِ تمام‌صفحه →
+        # خط‌ها به باکس‌هایِ دیتکتور تخصیص مییابند؛ باکسِ بیخط = نجاتِ
+        # کراپِ قدیمی (variants/upscale)؛ خطِ بیرون از همهٔ باکس‌ها =
+        # ناحیهٔ مستقل (استخراجِ بیشتر). خطا/خالی → مسیرِ قدیمی.
+        # خاموش‌کننده: MANGA_MLKIT_PAGE=0
+        _page_done = False
+        if (cand and _on_android()
+                and getattr(self, "_ocr_backend_name", "") == "mlkit"
+                and os.environ.get("MANGA_MLKIT_PAGE", "1").strip() != "0"):
+            try:
+                _plines = self._mlkit_page_lines(image)
+                if _plines:
+                    _res, _used = self._page_assign_lines(cand, _plines)
+                    _nused = sum(1 for _u in _used if _u)
+                    _nresc = 0
+                    for _k in range(len(cand)):
+                        if _used[_k]:
+                            continue
+                        try:
+                            _blk90 = [(t[2], t[3], t[4], t[5])
+                                      for j, t in enumerate(cand) if j != _k]
+                            _res[_k] = self._ocr_crop(
+                                image,
+                                [cand[_k][2], cand[_k][3],
+                                 cand[_k][4], cand[_k][5]],
+                                block_rects=_blk90)
+                        except Exception:
+                            _res[_k] = ("", [], [], [], [])
+                        _nresc += 1
+                    ocr_results = _res
+                    _page_done = True
+                    _ec, _er = self._page_leftover_cands(cand, _plines)
+                    if _ec:
+                        cand.extend(_ec)
+                        ocr_results.extend(_er)
+                    if self.debug:
+                        print(f"    [*]K3-صفحه: {len(_plines)} خطِ "
+                              f"تمام‌صفحه → {_nused}/{len(cand)} باکس از "
+                              f"ML Kit | {_nresc} نجاتِ کراپ | "
+                              f"+{len(_ec)} ناحیهٔ بیرونِ باکس")
+            except Exception:
+                _page_done = False
+        if not _page_done:
+            if cand:
+                # v1.14.90 — باکس‌هایِ همسایه به _ocr_crop داده می‌شود تا
+                # نجاتِ خطِ لبه‌بریده، کراپ را تا باکسِ ناحیهٔ دیگر باز نکند
+                # (جذبِ متنِ حبابِ مجاور ممنوع).
+                _all_rects90 = [(t[2], t[3], t[4], t[5]) for t in cand]
 
-            def _ocr_one90(k: int):
-                _t90 = cand[k]
-                _blk90 = [_all_rects90[j]
-                          for j in range(len(_all_rects90)) if j != k]
-                return self._ocr_crop(
-                    image, [_t90[2], _t90[3], _t90[4], _t90[5]],
-                    block_rects=_blk90)
+                def _ocr_one90(k: int):
+                    _t90 = cand[k]
+                    _blk90 = [_all_rects90[j]
+                              for j in range(len(_all_rects90)) if j != k]
+                    return self._ocr_crop(
+                        image, [_t90[2], _t90[3], _t90[4], _t90[5]],
+                        block_rects=_blk90)
 
-            n_workers = max(1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
-            # v1.14.120 — RapidOCR مجازِ موازی: سشن‌های det/rec ORT مشترک
-            # و thread-safe هستند (paddlelite/native از v1.14.120 حذف شد).
-            _ocr_ts90 = isinstance(self.ocr, RapidOCRBackend)
-            if n_workers > 1 and _ocr_ts90:
-                with ThreadPoolExecutor(max_workers=n_workers) as ex:
-                    ocr_results = list(ex.map(_ocr_one90, range(len(cand))))
-            else:
-                ocr_results = [_ocr_one90(k) for k in range(len(cand))]
+                n_workers = max(1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
+                # v1.14.120 — RapidOCR مجازِ موازی: سشن‌های det/rec ORT مشترک
+                # و thread-safe هستند (paddlelite/native از v1.14.120 حذف شد).
+                _ocr_ts90 = isinstance(self.ocr, RapidOCRBackend)
+                if n_workers > 1 and _ocr_ts90:
+                    with ThreadPoolExecutor(max_workers=n_workers) as ex:
+                        ocr_results = list(ex.map(_ocr_one90, range(len(cand))))
+                else:
+                    ocr_results = [_ocr_one90(k) for k in range(len(cand))]
 
         if split_groups:
             for idxs, full_rect in split_groups:
