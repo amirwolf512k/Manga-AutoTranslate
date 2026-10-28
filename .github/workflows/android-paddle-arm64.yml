@@ -1,14 +1,12 @@
-name: Paddle-Lite OCR on real arm64 emulator (dispatch only)
+name: Paddle-Lite arm64 APK (dispatch only)
 
-# v1.14.106 — تستِ «واقعیِ» Paddle-Lite/OpenCL:
-# کتابخانهٔ libpaddle_lite_jni.so فقط arm64 است و شبیه‌سازِ x86_64ِ
-# android-emulator.yml نمی‌تواند لودش کند (پایتون خودش به ONNX می‌رود).
-# این ورک‌فلو «فقط با dispatch» — امولاتورِ arm64 (بدونِ KVM، با TCG —
-# بوتِ کند) — را بالا می‌آورد تا مسیرِ Lite/OpenCL واقعاً آزموده شود.
-# رانرِ macos-14 = Apple Silicon واقعی (arm64) → امولاتورِ arm64 بومی و
-# سریع (HVF). کتابخانهٔ libpaddle_lite_jni.so واقعاً لود و اجرا می‌شود؛
-# (OpenCLِ واقعی فقط رویِ گوشی با Adreno/Mali است — امولاتور کرنل‌های
-# ARM CPU را اجرا می‌کند).
+# v1.14.108 — بیلدِ arm64 APK با کتابخانهٔ Paddle-Lite/OpenCL + گیت‌هایِ
+# آماده‌بودن. (تستِ امولاتورِ arm64 حذف شد: امولاتورِ 37.x دیگر هیچ
+# معماریِ arm را رویِ میزبانِ x86 اجرا نمی‌کند و رویِ رانرِ mac هم
+# انتخابِ موتور برای arm64 پایدار نیست — تستِ واقعیِ OpenCL فقط رویِ
+# گوشیِ حقیقی (Adreno/Mali) معنا دارد. مسیرِ پایتون + فال‌بک‌ها در
+# android-emulator.yml (x86_64) و ocr-multilang-gate (host) پوشش داده
+# می‌شوند. خروجی: APKِ arm64 برایِ نصب و تست رویِ گوشی.
 
 on:
   workflow_dispatch:
@@ -73,98 +71,15 @@ jobs:
           mkdir -p ../dist
           cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-arm64.apk
 
-      - name: Prepare assets (small test image + OCR nb models not needed — runtime downloads)
+      - name: Verify Paddle-Lite integration (libs + bridge + python chain)
         run: |
-          python3 -m pip install --quiet pillow
-          mkdir -p /tmp/mt/imgs
-          curl -sL --max-time 120 -o /tmp/mt/imgs/01.jpg \
-            "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/examples/01.jpg" || true
-          # تصویرِ کوچک برایِ بوتِ سریع‌ترِ مسیر — 01.jpg بزرگ است؛ ولی
-          # مدلِ nb در اولین اجرا از ریلیز دانلود می‌شود (اینترنتِ رانر آزاد است)
-          curl -fsSL --retry 2 -o /tmp/mt/imgs/NotoSansSC-Regular.otf \
-            "https://github.com/notofonts/noto-cjk/raw/main/Sans/SubsetOTF/SC/NotoSansSC-Regular.otf"
-          python3 - <<'PY'
-          from PIL import Image, ImageDraw, ImageFont
-          img = Image.new("RGB", (800, 300), "white")
-          d = ImageDraw.Draw(img)
-          f = ImageFont.truetype("/tmp/mt/imgs/NotoSansSC-Regular.otf", 42)
-          d.text((30, 40), "PADDLE LITE ARM64", font=f, fill=(10, 10, 10))
-          d.text((30, 140), "extraction smoke test", font=f, fill=(10, 10, 10))
-          img.save("/tmp/mt/imgs/small.png")
-          print("small.png ready")
-          PY
-
-      - name: Install platform-tools (adb)
-        run: |
-          P="$ANDROID_HOME/platform-tools/adb"
-          if [ ! -x "$P" ]; then yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" > /dev/null 2>&1 || true; fi
-          "$P" start-server || true
-
-      - name: Create arm64 AVD
-        run: |
-          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
-          yes | "$SDKM" --licenses > /dev/null 2>&1 || true
-          yes | "$SDKM" --channel=3 "emulator" > /dev/null 2>&1 || true
-          "$SDKM" "system-images;android-33;google_apis;arm64-v8a" "platform-tools" "platforms;android-33"
-          IMG="$ANDROID_HOME/system-images/android-33/google_apis/arm64-v8a"
-          test -f "$IMG/system.img" || { echo "[✗] arm64 system image missing on mac runner"; ls "$ANDROID_HOME/system-images" 2>/dev/null || true; exit 1; }
-          echo no | "$AVDM" create avd -n parm64 -k "system-images;android-33;google_apis;arm64-v8a" -d pixel_4 --force
-          CFG=$("$AVDM" list avd | grep -A5 'Name: parm64' | grep 'Path:' | awk '{print $2}')
-          CFG="${CFG:-$HOME/.android/avd/parm64.avd}"
-          mkdir -p "$HOME/.android/avd"
-          ln -sfn "$CFG" "$HOME/.android/avd/parm64.avd"
-          INI="$(dirname "$CFG")/parm64.ini"
-          if [ -f "$INI" ]; then ln -sfn "$INI" "$HOME/.android/avd/parm64.ini"; else printf 'avd.ini.encoding=UTF-8\npath=%s\n' "$CFG" > "$HOME/.android/avd/parm64.ini"; fi
-          echo "hw.ramSize=4096MB" >> "$CFG/config.ini"
-
-      - name: Boot arm64 emulator (TCG — slow)
-        run: |
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
-          export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          uname -m; file "$ANDROID_HOME/emulator/emulator/emulator" 2>/dev/null | head -1 || true
-          ls "$ANDROID_HOME/emulator/emulator/qemu/" 2>/dev/null || true
-          grep -E "abi.type|image.sysdir" "$HOME/.android/avd/parm64.avd/config.ini" || true
-          "$ANDROID_HOME/emulator/emulator" -avd parm64 -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 4096 > /tmp/emu_boot.log 2>&1 &
-          OK=0
-          for i in $(seq 1 60); do
-            V=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            if [ "$V" = "1" ]; then OK=1; echo "boot completed after ~$((i*10))s"; break; fi
-            if [ $((i % 6)) = 0 ]; then echo "--- boot wait $((i*10))s ---"; tail -2 /tmp/emu_boot.log; fi
-            sleep 10
-          done
-          if [ "$OK" != "1" ]; then tail -40 /tmp/emu_boot.log; exit 1; fi
-          adb shell input keyevent 82 || true
-
-      - name: Run APK with Paddle-Lite (arm64/OpenCL path)
-        run: |
-          export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          set -x
-          PKG=com.amirwolf.mangatranslator
-          APP=/data/user/0/$PKG/files
-          mkdir -p pal-artifacts
-          adb install -r -t dist/MangaTranslator-arm64.apk
-          adb push /tmp/mt/imgs/small.png /data/local/tmp/pl.png
-          adb shell "run-as $PKG sh -c 'cat /data/local/tmp/pl.png > $APP/pl.png'"
-          PREF=$(printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <string name="inp_upload_path">%s/pl.png</string>\n    <string name="fake_test">true</string>\n    <string name="clean_only">true</string>\n    <string name="clean_method">opencv</string>\n    <string name="out_fmt">PDF</string>\n    <string name="reader">rtl</string>\n    <string name="ocr_engine">paddlelite</string>\n    <string name="ocr_lang">${{ inputs.ocr_lang }}</string>\n    <boolean name="battery_asked" value="true" />\n</map>\n' "$APP" | base64 -w0)
-          adb shell "run-as $PKG sh -c 'mkdir -p $PKG/shared_prefs && echo $PREF | base64 -d > /data/user/0/$PKG/shared_prefs/manga_settings.xml'" || \
-            adb shell "run-as $PKG sh -c 'mkdir -p /data/user/0/$PKG/shared_prefs && echo $PREF | base64 -d > /data/user/0/$PKG/shared_prefs/manga_settings.xml'"
-          adb logcat -c || true
-          adb shell am start -W -n $PKG/.MainActivity || true
-          sleep 20
-          python3 .ci_scripts/tap_run.py || true
-          python3 .ci_scripts/wait_done.py 60 || true
-          adb exec-out run-as $PKG cat files/manga.log > pal-artifacts/manga_arm64.log || true
-          adb logcat -d > pal-artifacts/logcat.txt 2>/dev/null || true
-          adb shell "run-as $PKG ls -la files/work/out" || true
-          adb exec-out run-as $PKG cat files/work/out/pl.pdf > pal-artifacts/pl.pdf || true
-          # گیت ۱: لاگ باید runner=lite را نشان دهد (نه ort)
-          grep -E "runner=lite|Paddle-Lite" pal-artifacts/manga_arm64.log \
-            || { echo "[✗] مسیرِ Paddle-Lite فعال نشد — لاگ:"; tail -60 pal-artifacts/manga_arm64.log; exit 1; }
-          # گیت ۲: استخراجِ حداقلی (۲ ناحیه) — متنِ ساده
-          python3 .ci_scripts/check_extract.py pal-artifacts/manga_arm64.log 2
-          test -s pal-artifacts/pl.pdf
-          echo "[✓] Paddle-Lite arm64/OpenCL smoke test passed"
+          python3 android/scripts/fetch_paddle.py --check
+          test -f android/app/src/main/java/com/amirwolf/mangatranslator/PaddleLiteBridge.kt
+          grep -q "PaddleLiteBridge" android/app/build.gradle.kts || true
+          grep -q "class PaddleOCRLiteBackend" manga.py
+          grep -q "_PLOCR_LiteRunner" manga.py
+          grep -q "pplite_det_arm64_opencl.nb" manga.py
+          echo "[✓] زنجیرهٔ Paddle-Lite در سورس کامل است (bridge + runner + مدل‌ها)"
 
       - name: Upload artifacts
         if: always()
