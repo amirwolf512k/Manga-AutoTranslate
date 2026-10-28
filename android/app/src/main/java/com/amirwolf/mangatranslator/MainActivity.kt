@@ -180,6 +180,9 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // v1.14.109 — خطایِ شروعِ پایتون (اگر happened) — در رشتهٔ آماده‌سازی به UI میرود
+    private var pythonStartError: String? = null
+
     override fun onResume() {
         super.onResume()
 
@@ -201,7 +204,14 @@ class MainActivity : AppCompatActivity() {
         window.navigationBarColor = BG
         window.statusBarColor = BG
 
-        if (!Python.isStarted()) Python.start(AndroidPlatform(this))
+        // v1.14.109 — Python.start رویِ رشتهٔ اصلی است؛ اگر محیطِ native ناسازگار باشد (ABIِ غلط/حافظهٔ کم) به‌جایِ کرشِ کلِ اپ، خطا ذخیره و در UI نشان داده میشود.
+        pythonStartError = try {
+            if (!Python.isStarted()) Python.start(AndroidPlatform(this))
+            null
+        } catch (t: Throwable) {
+            android.util.Log.e("MainActivity", "Python.start failed", t)
+            (t.message ?: t.toString())
+        }
 
         // v1.14.63 — درخواستِ کاربر: «Downloads/manga/pages_*** پوشه بپاکه کلا»
         // پوشه‌هایِ pages_… (انبارِ ذخیرهٔ خودکارِ صفحات در اجراهایِ قبل)
@@ -342,7 +352,8 @@ class MainActivity : AppCompatActivity() {
         Thread {
             try {
                 try {
-                    val cl = java.io.File(filesDir, "crash_log.txt")
+    
+                val cl = java.io.File(filesDir, "crash_log.txt")
                     if (cl.exists()) {
                         val prevTxt = cl.readText().take(4000)
                         ui.post {
@@ -351,6 +362,8 @@ class MainActivity : AppCompatActivity() {
                     }
                 } catch (_: Exception) {
                 }
+                // v1.14.109 — اگر Python.start شکست خورده، همینجا با پیامِ روشن به UI برود (نه کرش)
+                pythonStartError?.let { throw RuntimeException("Python.start: $it") }
                 clearOldCaches()
                 copyBundledSources()
                 val launcher = Python.getInstance().getModule("launcher")
@@ -469,6 +482,7 @@ class MainActivity : AppCompatActivity() {
             var remote = 0
             var rname = ""
             var apk64 = ""
+            var apkv7 = ""
             var apkUni = ""
             for (ln in verTxt.lines()) {
                 val pp = ln.split("=", limit = 2)
@@ -477,13 +491,20 @@ class MainActivity : AppCompatActivity() {
                     "versionCode" -> remote = pp[1].trim().toIntOrNull() ?: 0
                     "versionName" -> rname = pp[1].trim()
                     "apkArm64" -> apk64 = pp[1].trim()
+                    "apkArmv7a" -> apkv7 = pp[1].trim()
                     "apkUniversal" -> apkUni = pp[1].trim()
                 }
             }
             if (remote <= vc || remote <= 0) return
-            val abis = Build.SUPPORTED_ABIS ?: arrayOf<String>()
-            val base = if (abis.any { it.contains("arm64") } && apk64.isNotEmpty())
-                apk64 else apkUni.ifEmpty { apk64 }
+            // v1.14.109 — گوشیِ ۳۲-بیتی (بدونِ arm64) APKِ armv7a را بگیرد
+            // (سبک‌تر از universal)؛ ۶۴-بیتی مثلِ قبل arm64؛ بدونِ هر دو = universal
+            val has64 = (Build.SUPPORTED_ABIS ?: arrayOf<String>())
+                .any { it.contains("arm64") }
+            val base = when {
+                has64 && apk64.isNotEmpty() -> apk64
+                !has64 && apkv7.isNotEmpty() -> apkv7
+                else -> apkUni.ifEmpty { apk64 }
+            }
             if (base.isEmpty()) return
             prefs.edit().putString("apk_url_" + remote, base).apply()
             ui.post {

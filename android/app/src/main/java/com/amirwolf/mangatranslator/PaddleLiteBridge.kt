@@ -16,15 +16,45 @@ import java.util.concurrent.ConcurrentHashMap
  *   predict(path, shape, floatData) → FloatBuffer خروجی
  *   predictShape(path)              → شکلِ خروجیِ آخرِ همان مدل
  *   ready(path)                     → ساختِ موفقِ predictor؟
- *   backend(path)                   → نامِ بکاندِ شتاب ("opencl")
+ *   backend(path)                   → نامِ بکاندِ شتاب ("opencl") یا ""
  *
- * مدل‌ها .nb هستند (تبدیل‌شده با opt و valid_targets="arm opencl")؛
- * کتابخانهٔ libpaddle_lite_jni.so از بیلدِ opencl است → کرنل‌های OpenCL
- * گوشی برای همهٔ OPهایِ پشتیبانی‌شده فعال می‌شود و بقیه رویِ ARM CPU.
+ * مدل‌ها .nb هستند (تبدیل‌شده با opt و valid_targets="arm opencl" — سازگار
+ * با armv7 و armv8 هر دو)؛ کتابخانهٔ libpaddle_lite_jni.so از بیلدِ opencl
+ * است (هر دو ABI از v1.14.109) → کرنل‌های OpenCL گوشی برای همهٔ OPهایِ
+ * پشتیبانی‌شده فعال می‌شود و بقیه رویِ ARM CPU.
  */
 object PaddleLiteBridge {
 
     private const val TAG = "PaddleLiteBridge"
+
+    // v1.14.109 — لودِ صریحِ امن: اگر .so برایِ ABIِ گوشی نباشد (بیلدِ
+    // arm64-only رویِ گوشیِ ۳۲-بیتی یا jar بدونِ so) به‌جایِ
+    // UnsatisfiedLinkError داخلِ initِ کلاسِ paddle، همین‌جا یک بار
+    // مدیریت می‌شود → ready()=false → پایتون می‌رود سراغِ ML Kit.
+    @Volatile
+    private var libState: Int = -1 // 1=لود شد، 0=نبود/نشد، -1=هنوز نه
+
+    private fun ensureLib(): Boolean {
+        when (libState) {
+            1 -> return true
+            0 -> return false
+        }
+        return try {
+            System.loadLibrary("paddle_lite_jni")
+            libState = 1
+            Log.i(TAG, "libpaddle_lite_jni loaded (opencl build)")
+            true
+        } catch (t: Throwable) {
+            libState = 0
+            Log.e(TAG, "libpaddle_lite_jni load failed — paddle off, "
+                    + "ML Kit fallback: " + t.message)
+            false
+        }
+    }
+
+    /** وضعیتِ کتابخانهٔ بومی — برایِ لاگ/دیباگ */
+    @JvmStatic
+    fun libOk(): Boolean = ensureLib()
 
     // کشِ predictor per-model — det و rec هرکدام یک مسیر
     private val predictors = ConcurrentHashMap<String, PaddlePredictor>()
@@ -37,6 +67,7 @@ object PaddleLiteBridge {
 
     @Synchronized
     private fun getOrCreate(modelPath: String, threads: Int): PaddlePredictor? {
+        if (!ensureLib()) return null
         predictors[modelPath]?.let { return it }
         // ساختِ همزمانِ دوباره را جلوگیری کن (قفلِ ساده per-path)
         synchronized(building.getOrPut(modelPath) { Any() }) {
@@ -66,9 +97,10 @@ object PaddleLiteBridge {
     fun ready(modelPath: String, threads: Int = 4): Boolean =
         getOrCreate(modelPath, threads) != null
 
-    /** بکاندِ شتابِ این کتابخانه — برای لاگِ پایتون */
+    /** بکاندِ شتابِ این کتابخانه — برایِ لاگِ پایتون (خالی = لود نشده) */
     @JvmStatic
-    fun backend(modelPath: String): String = "opencl"
+    fun backend(modelPath: String): String =
+        if (ensureLib()) "opencl" else ""
 
     /**
      * یک بارِ inference: ورودیِ float با شکلِ [shape] → خروجی به‌صورت
@@ -78,6 +110,7 @@ object PaddleLiteBridge {
     @JvmStatic
     fun predict(modelPath: String, shape: LongArray, data: FloatArray,
                 threads: Int = 4): FloatBuffer? {
+        if (!ensureLib()) return null
         val p = getOrCreate(modelPath, threads) ?: return null
         return try {
             val input = p.getInput(0) ?: return null
