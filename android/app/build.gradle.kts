@@ -24,15 +24,6 @@ android {
 
     }
 
-    sourceSets {
-        getByName("main") {
-            if (!(file("libs/PaddlePredictor.jar").exists()
-                    && file("libs/PaddlePredictor.jar").length() > 0)) {
-                java.excludes.add("**/PaddleLiteBridge.kt")
-            }
-        }
-    }
-
     packaging {
         // v1.14.67 — رویِ امولاتورِ x86_64 (ترجمهٔ arm64) لودِ .soِ
         // فشرده‌نشده از داخلِ APK ممکن است کار نکند → با -PlegacyJni=true
@@ -92,6 +83,8 @@ chaquopy {
     }
 }
 
+// v1.14.108 — اگر fetch_paddle اجرا نشده باشد (jar غایب): PaddleLiteBridge.kt
+// موقتاً به ‎.off منتقل می‌شود تا بدونِ کلاس‌های com.baidu.paddle.lite کامپایل سالم بماند
 // v1.14.108 — اگر fetch_paddle اجرا نشده باشد (jar غایب):
 // وابستگی و PaddleLiteBridge.kt از کامپایل حذف می‌شوند تا بیلد
 // نشکند؛ runtime jclass نمی‌یابد → پایتون به ONNX/ML Kit می‌رود.
@@ -100,6 +93,16 @@ val hasPaddle = paddleJar.exists() && paddleJar.length() > 0
 if (!hasPaddle) {
     logger.lifecycle("PaddlePredictor.jar missing -> Paddle-Lite disabled (ML Kit fallback)")
 }
+
+val paddleBridgeKt = file("src/main/java/com/amirwolf/mangatranslator/PaddleLiteBridge.kt")
+val paddleBridgeOff = file("src/main/java/com/amirwolf/mangatranslator/PaddleLiteBridge.kt.off")
+if (!hasPaddle && paddleBridgeKt.exists()) {
+    paddleBridgeKt.renameTo(paddleBridgeOff)
+}
+if (hasPaddle && paddleBridgeOff.exists()) {
+    paddleBridgeOff.renameTo(paddleBridgeKt)
+}
+
 
 dependencies {
     // v1.14.67 — ortVer برایِ CIِ امولاتور: AARِ 1.31 رویِ x86_64 در
