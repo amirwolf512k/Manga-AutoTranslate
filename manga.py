@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.117"
+APP_VER = "1.14.118"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3531,6 +3531,26 @@ class PaddleOCRLiteBackend:
             # تنظیمات صریحاً paddlelite را اجباری کرده باشد)
             _forced = str(os.environ.get("MANGA_ANDROID_OCR") or "").strip().lower()                 in ("paddlelite", "paddleocr-lite", "plite")
             _banned, _strikes = _plite_ban_status()
+            # v1.14.118 — قبل از تصمیمِ بن: مدلهایِ nb با ریلیز سنجیده
+            # میشوند (فقط اندروید). اگر مدل رویِ ریلیز عوض شده باشد
+            # دانلودِ دوباره میشود و بنِ خود-ترمیم میشود (مدلِ جدید =
+            # تلاشِ دوباره) — بدونِ این، مدلِ خرابِ کششده تا ابد
+            # میماند و بعد از فیکسِ ریلیز هم هیچگوش شفا پیدا نمیکرد.
+            if _on_android():
+                try:
+                    _pmdir = _model_cache_dir("paddle_models")
+                    if _lite_models_refresh(
+                            _pmdir, [_PADDLE_LITE_NB["det"],
+                                     _PADDLE_LITE_NB.get(self.lang)]):
+                        if _banned:
+                            _plite_unban()
+                            _banned, _strikes = False, 0
+                            print("[*] مدلهایِ paddlelite عوض شدند → بنِ "
+                                  "خودکار پاک شد (تلاشِ دوباره با مدلِ جدید)")
+                        else:
+                            print("[*] مدلهایِ paddlelite بهروز شدند")
+                except Exception as _re:
+                    print(f"[!] تازهسازیِ مدلِ lite: {_re}")
             if _banned and not _forced:
                 print(f"[!] Paddle-Lite قبلاً {_strikes or 1} بار اپ را وسطِ "
                       f"استخراج بسته (کرشِ native) → این اجرا با ML Kit/ONNX "
@@ -4205,6 +4225,68 @@ def _plite_ban_status():
     except Exception:
         pass
     return banned, max(0, strikes)
+
+
+def _plite_unban():
+    """v1.14.118 — پاککردنِ بنِ paddlelite (فقط وقتی مدلها عوض شدهاند)."""
+    try:
+        base = os.environ.get("MANGA_FILES_DIR") or os.getcwd()
+        for _f in ("paddle_banned.txt", "paddle_strikes.txt"):
+            _p = os.path.join(base, _f)
+            if os.path.isfile(_p):
+                os.remove(_p)
+    except Exception:
+        pass
+
+
+def _lite_models_refresh(mdir, files):
+    """v1.14.118 (فقط اندروید) — تازهسازیِ مدلهایِ nb در برابرِ ریلیزِ models.
+    زمینه: کرشِ 2026-10-28 (POCO F4/munch) — nbهایِ بازآپلودشدهٔ 01:01 UTC
+    با runtimeِ v2.14-rc ناسازگار بودند و موقعِ ساختِ predictor سگفلتِ
+    native میدادند؛ چون _ensure_rapidocr_models فایلِ موجودِ >100KB را
+    دانلود نمیکند، مدلِ خراب رویِ گوشی میماند. این تابع سایز/etagِ
+    ریموت را با کش میسنجد؛ مغایرت → دانلودِ دوباره. خروجی: True اگر
+    چیزی واقعاً عوض شد (برایِ بنِ خود-ترمیم)."""
+    changed = False
+    for fname in files:
+        if not fname:
+            continue
+        dst = os.path.join(mdir, fname)
+        rsize, etag = 0, ""
+        try:
+            import urllib.request as _uq
+            req = _uq.Request(_RAPIDOCR_MIRROR + fname, method="HEAD")
+            with _uq.urlopen(req, timeout=20) as r:
+                rsize = int(r.headers.get("Content-Length") or 0)
+                etag = (r.headers.get("ETag") or "").strip('" W/')
+        except Exception:
+            continue
+        if rsize <= 10_000:
+            continue
+        try:
+            meta = os.path.join(mdir, fname + ".etag")
+            old_etag = ""
+            if os.path.isfile(meta):
+                old_etag = (open(meta).read().strip() or "")
+            lsize = os.path.getsize(dst) if os.path.isfile(dst) else -1
+            if lsize == rsize and old_etag and etag and old_etag == etag:
+                continue
+            if os.path.isfile(dst):
+                os.remove(dst)
+            _ensure_rapidocr_models(mdir, files=[fname])
+            nsize = os.path.getsize(dst) if os.path.isfile(dst) else -1
+            if nsize > 10_000:
+                changed = True
+                print(f"[*] {fname}: {lsize} → {nsize} بایت "
+                      f"(مدلِ رویِ ریلیز عوض شده بود → دانلودِ دوباره)")
+            try:
+                with open(meta, "w") as f:
+                    f.write(etag)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"[!] تازهسازیِ {fname}: {e}")
+    return changed
 
 
 def _on_android() -> bool:
