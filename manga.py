@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.133"
+APP_VER = "1.14.134"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -9462,6 +9462,22 @@ class MangaTranslator:
                         n_ok += 1
                 except Exception:
                     continue
+        # v1.14.134 — پسگیرِ جوهرِ جامانده (فقطِ اندروید): قطعههایِ
+        # گلیفِ همسایهٔ ماسک که OCRِ ناقص (ML Kit) بیرونِ پالی گذاشته
+        # ('Yo'/'th'/'a' — حبابِ چپبالای 01.jpg) به ماسک برمیگردند.
+        if _android_gate("MANGA_INK_RECLAIM") and n_ok > 0:
+            try:
+                _add134 = self._stray_ink_reclaim(image, m, regions)
+                if _add134 is not None and np.any(_add134):
+                    m = cv2.bitwise_or(m, _add134)
+                    if self.debug:
+                        try:
+                            print(f"  [🔍]پسگیرِ جوهر: +"
+                                  f"{int(cv2.countNonZero(_add134))}px به ماسک")
+                        except Exception:
+                            pass
+            except Exception:
+                pass
         if n_ok <= 0 and n_skip <= 0:
             return None
         # v1.14.104 — «بالنِ سیستم»: اینتریورِ باکسِ سیستم اینجا به ماسک
@@ -9636,6 +9652,183 @@ class MangaTranslator:
             return full
         except Exception:
             return None
+
+    def _stray_ink_reclaim(self, image: np.ndarray,
+                           page_mask: np.ndarray,
+                           regions) -> Optional[np.ndarray]:
+        """v1.14.134 — «پسگیرِ جوهرِ جامانده» (فقطِ اندروید — گیتِ
+        MANGA_INK_RECLAIM).
+
+        ریشهٔ «متن جا میمونه سمت چپِ حباب» (01.jpg، لاگِ گوشیِ
+        v1.14.133): پالیهایِ OCRِ ناقصِ ML Kit ('ure' بهجایِ You're،
+        'neredl' بهجایِ the real، 'tractien' بهجایِ attraction) کادرِ
+        ناحیه را از x=39 شروع میکنند در حالی که جوهرِ واقعیِ حباب از
+        x=13 شروع میشود → حروفِ اولِ هر خط ('Yo'/'th'/'a') بیرونِ
+        ماسکِ پاکسازی و بیرونِ نوارهایِ کامپوز میمانند و در خروجی
+        برمیگردند. جارویِ بقایا هم نمیکشد چون دامنهٔ آن «فقط نوارهایِ
+        متن» است.
+
+        راهحل: بعد از ساختهشدنِ ماسکِ هر ناحیه، قطعههایِ همتونِ جوهرِ
+        خودِ ناحیه که (۱) به ماسک چسبیده/نزدیکاند (باندِ ۰.۵×ارتفاعِ
+        خط)، (۲) هماندازهٔ حرفاند (بعد و جرمِ ≤~۳ برابرِ گلیف)، (۳)
+        داخلِ راهرویِ ناحیهاند (پالیها ∪ rect منبسط به ۱×ارتفاعِ خط —
+        ضدِ خزش به هنرِ دور) و (۴) سقفِ کلِ جذبِ ۳۵٪ ماسکِ ناحیه را
+        ندارند، پس گرفته میشوند. قطعههایِ بزرگ (هنر/دیوارِ حباب) با
+        گاردهایِ بعد و جرم رد میشوند — درسِ v1.14.133 (قطعهٔ هنرِ
+        ca=5504).
+
+        خروجی: «فقط الحاقیاتِ تازه» (ماسکِ صفحهکامل) یا None.
+        PC بایت‌به‌بیت دست‌نخورده — فراخوانی فقط زیرِ _android_gate."""
+        try:
+            h, w = image.shape[:2]
+        except Exception:
+            return None
+        if page_mask is None or not np.any(page_mask):
+            return None
+        out = None
+        try:
+            for region in regions:
+                if getattr(region, "kind", "") in ("promo", "sfx"):
+                    continue
+                polys = []
+                for p in (getattr(region, "ocr_polys", None) or []):
+                    try:
+                        pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                    except Exception:
+                        continue
+                    if pp.shape[0] >= 3:
+                        polys.append(pp)
+                if not polys:
+                    continue
+                lines = MangaTranslator._group_polys_to_lines(polys)
+                if not lines:
+                    continue
+                med_h = float(np.median([b[3] - b[1] for b in lines]))
+                if med_h < 8.0:
+                    continue
+                # رسا = ۰.۸×ارتفاعِ خط — شکافِ واقعیِ 01.jpg تا ۰.۶۷× بود؛
+                # ۰.۸ حاشیهٔ امن میدهد بدونِ رسیدن به هنرِ دور
+                reach = int(min(40.0, max(12.0, 0.8 * med_h)))
+                _all = np.concatenate(polys, axis=0)
+                px0, py0 = float(_all[:, 0].min()), float(_all[:, 1].min())
+                px1, py1 = float(_all[:, 0].max()), float(_all[:, 1].max())
+                try:
+                    rx, ry, rw2, rh2 = [float(v) for v in region.rect]
+                    px0, py0 = min(px0, rx), min(py0, ry)
+                    px1, py1 = max(px1, rx + rw2), max(py1, ry + rh2)
+                except Exception:
+                    pass
+                wx0, wy0 = max(0, int(px0) - reach), max(0, int(py0) - reach)
+                wx1, wy1 = min(w, int(px1) + reach), min(h, int(py1) + reach)
+                if wx1 - wx0 < 12 or wy1 - wy0 < 12:
+                    continue
+                g = cv2.cvtColor(image[wy0:wy1, wx0:wx1], cv2.COLOR_BGR2GRAY)
+                med = float(np.median(g))
+                seed = page_mask[wy0:wy1, wx0:wx1] > 0
+                if not np.any(seed):
+                    continue
+                dark = g < med - 55.0
+                bright = None
+                if med < 200.0:
+                    _br = g > min(232.0, med + 55.0)
+                    if float(_br.mean()) <= 0.40:
+                        bright = _br
+                _cands = []
+                _dv = g[seed & dark]
+                if _dv.size >= 30:
+                    _cands.append(
+                        (abs(float(np.median(_dv)) - med), dark))
+                if bright is not None:
+                    _bv = g[seed & bright]
+                    if _bv.size >= 30:
+                        _cands.append(
+                            (abs(float(np.median(_bv)) - med), bright))
+                if not _cands:
+                    continue
+                _cands.sort(key=lambda t: -t[0])
+                ink = _cands[0][1]
+                if float(ink.mean()) > 0.55:
+                    continue
+                n, lab, st, _ = cv2.connectedComponentsWithStats(
+                    ink.astype(np.uint8), connectivity=8)
+                _band = max(6, int(0.4 * med_h))
+                _near = cv2.dilate(
+                    seed.astype(np.uint8),
+                    np.ones((2 * _band + 1, 2 * _band + 1), np.uint8)) > 0
+                # راهرو = پالیها ∪ rectِ ناحیه، منبسط به reach —
+                # جذب فقط در همسایگیِ بلوکِ متنِ خودِ ناحیه
+                _cor = np.zeros(g.shape[:2], dtype=np.uint8)
+                _off = np.array([wx0, wy0], dtype=np.int32)
+                for pp in polys:
+                    try:
+                        q = np.rint(pp).astype(np.int32) - _off
+                        if q.shape[0] >= 3:
+                            cv2.fillPoly(_cor, [q], 255)
+                    except Exception:
+                        continue
+                try:
+                    _cx0 = max(0, int(px0) - wx0)
+                    _cy0 = max(0, int(py0) - wy0)
+                    _cx1 = min(g.shape[1], int(px1) - wx0)
+                    _cy1 = min(g.shape[0], int(py1) - wy0)
+                    if _cx1 > _cx0 and _cy1 > _cy0:
+                        _cor[_cy0:_cy1, _cx0:_cx1] = 255
+                except Exception:
+                    pass
+                _cor = cv2.dilate(
+                    _cor, np.ones((2 * reach + 1, 2 * reach + 1), np.uint8))
+                _cand2 = []
+                _wh132, _ww132 = g.shape[:2]
+                for ci in range(1, n):
+                    ca = int(st[ci, cv2.CC_STAT_AREA])
+                    if ca < 6 or ca > 2.5 * med_h * med_h:
+                        continue
+                    cwd = int(st[ci, cv2.CC_STAT_WIDTH])
+                    chg = int(st[ci, cv2.CC_STAT_HEIGHT])
+                    if cwd > 2.2 * med_h or chg > 2.2 * med_h:
+                        continue
+                    # قطعهٔ بریدهشده به مرزِ پنجره = ساختارِ بزرگِ ادامهدار
+                    # (هنر/دیوار) → رد (همان گاردِ _ink_absorb_mask)
+                    _cx132 = int(st[ci, cv2.CC_STAT_LEFT])
+                    _cy132 = int(st[ci, cv2.CC_STAT_TOP])
+                    if (_cx132 <= 1 or _cy132 <= 1
+                            or _cx132 + cwd >= _ww132 - 1
+                            or _cy132 + chg >= _wh132 - 1):
+                        continue
+                    _cm = (lab == ci)
+                    if not bool((_cm & _near).any()):
+                        continue
+                    if not bool((_cm & (_cor > 0)).any()):
+                        continue
+                    # فقط «پیکسلِ تازه» (بیرونِ ماسکِ فعلی) شمرده شود —
+                    # بازجذبِ خودِ متنِ ازقبل-ماسکشده هم سقف را پُر میکرد
+                    # و دیلیتِ بعدی هالویِ بیفایده حولِ متن میداد
+                    _new132 = int(np.count_nonzero(_cm & (~seed)))
+                    if _new132 < 6:
+                        continue
+                    _cand2.append((_new132, ci))
+                _cand2.sort(key=lambda t: t[0])
+                _cap = 0.35 * float(max(1, int(seed.sum())))
+                _got = 0
+                for ca, ci in _cand2:
+                    if _got + ca > _cap:
+                        break
+                    _got += ca
+                    if out is None:
+                        out = np.zeros((h, w), dtype=np.uint8)
+                    out[wy0:wy1, wx0:wx1][(lab == ci) & (~seed)] = 255
+                if self.debug and _got > 0:
+                    try:
+                        print(f"  [🔍]پسگیرِ جوهر: ناحیهٔ "
+                              f"{getattr(region, 'id', '?')} +{_got}px "
+                              f"(رسا={reach}px، باند={_band}px)")
+                    except Exception:
+                        pass
+        except Exception:
+            return out
+        if out is not None and np.any(out):
+            out = cv2.dilate(out, np.ones((7, 7), np.uint8))
+        return out
 
     @staticmethod
     def _absorb_block_neighbors(image: np.ndarray, mask: np.ndarray,
@@ -11744,6 +11937,21 @@ class MangaTranslator:
             failed = (failed & _pm).astype(np.uint8) * 255
             if not m.any() and not failed.any():
                 return None, np.zeros((h, w), dtype=np.uint8)
+            # v1.14.134 — پسگیرِ جوهرِ جامانده در کامپوز (فقطِ اندروید):
+            # قطعههایِ گلیفِ بیرونِ پالی ('Yo'/'th'/'a' — 01.jpg) باید در
+            # نوارِ انتقال هم بیایند وگرنه «فقط-نوار» آنها را از عکسِ
+            # اصلی زنده نگه میدارد. همگام با ماسکِ پاکسازی (همان گیت).
+            if _android_gate("MANGA_INK_RECLAIM"):
+                try:
+                    _base134 = cv2.bitwise_or(m, failed)
+                    _add134 = self._stray_ink_reclaim(image, _base134,
+                                                      [region])
+                    if _add134 is not None and np.any(_add134):
+                        _add134 = cv2.bitwise_and(
+                            _add134, cv2.bitwise_not(_base134))
+                        m = cv2.bitwise_or(m, _add134)
+                except Exception:
+                    pass
             return m, failed
         except Exception:
             return None, np.zeros((1, 1), dtype=np.uint8)

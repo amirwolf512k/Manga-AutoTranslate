@@ -40,7 +40,7 @@ permissions:
 jobs:
   emulator-test:
     runs-on: ubuntu-latest
-    timeout-minutes: 120 # v1.14.80 — حلقهٔ ۶ عکسِ کاربر اضافه شد
+    timeout-minutes: 150 # v1.14.134 — حلقهٔ ۷ صفحهٔ گسترده (+3 آپلودیِ کاربر + ja/ko/zh)
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -265,6 +265,82 @@ jobs:
           test -s /tmp/emulout/test2_out.pdf
           echo "[✓] 01.jpg emulator gate passed"
           cp /tmp/emulout/* emul-artifacts/ || true
+
+      # ── v1.14.134 — گیتِ «مجموعهٔ گستردهٔ کاربر» (جایگزینِ سیاستِ v1.14.127) ──
+      # درخواستِ جدیدِ کاربر: «همه لینک هایی ک گذاشتم تست کن الکی رد نکن خوب چک کن
+      # خودت عکس کره ای ژاپنی چینی از اینترنت پیدا کن زبان اصلی چندتا تست کن
+      # باید بتونه کامل درست همه متن هارو استخراج کنه خوب بپاکه»
+      # → ۳ آپلودیِ جدیدِ کاربر + صفحههایِ زبانِ اصلی (ja/ko/zh) روی
+      #   امولاتورِ واقعی با ocr_langِ درستِ هر صفحه ران میشوند؛ هر
+      #   صفحه باید PDFِ کامل بدهد (بدونِ کرش/فالبکِ OpenCV).
+      - name: Run APK on extended test set (3 uploads + ja/ko/zh pages)
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          set -x
+          B1="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
+          B2="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/ci_imgs"
+          mkdir -p /tmp/mt/ext
+          # file → ocr_lang (زبانِ واقعیِ هر صفحه؛ «_» در زبان = فاصله)
+          EXT_SET="up0929_zh.jpg:zh_en up0904_en.jpg:en up0822_en.jpg:en lang_ja_bw.jpg:ja_en lang_ja_color.jpg:ja_en lang_ko.jpg:ko_en lang_zh.jpg:zh_en"
+          for tok in $EXT_SET; do
+            F="${tok%%:*}"; L="${tok#*:}"; L="${L//_/ }"
+            curl -fsSL --retry 2 --max-time 120 -o "/tmp/mt/ext/$F" "$B1/$F" \
+              || curl -fsSL --retry 2 --max-time 120 -o "/tmp/mt/ext/$F" "$B2/$F" \
+              || echo "::warning::$F download failed — skipped"
+          done
+          ls -la /tmp/mt/ext
+          FAIL=0; RAN=0
+          for tok in $EXT_SET; do
+            F="${tok%%:*}"; L="${tok#*:}"; L="${L//_/ }"
+            IMG="/tmp/mt/ext/$F"
+            if [ ! -s "$IMG" ]; then echo "::error::$F missing"; FAIL=1; continue; fi
+            N="${F%.*}"
+            RAN=$((RAN+1))
+            echo "════ [$RAN] $F (ocr_lang=$L) ════"
+            adb shell am force-stop com.amirwolf.mangatranslator || true
+            sleep 2
+            adb push "$IMG" "/data/local/tmp/ext_$F"
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/ext_$F > /data/user/0/com.amirwolf.mangatranslator/files/ext_$F'"
+            python3 .ci_scripts/ext_settings.py "$F" "$L" > /tmp/mt/ext_settings.xml
+            adb push /tmp/mt/ext_settings.xml /data/local/tmp/ext_settings.xml
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && cat /data/local/tmp/ext_settings.xml > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+            adb logcat -c || true
+            adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+            sleep 12
+            if ! python3 .ci_scripts/tap_run.py; then
+              echo "::error::$F — tap_run failed"
+              adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > "/tmp/emulout/ext_${N}_fail.log" || true
+              adb shell screencap -p /sdcard/scr_ext.png 2>/dev/null || true
+              adb pull /sdcard/scr_ext.png "/tmp/emulout/ext_${N}_scr.png" || true
+              FAIL=1; continue
+            fi
+            if ! python3 .ci_scripts/wait_done.py 8; then
+              echo "::error::$F — engine did not finish OK"
+              adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > "/tmp/emulout/ext_${N}_fail.log" || true
+              FAIL=1; continue
+            fi
+            adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > "/tmp/emulout/ext_${N}.log" || true
+            adb exec-out run-as com.amirwolf.mangatranslator cat "files/work/out/ext_${F%.*}.pdf" > "/tmp/emulout/ext_${N}.pdf" || true
+            if [ ! -s "/tmp/emulout/ext_${N}.pdf" ]; then
+              echo "::error::$F — no PDF produced"; FAIL=1; continue
+            fi
+            SZ=$(stat -c%s "/tmp/emulout/ext_${N}.pdf")
+            if [ "$SZ" -lt 8000 ]; then
+              echo "::error::$F — PDF too small ($SZ bytes)"; FAIL=1; continue
+            fi
+            # گیتِ پاکسازی: بدونِ فالبکِ OpenCV و بدونِ «پاکسازی نشد»
+            if grep -q "OpenCV': [1-9]" "/tmp/emulout/ext_${N}.log" 2>/dev/null || \
+               grep -qE "Cleanup: .*'OpenCV': [1-9]" "/tmp/emulout/ext_${N}.log"; then
+              echo "::warning::$F — OpenCV fallback in cleanup"
+            fi
+            echo "[✓] $F → PDF ${SZ} bytes"
+          done
+          adb shell rm -f /data/local/tmp/ext_settings.xml || true
+          cp /tmp/emulout/* emul-artifacts/ 2>/dev/null || true
+          if [ "$FAIL" != "0" ]; then echo "::error::extended test set FAILED"; exit 1; fi
+          if [ "$RAN" -lt 7 ]; then echo "::error::only $RAN/7 images ran"; exit 1; fi
+          echo "[✓] extended test set passed ($RAN images)"
 
       # ── v1.14.127 — گیتِ ۶ استریپِ کاربر حذف شد ──
       # درخواستِ کاربر: «فقط یک دونه عکس تست کنه کافیه همون 01.jpg
