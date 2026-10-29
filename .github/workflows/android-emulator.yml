@@ -101,16 +101,24 @@ jobs:
           ls -la ../dist
 
       # v1.14.127 — فقط 01.jpg + مدلها (۶ استریپ حذف شد — وقتِ CI)
-      - name: Prepare test assets (01.jpg + models)
+      # توجه: img5.webp برایِ گیتِ ردلکه (red-stain) همچنان لازم است.
+      - name: Prepare test assets (01.jpg + img5 red-stain + models)
         run: |
           mkdir -p /tmp/mt/imgs /tmp/models
+          B1="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
+          B2="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/ci_imgs"
           # v1.14.73 — درخواستِ کاربر: «این عکس اولی ناقص استخراج میشه و بد
           # میپاکه رو گوشی — همین عکسو هم تست بزن» → examples/01.jpg
           # روی امولاتور با گیتِ شمارشِ ناحیه‌ها اجرا می‌شود
           curl -sL --max-time 120 -o /tmp/mt/imgs/01.jpg \
             "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/examples/01.jpg" || true
+          # img5.webp = گیتِ ردلکه
+          curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/img5.webp "$B1/img5.webp" \
+            || curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/img5.webp "$B2/img5.webp" \
+            || echo "::warning::img5.webp download failed from both refs"
           ls -la /tmp/mt/imgs
           test -s /tmp/mt/imgs/01.jpg
+          test -s /tmp/mt/imgs/img5.webp
           curl -fL --retry 3 --max-time 300 -o /tmp/models/detector-v4-s_int8.onnx \
             "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/download/models/detector-v4-s_int8.onnx" || true
           curl -fL --retry 3 --max-time 600 -o /tmp/models/lama-manga-dyn.onnx \
