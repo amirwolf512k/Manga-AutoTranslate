@@ -1,4 +1,7 @@
-name: Android Emulator Test (real APK — red-stain gate + 6 user strips)
+name: Android Emulator Test (real APK — red-stain gate + 01.jpg)
+# v1.14.127 — فقط 01.jpg تست میشود (درخواستِ کاربر: «فقط یک دونه عکس تست
+# کنه کافیه همون 01.jpg شش تا عکس تست میکنه وقت میگیره») — ۶ استریپِ
+# کاربر از CI حذف شد.
 
 # درخواستِ کاربر (v1.14.67): «رو GitHub action واقعی اندروید ایجاد بشه
 # ران بزنه — سیستم تو رمش کمه، اونجا حداقل رم واسه تست داره، اونجا تست کن»
@@ -97,25 +100,16 @@ jobs:
           cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-x86_64.apk
           ls -la ../dist
 
-      # v1.14.80 — لینک‌هایِ عکس آپدیت شد: CDNِ منقضی‌شدنی → ci_imgs/ ریپو
-      # (rawِ همان commit + fallback به main) — ۶ عکسِ واقعیِ کاربر
-      - name: Prepare test assets (6 user strips from ci_imgs + 01.jpg + models)
+      # v1.14.127 — فقط 01.jpg + مدلها (۶ استریپ حذف شد — وقتِ CI)
+      - name: Prepare test assets (01.jpg + models)
         run: |
           mkdir -p /tmp/mt/imgs /tmp/models
-          B1="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
-          B2="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/ci_imgs"
-          for F in img2.webp img3.webp img4.jpg img5.webp img6.jpg img7.jpg; do
-            curl -fsSL --retry 2 --max-time 120 -o "/tmp/mt/imgs/$F" "$B1/$F" \
-              || curl -fsSL --retry 2 --max-time 120 -o "/tmp/mt/imgs/$F" "$B2/$F" \
-              || echo "::warning::$F download failed from both refs"
-          done
           # v1.14.73 — درخواستِ کاربر: «این عکس اولی ناقص استخراج میشه و بد
-          # میپاکه رو گوشی — همین عکسو هم تست بزن» → examples/01.jpg هم
+          # میپاکه رو گوشی — همین عکسو هم تست بزن» → examples/01.jpg
           # روی امولاتور با گیتِ شمارشِ ناحیه‌ها اجرا می‌شود
           curl -sL --max-time 120 -o /tmp/mt/imgs/01.jpg \
             "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/examples/01.jpg" || true
           ls -la /tmp/mt/imgs
-          for F in img2.webp img3.webp img4.jpg img5.webp img6.jpg img7.jpg; do test -s "/tmp/mt/imgs/$F"; done
           test -s /tmp/mt/imgs/01.jpg
           curl -fL --retry 3 --max-time 300 -o /tmp/models/detector-v4-s_int8.onnx \
             "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/download/models/detector-v4-s_int8.onnx" || true
@@ -262,70 +256,9 @@ jobs:
           echo "[✓] 01.jpg emulator gate passed"
           cp /tmp/emulout/* emul-artifacts/ || true
 
-      # ── v1.14.80 — گیتِ «۶ عکسِ واقعیِ کاربر» (fake-translateِ کامل) ──
-      # درخواستِ کاربر: «ymlِ اندروید لینکِ عکس‌هاش رو آپدیت کن… مال اندروید
-      # فرق داره، اونجا بدتر می‌بینی، PC بهتره — خوب تست کن»
-      # → هر ۶ عکس روی امولاتور با مسیرِ کاملِ رندر (fake-test، بدونِ
-      #   clean-only) اجرا و PDFِ خروجی + لاگ به آرتیفکت می‌رود تا با
-      #   خروجیِ PC (همان عکس‌ها، همان نسخه) مقایسه شود.
-      #   اندروید LaMa patch را خودش روی ۳۸۴ می‌گذارد (= PC).
-      - name: Run APK with 6 real user strips (fake-translate full-render gate)
-        run: |
-          export ANDROID_AVD_HOME="$HOME/.android/avd"
-          export PATH="$ANDROID_HOME/platform-tools:$PATH"
-          set -x
-          adb devices
-          mkdir -p /tmp/emulout6 emul-artifacts/user6
-          PKG=com.amirwolf.mangatranslator
-          APP=/data/user/0/$PKG/files
-          FAILS=""
-          for PAIR in u2:img2.webp u3:img3.webp u4:img4.jpg u5:img5.webp u6:img6.jpg u7:img7.jpg; do
-            K="${PAIR%%:*}"; F="${PAIR##*:}"; EXT="${F##*.}"
-            echo "===== user-strip $K ($F) ====="
-            adb push "/tmp/mt/imgs/$F" "/data/local/tmp/$K.$EXT"
-            adb shell "run-as $PKG sh -c 'cat /data/local/tmp/$K.$EXT > $APP/$K.$EXT'"
-            PREF=$(printf '<?xml version="1.0" encoding="utf-8" standalone="yes" ?>\n<map>\n    <string name="inp_upload_path">%s</string>\n    <string name="fake_test">true</string>\n    <string name="clean_only">false</string>\n    <string name="web_debug">true</string>\n    <string name="clean_method">lama-manga</string>\n    <string name="out_fmt">PDF</string>\n    <string name="reader">rtl</string>\n    <boolean name="battery_asked" value="true" />\n    <boolean name="viewer_hint_v3" value="true" />\n</map>\n' "$APP/$K.$EXT" | base64 -w0)
-            adb shell "run-as $PKG sh -c 'mkdir -p /data/user/0/$PKG/shared_prefs && echo $PREF | base64 -d > /data/user/0/$PKG/shared_prefs/manga_settings.xml'"
-            adb shell am force-stop $PKG || true
-            sleep 3
-            adb logcat -c || true
-            adb shell am start -W -n $PKG/.MainActivity || true
-            sleep 15
-            if ! python3 .ci_scripts/tap_run.py; then
-              echo "[✗] $K ($F): tap failed"
-              adb shell screencap -p /sdcard/scr_$K.png || true
-              adb pull /sdcard/scr_$K.png "/tmp/emulout6/scr_$K.png" || true
-              FAILS="$FAILS $K(tap)"
-              adb shell rm -f "/data/local/tmp/$K.$EXT" || true
-              continue
-            fi
-            if python3 .ci_scripts/wait_done.py 15; then
-              adb exec-out run-as $PKG cat files/manga.log > "/tmp/emulout6/manga_$K.log" || true
-              adb exec-out run-as $PKG cat "files/work/out/$K.pdf" > "/tmp/emulout6/$K.pdf" || true
-              if [ -s "/tmp/emulout6/$K.pdf" ]; then
-                echo "[✓] $K ($F): PDF ok ($(stat -c%s /tmp/emulout6/$K.pdf) bytes)"
-                # صفحهٔ اولِ PDF را برایِ مقایسهٔ سریع به JPG می‌کشیم
-                python3 .ci_scripts/pdf_p0.py "$K" || true
-              else
-                echo "[✗] $K ($F): PDF missing/empty"
-                FAILS="$FAILS $K(pdf)"
-              fi
-            else
-              echo "[✗] $K ($F): engine error/timeout (15min)"
-              adb exec-out run-as $PKG cat files/manga.log > "/tmp/emulout6/manga_$K.log" || true
-              FAILS="$FAILS $K(engine)"
-            fi
-            adb shell rm -f "/data/local/tmp/$K.$EXT" || true
-          done
-          cp /tmp/emulout6/* emul-artifacts/user6/ 2>/dev/null || true
-          adb exec-out run-as $PKG ls -la files/work/out > /tmp/emulout6/out_ls6.txt || true
-          cp /tmp/emulout6/out_ls6.txt emul-artifacts/user6/ 2>/dev/null || true
-          if [ -n "$FAILS" ]; then
-            echo "=== FAILED STRIPS:$FAILS"
-            exit 1
-          fi
-          echo "[✓] all 6 user strips passed on emulator (full fake-translate render)"
-          cp /tmp/emulout6/* emul-artifacts/ 2>/dev/null || true
+      # ── v1.14.127 — گیتِ ۶ استریپِ کاربر حذف شد ──
+      # درخواستِ کاربر: «فقط یک دونه عکس تست کنه کافیه همون 01.jpg
+      # شش تا عکس تست میکنه وقت میگیره» → فقط گیتِ 01.jpg بالا میماند.
 
       - name: Capture diagnostics (always on failure)
         if: failure()

@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.126"
+APP_VER = "1.14.127"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -20999,6 +20999,84 @@ class MangaTranslator:
                 _added += 1
         return _added
 
+    def _mlkit_gap_rescue(self, image: np.ndarray, cand, plines) -> int:
+        """v1.14.127 — نجاتِ خطِ «شکافِ بینِ باکسها» (فقط موتورِ ML Kit).
+
+        پاسِ تمامصفحه گاهی خطِ میانِ دو باکسِ نزدیک را نمیشناسد («I'll»
+        بینِ «Alright!» و «increase the speed more!» در 01.jpg) — مرکزِ
+        خط داخلِ هیچِ باکسی نیست، پس نه fillِ نیمهپوش میگیردش (باکسها
+        پرِ خطاند) نه leftover (خط اصلاً در پاسِ صفحه نیست). برایِ هر
+        ناحیهٔ «مجاورِ شکافدار» (شکافِ عمودی ≤150px با همپوشانیِ x، یا
+        افقیِ مشابه) «یک» پاسِ ML Kit رویِ برشِ بزرگشده زده میشود (پدِ
+        y تا ~60٪ ارتفاعِ باکس، سقفِ 120px) و فقط خطهایِ «تازه»ای که
+        مرکزشان بیرون از «همهٔ» باکسهاست (منطقهٔ شکاف) یا داخلِ خودِ
+        این باکس است افزوده میشوند؛ خطِ داخلِ باکسِ مجاور رد میشود (ضدِ
+        جذبِ حبابِ همسایه). خطِ شکاف بعداً توسطِ _page_leftover_cands
+        ناحیهٔ مستقلِ text_free میشود. خاموشی: MANGA_MLKIT_GAP=0"""
+        n = len(cand)
+        if n <= 0 or image is None or not isinstance(image, np.ndarray) \
+                or image.size == 0 or not cand:
+            return 0
+        _H, _W = image.shape[:2]
+        rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
+        _near = set()
+        for a in range(n):
+            ax1, ay1, ax2, ay2 = rects[a]
+            for b in range(a + 1, n):
+                bx1, by1, bx2, by2 = rects[b]
+                _aw, _bw = max(1, ax2 - ax1), max(1, bx2 - bx1)
+                _ah, _bh2 = max(1, ay2 - ay1), max(1, by2 - by1)
+                ox = min(ax2, bx2) - max(ax1, bx1)
+                oy = min(ay2, by2) - max(ay1, by1)
+                if ox > 0.30 * min(_aw, _bw):
+                    _gap = max(ay1, by1) - min(ay2, by2)
+                    if -20 <= _gap <= 150:
+                        _near.add(a)
+                        _near.add(b)
+                if oy > 0.30 * min(_ah, _bh2):
+                    _gap = max(ax1, bx1) - min(ax2, bx2)
+                    if -20 <= _gap <= 150:
+                        _near.add(a)
+                        _near.add(b)
+        if not _near:
+            return 0
+        _existing = [ent[2] for ent in plines]
+        _added = 0
+        for k in sorted(_near):
+            if _added >= 12:
+                break
+            x1, y1, x2, y2 = rects[k]
+            _bh, _bw = y2 - y1, x2 - x1
+            if _bh < 16 or _bw < 16:
+                continue
+            _py = min(120, max(24, int(0.6 * _bh)))
+            _px = min(60, max(12, int(0.25 * _bw)))
+            _cx1, _cy1 = max(0, x1 - _px), max(0, y1 - _py)
+            _cx2, _cy2 = min(_W, x2 + _px), min(_H, y2 + _py)
+            if _cx2 - _cx1 < 24 or _cy2 - _cy1 < 24:
+                continue
+            try:
+                _news = self._mlkit_crop_fill(
+                    image, (_cx1, _cy1, _cx2, _cy2), _existing)
+            except Exception:
+                continue
+            for ent in _news:
+                poly = ent[2]
+                ccx = float(poly[:, 0].mean())
+                ccy = float(poly[:, 1].mean())
+                _in_k = -1
+                for j, (jx1, jy1, jx2, jy2) in enumerate(rects):
+                    if jx1 - 6 <= ccx <= jx2 + 6 \
+                            and jy1 - 6 <= ccy <= jy2 + 6:
+                        _in_k = j
+                        break
+                if _in_k not in (-1, k):
+                    continue  # خطِ حبابِ مجاور — جذب ممنوع
+                plines.append(ent)
+                _existing.append(poly)
+                _added += 1
+        return _added
+
     @staticmethod
     def _aabb_iou(pa, pb):
         """v1.14.124 — IoUِ کادرِ محصورِ دو پالی (dedupِ خطِ ML Kit با
@@ -21295,6 +21373,57 @@ class MangaTranslator:
                 continue
             used[k] = True
             polys = [page_lines[li][2] for li in ls]
+            # v1.14.127 — بلوک‌هایِ ML Kit «درهمِ بین‌خطی» نسوزند: وقتی
+            # یک ناحیه خط‌هایِ «چند بلوکِ» جدا دارد (حباب + دست‌نویسِ
+            # کنارش در 01.jpg)، مرتبسازیِ نوارِ y آنها را بین‌خطی میکرد
+            # («THEN IL PULL FLOAT THE Youre FOR...»). حالا هر بلوک یک
+            # تکه میماند (خط‌هایش بالا→پایین) و بلوک‌ها به ترتیبِ
+            # بالاترینِ خطشان پشتِ هم میآیند. ستونبندیِ
+            # _column_line_groups فقط برایِ تکبلوک اجرا میشود (چندبلوک
+            # + ستونبندی = درهم‌ریزیِ دوباره وقتی xِ بلوکها همپوشان است).
+            _blks_raw = [int(page_lines[li][4]) for li in ls]
+            _bkeys = sorted({b for b in _blks_raw if b >= 0})
+            if len(_bkeys) > 1 or (len(_bkeys) >= 1
+                                   and any(b < 0 for b in _blks_raw)):
+                try:
+                    _groups = []
+                    for _b in _bkeys:
+                        _gi = [t for t in range(len(ls))
+                               if _blks_raw[t] == _b]
+                        _groups.append(
+                            (min(float(polys[t][:, 1].min())
+                                 for t in _gi), _gi))
+                    _m = [t for t in range(len(ls)) if _blks_raw[t] < 0]
+                    if _m:
+                        _groups.append(
+                            (min(float(polys[t][:, 1].min())
+                                 for t in _m), _m))
+                    _groups.sort(key=lambda g: g[0])
+                    order = [t for _, _gi in _groups for t in sorted(
+                        _gi, key=lambda t: (
+                            float(polys[t][:, 1].min()),
+                            float(polys[t][:, 0].min())))]
+                    o_polys = [polys[t] for t in order]
+                    o_txts = [str(page_lines[ls[t]][0] or "")
+                              for t in order]
+                    o_angs = [float(page_lines[ls[t]][3])
+                              for t in order]
+                    o_blks = [int(page_lines[ls[t]][4])
+                              for t in order]
+                    parts = []
+                    _off = 0
+                    for _, _gi in _groups:
+                        _tg = " ".join(
+                            str(o_txts[_off + i] or "").strip()
+                            for i in range(len(_gi))).strip()
+                        if _tg:
+                            parts.append(_tg)
+                        _off += len(_gi)
+                    res[k] = ("\n".join(parts).strip(), o_polys,
+                              o_angs, o_txts, o_blks)
+                    continue
+                except Exception:
+                    pass
             try:
                 hts = [float(p[:, 1].max() - p[:, 1].min()) for p in polys]
                 row_h = max(8.0, (float(np.median(hts)) if hts else 8.0) * 1.25)
@@ -21402,8 +21531,8 @@ class MangaTranslator:
                 texts = [str(page_lines[li][0] or "") for li in idxs]
                 angs = [float(page_lines[li][3]) for li in idxs]
                 blks = [int(page_lines[li][4]) for li in idxs]
-                if sum(1 for t in texts for c in t if c.isalnum()) < 4:
-                    continue
+                if sum(1 for t in texts for c in t if c.isalnum()) < 3:
+                    continue  # v1.14.127: 4→3 — «I'll» (۳ نویسهٔ الفبایی) هم ناحیه شود
                 x0 = int(np.floor(min(float(p[:, 0].min())
                                       for p in polys)))
                 y0 = int(np.floor(min(float(p[:, 1].min())
@@ -21849,6 +21978,19 @@ class MangaTranslator:
                             if _nfill and self.debug:
                                 print(f"    [*]MLKit-fill: +{_nfill} خطِ "
                                       "تازه/تکمیل از باکسهایِ نیمهپوش")
+                        except Exception:
+                            pass
+                    # v1.14.127 — نجاتِ خطِ «شکافِ بینِ باکسها»: خطِ وسطِ
+                    # دو باکسِ نزدیک («I'll» در 01.jpg) نه داخلِ باکسی است
+                    # نه در پاسِ صفحه هست → یک پاسِ ML Kit رویِ برشِ
+                    # بزرگشدهی نواحیِ مجاور. خاموشی: MANGA_MLKIT_GAP=0
+                    if os.environ.get("MANGA_MLKIT_GAP", "1").strip() != "0":
+                        try:
+                            _ngap = self._mlkit_gap_rescue(
+                                image, cand, _plines)
+                            if _ngap and self.debug:
+                                print(f"    [*]MLKit-gap: +{_ngap} خطِ "
+                                      "شکافِ بینِ باکسها → ناحیهٔ مستقل")
                         except Exception:
                             pass
                     _res, _used = self._page_assign_lines(cand, _plines)
