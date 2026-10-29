@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.131"
+APP_VER = "1.14.132"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -22593,6 +22593,67 @@ class MangaTranslator:
                             _oi != _hit
                             and self._aabb_iou(poly_new, _ep2) >= 0.15
                             for _oi, _ep2 in enumerate(_polys))
+                        # v1.14.132 — «جایگزینیِ پل با نیمهٔ خودی»: خطِ
+                        # برخوردی اگر «پلِ» عریضِ همان جزء باشد (≥۲ برابرِ
+                        # پهنایِ میانهٔ خطهایِ دیگرِ جزء + ≥۱.۵× میانهٔ
+                        # صفحه) و کاندیدِ شَفت نیمهٔ خودیِ همان پل باشد
+                        # (≤۰.۶۲× پهنایِ پل، درونِ گسترهٔ پل، مرکزِ داخلِ
+                        # هستهٔ خودی)، پل با خوانشِ تمیزِ نیمه «جایگزین»
+                        # میشود. ریشهٔ بازِ «حبابها ترکیب شده»: قبلاً
+                        # خوانشِ «neredl» (نیمهٔ خودیِ «the real») چون با
+                        # _lines_same به خودِ پل میخورد (قاعدهٔ اشغالِ ≥۶۰٪
+                        # — کاندید داخلِ باکسِ پل است) «خطِ خودی» حساب و
+                        # با قواعدِ ارتقا دور ریخته میشد؛ پلِ «fheredl
+                        # OU!» با کادرِ کشآمده (۱۰۴px همپوشانی با حبابِ
+                        # راست) و متنِ آلوده میماند. بعد از جایگزینی،
+                        # بازسازیِ کادرِ همان حلقه از هسته میسازد
+                        # (همپوشانی ۱۰۴→۶px) و پل به _mlkit_retire_bridges
+                        # هم دیگر نمیرسد. گاردها: عرضِ پل نسبی، نیمهٔ
+                        # درونِ گسترهٔ پل، مرکز در هستهٔ خودی، متنِ متفاوت.
+                        _rep = False
+                        try:
+                            _bw = float(_ep[:, 0].max()
+                                        - _ep[:, 0].min())
+                            _nw3 = float(poly_new[:, 0].max()
+                                         - poly_new[:, 0].min())
+                            _ows = [float(q[:, 0].max()
+                                          - q[:, 0].min())
+                                    for _j3, q in enumerate(_polys)
+                                    if _j3 != _hit]
+                            _om3 = float(sorted(_ows)[
+                                len(_ows) // 2]) if _ows else 0.0
+                            _nx3 = (float(poly_new[:, 0].min())
+                                    >= float(_ep[:, 0].min()) - 4.0
+                                    and float(poly_new[:, 0].max())
+                                    <= float(_ep[:, 0].max()) + 4.0)
+                            if _side:
+                                _cin = (_cores[_pi][0] - 6.0
+                                        <= float(poly_new[:, 0].mean())
+                                        <= _cores[_pi][2] + 6.0)
+                            else:
+                                _cin = (_cores[_pi][1] - 6.0
+                                        <= float(poly_new[:, 1].mean())
+                                        <= _cores[_pi][3] + 6.0)
+                            _rep = bool(
+                                len(_polys) >= 2 and _om3 > 1.0
+                                and _bw >= 2.0 * _om3
+                                and _bw >= 1.5 * _wmed
+                                and _nw3 <= 0.62 * _bw
+                                and _nx3 and _cin
+                                and _nv and _ov != _nv)
+                        except Exception:
+                            _rep = False
+                        if _rep and not _amb:
+                            _polys[_hit] = np.rint(poly_new) \
+                                .astype(np.int32)
+                            _texts[_hit] = txt_new
+                            try:
+                                _angs[_hit] = float(ent[3] or 0.0)
+                            except Exception:
+                                pass
+                            _nup += 1
+                            _added += 1
+                            continue
                         if _amb or not _old:
                             continue
                         if (_ov == _nv and "'" in txt_new
@@ -22883,7 +22944,20 @@ class MangaTranslator:
                     _col = (255.0 - _gg.astype(np.float32)).sum(axis=0)
                     _cmin = float(_col.min())
                     _cmax = float(_col.max())
-                    if _cmax > 0 and _cmin > 0.22 * _cmax:
+                    # v1.14.132 — «فیلِ» همگنِ روشنِ حباب (زرد/کرم —
+                    # خاکستریِ ~۲۰۰+) جوهرِ متن نیست. اندازهگیریِ واقعیِ
+                    # 01.jpg: نوارِ گاترِ بینِ «the real» و «YOU!» همهٔ
+                    # ستونها جوهرِ یکنواخت (cmin/cmax=1.0، تاریکیِ
+                    # میانگینِ ~۴۲/۲۵۵) داشت = فیلِ زردِ حباب؛ گاردِ
+                    # قبلی آن را «جوهرِ پیوسته» میفهمید و برش را رد
+                    # میکرد → پلِ «fheredl OU!» بازنشسته نمیشد. حالا اگر
+                    # کمجوهرترینِ ستونها میانگینِ تاریکیِ ≤۸۵ داشته باشد
+                    # (فیلِ روشن) برش امن است؛ متنِ پیوسته/زیرخطِ تیره
+                    # (تاریکیِ ~۱۵۰+) همچنان رد میشود.
+                    _hh2 = max(1.0, float(_wy1 - _wy0))
+                    _fill_ok = (_cmin / _hh2) <= 85.0
+                    if _cmax > 0 and _cmin > 0.22 * _cmax \
+                            and not _fill_ok:
                         continue  # گاتر جوهر دارد — برشِ امن نیست
                     _cols = np.where(
                         _col <= _cmin + 0.05 * max(1.0, _cmax))[0]
