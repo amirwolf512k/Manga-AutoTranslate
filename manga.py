@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.129"
+APP_VER = "1.14.130"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -20888,7 +20888,40 @@ class MangaTranslator:
                        if (results and results[0]) else [])
                 print(f"      [🔍crop] ocr → {_rn} خطِ خام {_rt}")
             if not results or not results[0]:
-                return out
+                # v1.14.130 — تلاشِ دودوییِ Otsu (فقط وقتی پاسِ عادی صفر
+                # بود): متنِ ایتالیکِ دستنویس رویِ پسزمینهٔ رنگی
+                # («I'll» بینِ Alright!/increase در 01.jpg — حتی ×3 هم
+                # صفر برمیگرداند) در پاسِ عادی خوانده نمیشود؛ دودوییِ
+                # سیاه-سفیدِ با پلاریتهٔ درست، حاشیهٔ سفیدِ دورِ حرفها
+                # و گرادیانِ پسزمینه را حذف میکند و ML Kit معمولاً
+                # همان متن را میخواند. هزینه: فقط برایِ کراپهایِ خالی
+                # +۱ فراخوانی. خاموشی: MANGA_MLKIT_BIN=0
+                try:
+                    _bin_on = os.environ.get(
+                        "MANGA_MLKIT_BIN", "1").strip() != "0"
+                except Exception:
+                    _bin_on = True
+                if _bin_on:
+                    try:
+                        _g = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+                        _g = cv2.GaussianBlur(_g, (3, 3), 0)
+                        _tb, _bw = cv2.threshold(
+                            _g, 0, 255,
+                            cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                        if float(np.mean(_bw)) < 127.0:
+                            _bw = 255 - _bw
+                        results = _src.ocr(cv2.merge([_bw, _bw, _bw]))
+                        if self.debug:
+                            _rn = (len(results[0])
+                                   if (results and results[0]) else 0)
+                            _rt = ([str(l[1][0]) for l in results[0][:12]]
+                                   if (results and results[0]) else [])
+                            print(f"      [🔍crop] دودوییِ Otsu → "
+                                  f"{_rn} خطِ خام {_rt}")
+                    except Exception:
+                        results = None
+                if not results or not results[0]:
+                    return out
             for line in results[0]:
                 try:
                     if not (isinstance(line, (list, tuple))
@@ -22091,6 +22124,57 @@ class MangaTranslator:
                 hs = [float(p[:, 1].max() - p[:, 1].min()) for p in ps]
                 info[u] = (x0, y0, x1, y1,
                            float(np.median(hs)) if hs else 10.0, len(idxs))
+            # v1.14.130 — خطِ «پل» (spanner): خطی که نابهنگام عریض‌تر از
+            # هم‌بلوکیهایِ خودش است — خوانشِ ادغامیِ دو ستونِ موازی
+            # (01.jpg: «the real»+«YOU!» → «fheredl OU!» با عرضِ ۲۳۱px در
+            # برابرِ ۶۳-۹۹px). این خط فقط در محورِ y معتبر است و نباید در
+            # آزمونِ پلِ x شرکت کند — وگرنه دو ستونِ واقعی (حباب +
+            # دستنویسِ کنارش) بهاجبار «یک حباب» میشوند، تفکیکِ بلوکی
+            # از کار میافتد و ترتیبِ خطها بینِ دو ستون قاطی میشود
+            # («THEN IL PULL THE FLOAT ure FOR fheredl OU!...»).
+            # محورِ yِ بلوک با خطِ پل کامل میماند (بلوکِ دستنویس زیرِ
+            # حباب است و باید بتواند از نظرِ y بچسبد). خاموشی:
+            # MANGA_MLKIT_SPANBRIDGE=0
+            _span_on = True
+            try:
+                if os.environ.get(
+                        "MANGA_MLKIT_SPANBRIDGE", "1").strip() == "0":
+                    _span_on = False
+            except Exception:
+                pass
+            _strip = {}
+            for u in uids:
+                _mem = []
+                for k in by_blk.get(u, []):
+                    if 0 <= k < len(polys) and polys[k] is not None:
+                        _pp = np.asarray(polys[k],
+                                         dtype=np.float32).reshape(-1, 2)
+                        _mem.append((k, float(_pp[:, 0].max()
+                                              - _pp[:, 0].min())))
+                if not _span_on or len(_mem) < 2:
+                    _strip[u] = ((info[u][0], info[u][2]) if _mem else None)
+                    continue
+                _wmed_u = float(np.median([w for _, w in _mem])) \
+                    if _mem else 0.0
+                _span = set()
+                for _k, _wk in _mem:
+                    _oth = sorted(w for kk, w in _mem if kk != _k)
+                    _om = float(_oth[len(_oth) // 2]) if _oth else 0.0
+                    if _om > 1.0 and _wmed_u > 1.0 \
+                            and _wk >= 2.0 * _om and _wk >= 2.2 * _wmed_u:
+                        _span.add(_k)
+                _core = [k for k, _ in _mem if k not in _span]
+                if not _core:
+                    _strip[u] = None  # همهٔ خطها پلاند — پل نمیزند
+                    continue
+                _xs = []
+                for k in _core:
+                    _pp = np.asarray(polys[k],
+                                     dtype=np.float32).reshape(-1, 2)
+                    _xs.append((float(_pp[:, 0].min()),
+                                float(_pp[:, 0].max())))
+                _strip[u] = (min(x[0] for x in _xs),
+                             max(x[1] for x in _xs))
             parent = {u: u for u in uids}
 
             def _find(a):
@@ -22102,12 +22186,15 @@ class MangaTranslator:
             for _i in range(len(uids)):
                 for _j in range(_i + 1, len(uids)):
                     a, b = uids[_i], uids[_j]
+                    _sa, _sb = _strip.get(a), _strip.get(b)
+                    if _sa is None or _sb is None:
+                        continue  # v1.14.130 — بلوکِ پل‌زن ادغام نمیکند
                     ax0, ay0, ax1, ay1, _ah, _an = info[a]
                     bx0, by0, bx1, by1, _bh, _bn = info[b]
-                    _aw = max(1.0, ax1 - ax0)
-                    _bw = max(1.0, bx1 - bx0)
-                    asx0, asx1 = ax0 + 0.12 * _aw, ax1 - 0.12 * _aw
-                    bsx0, bsx1 = bx0 + 0.12 * _bw, bx1 - 0.12 * _bw
+                    _aw = max(1.0, _sa[1] - _sa[0])
+                    _bw = max(1.0, _sb[1] - _sb[0])
+                    asx0, asx1 = _sa[0] + 0.12 * _aw, _sa[1] - 0.12 * _aw
+                    bsx0, bsx1 = _sb[0] + 0.12 * _bw, _sb[1] - 0.12 * _bw
                     ox = min(asx1, bsx1) - max(asx0, bsx0)
                     narrow = max(1.0, min(asx1 - asx0, bsx1 - bsx0))
                     if ox < 0.45 * narrow:
@@ -22134,21 +22221,27 @@ class MangaTranslator:
             return [list(v) for v in by_blk.values()]
 
     def _split_mlkit_block_cands(self, cand, ocr_results):
-        """v1.14.121 — تفکیکِ نتایجِ OCRِ هر باکس بر اساسِ شمارهٔ TextBlockِ
-        ML Kit (layout-analysisِ نیتیو — دقیقاً موتورِ K3).
+        """v1.14.121/130 — تفکیکِ نتایجِ OCRِ هر باکس بر اساسِ شمارهٔ
+        TextBlockِ ML Kit (layout-analysisِ نیتیو — دقیقاً موتورِ K3).
 
         ورودی: cand (باکس‌هایِ دیتکتور) + ocr_results (خروجیِ _ocr_crop:
         txt, polys, angs, texts, blks). اگر در یک کراپ ≥۲ بلوکِ متمایزِ ML
         Kit باشد، هر بلوک به یک cand مستقل (rect = کادرِ پالی‌هایِ همان
         بلوک) تبدیل میشود تا بقیهٔ خطِ لوله (دسته‌بندی/زاویه/سیستمی‌شناسی)
-        برای هر بلوک جداگانه اجرا شود. اگر هر بلوکی نامعتبر بود یا خطِ
-        بدونِ بلوک (blk=-1 — خطِ نجات‌یافتهٔ r90) در کار بود، همان ناحیهٔ
-        سرِهم حفظ میشود (فال‌بکِ امن؛ بلوک‌بندیِ هندسیِ
-        _split_multiblock_regions هم پشتِ آن هست)."""
+        برای هر بلوک جداگانه اجرا شود.
+        v1.14.130 — (۱) خطِ «پل» (خیلی عریضتر از همگروهیها — خوانشِ
+        ادغامیِ دو ستون) در کادرِ «هستهٔ» جزء نماید چون دو ستون را بههم
+        دوختهاست؛ کادر از خطهایِ غیرپل ساخته میشود (وگرنه کادرِ جزءِ
+        دستنویس تا وسطِ حباب کش میآید و نجاتِ «YOU!» در postsplit ممکن
+        نمیشود). (۲) خطهایِ بیبلوکِ نجات (blk=-1) بهجایِ «لغوِ کلِ
+        تفکیک»، با هندسه به جزءِ همپوشان attach میشوند؛ اگر جایی نروند
+        تفکیک لغو میشود (فال‌بکِ امن — رفتارِ قدیمی). (۳) خروجی سوم:
+        فهرستِ گروههایِ جزءهایِ تفکیکشده برایِ _post_split_fill."""
         if len(cand) != len(ocr_results):
-            return cand, ocr_results
+            return cand, ocr_results, []
         new_cand: list = []
         new_res: list = []
+        split_out: list = []
         n_split = 0
         for cb, cres in zip(cand, ocr_results):
             try:
@@ -22159,12 +22252,19 @@ class MangaTranslator:
                     continue
                 _blks = list(cres[4] or [])
                 _polys = list(cres[1] or [])
-                if (not _blks or len(_blks) != len(_polys)
-                        or any(int(v) < 0 for v in _blks)):
+                if not _blks or len(_blks) != len(_polys):
                     new_cand.append(cb)
                     new_res.append(cres)
                     continue
-                _uids = sorted({int(v) for v in _blks})
+                # v1.14.130 — خطهایِ بیبلوک (blk=-1) مانعِ تفکیک نیستند
+                # اگر ≥۶۰٪ خطها بلوکِ واقعی دارند (حذفِ «any(<0)» که با
+                # یک خطِ نجات، تفکیکِ کل را میکشت)
+                _n_blk = sum(1 for v in _blks if int(v) >= 0)
+                if _n_blk < 2 or _n_blk < 0.6 * len(_blks):
+                    new_cand.append(cb)
+                    new_res.append(cres)
+                    continue
+                _uids = sorted({int(v) for v in _blks if int(v) >= 0})
                 if len(_uids) < 2:
                     new_cand.append(cb)
                     new_res.append(cres)
@@ -22176,8 +22276,12 @@ class MangaTranslator:
                 while len(_angs) < len(_polys):
                     _angs.append(0.0)
                 _by_blk: dict = {}
+                _free = []
                 for _k, _bv in enumerate(_blks):
-                    _by_blk.setdefault(int(_bv), []).append(_k)
+                    if int(_bv) >= 0:
+                        _by_blk.setdefault(int(_bv), []).append(_k)
+                    else:
+                        _free.append(_k)
                 # v1.14.122 — بلوک‌هایِ همان‌حباب اول ادغام میشوند (کراپِ
                 # بدونِ بافتِ صفحه پاراگراف‌هایِ یک حباب را بلوکِ جدا
                 # میداد → v1.14.121 متنِ نزدیک را جدا میکرد). اگر بعد از
@@ -22186,37 +22290,119 @@ class MangaTranslator:
                 _groups = self._merge_same_bubble_blocks(_by_blk, _polys)
                 _cx1, _cy1, _cx2, _cy2 = cb[2], cb[3], cb[4], cb[5]
                 _orig_b = cb[1] if isinstance(cb[1], dict) else {}
-                parts = []
+                # v1.14.130 — عرضِ همهٔ خطها → شناساییِ «پل» در هر گروه
+                _allw = []
+                for _k in range(len(_polys)):
+                    try:
+                        _ppx = np.asarray(_polys[_k],
+                                          dtype=np.float32).reshape(-1, 2)
+                        _allw.append(float(_ppx[:, 0].max()
+                                           - _ppx[:, 0].min()))
+                    except Exception:
+                        _allw.append(0.0)
+                _wmed = float(np.median([w for w in _allw if w > 1.0])) \
+                    if any(w > 1.0 for w in _allw) else 0.0
+                _gmeta = []
                 for _gidxs in _groups:
-                    _idxs = list(_gidxs)
-                    _g_uid = min(int(_blks[_k]) for _k in _idxs
-                                 if 0 <= _k < len(_blks)) if _idxs else -1
-                    _pt = " ".join(str(_texts[_k] or "").strip()
-                                   for _k in _idxs
-                                   if str(_texts[_k] or "").strip())
-                    if sum(1 for c in _pt if c.isalnum()) < 2:
-                        parts = None
-                        break
+                    _idxs = [k for k in _gidxs if 0 <= k < len(_polys)]
+                    if not _idxs:
+                        _gmeta.append(None)
+                        continue
+                    _ws = [(k, _allw[k] if 0 <= k < len(_allw) else 0.0)
+                           for k in _idxs]
+                    _span = set()
+                    if len(_ws) >= 2 and _wmed > 1.0:
+                        for _k, _wk in _ws:
+                            _oth = sorted(w for kk, w in _ws if kk != _k)
+                            _om = float(_oth[len(_oth) // 2]) \
+                                if _oth else 0.0
+                            if (_om > 1.0 and _wk >= 2.0 * _om
+                                    and _wk >= 1.5 * _wmed):
+                                _span.add(_k)
+                    _ck = [k for k, _ in _ws if k not in _span] \
+                        or [k for k, _ in _ws]
                     _pp = np.concatenate([
-                        np.asarray(_polys[_k], dtype=np.float32).reshape(-1, 2)
-                        for _k in _idxs])
-                    _bx0 = max(_cx1, int(np.floor(float(_pp[:, 0].min()))) - 6)
-                    _by0 = max(_cy1, int(np.floor(float(_pp[:, 1].min()))) - 6)
-                    _bx1 = min(_cx2, int(np.ceil(float(_pp[:, 0].max()))) + 6)
-                    _by1 = min(_cy2, int(np.ceil(float(_pp[:, 1].max()))) + 6)
-                    if _bx1 - _bx0 < 24 or _by1 - _by0 < 14:
-                        parts = None
+                        np.asarray(_polys[k], dtype=np.float32).reshape(-1, 2)
+                        for k in _ck])
+                    _gmeta.append((_idxs, _span,
+                                   (float(_pp[:, 0].min()),
+                                    float(_pp[:, 1].min()),
+                                    float(_pp[:, 0].max()),
+                                    float(_pp[:, 1].max()))))
+                # attachِ خطهایِ بیبلوک با هندسه (مرکز داخلِ هستهٔ ±6)
+                _attach: dict = {}
+                _loose = False
+                for _k in _free:
+                    try:
+                        _ppx = np.asarray(_polys[_k],
+                                          dtype=np.float32).reshape(-1, 2)
+                        _fcx = float(_ppx[:, 0].mean())
+                        _fcy = float(_ppx[:, 1].mean())
+                    except Exception:
+                        _loose = True
                         break
-                    parts.append((
-                        _g_uid,
-                        (_bx0, _by0, _bx1, _by1),
-                        [np.rint(np.asarray(_polys[_k],
-                                            dtype=np.float32)).astype(np.int32)
-                         for _k in _idxs],
-                        [str(_texts[_k] or "") for _k in _idxs],
-                        [float(_angs[_k]) for _k in _idxs],
-                        _pt,
-                    ))
+                    _gi = -1
+                    for _m, _gm in enumerate(_gmeta):
+                        if not _gm:
+                            continue
+                        _gx0, _gy0, _gx1, _gy1 = _gm[2]
+                        if (_gx0 - 6 <= _fcx <= _gx1 + 6
+                                and _gy0 - 6 <= _fcy <= _gy1 + 6):
+                            _gi = _m
+                            break
+                    if _gi < 0:
+                        _loose = True
+                        break
+                    _attach.setdefault(_gi, []).append(_k)
+                parts = []
+                if not _loose:
+                    for _m, _gm in enumerate(_gmeta):
+                        if not _gm:
+                            parts = None
+                            break
+                        _idxs, _span, _gbb = _gm
+                        _idxs = list(_idxs) + list(
+                            _attach.get(_m, []))
+                        _g_uid = min((int(_blks[_k]) for _k in _idxs
+                                      if 0 <= _k < len(_blks)
+                                      and int(_blks[_k]) >= 0),
+                                     default=-1)
+                        _pt = " ".join(str(_texts[_k] or "").strip()
+                                       for _k in _idxs
+                                       if str(_texts[_k] or "").strip())
+                        if sum(1 for c in _pt if c.isalnum()) < 2:
+                            parts = None
+                            break
+                        # کادرِ جزء از «هستهٔ» غیرپل (خطِ پل دو ستون را
+                        # دوخته و کادر را تا ستونِ مجازی میکشد)
+                        _ck = [k for k in _idxs if k not in _span] \
+                            or list(_idxs)
+                        _pp = np.concatenate([
+                            np.asarray(_polys[_k],
+                                       dtype=np.float32).reshape(-1, 2)
+                            for _k in _ck])
+                        _bx0 = max(_cx1, int(np.floor(
+                            float(_pp[:, 0].min()))) - 6)
+                        _by0 = max(_cy1, int(np.floor(
+                            float(_pp[:, 1].min()))) - 6)
+                        _bx1 = min(_cx2, int(np.ceil(
+                            float(_pp[:, 0].max()))) + 6)
+                        _by1 = min(_cy2, int(np.ceil(
+                            float(_pp[:, 1].max()))) + 6)
+                        if _bx1 - _bx0 < 24 or _by1 - _by0 < 14:
+                            parts = None
+                            break
+                        parts.append((
+                            _g_uid,
+                            (_bx0, _by0, _bx1, _by1),
+                            [np.rint(np.asarray(_polys[_k],
+                                                dtype=np.float32)
+                                     ).astype(np.int32)
+                             for _k in _idxs],
+                            [str(_texts[_k] or "") for _k in _idxs],
+                            [float(_angs[_k]) for _k in _idxs],
+                            _pt,
+                        ))
                 _orig_alnum = sum(1 for c in str(cres[0] or "")
                                   if c.isalnum())
                 if (not parts or len(parts) < 2
@@ -22226,16 +22412,19 @@ class MangaTranslator:
                     new_cand.append(cb)
                     new_res.append(cres)
                     continue
+                _grp_idx = []
                 for (_uid, (bx0, by0, bx1, by1), bp, bt, ba, btxt) in parts:
                     _nb = dict(_orig_b)
                     _nb["rect"] = (bx0, by0, bx1, by1)
                     _nb["mask_poly"] = None
                     if not _nb.get("class_name"):
                         _nb["class_name"] = "text_bubble"
+                    _grp_idx.append(len(new_cand))
                     new_cand.append((len(new_cand), _nb, bx0, by0, bx1, by1,
                                      bx1 - bx0, by1 - by0))
                     new_res.append((btxt, bp, ba, bt,
                                     [_uid] * len(bp)))
+                split_out.append(_grp_idx)
                 n_split += 1
             except Exception:
                 new_cand.append(cb)
@@ -22244,7 +22433,234 @@ class MangaTranslator:
             print(f"    [*]K3-بلوک‌هایِ ML Kit: {n_split} باکسِ درهم → "
                   f"{len(new_cand)} ناحیهٔ مستقل "
                   "(layout-analysisِ نیتیو)")
-        return new_cand, new_res
+        return new_cand, new_res, split_out
+
+    def _post_split_fill(self, image, cand, ocr_results, split_groups):
+        """v1.14.130 — پاسِ «شَفتِ» ستون بعد از تفکیکِ بلوکی (فقط ML Kit).
+
+        تفکیکِ بلوکی، حباب و دستنویسِ کنارش را جدا میکند ولی خوانشِ
+        ادغامیِ «پل» (مثلِ «fheredl OU!» = «the real» + «YOU!») فقط با
+        «یک» جزء میرود — نیمهٔ دیگر («YOU!») از حباب گم میشود (شکایتِ
+        «هنوز ناقص استخراج میشه»). برایِ هر جزءِ تازه‌تولیدشده «یک» پاسِ
+        ML Kit رویِ برشِ «شَفتِ» همان ستون زده میشود: ستونی = xِ هستهٔ
+        جزء + کلِ yِ والد؛ عمودی = برعکس. خطهایِ تازهٔ داخلِ شَفت و
+        بیرون از هستهٔ همسایهها به همان جزء اضافه میشوند؛ خوانشِ بهترِ
+        خطِ خودی (آپوستروف/تکمیل — قواعدِ fill) جایگزین میشود. خطی که
+        فقط با «خطِ پلِ» عریض تطبیق میکند dup نیست — همان نیمهٔ گمشدهٔ
+        پل است. خاموشی: MANGA_MLKIT_POSTSPLIT=0 | سقف: ۸ خط/۶ جزء"""
+        if (image is None or not isinstance(image, np.ndarray)
+                or image.size == 0 or not split_groups
+                or len(cand) != len(ocr_results)):
+            return 0
+        try:
+            if os.environ.get(
+                    "MANGA_MLKIT_POSTSPLIT", "1").strip() == "0":
+                return 0
+        except Exception:
+            pass
+        H, W = image.shape[:2]
+
+        def _anorm(s):
+            return "".join(str(s).lower().split()).replace("'", "") \
+                .replace("’", "")
+
+        _all_polys = []
+        for _r in ocr_results:
+            try:
+                for _p in (_r[1] or []):
+                    _all_polys.append(
+                        np.asarray(_p, dtype=np.float32).reshape(-1, 2))
+            except Exception:
+                continue
+        _added = 0
+        _nup = 0
+        for _grp in split_groups[:6]:
+            if _added >= 8:
+                break
+            _parts = []
+            for _si in _grp:
+                if not (0 <= _si < len(cand)):
+                    continue
+                try:
+                    _cb = cand[_si]
+                    _cres = ocr_results[_si]
+                    if not (isinstance(_cres, tuple) and len(_cres) >= 5):
+                        continue
+                    _polys = [np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                              for p in (_cres[1] or [])]
+                    _texts = [str(t or "") for t in (_cres[3] or [])]
+                    while len(_texts) < len(_polys):
+                        _texts.append("")
+                    _angs = [float(a) for a in (_cres[2] or [])]
+                    while len(_angs) < len(_polys):
+                        _angs.append(0.0)
+                    _blks = [int(b) for b in (_cres[4] or [])]
+                    while len(_blks) < len(_polys):
+                        _blks.append(-1)
+                    if not _polys:
+                        continue
+                    _rx = (int(_cb[2]), int(_cb[3]),
+                           int(_cb[4]), int(_cb[5]))
+                    _parts.append([_si, _rx, _polys, _texts, _angs, _blks])
+                except Exception:
+                    continue
+            if len(_parts) < 2:
+                continue
+            # هستهٔ هر جزء = خطهایِ غیرپل (ملاکِ ضدِ جذب و شَفت)
+            _allw = [float(p[:, 0].max() - p[:, 0].min())
+                     for pt in _parts for p in pt[2]]
+            _wmed = float(np.median([w for w in _allw if w > 1.0])) \
+                if any(w > 1.0 for w in _allw) else 0.0
+            _cores = []
+            _span_all = []
+            for pt in _parts:
+                _ws = [(k, float(p[:, 0].max() - p[:, 0].min()))
+                       for k, p in enumerate(pt[2])]
+                _span = set()
+                if len(_ws) >= 2 and _wmed > 1.0:
+                    for k, wk in _ws:
+                        _oth = sorted(w for kk, w in _ws if kk != k)
+                        _om = float(_oth[len(_oth) // 2]) if _oth else 0.0
+                        if (_om > 1.0 and wk >= 2.0 * _om
+                                and wk >= 1.5 * _wmed):
+                            _span.add(k)
+                for k in _span:
+                    _span_all.append(pt[2][k])
+                _ck = [k for k, _ in _ws if k not in _span] \
+                    or [k for k, _ in _ws]
+                _cores.append((
+                    min(float(pt[2][k][:, 0].min()) for k in _ck),
+                    min(float(pt[2][k][:, 1].min()) for k in _ck),
+                    max(float(pt[2][k][:, 0].max()) for k in _ck),
+                    max(float(pt[2][k][:, 1].max()) for k in _ck)))
+            _px1 = min(c[0] for c in _cores)
+            _py1 = min(c[1] for c in _cores)
+            _px2 = max(c[2] for c in _cores)
+            _py2 = max(c[3] for c in _cores)
+            for _pi, pt in enumerate(_parts):
+                if _added >= 8:
+                    break
+                _bx1, _by1, _bx2, _by2 = _cores[_pi]
+                # جهتِ تقسیم: هستههایِ xِ جداشده = ستونی (شَفتِ عمودی)
+                _side = False
+                for _qi in range(len(_parts)):
+                    if _qi == _pi:
+                        continue
+                    _ox = (min(_bx2, _cores[_qi][2])
+                           - max(_bx1, _cores[_qi][0]))
+                    _nw = max(1.0, min(_bx2 - _bx1,
+                                       _cores[_qi][2] - _cores[_qi][0]))
+                    if _ox <= 0.25 * _nw:
+                        _side = True
+                if _side:
+                    _rect = (max(0, int(_bx1)), max(0, int(_py1)),
+                             min(W, int(_bx2)), min(H, int(_py2)))
+                else:
+                    _rect = (max(0, int(_px1)), max(0, int(_by1)),
+                             min(W, int(_px2)), min(H, int(_by2)))
+                if _rect[2] - _rect[0] < 24 or _rect[3] - _rect[1] < 24:
+                    continue
+                try:
+                    _news = self._mlkit_crop_fill(image, _rect, _all_polys,
+                                                  keep_dup=True)
+                except Exception:
+                    continue
+                if not _news:
+                    continue
+                if self.debug:
+                    print(f"    [🔍]MLKit-postsplit: جزء{_pi} "
+                          f"شَفت={_rect} → {len(_news)} خطِ کاندید")
+                _si, _rx, _polys, _texts, _angs, _blks = pt
+                _sib_core = [_cores[q] for q in range(len(_parts))
+                             if q != _pi]
+                for ent in _news:
+                    if _added >= 8:
+                        break
+                    txt_new = str(ent[0] or "").strip()
+                    poly_new = ent[2]
+                    if not txt_new:
+                        continue
+                    _hit = -1
+                    for _i2, _ep in enumerate(_polys):
+                        if self._lines_same(poly_new, _ep):
+                            _hit = _i2
+                            break
+                    if _hit >= 0:
+                        # خطِ خودی — فقط ارتقایِ متن (قواعدِ fill)
+                        _old = str(_texts[_hit] or "").strip()
+                        _nv, _ov = _anorm(txt_new), _anorm(_old)
+                        _amb = any(
+                            _oi != _hit
+                            and self._aabb_iou(poly_new, _ep2) >= 0.15
+                            for _oi, _ep2 in enumerate(_polys))
+                        if _amb or not _old:
+                            continue
+                        if (_ov == _nv and "'" in txt_new
+                                and "'" not in _old):
+                            _texts[_hit] = txt_new
+                            _nup += 1
+                            _added += 1
+                        elif (_ov and _nv and _ov in _nv
+                                and len(txt_new) > len(_old)):
+                            _texts[_hit] = txt_new
+                            _nup += 1
+                            _added += 1
+                        continue
+                    # خطِ تازه — ولی اگر فقط نیمهٔ «خطِ پل» است dup حساب
+                    # نکن (همان «YOU!» گمشده)
+                    _nw2 = float(poly_new[:, 0].max()
+                                 - poly_new[:, 0].min())
+                    _spanhit = any(
+                        self._lines_same(poly_new, _sp)
+                        and _nw2 < 0.62 * max(
+                            1.0, float(_sp[:, 0].max()
+                                       - _sp[:, 0].min()))
+                        for _sp in _span_all)
+                    if not _spanhit:
+                        _is_dup = any(self._lines_same(poly_new, _gp)
+                                      for _gp in _all_polys)
+                        if _is_dup:
+                            continue
+                    _cx = float(poly_new[:, 0].mean())
+                    _cy = float(poly_new[:, 1].mean())
+                    if not (_rect[0] <= _cx <= _rect[2]
+                            and _rect[1] <= _cy <= _rect[3]):
+                        continue
+                    if any(sc[0] - 6 <= _cx <= sc[2] + 6
+                           and sc[1] - 6 <= _cy <= sc[3] + 6
+                           for sc in _sib_core):
+                        continue  # جذبِ خطِ جزءِ همسایه ممنوع
+                    _polys.append(np.rint(poly_new).astype(np.int32))
+                    _texts.append(txt_new)
+                    _angs.append(float(ent[3] or 0.0))
+                    _blks.append(-1)
+                    _all_polys.append(_polys[-1])
+                    _added += 1
+                _pj = " ".join(t.strip() for t in _texts
+                               if t.strip()).strip()
+                if not _pj:
+                    continue
+                ocr_results[_si] = (_pj, _polys, _angs, _texts, _blks)
+                _nx1 = min([_rx[0]] + [int(float(p[:, 0].min()))
+                                       for p in _polys])
+                _ny1 = min([_rx[1]] + [int(float(p[:, 1].min()))
+                                       for p in _polys])
+                _nx2 = max([_rx[2]] + [int(float(p[:, 0].max()))
+                                       for p in _polys])
+                _ny2 = max([_rx[3]] + [int(float(p[:, 1].max()))
+                                       for p in _polys])
+                _nx1, _ny1 = max(0, _nx1), max(0, _ny1)
+                _nx2, _ny2 = min(W, _nx2), min(H, _ny2)
+                if (_nx1, _ny1, _nx2, _ny2) != _rx:
+                    _nb = dict(cand[_si][1]) \
+                        if isinstance(cand[_si][1], dict) else {}
+                    _nb["rect"] = (_nx1, _ny1, _nx2, _ny2)
+                    cand[_si] = (cand[_si][0], _nb, _nx1, _ny1,
+                                 _nx2, _ny2, _nx2 - _nx1, _ny2 - _ny1)
+        if self.debug and (_added or _nup):
+            print(f"    [🔍]MLKit-postsplit: +{_added} خطِ تازه/ارتقا "
+                  f"({_nup} ارتقایِ متنِ خودی)")
+        return _added
 
     def _split_multiblock_regions(self, image: np.ndarray,
                                   regions: List["TextRegion"]) -> List["TextRegion"]:
@@ -22677,8 +23093,17 @@ class MangaTranslator:
                 in ("mlkit", "rapidocr")
                 and os.environ.get("MANGA_MLKIT_BLOCKS", "1").strip() != "0"):
             try:
-                cand, ocr_results = self._split_mlkit_block_cands(
-                    cand, ocr_results)
+                cand, ocr_results, _sp_groups = \
+                    self._split_mlkit_block_cands(cand, ocr_results)
+                # v1.14.130 — پاسِ شَفتِ ستون بعد از تفکیک: بازیابیِ
+                # نیمهٔ گمشدهٔ خطِ پل («YOU!») + ارتقایِ خوانشِ خطهای
+                # خودی («I'L» ← «I'LL» در برشِ تکستونی)
+                if _sp_groups:
+                    try:
+                        self._post_split_fill(image, cand, ocr_results,
+                                              _sp_groups)
+                    except Exception:
+                        pass
             except Exception:
                 pass
 
