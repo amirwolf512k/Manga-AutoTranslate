@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.128"
+APP_VER = "1.14.129"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -20987,6 +20987,7 @@ class MangaTranslator:
             return "".join(str(s).lower().split())
 
         _added = 0
+        _nfix = 0
         for _cov, k in _thin[:12]:
             if _added >= 40:
                 break
@@ -20999,24 +21000,45 @@ class MangaTranslator:
                         _hit = _i
                         break
                 if _hit >= 0:
-                    # تکمیلِ خطِ نیمهخواندهٔ صفحه: «You're the real» ←
+                    # (a) تکمیلِ خطِ نیمهخواندهٔ صفحه: «You're the real» ←
                     # «You're the real attraction here!» — متنِ بلندترِ
                     # شاملِ قبلی جایگزین میشود؛ پالی/بلوکِ صفحه میماند.
                     _old = str(plines[_hit][0] or "").strip()
-                    if (txt_new and _old
-                            and _norm(txt_new) != _norm(_old)
-                            and _norm(_old) in _norm(txt_new)
-                            and len(txt_new) > len(_old)):
+                    _nv, _ov = _norm(txt_new), _norm(_old)
+                    if (txt_new and _old and _nv != _ov
+                            and _ov in _nv and len(txt_new) > len(_old)):
                         plines[_hit] = (txt_new, float(ent[1]),
                                         plines[_hit][2], plines[_hit][3],
                                         plines[_hit][4])
                         _added += 1
+                    # (b) v1.14.129 — ضدِ «خطِ آلوده» (ادغامِ دو حبابِ
+                    # مجاور در یک خط توسطِ پاسِ صفحه): متنِ صفحه
+                    # سوپراسترینگِ خوانشِ تمیزِ برشِ همین باکس است
+                    # («besides,» ⊂ «besides,attractions,») و خط از مرزِ
+                    # این باکس بیرون میزند → برشِ باکس‌کلیپ که متنِ
+                    # حبابِ دیگر را «نمیتواند» ببیند مرجع است؛ متن+پالی
+                    # جایگزین میشود (پالیِ جدید داخلِ باکس = تخصیصِ درست).
+                    # تا 1.14.128 این خط توسطِ _lines_same dedup و دور
+                    # ریخته میشد — ریشهٔ اصلیِ «هنوز ناقص استخراج میشه».
+                    elif (txt_new and _old and _nv != _ov
+                            and _nv in _ov and len(_old) > len(txt_new)
+                            and sum(c.isalnum() for c in txt_new) >= 2
+                            and self._line_sticks_out(plines[_hit][2],
+                                                      rects[k])):
+                        plines[_hit] = (txt_new, float(ent[1]),
+                                        np.rint(poly_new).astype(np.int32),
+                                        plines[_hit][3], plines[_hit][4])
+                        _added += 1
+                        _nfix += 1
                     continue
                 # v1.14.128 — blkِ کراپ «لوکالِ برش» است و با شمارهٔ بلوکِ
                 # صفحه تصادم میکند → -۱ (بیبلوک؛ درجِ y در ترتیب)
                 plines.append((ent[0], ent[1], ent[2], ent[3], -1))
                 _existing.append(poly_new)
                 _added += 1
+        if self.debug:
+            print(f"    [🔍]MLKit-fill: {len(_thin)}/{n} باکسِ نیمهپوش "
+                  f"بررسی شد → +{_added} خط ({_nfix} ضدِ آلودگی)")
         return _added
 
     def _mlkit_gap_rescue(self, image: np.ndarray, cand, plines) -> int:
@@ -21096,6 +21118,9 @@ class MangaTranslator:
                 plines.append((ent[0], ent[1], ent[2], ent[3], -1))
                 _existing.append(poly)
                 _added += 1
+        if self.debug:
+            print(f"    [🔍]MLKit-gap: {len(_near)} باکسِ مجاورِ شکافدار "
+                  f"→ +{_added} خط")
         return _added
 
     def _mlkit_split_cross_lines(self, image: np.ndarray, cand, plines) -> int:
@@ -21126,6 +21151,7 @@ class MangaTranslator:
             return "".join(str(s).lower().split())
 
         _fixed = 0
+        _nsusp = 0
         _n0 = len(plines)
         for li in range(_n0):
             if _fixed >= 8:
@@ -21164,8 +21190,12 @@ class MangaTranslator:
                     break
             if _own < 0:
                 continue
-            # باکسها باید «کنارِ هم» باشند نه تودرتو — وگرنه خطِ سالمِ
-            # عریضِ یک باکسِ بزرگ دست میخورد.
+            # جفتِ «تودرتو» اشتباه نشود: اگر یکی از باکسها تقریباً کامل
+            # داخلِ دیگری است (x و y ≥۸۵٪)، خطِ عریضِ باکسِ بزرگِ محتوی
+            # «بین‌حبابیه» نیست. غیرِ از آن (کنارِ هم، یا همپوشانیِ جزئی
+            # مثلِ باکسِ دستنویس رویِ حباب) مجاز است — 1.14.128 با گاردِ
+            # سختگیرانهٔ «کنارِ همِ خالص» موردِ دستنویس+حباب را از دست
+            # میداد.
             _okpair = False
             for _i in range(len(_hits)):
                 for _j in range(_i + 1, len(_hits)):
@@ -21173,12 +21203,19 @@ class MangaTranslator:
                     _ax2, _ay2 = _hits[_i][3], _hits[_i][4]
                     _bx1, _by1 = _hits[_j][1], _hits[_j][2]
                     _bx2, _by2 = _hits[_j][3], _hits[_j][4]
-                    _ix = min(_ax2, _bx2) - max(_ax1, _bx1)
-                    _nw = max(1.0, min(_ax2 - _ax1, _bx2 - _bx1))
-                    if _ix <= 0.40 * _nw:
+                    _ix = max(0.0, min(_ax2, _bx2) - max(_ax1, _bx1))
+                    _iy = max(0.0, min(_ay2, _by2) - max(_ay1, _by1))
+                    _aw = max(1.0, _ax2 - _ax1)
+                    _ah = max(1.0, _ay2 - _ay1)
+                    _bw = max(1.0, _bx2 - _bx1)
+                    _bh = max(1.0, _by2 - _by1)
+                    _nested = (_ix >= 0.85 * min(_aw, _bw)
+                               and _iy >= 0.85 * min(_ah, _bh))
+                    if not _nested:
                         _okpair = True
             if not _okpair:
                 continue
+            _nsusp += 1
             _band = (max(0, int(lx1) - 10), max(0, int(ly1) - 10),
                      min(_W, int(lx2) + 10), min(_H, int(ly2) + 10))
             _old_t = str(ent[0] or "").strip()
@@ -21253,6 +21290,9 @@ class MangaTranslator:
                     _touched = True
             if _touched:
                 _fixed += 1
+        if self.debug:
+            print(f"    [🔍]MLKit-xline: {_nsusp} خطِ مشکوکِ بین‌حبابیه "
+                  f"→ {_fixed} اصلاح/جدا")
         return _fixed
 
     def _mlkit_ingap_fill(self, image: np.ndarray, cand, plines) -> int:
@@ -21275,6 +21315,7 @@ class MangaTranslator:
         _H, _W = image.shape[:2]
         rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
         _added = 0
+        _ngaps = 0
         for k in range(n):
             if _added >= 6:
                 break
@@ -21304,6 +21345,7 @@ class MangaTranslator:
                             max(1.0, _b[1] - _b[0]))
                 if _gap <= max(1.25 * _hmin, 30.0):
                     continue
+                _ngaps += 1
                 gy1 = int(max(0, _a[1] - 0.15 * _gap))
                 gy2 = int(min(_H, _b[0] + 0.15 * _gap))
                 cx1, cy1 = max(0, x1 - 8), gy1
@@ -21338,6 +21380,9 @@ class MangaTranslator:
                                    p, float(t[3]), -1))
                     _existing.append(p)
                     _added += 1
+        if self.debug:
+            print(f"    [🔍]MLKit-ingap: {_ngaps} شکافِ مشکوکِ درونی "
+                  f"→ +{_added} خط")
         return _added
 
     @staticmethod
@@ -21388,6 +21433,26 @@ class MangaTranslator:
                     ay2 - ay1, by2 - by1, 1.0):
                 return True
             return False
+        except Exception:
+            return False
+
+    @staticmethod
+    def _line_sticks_out(poly, rect, frac: float = 0.12) -> bool:
+        """v1.14.129 — آیا bboxِ خط از مرزِ باکس بیرون میزند؟
+        افقی: > frac×عرضِ خط؛ عمودی: > 8px. ملاکِ «خطِ آلوده»: برشِ
+        باکس‌کلیپ نمیتواند متنِ حبابِ دیگر را ببیند — اگر خوانشِ برش
+        زیررشتهٔ متنِ صفحه باشد و خط بیرون بزند، متنِ صفحه آلوده است."""
+        try:
+            x1, y1, x2, y2 = [float(v) for v in rect[:4]]
+            bx1 = float(poly[:, 0].min())
+            bx2 = float(poly[:, 0].max())
+            by1 = float(poly[:, 1].min())
+            by2 = float(poly[:, 1].max())
+            bw = max(1.0, bx2 - bx1)
+            return (max(0.0, (x1 - 6) - bx1) > frac * bw
+                    or max(0.0, bx2 - (x2 + 6)) > frac * bw
+                    or max(0.0, (y1 - 6) - by1) > 8.0
+                    or max(0.0, by2 - (y2 + 6)) > 8.0)
         except Exception:
             return False
 
@@ -22263,8 +22328,9 @@ class MangaTranslator:
                             if _nx and self.debug:
                                 print(f"    [*]MLKit-xline: {_nx} خطِ "
                                       "بین‌حبابیه جدا/تمیز شد")
-                        except Exception:
-                            pass
+                        except Exception as _ex:
+                            if self.debug:
+                                print(f"    [!]MLKit-xline خطا: {_ex}")
                     # v1.14.126 — پرکردنِ باکسهایِ نیمهپوش قبل از تخصیص:
                     # متنِ ریز/سبکی که پاسِ تمامصفحه گم میکند، با «یک»
                     # پاسِ ML Kit رویِ برشِ خودِ باکس برمیگردد (نیتیو و
@@ -22276,8 +22342,9 @@ class MangaTranslator:
                             if _nfill and self.debug:
                                 print(f"    [*]MLKit-fill: +{_nfill} خطِ "
                                       "تازه/تکمیل از باکسهایِ نیمهپوش")
-                        except Exception:
-                            pass
+                        except Exception as _ex:
+                            if self.debug:
+                                print(f"    [!]MLKit-fill خطا: {_ex}")
                     # v1.14.128 — خطِ جاماندهٔ «درونی» («I'll» بینِ دو خطِ
                     # متوالیِ یک باکس): شکافِ واضحِ توالی → پاسِ نوارِ شکاف.
                     # خاموشی: MANGA_MLKIT_INGAP=0
@@ -22288,8 +22355,9 @@ class MangaTranslator:
                             if _nig and self.debug:
                                 print(f"    [*]MLKit-ingap: +{_nig} خطِ "
                                       "جاماندهٔ درونِ باکس")
-                        except Exception:
-                            pass
+                        except Exception as _ex:
+                            if self.debug:
+                                print(f"    [!]MLKit-ingap خطا: {_ex}")
                     # v1.14.127 — نجاتِ خطِ «شکافِ بینِ باکسها»: خطِ وسطِ
                     # دو باکسِ نزدیک («I'll» در 01.jpg) نه داخلِ باکسی است
                     # نه در پاسِ صفحه هست → یک پاسِ ML Kit رویِ برشِ
@@ -22301,6 +22369,23 @@ class MangaTranslator:
                             if _ngap and self.debug:
                                 print(f"    [*]MLKit-gap: +{_ngap} خطِ "
                                       "شکافِ بینِ باکسها → ناحیهٔ مستقل")
+                        except Exception as _ex:
+                            if self.debug:
+                                print(f"    [!]MLKit-gap خطا: {_ex}")
+                    # v1.14.129 — دیباگِ خط‌بهخطِ پاسِ صفحه (تشخیصِ دقیقِ
+                    # ادغام/نشتی در لاگِ کاربر — فقط debug)
+                    if self.debug:
+                        try:
+                            for _dl in _plines[:80]:
+                                _dp = _dl[2]
+                                print(
+                                    f"      [L] {_dl[0]!r} "
+                                    f"conf={float(_dl[1]):.2f} "
+                                    f"bbox=({float(_dp[:, 0].min()):.0f},"
+                                    f"{float(_dp[:, 1].min()):.0f},"
+                                    f"{float(_dp[:, 0].max()):.0f},"
+                                    f"{float(_dp[:, 1].max()):.0f}) "
+                                    f"blk={_dl[4]}")
                         except Exception:
                             pass
                     _res, _used = self._page_assign_lines(cand, _plines)
