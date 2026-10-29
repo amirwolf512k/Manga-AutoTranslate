@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.123"
+APP_VER = "1.14.124"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -4960,6 +4960,17 @@ class MangaTranslator:
                     self._ocr_backend_name = "rapidocr"
                     print("[*] اندروید: موتورِ ONNXِ پی‌سی (PP-OCRv6) "
                           "پیشفرض شد — همانِ PC لینوکس.")
+                    # v1.14.124 — راهنمایِ برشِ امنِ ML Kit (کاسکادِ K3):
+                    # استخراجِ یک بار با ML Kit، بعدِ PP-OCRv6 فقط رویِ
+                    # همان نقاط (RunRapidOcrPipelineOnCropِ دیکدِ K3).
+                    self._mlkit_guide = None
+                    try:
+                        self._mlkit_guide = MlKitBackend(lang=main_lang)
+                        print("[*] کاسکادِ K3 فعال: ML Kit → برشِ امن → "
+                              "PP-OCRv6 رویِ برش‌ها (سریع + دقتِ PC)")
+                    except Exception as _e2:
+                        print(f"[!] راهنمایِ ML Kit در دسترس نیست ({_e2}) "
+                              "→ PP-OCRv6 تمام‌صفحه")
                 except Exception as e:
                     print(f"[!] PP-OCRv6 ONNX روی اندروید لود نشد ({e}) "
                           "→ ML Kit نیتیو")
@@ -20696,8 +20707,13 @@ class MangaTranslator:
         if (self.ocr is None or image is None
                 or not isinstance(image, np.ndarray) or image.size == 0):
             return []
+        # v1.14.124 — منبعِ خط‌هایِ صفحه: راهنمایِ ML Kit (وقتی بکاندِ
+        # اصلی PP-OCRv6 است) یا خودِ بکاند (وقتی بکاند = ML Kit).
+        _ocr_src = getattr(self, "_mlkit_guide", None) or self.ocr
+        if _ocr_src is None:
+            return []
         try:
-            results = self.ocr.ocr(image)
+            results = _ocr_src.ocr(image)
         except Exception:
             return []
         if not results or not results[0]:
@@ -20747,6 +20763,243 @@ class MangaTranslator:
             except Exception:
                 continue
         return out
+
+    @staticmethod
+    def _aabb_iou(pa, pb):
+        """v1.14.124 — IoUِ کادرِ محصورِ دو پالی (dedupِ خطِ ML Kit با
+        خطِ PP-OCRv6ِ کراپ در کاسکادِ K3)."""
+        try:
+            ax1, ay1 = float(pa[:, 0].min()), float(pa[:, 1].min())
+            ax2, ay2 = float(pa[:, 0].max()), float(pa[:, 1].max())
+            bx1, by1 = float(pb[:, 0].min()), float(pb[:, 1].min())
+            bx2, by2 = float(pb[:, 0].max()), float(pb[:, 1].max())
+            ix = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+            iy = max(0.0, min(ay2, by2) - max(ay1, by1))
+            inter = ix * iy
+            union = ((ax2 - ax1) * (ay2 - ay1)
+                     + (bx2 - bx1) * (by2 - by1) - inter)
+            return (inter / union) if union > 1e-6 else 0.0
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def _lines_same(pa, pb):
+        """v1.14.124 — آیا دو پالی «یک خطِ فیزیکی»اند (دو دیتکتورِ
+        متفاوت: ML Kit و PP-OCRv6)؟ سه قاعده: IoU؛ اشغالِ باکسِ کوچکتر
+        (unclipِ پهنتر)؛ همپوشانیِ افقیِ زیاد + مرکزِ y نزدیک (کادرِ
+        بلندترِ دیتکتورِ دیگر). هدف: جلوگیری از متنِ تکراری."""
+        try:
+            ax1, ay1 = float(pa[:, 0].min()), float(pa[:, 1].min())
+            ax2, ay2 = float(pa[:, 0].max()), float(pa[:, 1].max())
+            bx1, by1 = float(pb[:, 0].min()), float(pb[:, 1].min())
+            bx2, by2 = float(pb[:, 0].max()), float(pb[:, 1].max())
+            ix = max(0.0, min(ax2, bx2) - max(ax1, bx1))
+            iy = max(0.0, min(ay2, by2) - max(ay1, by1))
+            inter = ix * iy
+            if inter <= 0:
+                return False
+            a_area = max(1.0, (ax2 - ax1) * (ay2 - ay1))
+            b_area = max(1.0, (bx2 - bx1) * (by2 - by1))
+            union = a_area + b_area - inter
+            if inter / union >= 0.45:
+                return True
+            if inter / max(1.0, min(a_area, b_area)) >= 0.60:
+                return True
+            ox = min(ax2, bx2) - max(ax1, bx1)
+            narrow_x = max(1.0, min(ax2 - ax1, bx2 - bx1))
+            cy_a, cy_b = (ay1 + ay2) * 0.5, (by1 + by2) * 0.5
+            if ox >= 0.70 * narrow_x and abs(cy_a - cy_b) <= 0.6 * max(
+                    ay2 - ay1, by2 - by1, 1.0):
+                return True
+            return False
+        except Exception:
+            return False
+
+    def _cascade_page_ocr(self, image: np.ndarray, cand):
+        """v1.14.124 — کاسکادِ موتورِ K3 (دیکدِ واقعیِ APKِ v4.1.1 —
+        رشته‌هایِ 105.dll: RunRapidOcrPipelineOnCrop، detector_int8.onnx،
+        GroupNearbyBoxes، DropContainedBoxes، EnhanceCropWithWaifu2x):
+          ۱) استخراجِ «یک بار» با ML Kit رویِ کلِ صفحه (نیتیو و سریع)
+          ۲) «برشِ امن»: هر خوشهٔ خطِ مجاور → کادرِ union + پدِ امن
+             (ادغامِ همپوشان = GroupNearbyBoxes/DropContainedBoxes)
+          ۳) PP-OCRv6 (موتورِ PC/K3) «فقط رویِ همان برش‌ها» — مثلِ
+             RunRapidOcrPipelineOnCrop؛ تصویرِ کوچک = det/recِ سریع
+             (مثلِ lama.onnx: سشنِ ONNX رویِ ورودیِ کوچک)
+          ۴) خطِ Rapid جانشینِ خطِ ML Kitِ همان ناحیه میشود (دقتِ PC)
+             و خطِ تازه اضافه میشود (استخراجِ بیشتر). شمارهٔ بلوکِ
+             ML Kit حفظ میشود (layout-analysis). برشِ بی‌نتیجه →
+             متنِ ML Kit می‌ماند (پوششِ کامل).
+        فال‌بک: ML Kit خالی → None (مسیرِ قبلی). خاموش‌کننده‌ها:
+        MANGA_CASCADE=0 | نجاتِ کراپ: MANGA_CROP_RESCUE=0 | ورکرِ
+        کاسکاد: MANGA_CASCADE_WORKERS (۰ = خودکار تا ۳)"""
+        if (image is None or not isinstance(image, np.ndarray)
+                or image.size == 0 or not cand):
+            return None
+        _mob = getattr(getattr(self, "ocr", None), "_mobile", None)
+        if _mob is None:
+            return None
+        import time as _time
+        _t0 = _time.time()
+        plines = self._mlkit_page_lines(image)
+        if not plines:
+            return None
+        _H, _W = image.shape[:2]
+
+        # ۲) برشِ امن — کادرِ هر خط + پدِ امن → ادغامِ همپوشان‌ها
+        _rects = []
+        for ent in plines:
+            try:
+                p = ent[2]
+            except Exception:
+                continue
+            rx1 = int(np.floor(float(p[:, 0].min())))
+            ry1 = int(np.floor(float(p[:, 1].min())))
+            rx2 = int(np.ceil(float(p[:, 0].max())))
+            ry2 = int(np.ceil(float(p[:, 1].max())))
+            lh = max(4, ry2 - ry1)
+            _px = int(max(14.0, 0.55 * lh))
+            _py = int(max(10.0, 0.45 * lh))
+            _rects.append((max(0, rx1 - _px), max(0, ry1 - _py),
+                           min(_W, rx2 + _px), min(_H, ry2 + _py)))
+        _changed = True
+        while _changed:
+            _changed = False
+            _out = []
+            for r in _rects:
+                _hit = None
+                for o in _out:
+                    if (r[0] <= o[2] and o[0] <= r[2]
+                            and r[1] <= o[3] and o[1] <= r[3]):
+                        _hit = o
+                        break
+                if _hit is not None:
+                    _hit[0] = min(_hit[0], r[0])
+                    _hit[1] = min(_hit[1], r[1])
+                    _hit[2] = max(_hit[2], r[2])
+                    _hit[3] = max(_hit[3], r[3])
+                    _changed = True
+                else:
+                    _out.append(list(r))
+            _rects = [tuple(o) for o in _out]
+        if not _rects:
+            return None
+
+        # ۳) PP-OCRv6 فقط رویِ برش‌ها (سشن‌هایِ det/rec مشترک و
+        # thread-safe — همان سابقهٔ v1.14.120)
+        def _run_one(crect):
+            cx1, cy1, cx2, cy2 = crect
+            try:
+                _crop = image[cy1:cy2, cx1:cx2]
+                return crect, _mob.ocr(_crop)
+            except Exception:
+                return crect, None
+
+        def _collect(crect, out):
+            cx1, cy1 = crect[0], crect[1]
+            _got = []
+            if out and out[0]:
+                for _bx, _pair in out[0]:
+                    try:
+                        # _deaccent رویِ RapidOCRBackend است (نه این کلاس)
+                        _t = RapidOCRBackend._deaccent(str(_pair[0])).strip()
+                        _s = float(_pair[1])
+                        if not _t or _s < float(
+                                getattr(self, "min_confidence", 0.5)):
+                            continue
+                        _pp = np.asarray(
+                            _bx, dtype=np.float32).reshape(-1, 2).copy()
+                        _pp[:, 0] += cx1
+                        _pp[:, 1] += cy1
+                        _got.append((_t, _s,
+                                     np.rint(_pp).astype(np.int32),
+                                     0.0, -1))
+                    except Exception:
+                        continue
+            return _got
+
+        try:
+            _w_env = int(os.environ.get("MANGA_CASCADE_WORKERS", "0") or 0)
+        except Exception:
+            _w_env = 0
+        _workers = _w_env if _w_env > 0 else min(3, max(
+            1, int(getattr(self, "max_workers", 2) or 2)))
+        _workers = max(1, min(_workers, len(_rects)))
+        _rapid = []
+        if _workers > 1:
+            with ThreadPoolExecutor(max_workers=_workers) as _ex:
+                for _cr, _o in _ex.map(_run_one, _rects):
+                    _rapid.extend(_collect(_cr, _o))
+        else:
+            for _cr in _rects:
+                _cr2, _o = _run_one(_cr)
+                _rapid.extend(_collect(_cr2, _o))
+
+        # ۴) ادغام — خطِ Rapid جانشینِ خطِ ML Kitِ همان ناحیه (دقتِ PC)
+        # و خطِ تازه اضافه میشود (استخراجِ بیشتر). بلوکِ ML Kit حفظ.
+        merged = list(plines)
+        _nrep = 0
+        for rl in _rapid:
+            rp = rl[2]
+            _hit_i = -1
+            for _i, _ml in enumerate(merged):
+                if self._lines_same(rp, _ml[2]):
+                    _hit_i = _i
+                    break
+            if _hit_i >= 0:
+                _ml = merged[_hit_i]
+                merged[_hit_i] = (rl[0], rl[1], rl[2], rl[3], _ml[4])
+                _nrep += 1
+            else:
+                merged.append(rl)
+
+        # ۵) تخصیصِ خط‌ها به باکس‌هایِ دیتکتور (همان مسیرِ v1.14.122)
+        res, used = self._page_assign_lines(cand, merged)
+
+        # ۶) نجاتِ باکسِ بی‌خط — اولِ PP-OCRv6 رویِ برشِ خودِ باکس
+        # (ورودیِ محلی = متنِ ریز که پاسِ صفحه جا می‌اندازد)، بعدِ
+        # مسیرِ قدیمیِ _ocr_crop (variants/upscale).
+        rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
+        _nresc = 0
+        _rescue = os.environ.get("MANGA_CROP_RESCUE", "1").strip() != "0"
+        for _k in range(len(cand)):
+            if used[_k]:
+                continue
+            try:
+                x1, y1, x2, y2 = rects[_k]
+                _px = max(6, int(0.03 * (x2 - x1)))
+                _py = max(6, int(0.15 * (y2 - y1)))
+                cx1, cy1 = max(0, x1 - _px), max(0, y1 - _py)
+                cx2, cy2 = min(_W, x2 + _px), min(_H, y2 + _py)
+                _cr2, _o = _run_one((cx1, cy1, cx2, cy2))
+                _got = _collect(_cr2, _o)
+                if _got:
+                    used[_k] = True
+                    res[_k] = (" ".join(g[0] for g in _got),
+                               [g[2] for g in _got],
+                               [g[3] for g in _got],
+                               [g[0] for g in _got],
+                               [g[4] for g in _got])
+                    _nresc += 1
+                    continue
+                if _rescue:
+                    _blk = [(rects[j][0], rects[j][1], rects[j][2],
+                             rects[j][3])
+                            for j in range(len(cand)) if j != _k]
+                    res[_k] = self._ocr_crop(
+                        image, [x1, y1, x2, y2], block_rects=_blk)
+            except Exception:
+                continue
+
+        # ۷) خط‌هایِ بیرون از همهٔ باکس‌ها → ناحیهٔ مستقل
+        ec, er = self._page_leftover_cands(cand, merged)
+        if self.debug:
+            print(f"    [*]K3-کاسکاد: MLKit={len(plines)}خط | "
+                  f"برش={len(_rects)} | PP-OCRv6={len(_rapid)}خط "
+                  f"(جایگزین={_nrep}) | باکس="
+                  f"{sum(1 for _u in used if _u)}/{len(cand)} "
+                  f"+{_nresc} نجات | +{len(ec)} بیرون | "
+                  f"{int((_time.time() - _t0) * 1000)}ms")
+        return res, ec, er
 
     @staticmethod
     def _page_assign_lines(cand, page_lines):
@@ -21309,10 +21562,28 @@ class MangaTranslator:
         # خط‌ها به باکس‌هایِ دیتکتور تخصیص مییابند؛ باکسِ بیخط = نجاتِ
         # کراپِ قدیمی (variants/upscale)؛ خطِ بیرون از همهٔ باکس‌ها =
         # ناحیهٔ مستقل (استخراجِ بیشتر). خطا/خالی → مسیرِ قدیمی.
-        # خاموش‌کننده: MANGA_MLKIT_PAGE=0
+        # خاموش‌کننده: MANGA_CASCADE=0 (کاسکاد) | MANGA_MLKIT_PAGE=0 (پاسِ ML Kit)
         _page_done = False
-        if (cand and _on_android()
-                and getattr(self, "_ocr_backend_name", "") == "mlkit"
+        _bn_ocr = getattr(self, "_ocr_backend_name", "")
+        # ── v1.14.124 — کاسکادِ K3: ML Kit (یک بار) → برشِ امن →
+        # PP-OCRv6 فقط رویِ برش‌ها (دیکدِ K3: RunRapidOcrPipelineOnCrop).
+        # خطای/خالیِ کاسکاد → مسیرِ پاسِ ML Kitِ خالص → مسیرِ قدیمی.
+        if (cand and _on_android() and _bn_ocr == "rapidocr"
+                and getattr(self, "_mlkit_guide", None) is not None
+                and os.environ.get("MANGA_CASCADE", "1").strip() != "0"):
+            try:
+                _casc = self._cascade_page_ocr(image, cand)
+                if _casc is not None:
+                    _res_c, _ec, _er = _casc
+                    ocr_results = _res_c
+                    _page_done = True
+                    if _ec:
+                        cand.extend(_ec)
+                        ocr_results.extend(_er)
+            except Exception:
+                _page_done = False
+        if (not _page_done and cand and _on_android()
+                and _bn_ocr == "mlkit"
                 and os.environ.get("MANGA_MLKIT_PAGE", "1").strip() != "0"):
             try:
                 _plines = self._mlkit_page_lines(image)
@@ -21411,7 +21682,8 @@ class MangaTranslator:
         # («THEN I'L PULL THE re FOR FLOAT theredl OU!...») ریشه‌ای حل
         # میشود. خاموش‌کننده: MANGA_MLKIT_BLOCKS=0
         if (_on_android()
-                and getattr(self, "_ocr_backend_name", "") == "mlkit"
+                and getattr(self, "_ocr_backend_name", "")
+                in ("mlkit", "rapidocr")
                 and os.environ.get("MANGA_MLKIT_BLOCKS", "1").strip() != "0"):
             try:
                 cand, ocr_results = self._split_mlkit_block_cands(
