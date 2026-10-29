@@ -20848,6 +20848,9 @@ class MangaTranslator:
                 return out
             crop = image[y1:y2, x1:x2]
             ch, cw = crop.shape[:2]
+            if self.debug:
+                print(f"      [🔍crop] rect=({x1},{y1},{x2},{y2}) "
+                      f"crop={cw}×{ch}")
             # v1.14.128 — بزرگنمایی بر اساسِ «ضلعِ کوچک» (هدفِ ≥400px):
             # تا دیروز برشِ بلندِ باریک (مثلِ 238×642 اصلاً بزرگ نمیشد چون
             # فقط ضلعِ بزرگ ملاک بود) و متنِ ریزش خوانده نمیشد. سقفِ ضریب
@@ -20866,8 +20869,14 @@ class MangaTranslator:
             if sc > 1.01:
                 crop = cv2.resize(crop, None, fx=sc, fy=sc,
                                   interpolation=cv2.INTER_CUBIC)
+                if self.debug:
+                    print(f"      [🔍crop] ×{sc:.2f} → "
+                          f"{crop.shape[1]}×{crop.shape[0]}")
             _src = getattr(self, "_mlkit_guide", None) or self.ocr
             results = _src.ocr(crop)
+            if self.debug:
+                _rn = (len(results[0]) if (results and results[0]) else 0)
+                print(f"      [🔍crop] ocr → {_rn} خطِ خام")
             if not results or not results[0]:
                 return out
             for line in results[0]:
@@ -20922,7 +20931,11 @@ class MangaTranslator:
                     out.append((text, float(conf), poly, float(ang), int(blk)))
                 except Exception:
                     continue
-        except Exception:
+            if self.debug:
+                print(f"      [🔍crop] → {len(out)} خطِ تازه")
+        except Exception as _ex:
+            if self.debug:
+                print(f"      [🔍crop] خطا: {_ex}")
             return []
         return out
 
@@ -22388,6 +22401,43 @@ class MangaTranslator:
                                     f"blk={_dl[4]}")
                         except Exception:
                             pass
+                    # v1.14.129 — پروبِ کراپِ ML Kit: آیا ocrِ برشِ همان
+                    # موتورِ صفحه اصلاً جواب میدهد؟ (تشخیصِ قطعیِ ریشهٔ
+                    # خالیبودنِ همهٔ کراپها — خطِ اولِ صفحه بریده و
+                    # خام/بزرگنمایی شده OCR میشود)
+                    if self.debug:
+                        try:
+                            _probe_src = (getattr(self, "_mlkit_guide",
+                                                  None) or self.ocr)
+                            _pl0 = _plines[0][2]
+                            _px1 = max(0, int(float(
+                                _pl0[:, 0].min())) - 16)
+                            _py1 = max(0, int(float(
+                                _pl0[:, 1].min())) - 16)
+                            _px2 = min(image.shape[1], int(float(
+                                _pl0[:, 0].max())) + 16)
+                            _py2 = min(image.shape[0], int(float(
+                                _pl0[:, 1].max())) + 16)
+                            _pc = image[_py1:_py2, _px1:_px2]
+                            _pr1 = _probe_src.ocr(_pc)
+                            _n1 = (len(_pr1[0])
+                                   if (_pr1 and _pr1[0]) else 0)
+                            _t1 = (str(_pr1[0][0][1][0])
+                                   if _n1 else "-")
+                            _pc2 = cv2.resize(
+                                _pc, None, fx=2.0, fy=2.0,
+                                interpolation=cv2.INTER_CUBIC)
+                            _pr2 = _probe_src.ocr(_pc2)
+                            _n2 = (len(_pr2[0])
+                                   if (_pr2 and _pr2[0]) else 0)
+                            _t2 = (str(_pr2[0][0][1][0])
+                                   if _n2 else "-")
+                            print(f"    [🔍]MLKit-probe: برشِ "
+                                  f"{_pc.shape[1]}×{_pc.shape[0]} "
+                                  f"→ {_n1} خط ({_t1!r}) | ×2 → "
+                                  f"{_n2} خط ({_t2!r})")
+                        except Exception as _pe:
+                            print(f"    [🔍]MLKit-probe خطا: {_pe}")
                     _res, _used = self._page_assign_lines(cand, _plines)
                     _nused = sum(1 for _u in _used if _u)
                     _nresc = 0
