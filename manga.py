@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.124"
+APP_VER = "1.14.125"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3325,19 +3325,6 @@ class RapidOCRBackend:
                 "rapidocr_models")
             os.makedirs(_mdir, exist_ok=True)
             _low = str(lang).lower()
-            _det = "PP-OCRv6_det_small.onnx"
-            if _low in ("korean", "ko"):
-                _rec = "korean_PP-OCRv5_rec_mobile.onnx"
-            elif _low in ("japan", "ja", "japanese"):
-                _rec = "japan_PP-OCRv4_rec_mobile.onnx"
-            else:
-                _rec = "PP-OCRv6_rec_small.onnx"
-            _ensure_rapidocr_models(_mdir, files=[_det, _rec])
-            _p_det = os.path.join(_mdir, _det)
-            _p_rec = os.path.join(_mdir, _rec)
-            for _p in (_p_det, _p_rec):
-                if not (os.path.isfile(_p) and os.path.getsize(_p) > 100_000):
-                    raise ImportError(f"مدلِ OCR دانلود نشد: {_p}")
             _chars = self._MOBILE_CHARS.get(_low, "ppocrv6_chars.txt")
             try:
                 _cpu_n = os.cpu_count() or 4
@@ -3351,14 +3338,58 @@ class RapidOCRBackend:
                     _intra = _env_th
             except Exception:
                 pass
+            # v1.14.125 — detِ int8 (دقیقاً الگویِ detector_int8.onnx در
+            # دیکدِ K3 v4.1.1): ۹.۹MB → ۲.۷MB و رویِ ARM64 با کرنلهایِ
+            # u8s8ِ MLAS سریعتر. توافقِ باکس رویِ 01.jpg: ۴۸/۴۸ باکسِ
+            # fp32 (بنچمارکِ v1.14.125). خاموش: MANGA_MOBILE_DET_INT8=0.
+            # دانلودِ ناموفق/نبودِ فایل → fp32 (بیصدا).
+            _det_name = "PP-OCRv6_det_small.onnx"
+            try:
+                _int8_on = os.environ.get(
+                    "MANGA_MOBILE_DET_INT8", "1").strip() != "0"
+            except Exception:
+                _int8_on = True
+            if _int8_on:
+                _det8 = "PP-OCRv6_det_small.int8.onnx"
+                try:
+                    _ensure_rapidocr_models(_mdir, files=[_det8])
+                except Exception:
+                    pass
+                _p8 = os.path.join(_mdir, _det8)
+                if os.path.isfile(_p8) and os.path.getsize(_p8) > 100_000:
+                    _det_name = _det8
+            _det = _det_name
+            if _low in ("korean", "ko"):
+                _rec = "korean_PP-OCRv5_rec_mobile.onnx"
+            elif _low in ("japan", "ja", "japanese"):
+                _rec = "japan_PP-OCRv4_rec_mobile.onnx"
+            else:
+                _rec = "PP-OCRv6_rec_small.onnx"
+            _ensure_rapidocr_models(_mdir, files=[_det, _rec])
+            _p_det = os.path.join(_mdir, _det)
+            _p_rec = os.path.join(_mdir, _rec)
+            for _p in (_p_det, _p_rec):
+                if not (os.path.isfile(_p) and os.path.getsize(_p) > 100_000):
+                    raise ImportError(f"مدلِ OCR دانلود نشد: {_p}")
+            # v1.14.125 — سقفِ detِ برش (کاسکادِ K3): بدونِ بزرگنمایی، فقط
+            # سقفِ ضلعِ بزرگ (برندهٔ بنچمارک: ۳.۵× سریعتر با ۹۷٪+ خط).
+            # ریشهٔ کندیِ 1.14.124: det با limit=736 نوعِ min برشهایِ حباب
+            # را تا ضلعِ کوچکِ ۷۳۶ بزرگ میکرد = ۴-۶× پیکسلِ اضافه.
+            try:
+                _det_cap = int(os.environ.get(
+                    "MANGA_CROP_DET_CAP", "960") or 960)
+            except Exception:
+                _det_cap = 960
             self._mobile = RapidOcrMobile(
                 _p_det, _p_rec, charset_path=os.path.join(
                     os.path.dirname(os.path.abspath(
                         sys.modules["rapidocr_mobile"].__file__)),
                     _chars),
-                intra_threads=_intra)
+                intra_threads=_intra, det_cap=max(320, _det_cap))
             print(f"[+] OCR گوشی: PP-OCRv6 ONNX (موتورِ PC/K3) | "
-                  f"lang={lang} | threads={_intra}")
+                  f"lang={lang} | threads={_intra} | "
+                  f"det={'int8' if _det_name.endswith('int8.onnx') else 'fp32'}"
+                  f" | crop-cap={max(320, _det_cap)}")
         except ImportError:
             raise
         except Exception as e:
@@ -3375,15 +3406,17 @@ class RapidOCRBackend:
         except Exception:
             return txt
 
-    def ocr(self, image_bgr: np.ndarray):
+    def ocr(self, image_bgr: np.ndarray, crop_mode: bool = False):
 
         if image_bgr is None or image_bgr.size == 0:
             return None
         # v1.14.123 — اندروید: موتورِ PP-OCRv6 ONNX (خروجی هم‌قالبِ
         # مسیرهایِ دیگر: [ [box, (text, score)], ... ])
+        # v1.14.125 — crop_mode: detِ برشِ بدونِ بزرگنمایی با سقفِ
+        # det_cap (فقط مسیرهایِ برشِ کاسکاد/نجات میفرستند؛ صفحه = False)
         if self._mobile is not None:
             try:
-                _out = self._mobile.ocr(image_bgr)
+                _out = self._mobile.ocr(image_bgr, crop_mode=bool(crop_mode))
             except Exception:
                 return None
             if not _out or not _out[0]:
@@ -19494,7 +19527,15 @@ class MangaTranslator:
                     crop_bgr, None, fx=scale, fy=scale, interpolation=cv2.INTER_CUBIC
                 )
             try:
-                results = self.ocr.ocr(crop_bgr)
+                # v1.14.125 — اندروید: OCRِ برش با crop_mode (detِ بدونِ
+                # بزرگنمایی) — نردبانِ variantها ۴-۶× ارزانتر میشود؛
+                # PC/بکاندِ ML Kit دستنخورده.
+                _oc125 = self.ocr
+                if _on_android() and getattr(_oc125, "_mobile", None) \
+                        is not None:
+                    results = _oc125.ocr(crop_bgr, crop_mode=True)
+                else:
+                    results = _oc125.ocr(crop_bgr)
             except Exception:
                 return "", [], 0.0, []
             if not results or not results[0]:
@@ -20745,7 +20786,21 @@ class MangaTranslator:
                             blk = -1
                 else:
                     text, conf = str(pair).strip(), 1.0
-                if not text or conf < self.min_confidence:
+                # v1.14.125 — آستانهٔ پایینترِ ML Kit فقط برایِ پاسِ صفحهٔ
+                # اندروید (شکایتِ «ناقص استخراج میزنه»: خطهایِ confِ
+                # 0.30-0.5 حذف میشدند). خطِ کم‌اعتمادِ ML Kit که PP-OCRv6
+                # نتواند تأیید/جانشین کند همان متنِ ML Kit میماند — بهتر
+                # از حذفِ کامل. اورراید: MANGA_MLKIT_MINCONF (پیشفرض 0.30).
+                _min_c = self.min_confidence
+                if _on_android():
+                    try:
+                        _ml_min = float(os.environ.get(
+                            "MANGA_MLKIT_MINCONF", "0.30") or 0.30)
+                    except Exception:
+                        _ml_min = 0.30
+                    if _ml_min < _min_c:
+                        _min_c = _ml_min
+                if not text or conf < _min_c:
                     continue
                 if self._is_non_english_script(text):
                     continue
@@ -20886,11 +20941,21 @@ class MangaTranslator:
 
         # ۳) PP-OCRv6 فقط رویِ برش‌ها (سشن‌هایِ det/rec مشترک و
         # thread-safe — همان سابقهٔ v1.14.120)
+        # v1.14.125 — detِ برش = crop_mode (بدونِ بزرگنمایی، سقفِ
+        # MANGA_CROP_DET_CAP=960): برندهٔ بنچمارکِ ۳.۵× با ۹۷٪+ خط؛
+        # ریشهٔ کندیِ 1.14.124 همان بزرگنماییِ 736-minِ det بود.
+        try:
+            _det_cap = int(os.environ.get(
+                "MANGA_CROP_DET_CAP", "960") or 960)
+        except Exception:
+            _det_cap = 960
+
         def _run_one(crect):
             cx1, cy1, cx2, cy2 = crect
             try:
                 _crop = image[cy1:cy2, cx1:cx2]
-                return crect, _mob.ocr(_crop)
+                return crect, _mob.ocr(_crop, crop_mode=True,
+                                       det_cap=_det_cap)
             except Exception:
                 return crect, None
 
@@ -20921,7 +20986,9 @@ class MangaTranslator:
             _w_env = int(os.environ.get("MANGA_CASCADE_WORKERS", "0") or 0)
         except Exception:
             _w_env = 0
-        _workers = _w_env if _w_env > 0 else min(3, max(
+        # v1.14.125 — پیشفرضِ ۲ ورکر (۲×۴ نخ = ۸ هسته؛ ۳ ورکر رویِ گوشی
+        # oversubscription میشد) — اورراید: MANGA_CASCADE_WORKERS
+        _workers = _w_env if _w_env > 0 else min(2, max(
             1, int(getattr(self, "max_workers", 2) or 2)))
         _workers = max(1, min(_workers, len(_rects)))
         _rapid = []
@@ -20981,6 +21048,9 @@ class MangaTranslator:
                                [g[4] for g in _got])
                     _nresc += 1
                     continue
+                # v1.14.125 — نجاتِ legacy (variants/upscale) فقط وقتی
+                # PP-OCRv6 رویِ برشِ خودِ باکس هم چیزی نیافت؛ اورراید:
+                # MANGA_CROP_RESCUE=0 (پیشفرضِ روشن برایِ استخراجِ کامل)
                 if _rescue:
                     _blk = [(rects[j][0], rects[j][1], rects[j][2],
                              rects[j][3])

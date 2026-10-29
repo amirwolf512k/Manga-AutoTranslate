@@ -59,18 +59,28 @@ class _Sess:
 
 
 class RapidOcrMobile:
-    """PP-OCRv6 det+rec — عینِ پیشفرضهایِ rapidocr config.yaml."""
+    """PP-OCRv6 det+rec — عینِ پیشفرضهایِ rapidocr config.yaml.
+
+    v1.14.125 — crop_mode: حالتِ «برش» (کاسکادِ K3). det در حالتِ صفحه
+    (limit=736، نوعِ min) برشهایِ کوچک را تا ضلعِ کوچکِ ۷۳۶ «بزرگ»
+    میکند — برایِ برشِ حباب یعنی det رویِ ۴-۶× پیکسلِ بیشتر از لازم
+    (عینِ ریشهٔ کندیِ 1.14.124). در crop_mode: هیچِ بزرگنماییِ نمیشود
+    (متنِ برش بزرگ است) و فقط اگر ضلعِ بزرگ از det_cap گذشت، کوچک
+    میشود — دقیقاً منطقِ RunRapidOcrPipelineOnCrop در K3 (برشِ کوچک =
+    det/recِ سریع، مثلِ lama-nofft: سشنِ ONNX رویِ ورودیِ کوچک)."""
 
     def __init__(self, det_path: str, rec_path: str,
                  charset_path: str = _CHARS_TXT, intra_threads: int = 4,
                  limit_side_len: int = 736, thresh: float = 0.3,
                  box_thresh: float = 0.5, unclip_ratio: float = 1.6,
                  max_candidates: int = 1000, text_score: float = 0.5,
-                 rec_img_shape=(3, 48, 320), rec_batch_num: int = 6):
+                 rec_img_shape=(3, 48, 320), rec_batch_num: int = 6,
+                 det_cap: int = 960):
         self.det = _Sess(det_path, intra_threads)
         self.rec = _Sess(rec_path, intra_threads)
         self.character = _load_charset(charset_path)
         self.limit_side_len = int(limit_side_len)
+        self.det_cap = int(det_cap)
         self.thresh = float(thresh)
         self.box_thresh = float(box_thresh)
         self.unclip_ratio = float(unclip_ratio)
@@ -83,9 +93,18 @@ class RapidOcrMobile:
 
     # ─────────────────────────── det ───────────────────────────
 
-    def _det_preprocess(self, img: np.ndarray):
+    def _det_preprocess(self, img: np.ndarray,
+                        crop_mode: bool = False, det_cap=None):
         h, w = img.shape[:2]
-        if min(h, w) < self.limit_side_len:
+        if crop_mode:
+            # v1.14.125 — برش: بدونِ بزرگنمایی؛ فقط کوچککردنِ تا سقف
+            try:
+                _cap = int(det_cap) if det_cap else self.det_cap
+            except Exception:
+                _cap = 960
+            _m = max(h, w)
+            ratio = min(1.0, float(_cap) / _m) if _m > _cap else 1.0
+        elif min(h, w) < self.limit_side_len:
             ratio = (float(self.limit_side_len) / h) if h < w else \
                 (float(self.limit_side_len) / w)
         else:
@@ -206,9 +225,10 @@ class RapidOcrMobile:
             scores.append(float(score))
         return boxes, scores
 
-    def _detect(self, img: np.ndarray):
+    def _detect(self, img: np.ndarray, crop_mode: bool = False,
+                det_cap=None):
         src_h, src_w = img.shape[:2]
-        pre = self._det_preprocess(img)
+        pre = self._det_preprocess(img, crop_mode=crop_mode, det_cap=det_cap)
         if pre is None:
             return []
         pred = self.det(pre)
@@ -330,11 +350,14 @@ class RapidOcrMobile:
         rw = w / float(img.shape[1])
         return img, rh, rw
 
-    def ocr(self, image_bgr: np.ndarray):
+    def ocr(self, image_bgr: np.ndarray, crop_mode: bool = False,
+            det_cap=None):
         """خروجی: [ [box, (text, score)], ... ] یا None (خالی).
 
         خطِ کاملِ rapidocr: bounds-resize → vertical-padding → det →
-        crop → rec → فیلترِ text_score → mapِ باکسها به تصویرِ اصلی."""
+        crop → rec → فیلترِ text_score → mapِ باکسها به تصویرِ اصلی.
+        v1.14.125 — crop_mode=True: detِ بدونِ بزرگنمایی با سقفِ det_cap
+        (برشِ کاسکاد؛ ورودیِ کوچک = سریع، مثلِ K3)."""
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
         ori_h, ori_w = image_bgr.shape[:2]
@@ -353,7 +376,7 @@ class RapidOcrMobile:
                 cv2.BORDER_CONSTANT, value=(0, 0, 0))
 
         # ۳) det
-        dets = self._detect(work)
+        dets = self._detect(work, crop_mode=crop_mode, det_cap=det_cap)
         if not dets:
             return None
 
