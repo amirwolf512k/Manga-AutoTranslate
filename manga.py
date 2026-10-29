@@ -21368,7 +21368,12 @@ class MangaTranslator:
                             _existing[_dup_i] = p
                             _touched = True
                         continue
-                    plines.append((_new_t, float(_best[1]), p,
+                    # v1.14.129 — ترمیمِ فازیِ متنِ خطِ نو نسبت به متنِ
+                    # خطِ ادغامیِ اصلی («BESIDE6,» ← «BESIDES,» از دلِ
+                    # «BESIDES, ATTRACTIONS,») — کراپ جای خط را تأیید
+                    # میکند ولی ممکن است خودش یک غلطِ تکی بخواند.
+                    _rep_n = self._frag_in(_old_t, _new_t)
+                    plines.append((_rep_n or _new_t, float(_best[1]), p,
                                    float(_best[3]), -1))
                     _touched = True
             if _touched:
