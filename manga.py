@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.127"
+APP_VER = "1.14.128"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -20733,6 +20733,24 @@ class MangaTranslator:
         except Exception:
             return None
 
+    def _mlkit_minconf(self) -> float:
+        """v1.14.128 — کفِ اعتمادِ «مشترک» پاسِ صفحه و پاسهایِ کراپِ ML Kit.
+
+        تا 1.14.127 فقط پاسِ صفحه کفِ 0.30 اندروید را داشت (MANGA_MLKIT_MINCONF)
+        ولی کراپِ نجات (fill/gap/xline) با self.min_confidenceِ سختگیرانهتر
+        کار میکرد — خطی که صفحه با conf 0.4 نگه میداشت، کراپِ همان خط را
+        با همان conf دور میریخت؛ ناهماهنگ و ضدِ «ناقص استخراج میزنه»."""
+        _min_c = float(getattr(self, "min_confidence", 0.5) or 0.5)
+        if _on_android():
+            try:
+                _ml_min = float(os.environ.get(
+                    "MANGA_MLKIT_MINCONF", "0.30") or 0.30)
+            except Exception:
+                _ml_min = 0.30
+            if _ml_min < _min_c:
+                _min_c = _ml_min
+        return _min_c
+
     def _mlkit_page_lines(self, image: np.ndarray):
         """v1.14.122 — OCRِ تمام‌صفحه با ML Kit (دقیقاً راهِ موتورِ K3).
 
@@ -20789,20 +20807,9 @@ class MangaTranslator:
                             blk = -1
                 else:
                     text, conf = str(pair).strip(), 1.0
-                # v1.14.125 — آستانهٔ پایینترِ ML Kit فقط برایِ پاسِ صفحهٔ
-                # اندروید (شکایتِ «ناقص استخراج میزنه»: خطهایِ confِ
-                # 0.30-0.5 حذف میشدند). خطِ کم‌اعتمادِ ML Kit که PP-OCRv6
-                # نتواند تأیید/جانشین کند همان متنِ ML Kit میماند — بهتر
-                # از حذفِ کامل. اورراید: MANGA_MLKIT_MINCONF (پیشفرض 0.30).
-                _min_c = self.min_confidence
-                if _on_android():
-                    try:
-                        _ml_min = float(os.environ.get(
-                            "MANGA_MLKIT_MINCONF", "0.30") or 0.30)
-                    except Exception:
-                        _ml_min = 0.30
-                    if _ml_min < _min_c:
-                        _min_c = _ml_min
+                # v1.14.125/128 — کفِ اعتمادِ مشترکِ صفحه/کراپ (اندروید
+                # 0.30). خطِ کم‌اعتمادِ ML Kit بهتر از حذفِ کامل است.
+                _min_c = self._mlkit_minconf()
                 if not text or conf < _min_c:
                     continue
                 if self._is_non_english_script(text):
@@ -20841,12 +20848,21 @@ class MangaTranslator:
                 return out
             crop = image[y1:y2, x1:x2]
             ch, cw = crop.shape[:2]
+            # v1.14.128 — بزرگنمایی بر اساسِ «ضلعِ کوچک» (هدفِ ≥400px):
+            # تا دیروز برشِ بلندِ باریک (مثلِ 238×642 اصلاً بزرگ نمیشد چون
+            # فقط ضلعِ بزرگ ملاک بود) و متنِ ریزش خوانده نمیشد. سقفِ ضریب
+            # MANGA_CROP_SCALE_MAX (پیشفرض 2.0) و سقفِ ضلعِ 1500px.
             sc = 1.0
             _ms = max(ch, cw)
-            if _ms < 340:
-                sc = 2.0
-            elif _ms < 640:
-                sc = 1.5
+            _mn = max(12, min(ch, cw))
+            try:
+                _smax = float(os.environ.get(
+                    "MANGA_CROP_SCALE_MAX", "2.0") or 2.0)
+            except Exception:
+                _smax = 2.0
+            sc = max(1.0, min(_smax, 400.0 / float(_mn)))
+            if _ms * sc > 1500.0:
+                sc = max(1.0, 1500.0 / float(_ms))
             if sc > 1.01:
                 crop = cv2.resize(crop, None, fx=sc, fy=sc,
                                   interpolation=cv2.INTER_CUBIC)
@@ -20880,7 +20896,7 @@ class MangaTranslator:
                                 blk = -1
                     else:
                         text, conf = str(pair).strip(), 1.0
-                    if not text or conf < self.min_confidence:
+                    if not text or conf < self._mlkit_minconf():
                         continue
                     if self._is_non_english_script(text):
                         continue
@@ -20915,7 +20931,8 @@ class MangaTranslator:
 
         پاسِ تمامصفحه گاهی فقط بخشی از خطهایِ حباب را مییابد (متنِ ریز،
         فونتِ سبک، کنتراستِ کم) → شکایتِ «ناقص استخراج میزنه». برایِ هر
-        باکسی که خطهایِ تخصیصیافتهاش کمتر از ~۴۰٪ مساحتش را میپوشانند،
+        باکسی که خطهایِ تخصیصیافتهاش کمتر از ~۵۲٪ مساحتش را میپوشانند
+        (1.14.128: ۴۰٪ بود — حبابهایِ ۴۰-۵۲٪ مثلِ 01.jpg جا میماندند)،
         «یک» پاسِ ML Kit رویِ برشِ خودِ باکس زده میشود (نیتیو و ارزان —
         سقفِ ۱۲ باکسِ بدترینِ پوشش در هر صفحه) و فقط خطهایِ تازه به
         plines اضافه میشوند؛ اگر متنِ برش «تکمیلِ» متنِ نیمهخواندهٔ صفحه
@@ -20958,7 +20975,8 @@ class MangaTranslator:
         for k in range(n):
             if areas[k] > 0.30 * page_area:
                 continue  # ناحیهٔ خیلی بزرگ — پوششِ کم طبیعی است
-            if cover[k] / areas[k] < 0.40:
+            # v1.14.128 — 0.40→0.52: حبابهایِ ۴۰-۵۲٪ هم پاسِ کراپ بگیرند
+            if cover[k] / areas[k] < 0.52:
                 _thin.append((cover[k] / areas[k], k))
         if not _thin:
             return 0
@@ -20994,7 +21012,9 @@ class MangaTranslator:
                                         plines[_hit][4])
                         _added += 1
                     continue
-                plines.append(ent)
+                # v1.14.128 — blkِ کراپ «لوکالِ برش» است و با شمارهٔ بلوکِ
+                # صفحه تصادم میکند → -۱ (بیبلوک؛ درجِ y در ترتیب)
+                plines.append((ent[0], ent[1], ent[2], ent[3], -1))
                 _existing.append(poly_new)
                 _added += 1
         return _added
@@ -21072,9 +21092,252 @@ class MangaTranslator:
                         break
                 if _in_k not in (-1, k):
                     continue  # خطِ حبابِ مجاور — جذب ممنوع
-                plines.append(ent)
+                # v1.14.128 — blkِ کراپ لوکال است → -۱ (بیبلوک)
+                plines.append((ent[0], ent[1], ent[2], ent[3], -1))
                 _existing.append(poly)
                 _added += 1
+        return _added
+
+    def _mlkit_split_cross_lines(self, image: np.ndarray, cand, plines) -> int:
+        """v1.14.128 — شکافتنِ خطِ «بین‌حبابیه»یِ پاسِ تمامصفحه.
+
+        ML Kit رویِ تمامصفحه گاهی دو خطِ دو حبابِ مجاور را که در یک باندِ
+        y نشستهاند «یک» خط میخواند (01.jpg: «BESIDES,» حبابِ وسط +
+        «ATTRACTIONS,» حبابِ راست → خطِ ادغامیِ «BESIDES, ATTRACTIONS,»
+        با مرکزِ x~1136). آن خط به حبابِ راست میرود: حبابِ وسط برایِ
+        همیشه «BESIDES,» را ندارد («I CANT SWIM.») و متنِ حبابِ راست
+        کلمهٔ بیگانه دارد. تشخیص: خطی که باندِ yـش با ≥۲ باکس همپوشانیِ
+        معناردار (≥۱۸٪ عرضِ خط در هرکدام) دارد و باکسها «کنارِ هم»اند
+        (همپوشانیِ xِ باکسها ≤ ۴۰٪ عرضِ باریکتر). حل: برایِ هر باکسِ
+        همپوشان یک پاسِ ML Kit رویِ برشِ (باندِ خط ∩ باکس+پد۸) — هر برش
+        فقط متنِ حبابِ خودی را میبیند: متنِ باکسِ صاحبِ مرکز جایگزینِ
+        خطِ ادغامی میشود (فقط اگر زیررشتهٔ normalizedِ همان باشد =
+        خوانشِ تمیزِ همان خط) و متنِ هر همسایه خطِ نو (blk=-1) میشود که
+        تخصیصِ مرکزی خودش به حبابِ درست میبردش. شکستِ برش = وضعِ فعلی
+        (امن). خاموشی: MANGA_MLKIT_XLINE=0 | سقف: ۸ خط در صفحه"""
+        n = len(cand)
+        if (n <= 0 or not plines or image is None
+                or not isinstance(image, np.ndarray) or image.size == 0):
+            return 0
+        _H, _W = image.shape[:2]
+        rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
+
+        def _norm(s):
+            return "".join(str(s).lower().split())
+
+        _fixed = 0
+        _n0 = len(plines)
+        for li in range(_n0):
+            if _fixed >= 8:
+                break
+            ent = plines[li]
+            poly = ent[2]
+            try:
+                lx1 = float(poly[:, 0].min())
+                ly1 = float(poly[:, 1].min())
+                lx2 = float(poly[:, 0].max())
+                ly2 = float(poly[:, 1].max())
+                cx = float(poly[:, 0].mean())
+                cy = float(poly[:, 1].mean())
+            except Exception:
+                continue
+            lw = max(1.0, lx2 - lx1)
+            lh = max(1.0, ly2 - ly1)
+            if lw < 40 or lh < 12:
+                continue
+            _hits = []
+            for k in range(n):
+                x1, y1, x2, y2 = rects[k]
+                ox = min(lx2, x2) - max(lx1, x1)
+                if ox < 0.18 * lw:
+                    continue
+                oy = min(ly2, y2) - max(ly1, y1)
+                if oy < 0.5 * lh:
+                    continue
+                _hits.append((k, x1, y1, x2, y2))
+            if len(_hits) < 2:
+                continue
+            _own = -1
+            for (k, x1, y1, x2, y2) in _hits:
+                if x1 - 6 <= cx <= x2 + 6 and y1 - 6 <= cy <= y2 + 6:
+                    _own = k
+                    break
+            if _own < 0:
+                continue
+            # باکسها باید «کنارِ هم» باشند نه تودرتو — وگرنه خطِ سالمِ
+            # عریضِ یک باکسِ بزرگ دست میخورد.
+            _okpair = False
+            for _i in range(len(_hits)):
+                for _j in range(_i + 1, len(_hits)):
+                    _ax1, _ay1 = _hits[_i][1], _hits[_i][2]
+                    _ax2, _ay2 = _hits[_i][3], _hits[_i][4]
+                    _bx1, _by1 = _hits[_j][1], _hits[_j][2]
+                    _bx2, _by2 = _hits[_j][3], _hits[_j][4]
+                    _ix = min(_ax2, _bx2) - max(_ax1, _bx1)
+                    _nw = max(1.0, min(_ax2 - _ax1, _bx2 - _bx1))
+                    if _ix <= 0.40 * _nw:
+                        _okpair = True
+            if not _okpair:
+                continue
+            _band = (max(0, int(lx1) - 10), max(0, int(ly1) - 10),
+                     min(_W, int(lx2) + 10), min(_H, int(ly2) + 10))
+            _old_t = str(ent[0] or "").strip()
+            _touched = False
+            for (k, x1, y1, x2, y2) in _hits:
+                cx1 = max(_band[0], x1 - 8)
+                cy1 = max(_band[1], y1 - 8)
+                cx2 = min(_band[2], x2 + 8)
+                cy2 = min(_band[3], y2 + 8)
+                if cx2 - cx1 < 24 or cy2 - cy1 < 14:
+                    continue
+                _existing = [e[2] for e in plines]
+                try:
+                    _news = self._mlkit_crop_fill(
+                        image, (cx1, cy1, cx2, cy2), _existing)
+                except Exception:
+                    continue
+                _best = None
+                _bd = 1e9
+                _my = 0.5 * (ly1 + ly2)
+                for t in _news:
+                    try:
+                        p = t[2]
+                        mx = float(p[:, 0].mean())
+                        my = float(p[:, 1].mean())
+                    except Exception:
+                        continue
+                    if not (cx1 - 2 <= mx <= cx2 + 2
+                            and cy1 - 2 <= my <= cy2 + 2):
+                        continue
+                    d = abs(my - _my)
+                    if d < _bd:
+                        _bd, _best = d, t
+                if _best is None:
+                    continue
+                _new_t = str(_best[0] or "").strip()
+                if k == _own:
+                    # جایگزینی فقط با «خوانشِ تمیزِ همان خط»: برشِ این
+                    # باکس متنِ حبابِ دیگر را «نمیتواند» ببیند — پس
+                    # زیررشتهٔ normalized = همان خطِ خودیِ خواندهشده.
+                    if (_new_t and _old_t
+                            and sum(c.isalnum() for c in _new_t) >= 2
+                            and _norm(_new_t) != _norm(_old_t)
+                            and _norm(_new_t) in _norm(_old_t)):
+                        plines[li] = (_new_t, float(_best[1]),
+                                      np.rint(_best[2]).astype(np.int32),
+                                      ent[3], ent[4])
+                        _touched = True
+                else:
+                    if not _new_t or sum(c.isalnum() for c in _new_t) < 2:
+                        continue
+                    if _norm(_new_t) == _norm(_old_t):
+                        continue  # همان متنِ ادغامی — تکرار ممنوع
+                    p = np.rint(_best[2]).astype(np.int32)
+                    try:
+                        mx = float(p[:, 0].mean())
+                        my = float(p[:, 1].mean())
+                    except Exception:
+                        continue
+                    if not (x1 - 6 <= mx <= x2 + 6
+                            and y1 - 6 <= my <= y2 + 6):
+                        continue
+                    _dup = False
+                    for ep in _existing:
+                        if self._lines_same(p, ep):
+                            _dup = True
+                            break
+                    if _dup:
+                        continue
+                    plines.append((_new_t, float(_best[1]), p,
+                                   float(_best[3]), -1))
+                    _touched = True
+            if _touched:
+                _fixed += 1
+        return _fixed
+
+    def _mlkit_ingap_fill(self, image: np.ndarray, cand, plines) -> int:
+        """v1.14.128 — خطِ جاماندهٔ «درون» باکس (شکافِ میانیِ حباب).
+
+        پاسِ تمامصفحه گاهی یک خطِ میانیِ حباب را نمیشناسد («I'll» بینِ
+        «Alright!» و «increase the speed more!» در 01.jpg) و fillِ
+        نیمهپوش هم نمیگیردش — باکس از نظرِ پوشش «پر» است (۵۴٪) در
+        حالیکه خطِ حذفشده یک جای خالیِ واضح در «توالی» گذاشته. قاعده:
+        خطهایِ مرکزشان داخلِ باکس است مرتبِ y؛ شکافِ عمودیِ دو خطِ
+        متوالی > ۱٫۲۵×min(ارتفاعِ دو خط) و >30px = جای خطِ گمشده →
+        یک پاسِ ML Kit رویِ نوارِ شکاف (عرضِ باکس+پد۸، بزرگنماییِ
+        تطبیقی) و فقط خطهایِ تازهٔ داخلِ نوارِ شکاف و باکس افزوده
+        میشود (blk=-1 — درجِ y در _page_assign_lines سرِ درست
+        میگذاردش). خاموشی: MANGA_MLKIT_INGAP=0 | سقف: ۶ شکاف در صفحه"""
+        n = len(cand)
+        if (n <= 0 or not plines or image is None
+                or not isinstance(image, np.ndarray) or image.size == 0):
+            return 0
+        _H, _W = image.shape[:2]
+        rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
+        _added = 0
+        for k in range(n):
+            if _added >= 6:
+                break
+            x1, y1, x2, y2 = rects[k]
+            if x2 - x1 < 40 or y2 - y1 < 60:
+                continue
+            _ls = []
+            for li, ent in enumerate(plines):
+                try:
+                    p = ent[2]
+                    mx = float(p[:, 0].mean())
+                    my = float(p[:, 1].mean())
+                except Exception:
+                    continue
+                if x1 - 6 <= mx <= x2 + 6 and y1 - 6 <= my <= y2 + 6:
+                    _ls.append((float(p[:, 1].min()),
+                                float(p[:, 1].max()), li))
+            if len(_ls) < 2:
+                continue
+            _ls.sort()
+            _existing = [e[2] for e in plines]
+            for _a, _b in zip(_ls, _ls[1:]):
+                if _added >= 6:
+                    break
+                _gap = _b[0] - _a[1]
+                _hmin = min(max(1.0, _a[1] - _a[0]),
+                            max(1.0, _b[1] - _b[0]))
+                if _gap <= max(1.25 * _hmin, 30.0):
+                    continue
+                gy1 = int(max(0, _a[1] - 0.15 * _gap))
+                gy2 = int(min(_H, _b[0] + 0.15 * _gap))
+                cx1, cy1 = max(0, x1 - 8), gy1
+                cx2, cy2 = min(_W, x2 + 8), gy2
+                if cx2 - cx1 < 24 or cy2 - cy1 < 20:
+                    continue
+                try:
+                    _news = self._mlkit_crop_fill(
+                        image, (cx1, cy1, cx2, cy2), _existing)
+                except Exception:
+                    continue
+                for t in _news:
+                    try:
+                        p = np.rint(t[2]).astype(np.int32)
+                        mx = float(p[:, 0].mean())
+                        my = float(p[:, 1].mean())
+                    except Exception:
+                        continue
+                    if not (cx1 - 2 <= mx <= cx2 + 2
+                            and gy1 - 4 <= my <= gy2 + 4):
+                        continue
+                    if not (x1 - 6 <= mx <= x2 + 6):
+                        continue
+                    _dup = False
+                    for ep in _existing:
+                        if self._lines_same(p, ep):
+                            _dup = True
+                            break
+                    if _dup:
+                        continue
+                    plines.append((str(t[0] or "").strip(), float(t[1]),
+                                   p, float(t[3]), -1))
+                    _existing.append(p)
+                    _added += 1
         return _added
 
     @staticmethod
@@ -21373,18 +21636,18 @@ class MangaTranslator:
                 continue
             used[k] = True
             polys = [page_lines[li][2] for li in ls]
-            # v1.14.127 — بلوک‌هایِ ML Kit «درهمِ بین‌خطی» نسوزند: وقتی
-            # یک ناحیه خط‌هایِ «چند بلوکِ» جدا دارد (حباب + دست‌نویسِ
-            # کنارش در 01.jpg)، مرتبسازیِ نوارِ y آنها را بین‌خطی میکرد
-            # («THEN IL PULL FLOAT THE Youre FOR...»). حالا هر بلوک یک
-            # تکه میماند (خط‌هایش بالا→پایین) و بلوک‌ها به ترتیبِ
-            # بالاترینِ خطشان پشتِ هم میآیند. ستونبندیِ
-            # _column_line_groups فقط برایِ تکبلوک اجرا میشود (چندبلوک
-            # + ستونبندی = درهم‌ریزیِ دوباره وقتی xِ بلوکها همپوشان است).
+            # v1.14.127/128 — ترتیبِ «بلوکمحور با درجِ y»: هر بلوکِ
+            # ML Kit یک تکه میماند و «داخلِ» بلوک ترتیبِ نیتیوِ خروجیِ
+            # پل (block.lines = ترتیبِ خواندن) حفظ میشود — باندهایِ yِ
+            # تقریبی («row_h») دو خطِ واقعی را در یک سبد نمیاندازند
+            # («GO!/EVEN/FASTER...» دیگر «GO! FASTER.. EVEN» نمیشود).
+            # خطهایِ بیبلوکِ نجاتِ کراپ (blk=-1 مثلِ «I'll») با y
+            # «داخلِ» توالی درج میشوند. پاراگراف‌بندی: فقط تغییرِ
+            # «بلوکِ واقعی» خطِ جدید میسازد (خطِ -۱ وسطِ بلوک
+            # نمیشکند).
             _blks_raw = [int(page_lines[li][4]) for li in ls]
             _bkeys = sorted({b for b in _blks_raw if b >= 0})
-            if len(_bkeys) > 1 or (len(_bkeys) >= 1
-                                   and any(b < 0 for b in _blks_raw)):
+            if _bkeys:
                 try:
                     _groups = []
                     for _b in _bkeys:
@@ -21392,17 +21655,27 @@ class MangaTranslator:
                                if _blks_raw[t] == _b]
                         _groups.append(
                             (min(float(polys[t][:, 1].min())
-                                 for t in _gi), _gi))
-                    _m = [t for t in range(len(ls)) if _blks_raw[t] < 0]
-                    if _m:
-                        _groups.append(
-                            (min(float(polys[t][:, 1].min())
-                                 for t in _m), _m))
+                                 for t in _gi), _b, _gi))
                     _groups.sort(key=lambda g: g[0])
-                    order = [t for _, _gi in _groups for t in sorted(
-                        _gi, key=lambda t: (
-                            float(polys[t][:, 1].min()),
-                            float(polys[t][:, 0].min())))]
+                    _seq = []
+                    for _, _b, _gi in _groups:
+                        for t in _gi:  # ترتیبِ نیتیوِ پل (ls صعودی)
+                            _seq.append(
+                                (float(polys[t][:, 1].min()), t))
+                    for t in sorted(
+                            (tt for tt in range(len(ls))
+                             if _blks_raw[tt] < 0),
+                            key=lambda tt: float(
+                                polys[tt][:, 1].min())):
+                        _mc = float(polys[t][:, 1].mean())
+                        _pos = len(_seq)
+                        for _si, (_sy, _st) in enumerate(_seq):
+                            if _sy > _mc:
+                                _pos = _si
+                                break
+                        _seq.insert(_pos,
+                                    (float(polys[t][:, 1].min()), t))
+                    order = [t for _, t in _seq]
                     o_polys = [polys[t] for t in order]
                     o_txts = [str(page_lines[ls[t]][0] or "")
                               for t in order]
@@ -21411,15 +21684,26 @@ class MangaTranslator:
                     o_blks = [int(page_lines[ls[t]][4])
                               for t in order]
                     parts = []
-                    _off = 0
-                    for _, _gi in _groups:
-                        _tg = " ".join(
-                            str(o_txts[_off + i] or "").strip()
-                            for i in range(len(_gi))).strip()
+                    _cur = []
+                    _last_real = None
+                    for t in order:
+                        _b = _blks_raw[t]
+                        if _b >= 0:
+                            if (_last_real is not None
+                                    and _b != _last_real and _cur):
+                                parts.append(_cur)
+                                _cur = []
+                            _last_real = _b
+                        _cur.append(t)
+                    if _cur:
+                        parts.append(_cur)
+                    _pj = []
+                    for _g in parts:
+                        _tg = " ".join(str(o_txts[i] or "").strip()
+                                       for i in _g).strip()
                         if _tg:
-                            parts.append(_tg)
-                        _off += len(_gi)
-                    res[k] = ("\n".join(parts).strip(), o_polys,
+                            _pj.append(_tg)
+                    res[k] = ("\n".join(_pj).strip(), o_polys,
                               o_angs, o_txts, o_blks)
                     continue
                 except Exception:
@@ -21967,6 +22251,20 @@ class MangaTranslator:
             try:
                 _plines = self._mlkit_page_lines(image)
                 if _plines:
+                    # v1.14.128 — خطِ «بین‌حبابیه»: دو خطِ مجاور که ML Kit
+                    # در یک باندِ y یکی کرده («BESIDES, ATTRACTIONS,»)
+                    # با برشِ هر باکس فقط متنِ خودی خوانده و جدایش
+                    # میشود؛ حبابِ همسایه خطِ گمشدهاش را برمیگرداند.
+                    # خاموشی: MANGA_MLKIT_XLINE=0
+                    if os.environ.get("MANGA_MLKIT_XLINE", "1").strip() != "0":
+                        try:
+                            _nx = self._mlkit_split_cross_lines(
+                                image, cand, _plines)
+                            if _nx and self.debug:
+                                print(f"    [*]MLKit-xline: {_nx} خطِ "
+                                      "بین‌حبابیه جدا/تمیز شد")
+                        except Exception:
+                            pass
                     # v1.14.126 — پرکردنِ باکسهایِ نیمهپوش قبل از تخصیص:
                     # متنِ ریز/سبکی که پاسِ تمامصفحه گم میکند، با «یک»
                     # پاسِ ML Kit رویِ برشِ خودِ باکس برمیگردد (نیتیو و
@@ -21978,6 +22276,18 @@ class MangaTranslator:
                             if _nfill and self.debug:
                                 print(f"    [*]MLKit-fill: +{_nfill} خطِ "
                                       "تازه/تکمیل از باکسهایِ نیمهپوش")
+                        except Exception:
+                            pass
+                    # v1.14.128 — خطِ جاماندهٔ «درونی» («I'll» بینِ دو خطِ
+                    # متوالیِ یک باکس): شکافِ واضحِ توالی → پاسِ نوارِ شکاف.
+                    # خاموشی: MANGA_MLKIT_INGAP=0
+                    if os.environ.get("MANGA_MLKIT_INGAP", "1").strip() != "0":
+                        try:
+                            _nig = self._mlkit_ingap_fill(
+                                image, cand, _plines)
+                            if _nig and self.debug:
+                                print(f"    [*]MLKit-ingap: +{_nig} خطِ "
+                                      "جاماندهٔ درونِ باکس")
                         except Exception:
                             pass
                     # v1.14.127 — نجاتِ خطِ «شکافِ بینِ باکسها»: خطِ وسطِ

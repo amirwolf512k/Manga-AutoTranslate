@@ -258,7 +258,9 @@ jobs:
           adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test2_debug.pdf > /tmp/emulout/test2_debug.pdf || true
           adb shell rm -f /data/local/tmp/test2.jpg || true
           # گیت ۱: استخراجِ کامل (≥۷ ناحیه — PC با Paddle ONNX =۸)
-          python3 .ci_scripts/check_extract.py /tmp/emulout/manga_01.log 7
+          # + گیتِ محتوا (1.14.128): BESIDES+SWIM | I'LL+INCREASE |
+          #   ترتیبِ GO!→EVEN→FASTER | بدونِ آلودگیِ متقابلِ حبابها
+          python3 .ci_scripts/check_extract.py /tmp/emulout/manga_01.log 7 content
           # گیت ۲: خروجی ساخته شده
           test -s /tmp/emulout/test2_out.pdf
           echo "[✓] 01.jpg emulator gate passed"
