@@ -20829,14 +20829,20 @@ class MangaTranslator:
                 continue
         return out
 
-    def _mlkit_crop_fill(self, image: np.ndarray, rect, existing_polys):
-        """v1.14.126 — یک پاسِ ML Kit رویِ برشِ باکس؛ فقط خطهایِ «تازه».
+    def _mlkit_crop_fill(self, image: np.ndarray, rect, existing_polys,
+                         keep_dup: bool = False):
+        """v1.14.126/129 — یک پاسِ ML Kit رویِ برشِ باکس؛ خطهایِ «تازه».
 
         برش با پدِ کوچک + بزرگنماییِ تطبیقی (برشِ کوچک ×2.0/×1.5) تا متنِ
         ریز که در مقیاسِ صفحه خوانده نمیشود هم خوانده شود. خروجی: همان
-        ۵تاییِ _mlkit_page_lines با مختصاتِ صفحه. ضدِ تکرار: تطابقِ
-        _lines_same با هر خطِ موجود = رد (تکمیلِ متنِ نیمهخوانده جداگانه
-        در _mlkit_fill_thin_boxes تصمیمگیری میشود)."""
+        ۵تاییِ _mlkit_page_lines با مختصاتِ صفحه.
+        keep_dup (v1.14.129): اگر True، خطهایِ «تطبیقی» هم برگشت داده
+        میشوند — ریشهٔ اصلیِ «هنوز ناقص استخراج میشه»: dedupِ داخلیِ
+        _lines_same، خوانشِ تمیزِ «BESIDES,» را با «خطِ ادغامیِ»
+        BESIDES, ATTRACTIONS, (قاعدهٔ اشغالِ ≥۶۰٪) یکی میکرد و قبل از
+        رسیدن به منطقِ جایگزینیِ fill/xline دور میریخت — جایگزینیِ
+        ضدِ آلودگی عملاً کدِ مرده بود. حالا fill/xline با keep_dup=True
+        صدا میزنند و خودشان تصمیمِ تکمیل/ضدِ آلودگی/افزودن میگیرند."""
         out = []
         try:
             h, w = image.shape[:2]
@@ -20876,7 +20882,9 @@ class MangaTranslator:
             results = _src.ocr(crop)
             if self.debug:
                 _rn = (len(results[0]) if (results and results[0]) else 0)
-                print(f"      [🔍crop] ocr → {_rn} خطِ خام")
+                _rt = ([str(l[1][0]) for l in results[0][:6]]
+                       if (results and results[0]) else [])
+                print(f"      [🔍crop] ocr → {_rn} خطِ خام {_rt}")
             if not results or not results[0]:
                 return out
             for line in results[0]:
@@ -20922,17 +20930,19 @@ class MangaTranslator:
                     poly = np.rint(poly + np.array(
                         [x1, y1], dtype=np.float32)).astype(np.int32)
                     _dup = False
-                    for ep in existing_polys:
-                        if self._lines_same(poly, ep):
-                            _dup = True
-                            break
+                    if not keep_dup:
+                        for ep in existing_polys:
+                            if self._lines_same(poly, ep):
+                                _dup = True
+                                break
                     if _dup:
                         continue
                     out.append((text, float(conf), poly, float(ang), int(blk)))
                 except Exception:
                     continue
             if self.debug:
-                print(f"      [🔍crop] → {len(out)} خطِ تازه")
+                print(f"      [🔍crop] → {len(out)} خطِ برگشتی "
+                      f"{[t[0] for t in out[:6]]}")
         except Exception as _ex:
             if self.debug:
                 print(f"      [🔍crop] خطا: {_ex}")
@@ -21004,7 +21014,10 @@ class MangaTranslator:
         for _cov, k in _thin[:12]:
             if _added >= 40:
                 break
-            for ent in self._mlkit_crop_fill(image, rects[k], _existing):
+            # v1.14.129 — keep_dup=True: خطهایِ تطبیقی هم میآیند تا
+            # منطقِ (a)/(b) پایین بتوانند تکمیل/ضدِ آلودگی کنند.
+            for ent in self._mlkit_crop_fill(image, rects[k], _existing,
+                                             keep_dup=True):
                 poly_new = ent[2]
                 txt_new = str(ent[0] or "").strip()
                 _hit = -1
@@ -21013,36 +21026,43 @@ class MangaTranslator:
                         _hit = _i
                         break
                 if _hit >= 0:
-                    # (a) تکمیلِ خطِ نیمهخواندهٔ صفحه: «You're the real» ←
-                    # «You're the real attraction here!» — متنِ بلندترِ
-                    # شاملِ قبلی جایگزین میشود؛ پالی/بلوکِ صفحه میماند.
                     _old = str(plines[_hit][0] or "").strip()
                     _nv, _ov = _norm(txt_new), _norm(_old)
-                    if (txt_new and _old and _nv != _ov
-                            and _ov in _nv and len(txt_new) > len(_old)):
-                        plines[_hit] = (txt_new, float(ent[1]),
-                                        plines[_hit][2], plines[_hit][3],
-                                        plines[_hit][4])
-                        _added += 1
-                    # (b) v1.14.129 — ضدِ «خطِ آلوده» (ادغامِ دو حبابِ
-                    # مجاور در یک خط توسطِ پاسِ صفحه): متنِ صفحه
-                    # سوپراسترینگِ خوانشِ تمیزِ برشِ همین باکس است
-                    # («besides,» ⊂ «besides,attractions,») و خط از مرزِ
-                    # این باکس بیرون میزند → برشِ باکس‌کلیپ که متنِ
-                    # حبابِ دیگر را «نمیتواند» ببیند مرجع است؛ متن+پالی
-                    # جایگزین میشود (پالیِ جدید داخلِ باکس = تخصیصِ درست).
-                    # تا 1.14.128 این خط توسطِ _lines_same dedup و دور
-                    # ریخته میشد — ریشهٔ اصلیِ «هنوز ناقص استخراج میشه».
-                    elif (txt_new and _old and _nv != _ov
-                            and _nv in _ov and len(_old) > len(txt_new)
-                            and sum(c.isalnum() for c in txt_new) >= 2
-                            and self._line_sticks_out(plines[_hit][2],
-                                                      rects[k])):
-                        plines[_hit] = (txt_new, float(ent[1]),
-                                        np.rint(poly_new).astype(np.int32),
-                                        plines[_hit][3], plines[_hit][4])
-                        _added += 1
-                        _nfix += 1
+                    # v1.14.129 — گاردِ ابهام: اگر خوانشِ جدید با «خطِ
+                    # دیگری» هم همپوشان است (IoU≥0.15؛ مثلِ THEN I'LL
+                    # که THEN و IL صفحه را هر دو میپوشاند) جایگزینی
+                    # ممنوع — فقط خطِ صرفاً-همان جوابِ تمیز است.
+                    _amb = any(
+                        _oi != _hit
+                        and self._aabb_iou(poly_new, _ep) >= 0.15
+                        for _oi, _ep in enumerate(_existing))
+                    if not _amb and txt_new and _old and _nv != _ov:
+                        # (a) تکمیل: متنِ کراپ بلندتر و شاملِ متنِ صفحه
+                        if (_ov in _nv and len(txt_new) > len(_old)):
+                            plines[_hit] = (txt_new, float(ent[1]),
+                                            plines[_hit][2],
+                                            plines[_hit][3],
+                                            plines[_hit][4])
+                            _added += 1
+                        # (b) ضدِ آلوده: متنِ صفحه سوپراسترینگِ خوانشِ
+                        # برشِ همین باکس است و خط از مرز بیرون میزند →
+                        # برشِ باکس‌کلیپ مرجع (متن+پالی جایگزین).
+                        elif (_nv in _ov and len(_old) > len(txt_new)
+                                and sum(c.isalnum()
+                                        for c in txt_new) >= 2
+                                and self._line_sticks_out(
+                                    plines[_hit][2], rects[k])):
+                            plines[_hit] = (txt_new, float(ent[1]),
+                                            np.rint(poly_new).astype(
+                                                np.int32),
+                                            plines[_hit][3],
+                                            plines[_hit][4])
+                            # پالیِ جایگزین باید در existing هم عوض شود
+                            # وگرنه کراپِ باکسِ همسایه با پالیِ کهنهِ
+                            # ادغامی dedup میشود (ریشهٔ نیمفیکسِ قبلی)
+                            _existing[_hit] = plines[_hit][2]
+                            _added += 1
+                            _nfix += 1
                     continue
                 # v1.14.128 — blkِ کراپ «لوکالِ برش» است و با شمارهٔ بلوکِ
                 # صفحه تصادم میکند → -۱ (بیبلوک؛ درجِ y در ترتیب)
@@ -21243,7 +21263,8 @@ class MangaTranslator:
                 _existing = [e[2] for e in plines]
                 try:
                     _news = self._mlkit_crop_fill(
-                        image, (cx1, cy1, cx2, cy2), _existing)
+                        image, (cx1, cy1, cx2, cy2), _existing,
+                        keep_dup=True)
                 except Exception:
                     continue
                 _best = None
@@ -21276,6 +21297,10 @@ class MangaTranslator:
                         plines[li] = (_new_t, float(_best[1]),
                                       np.rint(_best[2]).astype(np.int32),
                                       ent[3], ent[4])
+                        # v1.14.129 — existing هم تازه شود تا کراپِ
+                        # همسایه (بعدی در همین چرخش) با پالیِ کهنهِ
+                        # ادغامی dedup نشود
+                        _existing[li] = plines[li][2]
                         _touched = True
                 else:
                     if not _new_t or sum(c.isalnum() for c in _new_t) < 2:
@@ -21292,11 +21317,30 @@ class MangaTranslator:
                             and y1 - 6 <= my <= y2 + 6):
                         continue
                     _dup = False
-                    for ep in _existing:
+                    _dup_i = -1
+                    for _di, ep in enumerate(_existing):
                         if self._lines_same(p, ep):
                             _dup = True
+                            _dup_i = _di
                             break
                     if _dup:
+                        # v1.14.129 — dup با «خطِ آلوده»: سوپراسترینگِ
+                        # خوانشِ تمیزِ برش + بیرونزدگی از همین باکس →
+                        # جایگزینی (همان منطقِ (b) در fill)
+                        _old2 = str(plines[_dup_i][0] or "").strip() \
+                            if 0 <= _dup_i < len(plines) else ""
+                        _nv2, _ov2 = _norm(_new_t), _norm(_old2)
+                        if (_old2 and _nv2 and _ov2 and _nv2 != _ov2
+                                and _nv2 in _ov2
+                                and len(_old2) > len(_new_t)
+                                and self._line_sticks_out(
+                                    plines[_dup_i][2],
+                                    (x1, y1, x2, y2))):
+                            plines[_dup_i] = (_new_t, float(_best[1]),
+                                             p, plines[_dup_i][3],
+                                             plines[_dup_i][4])
+                            _existing[_dup_i] = p
+                            _touched = True
                         continue
                     plines.append((_new_t, float(_best[1]), p,
                                    float(_best[3]), -1))
