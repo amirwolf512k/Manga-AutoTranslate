@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.132"
+APP_VER = "1.14.133"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3556,6 +3556,18 @@ def _on_android() -> bool:
         return True
     except Exception:
         return False
+
+
+def _android_gate(env_name: str) -> bool:
+    """v1.14.133 — گیتِ مشترکِ فیکسهایِ پاکسازیِ اندروید. پیشفرض = فقط
+    اندروید (رفتارِ PC بایت‌به‌بایت مثلِ قبل میماند)؛ env=1/0 برایِ اجبار
+    (تستِ مسیرِ اندروید رویِ PC)."""
+    _v = str(os.environ.get(env_name, "") or "").strip().lower()
+    if _v in ("1", "true", "yes", "on"):
+        return True
+    if _v in ("0", "false", "no", "off"):
+        return False
+    return bool(_on_android())
 
 
 class MlKitBackend:
@@ -8700,7 +8712,14 @@ class MangaTranslator:
             return None
         # ماسکِ خط‌به‌خط نباید خودش «تقریباً کلِ ناحیه» شود — وگرنه هدف
         # (نماندنِ حباب در ماسک) از بین می‌رود → فال‌بک
-        if total_area > 0.72 * rect_area:
+        # v1.14.133 — اندروید: برایِ متنِ ضخیمِ دورخط‌دار (You're… در
+        # 01.jpg) نوارها تا ~۸۸٪ rect پر می‌شوند؛ فال‌بکِ block-rect∪ink
+        # «همیشه» بزرگ‌تر یا مساویِ strips است → آستانه ۰.۹۵ (فقط وقتی
+        # strips واقعاً از خودِ rect بدتر شوند رد).
+        _rect_thr = 0.72
+        if _android_gate("MANGA_LSM_POLY_RESCUE"):
+            _rect_thr = 0.95
+        if total_area > _rect_thr * rect_area:
             if _lsm_dbg:
                 print(f"      [📐dbg] رد: نزدیکِ کلِ rect {total_area}"
                       f"/{int(rect_area)}", flush=True)
@@ -8786,7 +8805,16 @@ class MangaTranslator:
                     core = core | (_dark & _nc)
             # نوارِ خط عمدتاً زمینه است؛ اگر بیشترِ نوار «جوهر» باشد یعنی
             # هنر/بلوکِ تیره است — نه خطِ متن → فال‌بک
-            if float(core.mean()) > 0.42:
+            # v1.14.133 — متنِ ضخیمِ دورخط‌دار (حبابِ زردِ 01.jpg): بدنهٔ
+            # تیره + دورخطِ روشنِ چسبیده (v1.14.75 به core اضافه می‌شود)
+            # core را تا ~0.45 می‌رساند و نوارِ سالمِ متن رد می‌شد → فال‌بکِ
+            # block-rect∪ink → حفرهٔ بزرگ → پرِ تیرهٔ LaMa رویِ گوشی. روی
+            # زمینهٔ روشنِ یکدست آستانه سخاوتمندانه‌تر (0.55) — بلوکِ تیره
+            # (med پایین) همچنان با همان 0.42 رد می‌شود.
+            _thr_core = 0.42
+            if med >= 170.0 and _android_gate("MANGA_LSM_POLY_RESCUE"):
+                _thr_core = 0.65
+            if float(core.mean()) > _thr_core:
                 if dbg:
                     print(f"      [📐dbg] رد: نوارِ پر از جوهر "
                           f"core={float(core.mean()):.2f} med={med:.0f}",
@@ -8802,6 +8830,7 @@ class MangaTranslator:
             # v1.14.64 — نقشهٔ پالی‌هایِ OCR در برشِ نوار: حروف داخلِ پالی‌ها
             # هستند، دیوارِ حباب/قوس/کادرِ پنل بیرونِ آن‌ها
             _pm = np.full(lm.shape, 255, dtype=np.uint8)
+            _pm_ok = False
             try:
                 _pm = np.zeros(lm.shape, dtype=np.uint8)
                 for _pp in (polys_raw or []):
@@ -8812,9 +8841,11 @@ class MangaTranslator:
                     _pii[:, 0] -= sx0
                     _pii[:, 1] -= sy0
                     cv2.fillPoly(_pm, [_pii], 255)
+                    _pm_ok = True
                 _pm = cv2.dilate(_pm, np.ones((3, 3), np.uint8))
             except Exception:
                 _pm = np.full(lm.shape, 255, dtype=np.uint8)
+                _pm_ok = False
             # قطعه‌هایِ عظیم = هنر، نه حرف — امن‌تر: ردِ خط
             nz, lal, sts, _ = cv2.connectedComponentsWithStats(
                 lm.astype(np.uint8), connectivity=8)
@@ -8825,6 +8856,22 @@ class MangaTranslator:
                 chg = int(sts[ci, cv2.CC_STAT_HEIGHT])
                 if ca > 0.55 * (sy1 - sy0) * (sx1 - sx0) \
                         and max(cwd, chg) > 2.5 * max(8.0, lh):
+                    # v1.14.133 — نجاتِ متنِ دورخط‌دار: کامپوننتی که «هنر»
+                    # خوانده میشود ولی ≥۵۵٪ پیکسلهایش داخلِ پالیهایِ OCR
+                    # خودِ خط است = حروفِ ضخیمِ بههمپیوسته (THEN…/the speed
+                    # در 01.jpg)، نه هنر. هنرِ واقعی (قوسِ دیوار، افکتِ صدا)
+                    # بیرونِ پالیهاست و مثلِ قبل رد می‌شود.
+                    if _pm_ok and _android_gate("MANGA_LSM_POLY_RESCUE"):
+                        _cm133 = (lal == ci)
+                        _in133 = float(np.count_nonzero(_cm133 & (_pm > 0)))
+                        if _in133 >= 0.55 * float(max(1, ca)):
+                            if dbg:
+                                print(f"      [📐dbg] نجاتِ متنِ دورخط‌دار "
+                                      f"ca={ca} {cwd}×{chg} "
+                                      f"درپالی={_in133 / max(1, ca):.2f}",
+                                      flush=True)
+                            kept |= _cm133
+                            continue
                     if dbg:
                         print(f"      [📐dbg] رد: قطعهٔ هنر ca={ca} "
                               f"{cwd}×{chg}", flush=True)
@@ -8849,7 +8896,9 @@ class MangaTranslator:
                                       f"ca={ca} chg={chg}", flush=True)
                             continue
                 kept |= (lal == ci)
-            if float(kept.mean()) > 0.60:
+            if float(kept.mean()) > (0.80 if (
+                    med >= 170.0
+                    and _android_gate("MANGA_LSM_POLY_RESCUE")) else 0.60):
                 if dbg:
                     print(f"      [📐dbg] رد: نوارِ اشباع "
                           f"kept={float(kept.mean()):.2f}", flush=True)
@@ -8892,6 +8941,12 @@ class MangaTranslator:
         # توپر پاک می‌شود و در کامپوز هم کلِ بنر از عکسِ پاک‌شده می‌آید
         self._promo_rect_boxes = []
         padding = max(0, int(getattr(self, "mask_padding", 3)))
+        # v1.14.133 — اندروید: متنِ ضخیمِ دورخط‌دار (حبابهایِ زردِ 01.jpg) —
+        # پدِ ۳ ماسک را دقیقاً رویِ دورخطِ سفیدِ حروف میگذارد و LaMaِ گوشی
+        # دورخط را داخلِ حفره «ادامه» میدهد (شبحِ سفیدِ گلیفی). پدِ ۸ لبهٔ
+        # ماسک را در زمینهٔ تمیز میبرد (تستِ H: حبابِ TL تقریباً عالی شد).
+        if padding < 8 and _android_gate("MANGA_LSM_POLY_RESCUE"):
+            padding = 8
         # v1.14.47: دیلیشنِ padding به‌ازایِ هر ناحیه و «قبلِ» گارد/لیمیت انجام
         # می‌شود (قبلاً بعد از حلقه روی کلِ ماسک بود و بعد از کلیپِ حباب،
         # ماسک را ۳px داخلِ دیوار می‌فرستاد). حالا لیمیتِ حباب آخربُر است.
@@ -10507,7 +10562,20 @@ class MangaTranslator:
                         and _bright.size >= 0.55 * _bg_px.size):
                     _bg_med = float(np.median(_bright))
                     _fill_med = float(np.median(_g[_fm]))
-                    if _fill_med < 115.0 and _fill_med < _bg_med - 55.0:
+                    # v1.14.133 — اندروید: رویِ حلقهٔ تختِ روشن (حبابِ زرد)،
+                    # پرِ ~۱۳۰-۱۶۰ (بلوکِ خاکستریِ LaMaِ xnnpack) از آستانهٔ
+                    # قدیمیِ (-55) رد میشد و به خروجی میرفت. رویِ حلقهٔ یکدست
+                    # (std≤30) آستانه به -30 سختگیرانهتر میشود؛ بافتِ
+                    # واقعی (std بالا) مثلِ قبل -55.
+                    _dqc_thr = 55.0
+                    if _android_gate("MANGA_DARKQC_HARD"):
+                        try:
+                            if float(np.std(_bg_px)) <= 30.0:
+                                _dqc_thr = 30.0
+                        except Exception:
+                            pass
+                    if _fill_med < 115.0 \
+                            and _fill_med < _bg_med - _dqc_thr:
                         # v1.14.65 — لاگ شود؛ این ردِ خاموش = فال‌بکِ OpenCV
                         try:
                             print(f"    [!] LaMa group rejected: dark fill "
@@ -10515,7 +10583,42 @@ class MangaTranslator:
                                   flush=True)
                         except Exception:
                             pass
-                        return
+                        # v1.14.133 — اندروید: به‌جایِ رهاشدن به TELEA (اسمیرِ
+                        # کم‌رنگ رویِ حفرهٔ بزرگ)، اگر حلقه تختِ روشن است خودم
+                        # با رنگِ میانهٔ حلقه پر می‌کنم (همان پرِ تختِ امن).
+                        # پرِ موفق → return نمی‌خوریم تا کامیتِ پایینی اجرا
+                        # شود؛ اعتبارسنجیِ عضویِ بعدی رویِ پرِ تختِ
+                        # نجات‌یافته badf≈۰ می‌گیرد و دست نمی‌زند.
+                        _rescued133 = False
+                        if _android_gate("MANGA_FILL_RESCUE"):
+                            try:
+                                # رنگِ نجات: اگر حلقه تختِ کامل است از کلِ
+                                # حلقه؛ وگرنه از پیکسلهایِ روشنِ حلقه (≥۵۵٪
+                                # حلقه روشن است — شرطِ خودِ QC) تا دیوارِ
+                                # تیرهٔ حباب در رنگ دخالت نکند.
+                                _src133 = _ring
+                                _b133 = _bg_px >= 160.0
+                                if float(_b133.mean()) < 0.98:
+                                    _ri133 = np.where(_ring)
+                                    _bi = np.where(_b133)[0]
+                                    _src133 = (_ri133[0][_bi],
+                                               _ri133[1][_bi])
+                                _px133 = sub_img[_src133].astype(np.float32)
+                                _rc133 = np.median(_px133, axis=0)
+                                _sd133 = float(np.std(_px133))
+                                if _sd133 <= 40.0 and np.isfinite(_rc133).all():
+                                    sub_bgr = sub_bgr.copy()
+                                    sub_bgr[_fm] = np.clip(
+                                        np.rint(_rc133), 0, 255).astype(
+                                            np.uint8)
+                                    _rescued133 = True
+                                    print(f"    [✓] پرِ تختِ نجات از حلقه "
+                                          f"(rgb={_rc133.round(0).tolist()})",
+                                          flush=True)
+                            except Exception:
+                                _rescued133 = False
+                        if not _rescued133:
+                            return
         except Exception:
             pass
         # v1.14.49 — اعتبارسنجیِ ضدتوهمِ هر عضو: LaMa-Manga وقتی حفرهٔ بزرگ
@@ -13537,6 +13640,16 @@ class MangaTranslator:
                             result = _pf
                             _pf_ok = True
                 if result is None and not _q_lama:
+                    result = self._flat_fill_cluster(crop_img, crop_msk)
+                elif result is None and _q_lama \
+                        and _android_gate("MANGA_FILL_RESCUE") \
+                        and float(cv2.countNonZero(crop_msk)) >= 0.40 * float(
+                            max(1, (bx1 - bx0) * (by1 - by0))):
+                    # v1.14.133 — اندروید: فقط «حفرهٔ بزرگ» (ماسکِ block-rect∪ink
+                    # ~≥۴۰٪ باکس) → پرِ درجه‌دومِ تخت از حلقه؛ نوارهایِ باریکِ
+                    # line-strips (~۱۵-۳۰٪) همچنان به LaMa میروند که رویِ
+                    # حفرهٔ کوچک از پرِ تختِ درجه‌دوم تمیزتر است (گرادیانِ
+                    # حباب را از زمینهٔ بزرگتر میخواند).
                     result = self._flat_fill_cluster(crop_img, crop_msk)
                 if (result is not None and not _pf_ok
                         and self._bg_is_textured(crop_img, crop_msk,
