@@ -20830,7 +20830,7 @@ class MangaTranslator:
         return out
 
     def _mlkit_crop_fill(self, image: np.ndarray, rect, existing_polys,
-                         keep_dup: bool = False):
+                         keep_dup: bool = False, smax: float = 0.0):
         """v1.14.126/129 — یک پاسِ ML Kit رویِ برشِ باکس؛ خطهایِ «تازه».
 
         برش با پدِ کوچک + بزرگنماییِ تطبیقی (برشِ کوچک ×2.0/×1.5) تا متنِ
@@ -20869,6 +20869,8 @@ class MangaTranslator:
                     "MANGA_CROP_SCALE_MAX", "2.0") or 2.0)
             except Exception:
                 _smax = 2.0
+            if smax and smax > _smax:
+                _smax = smax  # تلاشِ دومِ ingap با بزرگنماییِ بیشتر
             sc = max(1.0, min(_smax, 400.0 / float(_mn)))
             if _ms * sc > 1500.0:
                 sc = max(1.0, 1500.0 / float(_ms))
@@ -20882,7 +20884,7 @@ class MangaTranslator:
             results = _src.ocr(crop)
             if self.debug:
                 _rn = (len(results[0]) if (results and results[0]) else 0)
-                _rt = ([str(l[1][0]) for l in results[0][:6]]
+                _rt = ([str(l[1][0]) for l in results[0][:12]]
                        if (results and results[0]) else [])
                 print(f"      [🔍crop] ocr → {_rn} خطِ خام {_rt}")
             if not results or not results[0]:
@@ -20942,7 +20944,7 @@ class MangaTranslator:
                     continue
             if self.debug:
                 print(f"      [🔍crop] → {len(out)} خطِ برگشتی "
-                      f"{[t[0] for t in out[:6]]}")
+                      f"{[t[0] for t in out[:12]]}")
         except Exception as _ex:
             if self.debug:
                 print(f"      [🔍crop] خطا: {_ex}")
@@ -21009,6 +21011,9 @@ class MangaTranslator:
         def _norm(s):
             return "".join(str(s).lower().split())
 
+        def _anorm(s):
+            return _norm(s).replace("'", "").replace("’", "")
+
         _added = 0
         _nfix = 0
         for _cov, k in _thin[:12]:
@@ -21027,7 +21032,7 @@ class MangaTranslator:
                         break
                 if _hit >= 0:
                     _old = str(plines[_hit][0] or "").strip()
-                    _nv, _ov = _norm(txt_new), _norm(_old)
+                    _nv, _ov = _anorm(txt_new), _anorm(_old)
                     # v1.14.129 — گاردِ ابهام: اگر خوانشِ جدید با «خطِ
                     # دیگری» هم همپوشان است (IoU≥0.15؛ مثلِ THEN I'LL
                     # که THEN و IL صفحه را هر دو میپوشاند) جایگزینی
@@ -21037,22 +21042,37 @@ class MangaTranslator:
                         and self._aabb_iou(poly_new, _ep) >= 0.15
                         for _oi, _ep in enumerate(_existing))
                     if not _amb and txt_new and _old and _nv != _ov:
-                        # (a) تکمیل: متنِ کراپ بلندتر و شاملِ متنِ صفحه
-                        if (_ov in _nv and len(txt_new) > len(_old)):
+                        # (a0) آپوستروفِ جامانده («IL» ← «I'L»):
+                        # anorm برابر ولی خامِ کراپ آپوستروف دارد
+                        if (_ov == _nv and "'" in txt_new
+                                and "'" not in _old):
                             plines[_hit] = (txt_new, float(ent[1]),
                                             plines[_hit][2],
                                             plines[_hit][3],
                                             plines[_hit][4])
                             _added += 1
-                        # (b) ضدِ آلوده: متنِ صفحه سوپراسترینگِ خوانشِ
-                        # برشِ همین باکس است و خط از مرز بیرون میزند →
-                        # برشِ باکس‌کلیپ مرجع (متن+پالی جایگزین).
-                        elif (_nv in _ov and len(_old) > len(txt_new)
+                        # (a) تکمیل: متنِ کراپ بلندتر و شاملِ متنِ صفحه
+                        elif (_ov and _nv and _ov in _nv
+                                and len(txt_new) > len(_old)):
+                            plines[_hit] = (txt_new, float(ent[1]),
+                                            plines[_hit][2],
+                                            plines[_hit][3],
+                                            plines[_hit][4])
+                            _added += 1
+                        # (b) ضدِ آلوده + ترمیمِ فازی: متنِ صفحه
+                        # سوپراسترینگِ خوانشِ برش است و خط بیرون میزند
+                        # → برش مرجع؛ ولی اگر خودِ برش یک غلطِ تکی داشت
+                        # («BESIDE6,»)، تکهٔ متناظرِ درست از متنِ صفحه
+                        # برمیگردد («BESIDES,»)
+                        elif (_nv and _ov and _nv in _ov
+                                and len(_old) > len(txt_new)
                                 and sum(c.isalnum()
                                         for c in txt_new) >= 2
                                 and self._line_sticks_out(
                                     plines[_hit][2], rects[k])):
-                            plines[_hit] = (txt_new, float(ent[1]),
+                            _rep = (self._frag_in(_old, txt_new)
+                                    or txt_new)
+                            plines[_hit] = (_rep, float(ent[1]),
                                             np.rint(poly_new).astype(
                                                 np.int32),
                                             plines[_hit][3],
@@ -21293,8 +21313,11 @@ class MangaTranslator:
                     if (_new_t and _old_t
                             and sum(c.isalnum() for c in _new_t) >= 2
                             and _norm(_new_t) != _norm(_old_t)
-                            and _norm(_new_t) in _norm(_old_t)):
-                        plines[li] = (_new_t, float(_best[1]),
+                            and (_norm(_new_t) in _norm(_old_t)
+                                 or self._frag_in(_old_t, _new_t))):
+                        _rep_t = (self._frag_in(_old_t, _new_t)
+                                  or _new_t)
+                        plines[li] = (_rep_t, float(_best[1]),
                                       np.rint(_best[2]).astype(np.int32),
                                       ent[3], ent[4])
                         # v1.14.129 — existing هم تازه شود تا کراپِ
@@ -21331,12 +21354,15 @@ class MangaTranslator:
                             if 0 <= _dup_i < len(plines) else ""
                         _nv2, _ov2 = _norm(_new_t), _norm(_old2)
                         if (_old2 and _nv2 and _ov2 and _nv2 != _ov2
-                                and _nv2 in _ov2
+                                and (_nv2 in _ov2
+                                     or self._frag_in(_old2, _new_t))
                                 and len(_old2) > len(_new_t)
                                 and self._line_sticks_out(
                                     plines[_dup_i][2],
                                     (x1, y1, x2, y2))):
-                            plines[_dup_i] = (_new_t, float(_best[1]),
+                            _rep2 = (self._frag_in(_old2, _new_t)
+                                     or _new_t)
+                            plines[_dup_i] = (_rep2, float(_best[1]),
                                              p, plines[_dup_i][3],
                                              plines[_dup_i][4])
                             _existing[_dup_i] = p
@@ -21389,7 +21415,9 @@ class MangaTranslator:
                     continue
                 if x1 - 6 <= mx <= x2 + 6 and y1 - 6 <= my <= y2 + 6:
                     _ls.append((float(p[:, 1].min()),
-                                float(p[:, 1].max()), li))
+                                float(p[:, 1].max()), li,
+                                float(p[:, 0].min()),
+                                float(p[:, 0].max())))
             if len(_ls) < 2:
                 continue
             _ls.sort()
@@ -21412,6 +21440,17 @@ class MangaTranslator:
                 try:
                     _news = self._mlkit_crop_fill(
                         image, (cx1, cy1, cx2, cy2), _existing)
+                    if not _news:
+                        # v1.14.129 — تلاشِ دوم: برشِ «ستونِ متنِ» دو خطِ
+                        # مجاور (باریکتر — حباب/هنرِ کناری حذف) با
+                        # بزرگنماییِ ×3 — «I'll» که در نوارِ عریضِ ×2
+                        # دیده نمیشود
+                        _tx1 = max(0, int(min(_a[3], _b[3])) - 20)
+                        _tx2 = min(_W, int(max(_a[4], _b[4])) + 20)
+                        if _tx2 - _tx1 >= 24:
+                            _news = self._mlkit_crop_fill(
+                                image, (_tx1, gy1, _tx2, gy2), _existing,
+                                smax=3.0)
                 except Exception:
                     continue
                 for t in _news:
@@ -21492,6 +21531,54 @@ class MangaTranslator:
             return False
         except Exception:
             return False
+
+    @staticmethod
+    def _ed1(a: str, b: str, max_ed: int = 1) -> bool:
+        """v1.14.129 — فاصلهٔ ویرایشیِ ≤max_ed (برایِ رشتههایِ کوتاه)."""
+        try:
+            a, b = str(a), str(b)
+            if a == b:
+                return True
+            if abs(len(a) - len(b)) > max_ed:
+                return False
+            la, lb = len(a), len(b)
+            if la == lb:
+                return sum(1 for x, y in zip(a, b) if x != y) <= max_ed
+            if la > lb:
+                a, b, la, lb = b, a, lb, la
+            i = 0
+            while i < la and a[i] == b[i]:
+                i += 1
+            return a[i:] == b[i + 1:]
+        except Exception:
+            return False
+
+    @staticmethod
+    def _frag_in(old_s: str, new_s: str, max_ed: int = 1) -> str:
+        """v1.14.129 — تکهٔ خامِ old که با ≤max_ed خطا با new میخواند.
+
+        کاربرد: کراپِ باکس‌کلیپ جای خط را «تأیید» میکند ولی ممکن است
+        خودش را غلط بخواند («BESIDE6,» بهجایِ «BESIDES,») — متنِ صفحه
+        همان تکه را در بسترِ کامل درستخوانده؛ پس تکهٔ متناظرِ متنِ
+        صفحه را برمیگردانیم («BESIDES,» از دلِ «BESIDES, ATTRACTIONS,»)."""
+        try:
+            o = str(old_s or "")
+            n = "".join(str(new_s or "").lower().split())
+            if not o or not n or len(n) < 3:
+                return ""
+            low = o.lower()
+            L = len(n)
+            for l0 in (L, L - 1, L + 1):
+                if l0 <= 0 or l0 > len(low):
+                    continue
+                for i in range(0, len(low) - l0 + 1):
+                    if MangaTranslator._ed1(low[i:i + l0], n, max_ed):
+                        _f = o[i:i + l0].strip()
+                        if sum(c.isalnum() for c in _f) >= 2:
+                            return _f
+            return ""
+        except Exception:
+            return ""
 
     @staticmethod
     def _line_sticks_out(poly, rect, frac: float = 0.12) -> bool:
@@ -21808,7 +21895,12 @@ class MangaTranslator:
                     parts = []
                     _cur = []
                     _last_real = None
-                    for t in order:
+                    # v1.14.129-fix — _cur ایندکسِ «order» است نه ls!
+                    # (باگِ قبلی: o_txts با ایندکسِ ls از آرایهٔ order-ای
+                    # خوانده میشد → هر ناحیه‌ای که درجِ misc/ترتیبِ بلوک
+                    # orderِ آن را از هویت جدا میکرد، متنش بههم میریخت —
+                    # «SWIM.. BESIDE6, I CAN'T» بهجایِ «BESIDE6, I CAN'T SWIM..»)
+                    for _oj, t in enumerate(order):
                         _b = _blks_raw[t]
                         if _b >= 0:
                             if (_last_real is not None
@@ -21816,7 +21908,7 @@ class MangaTranslator:
                                 parts.append(_cur)
                                 _cur = []
                             _last_real = _b
-                        _cur.append(t)
+                        _cur.append(_oj)
                     if _cur:
                         parts.append(_cur)
                     _pj = []
