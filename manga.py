@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.130"
+APP_VER = "1.14.131"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -22657,10 +22657,319 @@ class MangaTranslator:
                     _nb["rect"] = (_nx1, _ny1, _nx2, _ny2)
                     cand[_si] = (cand[_si][0], _nb, _nx1, _ny1,
                                  _nx2, _ny2, _nx2 - _nx1, _ny2 - _ny1)
+            # v1.14.131 — بازنشستِ «خطِ پلِ» بین‌ستونی: نیمهٔ خودی جایگزینِ
+            # پل میشود (متنِ تمیزِ همان ستون + کادرِ بدونِ نفوذ به حبابِ
+            # مجاور)؛ نیمهٔ همسایه dup است یا به جزءِ همسایه برمیگردد.
+            try:
+                _nret = self._mlkit_retire_bridges(
+                    image, cand, _parts, _cores, ocr_results, _all_polys)
+                if _nret and self.debug:
+                    print(f"    [🔍]MLKit-postsplit: {_nret} خطِ پلِ "
+                          "بین‌ستونی بازنشسته شد (نیمه/نیمه)")
+            except Exception:
+                pass
         if self.debug and (_added or _nup):
             print(f"    [🔍]MLKit-postsplit: +{_added} خطِ تازه/ارتقا "
                   f"({_nup} ارتقایِ متنِ خودی)")
         return _added
+
+    def _mlkit_retire_bridges(self, image, cand, parts, cores,
+                              ocr_results, all_polys):
+        """v1.14.131 — بازنشستِ «خطِ پلِ» بین‌ستونی (فقط مسیرِ ML Kitِ
+        اندروید؛ PC هرگز به اینجا نمیآید).
+
+        ریشهٔ «حباب‌ها ترکیب شده» (چپِبالایِ 01.jpg): دیتکتور دو حبابِ
+        چسبیده را «یک» باکس میدهد و ML Kit آخرین خطِ حبابِ راست («YOU!»)
+        و یک کلمهٔ حبابِ چپ را — چون در «یک باندِ y» نشسته‌اند — به‌صورت
+        «یک» خطِ پلِ عریض میخواند («fheredl OU!»). تفکیکِ بلوکی پل را
+        تماماً به «یک» جزء میدهد؛ پاسِ شَفت نیمهٔ گمشده را به حبابِ راست
+        برمیگرداند ولی خودِ پلِ آلوده در جزءِ چپ میماند و کادرِ جزء تا
+        ستونِ مجازی کش میآید → دو کادرِ روی‌هم، پاکسازیِ متقاطع و متنِ
+        آلوده در ترجمه.
+
+        اینجا: گاترِ بینِ هستهٔ خودی و هستهٔ همسایه (ستونِ کم‌جوهرِ نوارِ
+        خط) نقطهٔ برش است؛ پل نصف میشود، هر نیمه با «یک» پاسِ ریزِ ML Kit
+        دوباره خوانده میشود؛ نیمهٔ خودی جایگزینِ پل میشود و نیمهٔ همسایه
+        یا تکراریِ خطِ خودِ همسایه است (حذف) یا به جزءِ همسایه اضافه
+        میشود (نجات). کادرِ جزء از نو ساخته میشود. خاموشی:
+        MANGA_MLKIT_BRIDGE=0 | سقف: ۲ پل در هر گروهِ تفکیک."""
+        if (image is None or not isinstance(image, np.ndarray)
+                or image.size == 0 or not parts
+                or len(parts) != len(cores) or not ocr_results):
+            return 0
+        try:
+            if os.environ.get("MANGA_MLKIT_BRIDGE", "1").strip() == "0":
+                return 0
+        except Exception:
+            pass
+        H, W = image.shape[:2]
+
+        def _bb(p):
+            return (float(p[:, 0].min()), float(p[:, 1].min()),
+                    float(p[:, 0].max()), float(p[:, 1].max()))
+
+        def _anorm(s):
+            return "".join(str(s).lower().split()) \
+                .replace("'", "").replace("’", "")
+
+        _allw = []
+        for _pt in parts:
+            for _p in _pt[2]:
+                try:
+                    _b0 = _bb(np.asarray(_p, dtype=np.float32)
+                              .reshape(-1, 2))
+                    _allw.append(max(0.0, _b0[2] - _b0[0]))
+                except Exception:
+                    _allw.append(0.0)
+        _posw = [w for w in _allw if w > 1.0]
+        _wmed = float(np.median(_posw)) if _posw else 0.0
+
+        def _rebuild(_pt):
+            _si2, _rx2, _polys2, _texts2, _angs2, _blks2 = _pt
+            if not (0 <= _si2 < len(ocr_results)) or not _polys2:
+                return
+            _pj2 = " ".join(t.strip() for t in _texts2
+                            if t.strip()).strip()
+            if not _pj2:
+                return
+            ocr_results[_si2] = (_pj2, _polys2, _angs2, _texts2, _blks2)
+            try:
+                _qx1 = min([int(_rx2[0])]
+                           + [int(float(p[:, 0].min())) for p in _polys2])
+                _qy1 = min([int(_rx2[1])]
+                           + [int(float(p[:, 1].min())) for p in _polys2])
+                _qx2 = max([int(_rx2[2])]
+                           + [int(float(p[:, 0].max())) for p in _polys2])
+                _qy2 = max([int(_rx2[3])]
+                           + [int(float(p[:, 1].max())) for p in _polys2])
+                _qx1, _qy1 = max(0, _qx1), max(0, _qy1)
+                _qx2, _qy2 = min(W, _qx2), min(H, _qy2)
+                if (_qx1, _qy1, _qx2, _qy2) != tuple(
+                        int(v) for v in _rx2):
+                    _nb2 = dict(cand[_si2][1]) \
+                        if isinstance(cand[_si2][1], dict) else {}
+                    _nb2["rect"] = (_qx1, _qy1, _qx2, _qy2)
+                    cand[_si2] = (cand[_si2][0], _nb2, _qx1, _qy1,
+                                  _qx2, _qy2, _qx2 - _qx1, _qy2 - _qy1)
+            except Exception:
+                pass
+
+        _exist = []
+        for _pt in parts:
+            _exist.extend(_pt[2])
+
+        def _pick(_hx0, _hx1, _sy0, _sy1, _lh):
+            # v1.14.131 — جبرانِ پدِ داخلیِ _mlkit_crop_fill (۸px): برشِ
+            # مؤثر باید «فقط» نیمهٔ پل باشد؛ وگرنه پد، جوهرِ ستونِ مجاور
+            # (گاترِ ۶px!) و تهخطِ بالایی را دوباره واردِ کراپ میکند و
+            # همان ادغامِ پل از نو ساخته میشود.
+            _ix0 = int(_hx0) + 10
+            _ix1 = int(_hx1) - 10
+            _iy0 = int(_sy0) + 9
+            _iy1 = int(_sy1) - 9
+            if _ix1 - _ix0 >= 24 and _iy1 - _iy0 >= 14:
+                _rc = (_ix0, _iy0, _ix1, _iy1)
+            else:
+                _rc = (int(_hx0) + 2, int(_sy0),
+                       int(_hx1) - 2, int(_sy1))
+                if _rc[2] - _rc[0] < 20 or _rc[3] - _rc[1] < 14:
+                    return None
+            try:
+                _cands = self._mlkit_crop_fill(image, _rc, _exist,
+                                               keep_dup=True)
+            except Exception:
+                return None
+            _best = None
+            _bs = -1.0
+            _cy_ref = 0.5 * (_sy0 + _sy1)
+            for ent in (_cands or []):
+                try:
+                    _cp = np.asarray(ent[2],
+                                     dtype=np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                _cx0, _cy0, _cx1, _cy1 = _bb(_cp)
+                _ch = max(1.0, _cy1 - _cy0)
+                _oy = min(_cy1, _sy1) - max(_cy0, _sy0)
+                if _oy < 0.55 * _ch:
+                    continue  # خطِ بالا/پایینِ نوارِ پل است نه خودش
+                if abs(0.5 * (_cy0 + _cy1) - _cy_ref) > 0.45 * _lh:
+                    continue
+                _ox = min(_cx1, _hx1) - max(_cx0, _hx0)
+                if _ox < 0.55 * max(1.0, _cx1 - _cx0):
+                    continue  # به نیمهٔ دیگر میزند بیرون
+                _t = str(ent[0] or "").strip()
+                if sum(1 for c in _t if c.isalnum()) < 1:
+                    continue
+                _sc = float(ent[1] or 0.0) * (0.5 + 0.5 * _oy / _ch)
+                if _sc > _bs:
+                    _bs = _sc
+                    _best = (ent, _cp)
+            return _best
+
+        n_ret = 0
+        for _pi, _pt in enumerate(parts):
+            if n_ret >= 2:
+                break
+            _si, _rx, _polys, _texts, _angs, _blks = _pt
+            if not _polys:
+                continue
+            _own = cores[_pi]
+            for _k in range(len(_polys)):
+                if n_ret >= 2:
+                    break
+                try:
+                    _sp = np.asarray(_polys[_k],
+                                     dtype=np.float32).reshape(-1, 2)
+                    _sx0, _sy0, _sx1, _sy1 = _bb(_sp)
+                except Exception:
+                    continue
+                _sw = _sx1 - _sx0
+                if _sw < 40.0 or len(_polys) < 2:
+                    continue
+                _pw = []
+                for _j, _p2 in enumerate(_polys):
+                    if _j == _k:
+                        continue
+                    try:
+                        _b2 = _bb(np.asarray(_p2, dtype=np.float32)
+                                  .reshape(-1, 2))
+                        _pw.append(max(1.0, _b2[2] - _b2[0]))
+                    except Exception:
+                        _pw.append(1.0)
+                if not _pw:
+                    continue
+                _om = float(sorted(_pw)[len(_pw) // 2])
+                if not (_om > 1.0 and _sw >= 2.0 * _om
+                        and _sw >= 1.5 * _wmed):
+                    continue  # پل نیست
+                # همسایهٔ فرا-هسته (دو هستهٔ کنارِ هم — نه رویِ هم)
+                _sib = -1
+                _bo = 0.0
+                for _qi in range(len(parts)):
+                    if _qi == _pi:
+                        continue
+                    _cs0 = cores[_qi]
+                    _oxc = min(_own[2], _cs0[2]) - max(_own[0], _cs0[0])
+                    _nwc = max(1.0, min(_own[2] - _own[0],
+                                        _cs0[2] - _cs0[0]))
+                    if _oxc > 0.25 * _nwc:
+                        continue
+                    _ox = min(_sx1, _cs0[2]) - max(_sx0, _cs0[0])
+                    if _ox >= 0.30 * _sw and _ox > _bo:
+                        _bo, _sib = _ox, _qi
+                if _sib < 0:
+                    continue
+                _cs = cores[_sib]
+                if _cs[0] >= _own[2] - 1:
+                    _g0, _g1, _fr = _own[2], _cs[0], True
+                elif _cs[2] <= _own[0] + 1:
+                    _g0, _g1, _fr = _cs[2], _own[0], False
+                else:
+                    continue
+                if _g1 < _g0:
+                    _g0 = _g1 = 0.5 * (_g0 + _g1)
+                _lh = max(8.0, _sy1 - _sy0)
+                _wx0 = int(max(0, np.floor(_g0 - 0.05 * _lh)))
+                _wx1 = int(min(W - 1, np.ceil(_g1 + 0.05 * _lh)))
+                _wy0 = int(max(0, np.floor(_sy0 + 0.15 * _lh)))
+                _wy1 = int(min(H, np.ceil(_sy1 - 0.15 * _lh)))
+                if _wx1 - _wx0 < 2 or _wy1 - _wy0 < 6:
+                    continue
+                _cut = None
+                try:
+                    _strip = image[_wy0:_wy1, _wx0:_wx1 + 1]
+                    _gg = cv2.cvtColor(_strip, cv2.COLOR_BGR2GRAY)
+                    _col = (255.0 - _gg.astype(np.float32)).sum(axis=0)
+                    _cmin = float(_col.min())
+                    _cmax = float(_col.max())
+                    if _cmax > 0 and _cmin > 0.22 * _cmax:
+                        continue  # گاتر جوهر دارد — برشِ امن نیست
+                    _cols = np.where(
+                        _col <= _cmin + 0.05 * max(1.0, _cmax))[0]
+                    _cut = float(_wx0) + 0.5 * (float(_cols.min())
+                                                + float(_cols.max()))
+                except Exception:
+                    _cut = 0.5 * (_g0 + _g1)
+                if _cut is None or not np.isfinite(_cut):
+                    continue
+                _hs0, _hs1 = ((_sx0, _cut) if _fr else (_cut, _sx1))
+                _hf0, _hf1 = ((_cut, _sx1) if _fr else (_sx0, _cut))
+                if _hs1 - _hs0 < 14.0 or _hf1 - _hf0 < 14.0:
+                    continue
+                _hit_o = _pick(_hs0, _hs1, _sy0, _sy1, _lh)
+                if not _hit_o:
+                    continue  # خوانشِ نیمهٔ خودی نشد → پل میماند (امن)
+                (_oent, _opoly) = _hit_o
+                _otxt = str(_oent[0] or "").strip()
+                _old_txt = str(_texts[_k] or "")
+                if not _otxt or _anorm(_otxt) == _anorm(_old_txt):
+                    continue  # همان خطِ ادغامی دوباره خوانده شد
+                _sp_key = (_sx0, _sy0, _sx1, _sy1)
+
+                def _is_span(p):
+                    # خودِ پلِ درحال‌بازنشست نباید dup حساب شود — نیمه‌هایش
+                    # هندسهً داخلِ پلاند (حلقهای بیرون‌رفتنی)
+                    try:
+                        _b3 = _bb(np.asarray(
+                            p, dtype=np.float32).reshape(-1, 2))
+                        return all(abs(_b3[t] - _sp_key[t]) <= 2.0
+                                   for t in range(4))
+                    except Exception:
+                        return False
+                _ob = _bb(_opoly)
+                if (_fr and _ob[2] > _hs1 + 12.0) or \
+                        ((not _fr) and _ob[0] < _hs0 - 12.0):
+                    _opoly = np.array(
+                        [[_hs0, _sy0], [_hs1, _sy0],
+                         [_hs1, _sy1], [_hs0, _sy1]], dtype=np.int32)
+                _opoly = np.rint(_opoly).astype(np.int32)
+                # نیمهٔ همسایه: dup با خطهایِ موجود؟ وگرنه نجات
+                _hit_f = _pick(_hf0, _hf1, _sy0, _sy1, _lh)
+                if _hit_f:
+                    (_fent, _fpoly) = _hit_f
+                    _ftxt = str(_fent[0] or "").strip()
+                    if _ftxt and sum(1 for c in _ftxt
+                                     if c.isalnum()) >= 1:
+                        _fpoly = np.rint(_fpoly).astype(np.int32)
+                        _dup = False
+                        for _p3 in _exist:
+                            if _is_span(_p3):
+                                continue
+                            if self._lines_same(_fpoly, _p3):
+                                _dup = True
+                                break
+                        if not _dup and all_polys:
+                            for _gp in all_polys:
+                                if _is_span(_gp):
+                                    continue
+                                if self._lines_same(_fpoly, _gp):
+                                    _dup = True
+                                    break
+                        if not _dup:
+                            _sib_pt = parts[_sib]
+                            _sib_pt[2].append(_fpoly)
+                            _sib_pt[3].append(_ftxt)
+                            _sib_pt[4].append(float(_fent[3] or 0.0))
+                            _sib_pt[5].append(-1)
+                            _rebuild(_sib_pt)
+                            if self.debug:
+                                print(f"    [🔍]MLKit-bridge: نیمهٔ "
+                                      f"همسایه {_ftxt!r} به جزءِ "
+                                      f"{_sib} برگشت")
+                _polys[_k] = _opoly
+                _texts[_k] = _otxt
+                try:
+                    _angs[_k] = float(_oent[3] or 0.0)
+                except Exception:
+                    pass
+                _rebuild(_pt)
+                n_ret += 1
+                if self.debug:
+                    print(f"    [🔍]MLKit-bridge: پلِ {_old_txt!r} "
+                          f"بازنشسته شد → خودی={_otxt!r} "
+                          f"(برش@x={_cut:.0f})")
+        return n_ret
 
     def _split_multiblock_regions(self, image: np.ndarray,
                                   regions: List["TextRegion"]) -> List["TextRegion"]:
