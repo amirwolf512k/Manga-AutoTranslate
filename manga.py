@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.125"
+APP_VER = "1.14.126"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -4977,40 +4977,43 @@ class MangaTranslator:
                 print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
         if self.ocr is None and _on_android():
-            # v1.14.123 — زنجیرهٔ OCR اندروید: PP-OCRv6 ONNX (عینِ PC و
-            # عینِ K3 — دیکدِ K3 v4.1.1: RunRapidOcrPipelineOnCrop +
-            # _ppOcrDict؛ کاربر: «استخراجِ مالِ پی‌سی رو گوشی اوکی کرد»)
-            # → فال‌بکِ ML Kit. paddlelite کلاً حذف شده. اوررایدِ دستی:
-            # MANGA_ANDROID_OCR = rapidocr | mlkit
+            # v1.14.126 — پیشفرضِ اندروید = ML Kit خالص (نیتیوِ گوگل،
+            # بدونِ PaddleOCR/ONNX و بدونِ هیچ دانلودی). گزارشِ واقعیِ
+            # کاربر رویِ 1.14.125: استخراجِ کاسکادِ PP-OCRv6 رویِ گوشی
+            # تا «یک ساعت» طول میکشد (det/recِ ONNX رویِ CPUِ گوشی از
+            # راهِ پلِ جاوا — حتی با int8/crop-mode). درخواستِ صریحِ
+            # کاربر: «راهی واسه استفادهٔ سریع تو گوشی بدونِ paddleocr».
+            # PP-OCRv6/کاسکاد فقط با انتخابِ صریح:
+            # MANGA_ANDROID_OCR=rapidocr (برایِ گوشیهایِ پرچمدار)
             _aocr = os.environ.get("MANGA_ANDROID_OCR", "").strip().lower()
             if _aocr and _aocr not in ("mlkit", "rapidocr"):
-                print(f"[!] موتورِ «{_aocr}» حذف/ناشناخته است → PP-OCR ONNX")
+                print(f"[!] موتورِ «{_aocr}» ناشناخته است → ML Kit")
                 _aocr = ""
-            if _aocr != "mlkit":
+            if _aocr == "rapidocr":
                 try:
                     self.ocr = RapidOCRBackend(
                         lang=main_lang, prefer_gpu=self.use_gpu)
                     self._ocr_backend_name = "rapidocr"
-                    print("[*] اندروید: موتورِ ONNXِ پی‌سی (PP-OCRv6) "
-                          "پیشفرض شد — همانِ PC لینوکس.")
-                    # v1.14.124 — راهنمایِ برشِ امنِ ML Kit (کاسکادِ K3):
-                    # استخراجِ یک بار با ML Kit، بعدِ PP-OCRv6 فقط رویِ
-                    # همان نقاط (RunRapidOcrPipelineOnCropِ دیکدِ K3).
+                    print("[*] اندروید: PP-OCRv6 ONNX با انتخابِ صریحِ "
+                          "MANGA_ANDROID_OCR=rapidocr (کندتر از ML Kit).")
+                    # راهنمایِ برشِ امنِ ML Kit (کاسکادِ K3): استخراجِ
+                    # یک بار با ML Kit، بعدِ PP-OCRv6 فقط رویِ همان نقاط.
                     self._mlkit_guide = None
                     try:
                         self._mlkit_guide = MlKitBackend(lang=main_lang)
                         print("[*] کاسکادِ K3 فعال: ML Kit → برشِ امن → "
-                              "PP-OCRv6 رویِ برش‌ها (سریع + دقتِ PC)")
+                              "PP-OCRv6 رویِ برش‌ها")
                     except Exception as _e2:
                         print(f"[!] راهنمایِ ML Kit در دسترس نیست ({_e2}) "
                               "→ PP-OCRv6 تمام‌صفحه")
                 except Exception as e:
-                    print(f"[!] PP-OCRv6 ONNX روی اندروید لود نشد ({e}) "
-                          "→ ML Kit نیتیو")
+                    print(f"[!] PP-OCRv6 ONNX لود نشد ({e}) → ML Kit نیتیو")
             if self.ocr is None:
                 try:
                     self.ocr = MlKitBackend(lang=main_lang)
                     self._ocr_backend_name = "mlkit"
+                    print("[*] اندروید: موتورِ پیشفرض = ML Kit نیتیوِ گوگل "
+                          "(سریعترین حالتِ گوشی — بدونِ PaddleOCR/دانلود)")
                 except Exception as e:
                     print(f"[!] ML Kit لود نشد ({e}) → RapidOCR ONNX")
                     try:
@@ -20819,6 +20822,183 @@ class MangaTranslator:
                 continue
         return out
 
+    def _mlkit_crop_fill(self, image: np.ndarray, rect, existing_polys):
+        """v1.14.126 — یک پاسِ ML Kit رویِ برشِ باکس؛ فقط خطهایِ «تازه».
+
+        برش با پدِ کوچک + بزرگنماییِ تطبیقی (برشِ کوچک ×2.0/×1.5) تا متنِ
+        ریز که در مقیاسِ صفحه خوانده نمیشود هم خوانده شود. خروجی: همان
+        ۵تاییِ _mlkit_page_lines با مختصاتِ صفحه. ضدِ تکرار: تطابقِ
+        _lines_same با هر خطِ موجود = رد (تکمیلِ متنِ نیمهخوانده جداگانه
+        در _mlkit_fill_thin_boxes تصمیمگیری میشود)."""
+        out = []
+        try:
+            h, w = image.shape[:2]
+            x1, y1, x2, y2 = [int(v) for v in rect]
+            pad = 8
+            x1, y1 = max(0, x1 - pad), max(0, y1 - pad)
+            x2, y2 = min(w, x2 + pad), min(h, y2 + pad)
+            if x2 - x1 < 24 or y2 - y1 < 24:
+                return out
+            crop = image[y1:y2, x1:x2]
+            ch, cw = crop.shape[:2]
+            sc = 1.0
+            _ms = max(ch, cw)
+            if _ms < 340:
+                sc = 2.0
+            elif _ms < 640:
+                sc = 1.5
+            if sc > 1.01:
+                crop = cv2.resize(crop, None, fx=sc, fy=sc,
+                                  interpolation=cv2.INTER_CUBIC)
+            _src = getattr(self, "_mlkit_guide", None) or self.ocr
+            results = _src.ocr(crop)
+            if not results or not results[0]:
+                return out
+            for line in results[0]:
+                try:
+                    if not (isinstance(line, (list, tuple))
+                            and len(line) >= 2):
+                        continue
+                    pair = line[1]
+                    ang, blk = 0.0, -1
+                    if isinstance(pair, (list, tuple)):
+                        text = str(pair[0]).strip()
+                        conf = float(pair[1]) if len(pair) > 1 else 1.0
+                        if len(pair) > 2:
+                            try:
+                                ang = float(pair[2])
+                                if ang > 180.0:
+                                    ang -= 360.0
+                                if abs(ang) > 45.0:
+                                    ang = 0.0
+                            except (TypeError, ValueError):
+                                ang = 0.0
+                        if len(pair) > 3:
+                            try:
+                                blk = int(pair[3])
+                            except (TypeError, ValueError):
+                                blk = -1
+                    else:
+                        text, conf = str(pair).strip(), 1.0
+                    if not text or conf < self.min_confidence:
+                        continue
+                    if self._is_non_english_script(text):
+                        continue
+                    box0 = line[0] if len(line) >= 1 else None
+                    if not (box0 is not None
+                            and isinstance(box0, (list, tuple, np.ndarray))
+                            and len(box0) >= 3):
+                        continue
+                    poly = np.asarray(box0, dtype=np.float32).reshape(-1, 2)
+                    if poly.min() < -8 or poly.max() >= 100000:
+                        continue
+                    if sc > 1.01:
+                        poly = poly / sc
+                    poly = np.rint(poly + np.array(
+                        [x1, y1], dtype=np.float32)).astype(np.int32)
+                    _dup = False
+                    for ep in existing_polys:
+                        if self._lines_same(poly, ep):
+                            _dup = True
+                            break
+                    if _dup:
+                        continue
+                    out.append((text, float(conf), poly, float(ang), int(blk)))
+                except Exception:
+                    continue
+        except Exception:
+            return []
+        return out
+
+    def _mlkit_fill_thin_boxes(self, image: np.ndarray, cand, plines) -> int:
+        """v1.14.126 — پرکردنِ باکسهایِ «نیمهپوش» (فقط موتورِ ML Kit).
+
+        پاسِ تمامصفحه گاهی فقط بخشی از خطهایِ حباب را مییابد (متنِ ریز،
+        فونتِ سبک، کنتراستِ کم) → شکایتِ «ناقص استخراج میزنه». برایِ هر
+        باکسی که خطهایِ تخصیصیافتهاش کمتر از ~۴۰٪ مساحتش را میپوشانند،
+        «یک» پاسِ ML Kit رویِ برشِ خودِ باکس زده میشود (نیتیو و ارزان —
+        سقفِ ۱۲ باکسِ بدترینِ پوشش در هر صفحه) و فقط خطهایِ تازه به
+        plines اضافه میشوند؛ اگر متنِ برش «تکمیلِ» متنِ نیمهخواندهٔ صفحه
+        باشد (شاملِ آن + بلندتر) جایگزین میشود — حبابِ همان میماند، متن
+        کاملتر میشود. خاموشی: MANGA_MLKIT_FILL=0"""
+        n = len(cand)
+        if n <= 0 or not plines or image is None or image.size == 0:
+            return 0
+        _H, _W = image.shape[:2]
+        page_area = float(max(1, _H * _W))
+        rects = [(int(c[2]), int(c[3]), int(c[4]), int(c[5])) for c in cand]
+        areas = [max(1.0, float((r[2] - r[0]) * (r[3] - r[1])))
+                 for r in rects]
+        _prio = {"text_bubble": 0, "text_free": 1, "bubble": 2}
+        cover = [0.0] * n
+        for ent in plines:
+            try:
+                poly = ent[2]
+                cx = float(poly[:, 0].mean())
+                cy = float(poly[:, 1].mean())
+                _x = poly[:, 0].astype(np.float64)
+                _y = poly[:, 1].astype(np.float64)
+                a = abs(float(np.dot(_x, np.roll(_y, -1))
+                              - np.dot(_y, np.roll(_x, -1)))) * 0.5
+            except Exception:
+                continue
+            best_k = -1
+            best_key = None
+            for k in range(n):
+                x1, y1, x2, y2 = rects[k]
+                if x1 - 6 <= cx <= x2 + 6 and y1 - 6 <= cy <= y2 + 6:
+                    _cl = str(cand[k][1].get("class_name")
+                              or "") if isinstance(cand[k][1], dict) else ""
+                    key = (areas[k], _prio.get(_cl, 3))
+                    if best_k < 0 or key < best_key:
+                        best_k, best_key = k, key
+            if best_k >= 0:
+                cover[best_k] += a
+        _thin = []
+        for k in range(n):
+            if areas[k] > 0.30 * page_area:
+                continue  # ناحیهٔ خیلی بزرگ — پوششِ کم طبیعی است
+            if cover[k] / areas[k] < 0.40:
+                _thin.append((cover[k] / areas[k], k))
+        if not _thin:
+            return 0
+        _thin.sort()  # بدترینِ پوشش اول
+        _existing = [ent[2] for ent in plines]
+
+        def _norm(s):
+            return "".join(str(s).lower().split())
+
+        _added = 0
+        for _cov, k in _thin[:12]:
+            if _added >= 40:
+                break
+            for ent in self._mlkit_crop_fill(image, rects[k], _existing):
+                poly_new = ent[2]
+                txt_new = str(ent[0] or "").strip()
+                _hit = -1
+                for _i, _ep in enumerate(_existing):
+                    if self._lines_same(poly_new, _ep):
+                        _hit = _i
+                        break
+                if _hit >= 0:
+                    # تکمیلِ خطِ نیمهخواندهٔ صفحه: «You're the real» ←
+                    # «You're the real attraction here!» — متنِ بلندترِ
+                    # شاملِ قبلی جایگزین میشود؛ پالی/بلوکِ صفحه میماند.
+                    _old = str(plines[_hit][0] or "").strip()
+                    if (txt_new and _old
+                            and _norm(txt_new) != _norm(_old)
+                            and _norm(_old) in _norm(txt_new)
+                            and len(txt_new) > len(_old)):
+                        plines[_hit] = (txt_new, float(ent[1]),
+                                        plines[_hit][2], plines[_hit][3],
+                                        plines[_hit][4])
+                        _added += 1
+                    continue
+                plines.append(ent)
+                _existing.append(poly_new)
+                _added += 1
+        return _added
+
     @staticmethod
     def _aabb_iou(pa, pb):
         """v1.14.124 — IoUِ کادرِ محصورِ دو پالی (dedupِ خطِ ML Kit با
@@ -21658,6 +21838,19 @@ class MangaTranslator:
             try:
                 _plines = self._mlkit_page_lines(image)
                 if _plines:
+                    # v1.14.126 — پرکردنِ باکسهایِ نیمهپوش قبل از تخصیص:
+                    # متنِ ریز/سبکی که پاسِ تمامصفحه گم میکند، با «یک»
+                    # پاسِ ML Kit رویِ برشِ خودِ باکس برمیگردد (نیتیو و
+                    # ارزان). خاموشی: MANGA_MLKIT_FILL=0
+                    if os.environ.get("MANGA_MLKIT_FILL", "1").strip() != "0":
+                        try:
+                            _nfill = self._mlkit_fill_thin_boxes(
+                                image, cand, _plines)
+                            if _nfill and self.debug:
+                                print(f"    [*]MLKit-fill: +{_nfill} خطِ "
+                                      "تازه/تکمیل از باکسهایِ نیمهپوش")
+                        except Exception:
+                            pass
                     _res, _used = self._page_assign_lines(cand, _plines)
                     _nused = sum(1 for _u in _used if _u)
                     _nresc = 0
