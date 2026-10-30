@@ -2240,7 +2240,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             prompt_preview_head = gr.Markdown("")
             prompt_preview_body = gr.Textbox(
                 label="پیش‌نمایش پرامپت مؤثر (همین به مدل فرستاده می‌شود)",
-                lines=8, max_lines=20, interactive=False, show_copy_button=True)
+                lines=8, max_lines=20, interactive=False)
             story_brief = gr.Checkbox(
                 label="بریف داستان قبل از ترجمه (AI یک‌بار فصل را می‌خواند تا لحن شخصیت‌ها حفظ شود)",
                 value=bool(cfg.get("story_brief", True)))
