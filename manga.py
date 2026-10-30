@@ -93,6 +93,59 @@ DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 
 DEFAULT_SYSTEM_INSTRUCTION = DEFAULT_SYSTEM_INSTRUCTION_STYLE.strip()
 
+# ── v1.14.144 — پرامپتهای سبکیِ انگلیسیِ انتخابی بر اساس مدل ──────────────
+# الگو از رفتار K3 (حرفهای برای Flash/Pro، سبک برای Flash Lite) ولی متنِ
+# مستقل و انگلیسی؛ خروجی همیشه فارسی است. حالتِ کلاسیک = دستورِ فارسیِ بالا.
+FLASH_PROMPT = """You are a veteran manga, manhwa and comic translator preparing bubble dialogue for a print-quality Persian (Farsi) edition. Your lines must drop into the speech bubbles and read like the dialogue of a professionally published translation.
+
+THINKING PROCESS — three internal passes before you answer:
+Pass 1 — Read the whole scene first: genre, mood, who is speaking to whom, and each character's personality and way of talking.
+Pass 2 — Interrogate your draft like a harsh editor: does any line smell of machine translation? Is the character's voice intact? Is there a sharper, more idiomatic Persian wording?
+Pass 3 — Deliver only the polished result of Pass 2. Never show the drafts.
+
+NON-NEGOTIABLE RULES:
+1. Natural spoken Persian. Every line must sound like real, modern conversation — vivid, flowing, engaging. Literal word-by-word, bookish or robotic phrasing is forbidden; rebuild the sentence with Persian grammar instead of mirroring the source structure.
+2. Match the voice, never censor. Act the character: rude, uneducated or vulgar speakers must sound coarse and use street slang — never tidy them up. Dignified, noble or mysterious speakers stay courteous but conversational, not written-literary. If the source is profane, sexual or violent, the Persian must hit with the same force — no softening, sanitizing or pasteurizing. Professional means faithful, not censored.
+3. Localize idiom. Proverbs, jokes, taunts and culture-bound phrases get a natural Persian equivalent that lands the same feeling; with no direct equivalent, carry the idea across creatively so the reader feels the same punch.
+4. Transliterate proper nouns, never translate their meaning. A name renders from its sound, not its dictionary sense; keep the source order (family name first for Japanese/Korean/Chinese), transliterate honorifics as they are, and spell every name identically throughout the chapter. Where a glossary is supplied, its spelling always wins.
+5. Numbers, ranks, technique names and places are rendered accurately and consistently everywhere.
+6. The target language is always Persian (Farsi), whatever the source language — English, Japanese, Chinese, Korean, Spanish, French or any other.
+7. Obey the JSON instructions in the user message exactly: exactly one output entry per input item — no merging, no dropping, no reordering."""
+
+FLASH_LITE_PROMPT = """Translate comic dialogue into natural, spoken Persian (Farsi).
+1. Sound like everyday speech — lively and smooth, never literal or robotic.
+2. Keep each character's tone: rude characters use street slang, polite characters stay courteous but conversational. Never soften bad words — render them with equal strength.
+3. Idioms and jokes take a natural Persian equivalent with the same feeling.
+4. Spell every name the same way every time; transliterate the sound, never translate the meaning.
+5. The output language is always Persian. Follow the JSON instructions of the user message: one answer per item, nothing merged or skipped."""
+
+PROMPT_PRESETS = {
+    "professional": FLASH_PROMPT.strip(),
+    "lite": FLASH_LITE_PROMPT.strip(),
+    "classic": DEFAULT_SYSTEM_INSTRUCTION_STYLE.strip(),
+}
+PROMPT_MODES = ("auto", "professional", "lite", "classic")
+
+
+def resolve_prompt_mode(mode: str, provider: str = "gemini", model: str = "") -> str:
+    """انتخابِ سبکِ پرامپت: «auto» یعنی بر اساسِ سرویس و مدل.
+    هر سرویسی غیر از Gemini (ChatGPT/Groq/DeepSeek/دلخواه) → سبکِ سبک (lite).
+    Gemini + مدلِ Lite → سبکِ سبک؛ بقیهٔ مدلهای Gemini → حرفهای."""
+    m = (mode or "auto").lower().strip()
+    if m in PROMPT_PRESETS:
+        return m
+    prov = (provider or "gemini").lower().strip()
+    name = (model or "").lower()
+    if prov != "gemini":
+        return "lite"
+    if "lite" in name:
+        return "lite"
+    return "professional"
+
+
+def prompt_preset_text(mode: str, provider: str = "gemini", model: str = "") -> str:
+    return PROMPT_PRESETS[resolve_prompt_mode(mode, provider, model)]
+
 import os
 import sys
 import subprocess
@@ -4737,6 +4790,7 @@ class MangaTranslator:
         style_fonts: bool = True,
         active_tones: Optional[List[str]] = None,
         instruction_text: Optional[str] = None,
+        prompt_mode: Optional[str] = None,
         clean_sfx: bool = False,
         repair_page_seams: bool = True,
     ):
@@ -4749,6 +4803,10 @@ class MangaTranslator:
         self.style_fonts = bool(style_fonts)
         self.active_tones = (set(active_tones) if active_tones else None)
         self.custom_instruction = (instruction_text or "").strip() or ""
+        # v1.14.144 — سبکِ پرامپت: auto بر اساسِ سرویس/مدل انتخاب میکند
+        _pm = ((prompt_mode if prompt_mode is not None
+                else os.environ.get("MANGA_PROMPT_MODE", "")) or "auto").lower().strip()
+        self.prompt_mode = _pm if _pm in PROMPT_MODES else "auto"
         self.det_confidence = float(det_confidence)
         provider = (provider or "gemini").lower().strip()
         if provider not in PROVIDER_PRESETS:
@@ -18838,8 +18896,15 @@ class MangaTranslator:
 
     def _get_system_instruction(self) -> str:
         custom = (getattr(self, "custom_instruction", "") or "").strip()
-        body = custom if custom else DEFAULT_SYSTEM_INSTRUCTION_STYLE.strip()
-        return body
+        if custom:
+            return custom
+        # v1.14.144 — انتخابِ سبکِ پرامپت بر اساسِ مود/سرویس/مدل
+        mode = resolve_prompt_mode(
+            getattr(self, "prompt_mode", "auto"),
+            getattr(self, "provider", "gemini"),
+            getattr(self, "model_name", ""),
+        )
+        return PROMPT_PRESETS[mode]
 
 
     @staticmethod
@@ -30081,6 +30146,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--instruction", default=None,
                    help="فایل متنی دستور مترجم (System Instruction) — محتوای این فایل جایگزین "
                         "کامل متن دستور داخل کد می‌شود")
+    p.add_argument("--prompt-mode", default=None,
+                   choices=["auto", "professional", "lite", "classic"],
+                   help="سبکِ پرامپت وقتی --instruction داده نشده: auto (پیشفرض؛ بر اساسِ "
+                        "سرویس/مدل: غیرِ Gemini و مدلهایِ Lite → سبک، بقیه → حرفهای)، "
+                        "professional (حرفهای انگلیسی)، lite (سبک انگلیسی)، classic (دستورِ فارسیِ قدیمی)")
     p.add_argument("--temperature", type=float, default=0.6)
     p.add_argument(
         "--debug",
@@ -30219,6 +30289,7 @@ def main():
             open(args.instruction, encoding="utf-8").read()
             if getattr(args, "instruction", None) and os.path.isfile(args.instruction) else None
         ),
+        prompt_mode=getattr(args, "prompt_mode", None),
     )
     out_dir = os.path.dirname(os.path.abspath(output_path)) or "."
     translator.set_glossary_output_dir(out_dir)
