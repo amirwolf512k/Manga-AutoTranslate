@@ -220,6 +220,8 @@ def instruction_for_config(text: str) -> str:
     t = (text or "").strip()
     return t if is_custom_instruction(t) else ""
 
+PROMPT_MODE_DEFAULT = "auto"  # v1.14.146 — پیشفرضِ مشترکِ وب و فرمِ گوشی
+
 PROMPT_MODE_LABELS = {
     "auto": "خودکار (بر اساس سرویس و مدل)",
     "professional": "حرفه‌ای — مخصوص Gemini Flash و Pro",
@@ -2250,19 +2252,20 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             gr.Markdown("<div class='hint'><b>🧠 سبک پرامپت مترجم:</b> «auto» خودش بر اساسِ سرویس و مدل انتخاب می‌کند: مدلهایِ Gemini Flash/Pro → پرامپتِ حرفه‌ای؛ مدلهایِ Flash Lite و همهٔ سرویس‌هایِ غیرِ Gemini (ChatGPT/Groq/…) → پرامپتِ سبک. پرامپتِ مؤثر در کادرِ پایین نشان داده می‌شود و <b>همان کادر قابل ویرایش است</b> — اگر متنش را عوض کنید، متنِ شما بر همه مقدم می‌شود (برایِ برگشت به پیش‌فرض، سبک را دوباره انتخاب کنید). قوانینِ JSON و tone همیشه از داخلِ کد اعمال می‌شوند.</div>")
             # v1.14.145: چهار گزینه جمع شد در یک دروپ‌داون (کلیک → گزینه‌ها می‌آید)؛
             # مقادیرِ انگلیسیِ خالص — دقیقاً همان که manga.py میپذیرد (فیکسِ invalid choice).
-            _pm0 = sanitize_prompt_mode(cfg.get("prompt_mode"))
+            # مقدارِ literal «auto» تا استخراجِ فرمِ گوشی (APK قدیمی) هم پیشفرض را ببیند — v1.14.146
             prompt_mode = gr.Dropdown(
                 choices=["auto", "professional", "lite", "classic"],
-                value=_pm0,
+                value=PROMPT_MODE_DEFAULT,
                 label="سبک پرامپت ترجمه", scale=1)
             # v1.14.145: پرامپتِ دستیِ جدا حذف شد — خودِ پرامپتِ اصلی قابلِ ویرایش است.
             _pp_head0, _pp_body0 = resolve_prompt_preview(
-                _pm0, cfg.get("provider"), cfg.get("model"),
+                PROMPT_MODE_DEFAULT, cfg.get("provider"), cfg.get("model"),
                 str(cfg.get("instruction_text") or ""))
             prompt_preview_head = gr.Markdown(_pp_head0)
             prompt_preview_body = gr.Textbox(
                 label="پرامپت مترجم (همین به مدل فرستاده می‌شود — قابل ویرایش)",
                 lines=10, max_lines=25, interactive=True,
+                placeholder="خالی = پرامپتِ خودکارِ بر اساسِ سبک و مدل…",
                 value=_pp_body0)
             story_brief = gr.Checkbox(
                 label="بریف داستان قبل از ترجمه (AI یک‌بار فصل را می‌خواند تا لحن شخصیت‌ها حفظ شود)",

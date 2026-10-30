@@ -237,19 +237,37 @@ def _slot_fields(mf):
 
 
 def _defaults(mf):
+    # v1.14.146 — متنِ پرامپتِ خودکار (برایِ پیش‌فرضِ کادرِ پرامپتِ گوشی)
+    _auto_prompt = ""
     try:
-        dflt_instr = _manga().DEFAULT_SYSTEM_INSTRUCTION_STYLE.strip()
+        _mg = _manga()
+        _cfgp = str(manga_app.load_config().get("provider") or "gemini")
+        _cfgm = str(manga_app.load_config().get("model") or "")
+        _auto_prompt = str(_mg.prompt_preset_text("auto", _cfgp, _cfgm) or "")
     except Exception:
-        dflt_instr = ""
+        try:
+            _auto_prompt = str(_manga().PROMPT_PRESETS["professional"] or "")
+        except Exception:
+            _auto_prompt = ""
     for sec in mf.get("sections", []):
         for f in sec.get("fields", []):
             if not isinstance(f, dict):
                 continue
             if f.get("id") == "instruction_text":
+                # v1.14.146: دیگر متنِ کلاسیک پیشفرض نمینشیند — خالی = خودکار
+                # (پُرکردنِ قبلی باعثِ «رویِ گوشی پرامپت auto نمیشود» بود)
+                f["default"] = ""
+            elif f.get("id") == "prompt_mode":
                 cur = f.get("default")
                 cur = cur.get("default") if isinstance(cur, dict) else cur
-                if not (isinstance(cur, str) and cur.strip()):
-                    f["default"] = dflt_instr or "خالی = متن پیش‌فرض داخل کد"
+                if not (isinstance(cur, str) and cur.strip()
+                        in ("auto", "professional", "lite", "classic")):
+                    f["default"] = "auto"
+            elif f.get("id") in ("prompt_preview_body", "prompt_body"):
+                cur = f.get("default")
+                cur = cur.get("default") if isinstance(cur, dict) else cur
+                if not (isinstance(cur, str) and cur.strip()) and _auto_prompt:
+                    f["default"] = _auto_prompt
             elif f.get("id") == "readord":
                 cur = f.get("default")
                 if isinstance(cur, dict):
@@ -440,6 +458,29 @@ def _out_stem_from_src(src: str) -> str:
         stem = ""
     stem = re.sub(r'[\\/:*?"<>|]+', "_", stem).strip(" ._")
     return stem[:80]
+
+
+def _prompt_params(p):
+    """(prompt_mode, instruction) از پارامترهایِ جابِ گوشی — v1.14.146.
+    prompt_mode: گزینهٔ دروپ‌داونِ سبکِ پرامپت در گوشی.
+    instruction: متنِ کادرِ پرامپتِ گوشی — اگر برابرِ پیشفرضهایِ شناختهشده
+    باشد سفارشی حساب نمیشود (خودِ MangaTranslator هم نرمالایز میکند)."""
+    _pm = str(p.get("prompt_mode") or "").strip().lower()
+    if _pm not in ("auto", "professional", "lite", "classic"):
+        _pm = "auto"
+    _body = ""
+    for _k in ("prompt_body", "prompt_preview_body", "instruction", "instruction_text"):
+        _v = str(p.get(_k) or "").strip()
+        if _v and not _body:
+            _body = _v
+    try:
+        _mg = _manga()
+        if _body and _mg.is_known_default_instruction(_body):
+            _body = ""
+    except Exception:
+        pass
+    return _pm, (_body or None)
+
 
 
 def start_job(params_json, files_dir):
@@ -824,6 +865,7 @@ def _run(job):
                     except Exception:
                         mf = {}
                 font_by_style, active = _resolve_tones(job, mf)
+                _pmode, _instr = _prompt_params(p)
                 tr = _manga().MangaTranslator(
                     api_key=keys or ["placeholder"],
                     provider=str(p.get("provider") or "gemini"),
@@ -851,8 +893,8 @@ def _run(job):
                     img_format=_resolve_img_format(p),
                     style_fonts=bool(active),
                     active_tones=active or None,
-                    instruction_text=(str(p["instruction"]).strip() or None)
-                    if p.get("instruction") else None,
+                    instruction_text=_instr,
+                    prompt_mode=_pmode,
                 )
 
                 if (getattr(manga, "_on_android", lambda: False)()

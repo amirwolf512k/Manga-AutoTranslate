@@ -146,6 +146,31 @@ def resolve_prompt_mode(mode: str, provider: str = "gemini", model: str = "") ->
 def prompt_preset_text(mode: str, provider: str = "gemini", model: str = "") -> str:
     return PROMPT_PRESETS[resolve_prompt_mode(mode, provider, model)]
 
+
+def _norm_prompt_text(t: str) -> str:
+    return re.sub(r"\s+", " ", (t or "").strip())
+
+
+def is_known_default_instruction(text: str) -> bool:
+    """آیا متنِ دستورِ دادهشده یکی از پیشفرضهایِ شناختهشده است؟
+    (دستورِ کلاسیکِ فارسی + پرامپتهایِ سبکیِ انگلیسیِ v1.14.144)
+    v1.14.146 — فیکسِ «رویِ گوشی پرامپت auto نمیشود»: فرمِ گوشی فیلدِ
+    دستور را با متنِ پیشفرض پُر میفرستاد و موتور آن را «سفارشی» میگرفت؛
+    حالا متنِ برابرِ پیشفرضها سفارشی حساب نمیشود و مسیرِ سبک (auto) میرود."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    tn = _norm_prompt_text(t)
+    cands = [DEFAULT_SYSTEM_INSTRUCTION_STYLE, DEFAULT_SYSTEM_INSTRUCTION]
+    try:
+        cands += [v for v in PROMPT_PRESETS.values() if isinstance(v, str)]
+    except Exception:
+        pass
+    for c in cands:
+        if c and _norm_prompt_text(c) == tn:
+            return True
+    return False
+
 import os
 import sys
 import subprocess
@@ -4802,7 +4827,12 @@ class MangaTranslator:
             os.environ.get("MANGA_CLEAN_SFX", "0").strip() == "1")
         self.style_fonts = bool(style_fonts)
         self.active_tones = (set(active_tones) if active_tones else None)
-        self.custom_instruction = (instruction_text or "").strip() or ""
+        # v1.14.146 — متنِ برابرِ پیشفرضهایِ شناختهشده «سفارشی» نیست
+        # (فیکسِ گوشی: فیلدِ پُرشده با متنِ کلاسیک باعثِ غیرِ auto شدن میشد)
+        _raw_instr = (instruction_text or "").strip() or ""
+        if _raw_instr and is_known_default_instruction(_raw_instr):
+            _raw_instr = ""
+        self.custom_instruction = _raw_instr
         # v1.14.144 — سبکِ پرامپت: auto بر اساسِ سرویس/مدل انتخاب میکند
         _pm = ((prompt_mode if prompt_mode is not None
                 else os.environ.get("MANGA_PROMPT_MODE", "")) or "auto").lower().strip()

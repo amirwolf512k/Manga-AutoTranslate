@@ -1620,6 +1620,9 @@ class MainActivity : AppCompatActivity() {
         map.put("readord", firstNonEmpty(o, "readord") ?: "rtl")
         map.put("glossary", firstNonEmpty(o, "glossary_text", "glossary") ?: "")
         map.put("instruction", firstNonEmpty(o, "instruction_text", "instruction") ?: "")
+        // v1.14.146 — سبکِ پرامپت (auto/professional/lite/classic) + متنِ کادرِ پرامپتِ قابلِ ویرایش
+        map.put("prompt_mode", firstNonEmpty(o, "prompt_mode") ?: "auto")
+        map.put("prompt_body", firstNonEmpty(o, "prompt_preview_body", "prompt_body") ?: "")
         map.put("story_brief", optBoolD(o, true, "story_brief"))
 
         for (k in listOf("workers", "bubbles", "batchw", "timeout", "maxre", "reqdelay", "temp")) {
