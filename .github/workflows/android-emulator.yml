@@ -282,7 +282,10 @@ jobs:
           B2="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/ci_imgs"
           mkdir -p /tmp/mt/ext
           # file → ocr_lang (زبانِ واقعیِ هر صفحه؛ «_» در زبان = فاصله)
-          EXT_SET="up0929_zh.jpg:zh_en up0904_en.jpg:en up0822_en.jpg:en lang_ja_bw.jpg:ja_en lang_ja_color.jpg:ja_en lang_ko.jpg:ko_en lang_zh.jpg:zh_en"
+          # img4.jpg = صفحهٔ قانونیِ 690×11200 (همان خانوادهٔ صفحهٔ _9 کاربر از
+          # imgsrv5 1dx2/chapter-264/9) — درخواستِ کاربر: «تستِ اندرویدِ واقعیِ
+          # arm64 رویِ همان صفحهای که خراب درمیآید»
+          EXT_SET="img4.jpg:en up0929_zh.jpg:zh_en up0904_en.jpg:en up0822_en.jpg:en lang_ja_bw.jpg:ja_en lang_ja_color.jpg:ja_en lang_ko.jpg:ko_en lang_zh.jpg:zh_en"
           for tok in $EXT_SET; do
             F="${tok%%:*}"; L="${tok#*:}"; L="${L//_/ }"
             curl -fsSL --retry 2 --max-time 120 -o "/tmp/mt/ext/$F" "$B1/$F" \

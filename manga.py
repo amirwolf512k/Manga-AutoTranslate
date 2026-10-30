@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.139"
+APP_VER = "1.14.140"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -11219,6 +11219,48 @@ class MangaTranslator:
                                 _rescued133 = False
                         if not _rescued133:
                             return
+        except Exception:
+            pass
+        # v1.14.140 — اندروید (MANGA_DARKSMOKE): QCِ «حلقهٔ تیره». بلوکِ
+        # بالایی فقط حلقهٔ روشن (≥۵۵٪ پیکسل ≥160) را بازرسی میکند؛ رویِ
+        # کتِ تیرهٔ (#20) صفحهٔ 700×11362 حلقه تیره است → LaMaِ
+        # xnnpack در داوناسکیلِ پچِ 512 «دودِ خاکستری» رویِ کت میسازد و
+        # بدونِ هیچ بازرسی به خروجی میرود (لاگِ گوشیِ v1.14.139: متنِ
+        # (17,9661) پاک شد ولی هَزِ خاکستری رویِ کت ماند = «لگه»).
+        # درمان: حلقهٔ عمدتاً تیره (median<140) + انرژیِ فرکانس-بالایِ
+        # پرِ LaMa ≫ حلقهٔ خودش (hf_in > 2.2×hf_ring+4 — همان فرمولِ
+        # NOISEQC ولی رویِ خروجیِ گروه) → خروجیِ LaMa دود است؛ اگر
+        # حلقه یکدست باشد (std≤34 — کتِ سرمه‌ایِ صاف) کلِ ماسک با
+        # میانهٔ رنگِ حلقه از «عکسِ اورجینال» پر میشود. حلقهٔ
+        # بافت‌مند (std بالا) دستنخورده میماند. PC بیت‌به‌بیت.
+        try:
+            if _android_gate("MANGA_DARKSMOKE") and _fm.any() \
+                    and _ring.any():
+                _g140 = cv2.cvtColor(sub_bgr, cv2.COLOR_BGR2GRAY)
+                _rmed140 = float(np.median(_g140[_ring]))
+                if _rmed140 < 140.0:
+                    _med140 = cv2.medianBlur(_g140, 31)
+                    _hf140 = np.abs(
+                        _g140.astype(np.int16)
+                        - _med140.astype(np.int16))
+                    _hf_in = float(np.median(_hf140[_fm]))
+                    _hf_rg = float(np.median(_hf140[_ring]))
+                    if _hf_in > 2.2 * _hf_rg + 4.0 and _hf_in > 6.0:
+                        _sd140 = float(np.std(_g140[_ring]))
+                        if _sd140 <= 34.0:
+                            _col140 = np.median(
+                                sub_img[_ring].astype(np.float32),
+                                axis=0)
+                            sub_bgr = sub_bgr.copy()
+                            sub_bgr[_fm] = np.clip(
+                                np.rint(_col140), 0,
+                                255).astype(np.uint8)
+                            print(f"    [✓] ضدِ دودِ زمینهٔ تیره: "
+                                  f"hf={_hf_in:.1f} vs "
+                                  f"حلقه={_hf_rg:.1f} → پرِ تختِ "
+                                  f"حلقه rgb="
+                                  f"{_col140.round(0).tolist()}",
+                                  flush=True)
         except Exception:
             pass
         # v1.14.49 — اعتبارسنجیِ ضدتوهمِ هر عضو: LaMa-Manga وقتی حفرهٔ بزرگ
@@ -26644,6 +26686,26 @@ class MangaTranslator:
             # فقط-پاکسازی فقط دیالوگ (+junk: شمارهٔ صفحه) پاک می‌شود؛
             # بنرِ تبلیغ و افکتِ صوتی دست‌نخورده می‌مانند.
             clean_targets = [r for r in regions if r.kind in ("dialogue", "junk")]
+            # v1.14.140 — اندروید (MANGA_CLEAN_TEXTFREE): ناحیههایِ
+            # text_free در clean-only پاک نمیشدند (فیلترِ v1.14.78 فقط
+            # dialogue/junk) — ولی text_free = متنِ واقعیِ OCRشده
+            # (بنرِ تبلیغ جداگانه kind=promo میگیرد از جارویِ بنر) —
+            # لاگِ گوشیِ v1.14.139: ناحیهٔ نجاتخوردهٔ «PARAGRAPH 3
+            # WHEN THE EXERCISE…» (15,3256) بعد از ادغام با ناحیهٔ
+            # جارو kind=text_free گرفت → از پاکسازی رد شد = کلِ متن
+            # دستنخورده ماند؛ «THIS IS ONLY A DRAFT…» (0,10605) هم
+            # همیشه از v1.14.134 تاکنون پاک نشده بود. PC بیت‌به‌بیت.
+            if _android_gate("MANGA_CLEAN_TEXTFREE"):
+                _tf140 = [r for r in regions if r.kind == "text_free"]
+                if _tf140:
+                    clean_targets = clean_targets + _tf140
+                    if self.debug:
+                        try:
+                            print(f"  [*]text_free: +{len(_tf140)} "
+                                  f"ناحیه به پاکسازی اضافه شد "
+                                  f"(متنِ واقعی — نه تبلیغ)", flush=True)
+                        except Exception:
+                            pass
             if self.debug and regions:
                 page_debug = self._draw_debug_regions(image, regions)
                 try:
@@ -26684,6 +26746,15 @@ class MangaTranslator:
         # (ترجمه نمی‌شوند؛ فقط حذف)
         if getattr(self, "clean_sfx", False) and sfx_regions:
             _clean_regions = _clean_regions + sfx_regions
+        # v1.14.140 — اندروید (همان MANGA_CLEAN_TEXTFREEِ مسیرِ
+        # clean-only): در حالتِ ترجمه‌دار هم ناحیههایِ text_free فقط
+        # «پاک» میشوند (ترجمه نمیشوند — متنِ اصلی حذف میماند) وگرنه
+        # «PARAGRAPH 3…» و «THIS IS ONLY A DRAFT…» در خروجیِ ترجمهشده
+        # هم زنده میمانند. PC بیت‌به‌بیت.
+        if _android_gate("MANGA_CLEAN_TEXTFREE"):
+            _tf140t = [r for r in regions if r.kind == "text_free"]
+            if _tf140t:
+                _clean_regions = _clean_regions + _tf140t
         missing_n = sum(1 for r in dialogue_regions
                         if not r.translated_text
                         and not getattr(r, "ocr_empty", False))
