@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.138"
+APP_VER = "1.14.139"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -13325,6 +13325,159 @@ class MangaTranslator:
             self._compose_final_cmp = _cmp.copy()
             _out = np.ascontiguousarray(
                 np.where(_cmp[..., None], donor, original))
+            # v1.14.139 — ضدِ «باندِ سفید» در کامپوز (فقط اندروید —
+            # MANGA_STRIP_HARM): donorِ LaMa رویِ زمینهٔ گرادیانی/کرم
+            # گاهی «روشنتر/سفیدتر» از زمینهٔ اطراف برمیگردد و کامپوزِ
+            # فقط-نوار همان پیکسلهایِ سفید را میبرد (لاگِ گوشیِ
+            # v1.14.138 — نوارهایِ سفیدِ #19/#20 رویِ دیوارِ کرمِ
+            # 700×11362 = «لگه»).
+            # v1.14.139b — همسازِ «خط‌به‌خط» (بازنویسیِ همسازِ ردیفی):
+            # نوارهایِ خطِ چسبیده در بلوکِ متراکم در باندِ ردیفیِ مشترک
+            # ادغام میشوند و لنگرِ قائمِ آزاد پیدا نمیکنند → حالا برای
+            # هر «خطِ» هر ناحیه (همان گروه‌بندیِ خطِ نوارهایِ کامپوز)
+            # هدفِ هر ردیف = میانهٔ پیکسلهایِ «آزادِ همان ردیف» (شکافِ
+            # بینِ کلمات + حاشیهٔ خط) از عکسِ اورجینال گرفته میشود —
+            # لنگرِ افقی، مستقل ازِ گپِ بینِ خطها؛ گرادیانِ قائم هم
+            # چون هر ردیف هدفِ خودش را دارد حفظ میشود. گاردها: باندِ
+            # غیرتخت (std>15) / ردیفِ بدونِ نمونهٔ آزاد / هدفِ ناهوار
+            # (هنر) / دلتایِ ناچیز (<15) یا افراطی (>60) → دست نخوردن.
+            if _android_gate("MANGA_STRIP_HARM"):
+                try:
+                    _hH139, _wH139 = _cmp.shape
+                    _org32H = original.astype(np.float32)
+                    _out32H = _out.astype(np.float32)
+                    _nfixH = 0
+                    for _rgH in (getattr(self, "_page_regions",
+                                         None) or []):
+                        _plH = getattr(_rgH, "ocr_polys", None) or []
+                        if not _plH:
+                            continue
+                        try:
+                            _lnsH = MangaTranslator._group_polys_to_lines(
+                                list(_plH))
+                        except Exception:
+                            continue
+                        for (lx0, ly0, lx1, ly1) in (_lnsH or []):
+                            _yA = max(0, int(ly0) - 1)
+                            _yZ = min(_hH139, int(ly1) + 2)
+                            # ±۱۸px بیرونِ باکسِ خط = نمونهٔ زمینهٔ
+                            # اطرافِ خط (گپِ کلمه + حاشیهٔ دو سر) —
+                            # پالیِ ML Kit تاِ لبهٔ متن است و بدونِ
+                            # این بسط، ستونِ آزادِ کافی وجود ندارد
+                            _xA = max(0, int(lx0) - 18)
+                            _xZ = min(_wH139, int(lx1) + 19)
+                            _bh = _yZ - _yA
+                            if _bh < 12 or _bh > 220 or \
+                                    _xZ - _xA < 40:
+                                continue
+                            _mB = _cmp[_yA:_yZ, _xA:_xZ]
+                            if int(_mB.sum()) < 400:
+                                continue
+                            _sub = _out32H[_yA:_yZ, _xA:_xZ]
+                            _orgB = _org32H[_yA:_yZ, _xA:_xZ]
+                            _mBc = _mB
+                            _src = _sub[_mBc]
+                            if _src.size < 400 or \
+                                    float(_src.std()) > 15.0:
+                                continue
+                            _medS = np.median(
+                                _src.reshape(-1, 3), axis=0)
+                            # هدفِ هر ردیف از ستونهایِ آزادِ همان ردیف —
+                            # «آزاد» بر اساسِ ماسکِ بدونِ دیلیت است (گپِ
+                            # ۸-۱۴px کلمهها بعد از دیلیتِ 4px بسته
+                            # میشود)؛ نمونهها = شکافِ بینِ کلمات +
+                            # ردیفهایِ بالایِ سریف/پایینِ دم — همه
+                            # زمینهٔ اورجینال
+                            _mrawH = mask[_yA:_yZ, _xA:_xZ] > 0
+                            _tgt = np.zeros((_bh, 3), np.float32)
+                            _have = np.zeros(_bh, bool)
+                            for _ri in range(_bh):
+                                _free = ~_mrawH[_ri]
+                                _nf = int(_free.sum())
+                                if _nf < 12:
+                                    continue
+                                _tgt[_ri] = np.median(
+                                    _orgB[_ri][_free], axis=0)
+                                _have[_ri] = True
+                            if int(_have.sum()) < max(
+                                    4, int(0.3 * _bh)):
+                                continue
+                            # پرکردنِ ردیفهایِ نمونه‌نداشته + اسموث
+                            _idxH = np.nonzero(_have)[0]
+                            for _ri in range(_bh):
+                                if _have[_ri]:
+                                    continue
+                                _j = int(np.searchsorted(
+                                    _idxH, _ri))
+                                if _j == 0:
+                                    _tgt[_ri] = _tgt[_idxH[0]]
+                                elif _j >= _idxH.size:
+                                    _tgt[_ri] = _tgt[_idxH[-1]]
+                                else:
+                                    _ya2, _yb2 = int(_idxH[_j - 1]), \
+                                        int(_idxH[_j])
+                                    _t2 = float(_ri - _ya2) / \
+                                        float(_yb2 - _ya2)
+                                    _tgt[_ri] = _tgt[_ya2] * \
+                                        (1.0 - _t2) + _tgt[_yb2] * _t2
+                            if _bh >= 5:
+                                _kH = np.ones(5, np.float32) / 5.0
+                                for _c2 in range(3):
+                                    _tgt[:, _c2] = np.convolve(
+                                        _tgt[:, _c2], _kH,
+                                        mode='same')
+                            if float(_tgt.std()) > 24.0:
+                                continue  # هدفِ ناهوار = هنر
+                            # سازگاریِ قائم: هدفِ افقی باید با زمینهٔ
+                            # قائمِ همان ستونها همخوان باشد — وگرنه
+                            # خط رویِ مرزِ هنر است (نوارِ تیرهٔ
+                            # بالا/پایین) و لنگرِ افقی به آن اعمال
+                            # نمیشود. میانه در برابرِ گلیفِ خطِ
+                            # مجاورِ ناخوانده مقاوم است.
+                            _vtA = max(0, _yA - 9)
+                            _vtB = max(0, _yA - 3)
+                            _vbA = min(_hH139, _yZ + 4)
+                            _vbB = min(_hH139, _yZ + 10)
+                            _vok = []
+                            if _vtB > _vtA:
+                                _vok.append(np.median(
+                                    _org32H[_vtA:_vtB, _xA:_xZ]
+                                    .reshape(-1, 3), axis=0))
+                            if _vbB > _vbA:
+                                _vok.append(np.median(
+                                    _org32H[_vbA:_vbB, _xA:_xZ]
+                                    .reshape(-1, 3), axis=0))
+                            if not _vok:
+                                continue
+                            _vmid = np.median(
+                                np.stack(_vok, axis=0), axis=0)
+                            if float(np.abs(
+                                    np.median(_tgt, axis=0) -
+                                    _vmid).max()) > 30.0:
+                                continue
+                            _dlt = float(np.abs(
+                                _medS - np.median(
+                                    _tgt, axis=0)).max())
+                            if _dlt < 15.0 or _dlt > 60.0:
+                                continue
+                            _dRow = np.clip(
+                                _tgt[:, None, :] - _medS[None, None],
+                                -34.0, 34.0)
+                            _wgt = cv2.GaussianBlur(
+                                (_mBc.astype(np.uint8)) * 255,
+                                (0, 0), 2.0).astype(
+                                    np.float32) / 255.0
+                            _sub += _dRow * _wgt[..., None]
+                            _out32H[_yA:_yZ, _xA:_xZ] = _sub
+                            _nfixH += 1
+                    if _nfixH:
+                        _out = np.clip(
+                            _out32H, 0, 255).astype(np.uint8)
+                        if verbose:
+                            print(f"  [✓]همسازِ نوار: {_nfixH} "
+                                  f"خطِ ناهمرنگ اصلاح شد")
+                except Exception:
+                    pass
             try:
                 if verbose:
                     print(f"  [*] دو-عکسی: خروجی = عکسِ اصلی + "
@@ -17604,6 +17757,88 @@ class MangaTranslator:
             n_fix += 1
         return n_fix
 
+    # v1.14.139 — «نقصِ خط» (فقط اندروید، زیرِ MANGA_SWEEP_RESCUE /
+    # MANGA_SWEEP_COVDEDUP صدا زده میشود): شمارِ باندهایِ ردیفیِ متنیِ
+    # «بیرونِ» باندهایِ ردیفیِ پالیهایِ OCR. ریشه (لاگِ گوشیِ v1.14.138 —
+    # 700×11362): باکسِ #20 (17,9661,662×215) پنج خطِ کامل دارد ولی
+    # ML Kit فقط 2 خط خوانده → 3 خط («AND TO REQUIRE THE STUDENT'S
+    # PARENTS TO VISIT» / «(MANDATORY SUMMONS). IF THE PARENTS REFUSE» /
+    # «PARTICIPATION IN CLASS MAY BE RESTRICTED.») هرگز استخراج و
+    # پاک نشدند = «متنِ قبلی پاک نشده». گیتهایِ پوششِ مساحتیِ قبلی
+    # (نجات <۳۵٪ / dedup ≥۴۵٪) هر دو از این ناحیه رد شدند چون 2 پالیِ
+    # عریض ~۴۵٪ مستطیل را میپوشانند — بینِ دو آستانه گیر کرده بود.
+    # معیارِ ردیفی در برابرِ پوششِ مساحتی مقاوم است: هر «خطِ کاملِ
+    # بدونِ پالی» = یک باندِ ردیفیِ متنی بیرونِ پالیها. کالیبره رویِ
+    # مختصاتِ واقعیِ لاگ: #20 → 2 (آتش) | #03 → 7 (آتش) | #19/#12/#17/
+    # #02/#16/#06 → ≤1 (امن). PC هرگز این متد را صدا نمیزند.
+    @staticmethod
+    def _mlkit_row_deficit(gray: np.ndarray, rect, polys) -> int:
+        try:
+            if gray is None:
+                return 0
+            _rx, _ry, _rw, _rh = [int(v) for v in rect]
+            if _rw < 60 or _rh < 96:  # بلوکِ دستکم ۲-۳ خطه
+                return 0
+            H, W = gray.shape[:2]
+            sub = gray[max(0, _ry):min(H, _ry + _rh),
+                       max(0, _rx):min(W, _rx + _rw)]
+            if sub.shape[0] < 40 or sub.shape[1] < 40:
+                return 0
+            # باندهایِ ردیفیِ پالیها (ادغامِ فقط-متصل — خطهایِ چسبیده
+            # با گپِ ۱-۴px دو خطِ جدا هستند نه یکی)
+            pbands = []
+            for _p in (polys or []):
+                try:
+                    pp = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                except Exception:
+                    continue
+                if pp.shape[0] < 3:
+                    continue
+                pbands.append((float(pp[:, 1].min()),
+                               float(pp[:, 1].max())))
+            pbands.sort()
+            merged = []
+            for (a, b) in pbands:
+                if merged and a <= merged[-1][1]:
+                    merged[-1][1] = max(merged[-1][1], b)
+                else:
+                    merged.append([a, b])
+            npl = len(merged)
+            if npl == 0 or npl > 6:  # ناحیهٔ متراکمِ درستخوان — دست نخور
+                return 0
+            oy = max(0, _ry)
+            mr = np.median(sub, axis=1)
+            dk = sub.astype(np.int16) < \
+                (mr[:, None].astype(np.int16) - 45)
+            fr = dk.mean(axis=1).astype(np.float32)
+            sm = np.convolve(fr, np.ones(7, np.float32) / 7.0,
+                             mode='same')
+            trows = sm >= 0.14
+            prow = np.zeros(sub.shape[0], dtype=bool)
+            for (a, b) in merged:
+                a0 = max(0, int(a) - oy - 3)
+                b0 = min(sub.shape[0], int(b) - oy + 4)
+                if b0 > a0:
+                    prow[a0:b0] = True
+            out_rows = trows & ~prow
+            ids = np.nonzero(out_rows)[0]
+            if ids.size < 8:
+                return 0
+            obands, s, pv = [], int(ids[0]), int(ids[0])
+            for yy in ids[1:]:
+                if int(yy) - pv > 3:
+                    obands.append((s, pv))
+                    s = int(yy)
+                pv = int(yy)
+            obands.append((s, pv))
+            obands = [(a, b) for (a, b) in obands
+                      if 8 <= (b - a) <= 130]
+            if int(dk[out_rows].sum()) < 200:
+                return 0
+            return len(obands)
+        except Exception:
+            return 0
+
     # v1.14.105 — وارسیِ پس از پاکسازی + ترمیمِ پلکانی (ضدِ خروجیِ بدِ EP)
     # زمینه: رویِ برخی اجراکننده‌ها (CUDA/DML رویِ ویندوز) خروجیِ LaMa ناقص
     # یا کثیف برمی‌گردد در حالی که همان ورودی رویِ CPU تمیز پاک می‌شود —
@@ -18235,8 +18470,18 @@ class MangaTranslator:
                     fill, 0, 255).astype(np.uint8)[mfill]
                 return res
 
+            # v1.14.139 — دامنهٔ پرِ ردیفی جوهرِ ضعیفِ تأییدشده را هم
+            # میگیرد: لاگِ گوشیِ v1.14.138 — crop@(573,3189) با
+            # ink=0.16/حلقه=0.03/neutr=31 توسطِ خودِ وارسی «جوهر» پرچم
+            # شد (دود=1.00) ولی گیتِ قدیمیِ ink≥0.22 فالبکِ نهایی را
+            # قفل کرد → «ترمیمِ کامل نشد — خروجیِ فعلی ماند» = تکهٔ
+            # حرف رویِ تصویر. شرطِ تازه: جوهرِ ≥۰٫۱۰ وقتی حلقه پاک
+            # است (ink_r≤0.10) و حلقه گسترهٔ صدکیِ معقول دارد (rs≤30
+            # — ضدِ زمینهٔ بافت‌مند/هنری). PC بیت‌به‌بیت.
             if _android_gate("MANGA_VERIFY_ROWFILL") and bad_ink and \
-                    ink_m >= 0.22 and neutr <= 40.0:
+                    neutr <= 40.0 and \
+                    (ink_m >= 0.22 or (ink_m >= 0.10 and
+                                       ink_r <= 0.10 and rs <= 30.0)):
                 try:
                     _rf = _row_fill_res()
                     if _rf is not None:
@@ -25676,7 +25921,37 @@ class MangaTranslator:
                                         continue
                                     _cf138 = float((_rc138 > 0).mean())
                                     if _cf138 >= 0.35:
-                                        continue
+                                        # v1.14.139 — رهاسازیِ «نقصِ خط»:
+                                        # پوششِ مساحتیِ بالای ۳۵٪ دیگر
+                                        # بهتنهایی «درستخوان» نیست؛ اگر
+                                        # ≥2 خطِ کامل بیرونِ پالیها
+                                        # هست (لاگِ گوشی: #20 با 2 پالی
+                                        # از 5 خط — پوششِ ~۴۵٪ که نه
+                                        # نجاتِ <۳۵٪ میگرفت نه dedupِ
+                                        # ≥۴۵٪ رها میکرد)، ناحیه
+                                        # بدخوان است و نجات میگیرد.
+                                        # گاردِ زاویه: متنِ چرخیده
+                                        # (زاویه > ۸°) پروفایلِ ردیفی
+                                        # معنادار ندارد → مثلِ قبل.
+                                        _rd139 = 0
+                                        if abs(float(
+                                                getattr(_r138, "angle",
+                                                        0.0) or 0.0)) \
+                                                <= 8.0:
+                                            try:
+                                                _rd139 = \
+                                                    MangaTranslator._mlkit_row_deficit(
+                                                        _g135,
+                                                        (_rx138, _ry138,
+                                                         _rw138, _rh138),
+                                                        getattr(
+                                                            _r138,
+                                                            "ocr_polys",
+                                                            None) or [])
+                                            except Exception:
+                                                _rd139 = 0
+                                        if _rd139 < 2:
+                                            continue
                                     _ov138 = _ix138 * _iy138
                                     if _best138 is None or \
                                             _ov138 > _best138[0]:
@@ -25834,6 +26109,35 @@ class MangaTranslator:
                                             _cf136 = 1.0
                                         if _cf136 < 0.45:
                                             continue
+                                        # v1.14.139 — dedupِ نقصدار:
+                                        # پوششِ ≥۴۵٪ هم دیگر تضمینِ
+                                        # درستخوانی نیست (همان #20:
+                                        # ~۴۵٪ پوشش با 2 خط از 5)؛
+                                        # اگر ≥2 خطِ کامل بیرونِ
+                                        # پالیها هست، باندِ داخلِ
+                                        # ناحیه = خطِ واقعیِ جامانده →
+                                        # «تکراری» حساب نمیشود و خط
+                                        # نجات پیدا میکند. زاویهٔ
+                                        # چرخیده مثلِ قبل رد میشود.
+                                        if abs(float(getattr(
+                                                _r136, "angle",
+                                                0.0) or 0.0)) <= 8.0:
+                                            try:
+                                                if MangaTranslator. \
+                                                        _mlkit_row_deficit(
+                                                            _g135,
+                                                            (_ox136,
+                                                             _oy136,
+                                                             _ow136,
+                                                             _oh136),
+                                                            getattr(
+                                                                _r136,
+                                                                "ocr_polys",
+                                                                None)
+                                                            or []) >= 2:
+                                                    continue
+                                            except Exception:
+                                                pass
                                     _dup136 = True
                                     break
                                 if _dup136:
