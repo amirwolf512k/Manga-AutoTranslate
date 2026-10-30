@@ -238,17 +238,29 @@ def _slot_fields(mf):
 
 def _defaults(mf):
     # v1.14.146 — متنِ پرامپتِ خودکار (برایِ پیش‌فرضِ کادرِ پرامپتِ گوشی)
+    # v1.14.147 — نقشهٔ value_if: با تغییرِ دروپ‌داونِ سبک، متنِ کادرِ پرامپت
+    # زنده عوض میشود (فیکسِ «سبک را میگذارم lite ولی پرامپت عوض نمیشود»).
     _auto_prompt = ""
+    _preset_map = {}
     try:
         _mg = _manga()
         _cfgp = str(manga_app.load_config().get("provider") or "gemini")
         _cfgm = str(manga_app.load_config().get("model") or "")
         _auto_prompt = str(_mg.prompt_preset_text("auto", _cfgp, _cfgm) or "")
+        _preset_map = {
+            "auto": _auto_prompt,
+            "professional": str(_mg.PROMPT_PRESETS.get("professional") or ""),
+            "lite": str(_mg.PROMPT_PRESETS.get("lite") or ""),
+            "classic": str(_mg.PROMPT_PRESETS.get("classic") or ""),
+        }
     except Exception:
         try:
-            _auto_prompt = str(_manga().PROMPT_PRESETS["professional"] or "")
+            _mg = _manga()
+            _auto_prompt = str(_mg.PROMPT_PRESETS["professional"] or "")
+            _preset_map = {"auto": _auto_prompt}
         except Exception:
             _auto_prompt = ""
+            _preset_map = {}
     for sec in mf.get("sections", []):
         for f in sec.get("fields", []):
             if not isinstance(f, dict):
@@ -268,6 +280,10 @@ def _defaults(mf):
                 cur = cur.get("default") if isinstance(cur, dict) else cur
                 if not (isinstance(cur, str) and cur.strip()) and _auto_prompt:
                     f["default"] = _auto_prompt
+                if _preset_map:
+                    # v1.14.147 — MainActivity با تغییرِ prompt_mode متن را
+                    # بر اساسِ این نقشه زنده عوض میکند
+                    f["value_if"] = {"field": "prompt_mode", "values": _preset_map}
             elif f.get("id") == "readord":
                 cur = f.get("default")
                 if isinstance(cur, dict):

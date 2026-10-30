@@ -130,14 +130,21 @@ PROMPT_MODES = ("auto", "professional", "lite", "classic")
 def resolve_prompt_mode(mode: str, provider: str = "gemini", model: str = "") -> str:
     """انتخابِ سبکِ پرامپت: «auto» یعنی بر اساسِ سرویس و مدل.
     هر سرویسی غیر از Gemini (ChatGPT/Groq/DeepSeek/دلخواه) → سبکِ سبک (lite).
-    Gemini + مدلِ Lite → سبکِ سبک؛ بقیهٔ مدلهای Gemini → حرفهای."""
+    Gemini + مدلِ Lite → سبکِ سبک؛ بقیهٔ مدلهای Gemini → حرفهای.
+    v1.14.147: مدلِ خالی = پیشفرضِ گوگلِ (gemini-3.5-flash-lite) → سبکِ سبک —
+    تا پیشنمایشِ وباپ/گوشی با مسیرِ واقعیِ موتور یکی بماند."""
     m = (mode or "auto").lower().strip()
     if m in PROMPT_PRESETS:
         return m
     prov = (provider or "gemini").lower().strip()
-    name = (model or "").lower()
+    name = (model or "").lower().strip()
     if prov != "gemini":
         return "lite"
+    if not name:
+        try:
+            name = str(PROVIDER_PRESETS["gemini"].get("default_model") or "").lower()
+        except Exception:
+            name = "gemini-3.5-flash-lite"
     if "lite" in name:
         return "lite"
     return "professional"
@@ -2115,14 +2122,18 @@ class LamaMangaONNX:
 
     @staticmethod
     def _want_nofft() -> bool:
-        """اندروید: بدونِDFT (پیشفرضِ v1.14.115). PC: رفتارِ قبل (dyn)،
-        مگر MANGA_LAMA_NOFFT=1 (خروجی یکسان است، فقط سریعتر)."""
+        """v1.14.147: پیشفرضِ همهجا «بدونِ DFT» — همان وزنهایِ big-lama با
+        بلوکهایِ Fourier به ماتمولِ کسینوسی/سینوسی؛ وریفایِ عددیِ
+        scripts/lama_equiv.py: cosine=1.0000 MAE=0.002 در برابرِ dyn →
+        خروجی و سبکِ پاکسازی دستنخورده، CPU چند برابر سریعتر (8.2s→2.0s).
+        MANGA_LAMA_NOFFT=0 برایِ برگشتِ دستی به dyn (مثلاً GPU که DFT را
+        ارزان میدهد)."""
         _env = str(os.environ.get("MANGA_LAMA_NOFFT", "") or "").strip()
         if _env == "1":
             return True
         if _env == "0":
             return False
-        return bool(_on_android())
+        return True
 
     def __init__(self, model_path: Optional[str] = None, prefer_gpu: bool = True,
                  threads: int = 4, cache_dir: Optional[str] = None):
@@ -2141,7 +2152,9 @@ class LamaMangaONNX:
                 if threads and int(threads) > 0:
                     use_threads = max(1, min(int(threads), os.cpu_count() or 4))
                 else:
-                    _cap = 1 if _on_android() else 2
+                    # v1.14.147: PC تا ۴ نخ (با nofft چند برابر سریعتر میشود؛
+                    # اندروید مثلِ قبل ۱ — گاردِ رم/بزرگ.لیتلِ خودش را دارد)
+                    _cap = 1 if _on_android() else 4
                     use_threads = max(1, min(_cap, os.cpu_count() or 4))
         else:
             use_threads = max(1, int(threads or 1))
@@ -2354,8 +2367,9 @@ class LamaMangaONNX:
         from pathlib import Path
         cache_root = Path(cache_dir) if cache_dir else Path.home() / ".cache" / "manga_translator_models"
         cache_root.mkdir(parents=True, exist_ok=True)
-        # v1.14.115 — واریانتِ بدونِDFT رویِ اندروید (خروجیِ یکسان، CPUِ ARM
-        # بدونِ opِ DFT چند برابر سریعتر)؛ PC همان dynِ قبل برایِ صفرِ تغییر
+        # v1.14.147 — واریانتِ بدونِDFT همهجا (خروجیِ عددیِ یکسان با dyn —
+        # وریفایِ scripts/lama_equiv.py — و CPU چند برابر سریعتر)؛
+        # MANGA_LAMA_NOFFT=0 رویِ PC برایِ dynِ قدیمی.
         _nofft = cls._want_nofft()
         dst = cache_root / ("lama-manga-nofft.onnx" if _nofft else "lama-manga-dyn.onnx")
         if dst.is_file() and dst.stat().st_size > 1_000_000:
@@ -3842,7 +3856,7 @@ class PaddleOCRWrapper:
 PROVIDER_PRESETS = {
     "gemini": {
         "type": "gemini",
-        "default_model": "gemini-3.8-flash",
+        "default_model": "gemini-3.5-flash-lite",  # v1.14.147 — پیشفرضِ جدید (Flash-Lite)
         "env_key": "GEMINI_API_KEY",
     },
     "gemini-openai": {
@@ -4095,7 +4109,7 @@ def test_api_keys(keys_text: str, provider: str = "gemini",
                         r["error"] = "" if r["ok"] else f"HTTP {resp.status}"
                 elif ftype == "google-endpoint":
                     # POST سبک :generateContent — Google یا پراکسی سازگارش
-                    gmodel = user_model or "gemini-2.0-flash"
+                    gmodel = user_model or "gemini-3.5-flash-lite"
                     post_url = fbase + "/models/" \
                         + urllib.parse.quote(gmodel) + ":generateContent"
                     body = json.dumps({
@@ -4869,7 +4883,7 @@ class MangaTranslator:
         self._daily_dead: Dict[Tuple[str, str], bool] = {}
 
 
-        self.model_name = (model_name or self.provider_cfg.get("default_model") or "gemini-3.8-flash").strip()
+        self.model_name = (model_name or self.provider_cfg.get("default_model") or "gemini-3.5-flash-lite").strip()
         self._model_cascade: List[str] = []
         self._model_index: int = 0
         self._last_good_model: str = ""
@@ -5717,11 +5731,11 @@ class MangaTranslator:
     @staticmethod
     def _static_fallback_models(primary: str) -> List[str]:
         preferred = [
+            "gemini-3.5-flash-lite",  # v1.14.147 — پیشفرضِ جدید
             "gemini-3.8-flash",
             "gemini-3.7-flash",
             "gemini-3.6-flash",
             "gemini-3.5-flash",
-            "gemini-3.5-flash-lite",
             "gemini-3.1-flash-lite",
             "gemini-flash-latest",
             "gemini-flash-lite-latest",
@@ -5890,7 +5904,7 @@ class MangaTranslator:
                 return cascade
 
         print("[*] کشف API ممکن نشد / خالی → fallback محافظه‌کارانه")
-        return self._static_fallback_models(primary or "gemini-3.8-flash")
+        return self._static_fallback_models(primary or "gemini-3.5-flash-lite")
 
     def _drop_current_model_and_switch(self, reason: str = "") -> bool:
 
@@ -5953,7 +5967,7 @@ class MangaTranslator:
                 getattr(self, "_last_good_model", "") or "",
                 client=client,
             )
-            self._model_cascade = rebuilt or self._static_fallback_models("gemini-3.8-flash")
+            self._model_cascade = rebuilt or self._static_fallback_models("gemini-3.5-flash-lite")
         self._model_index = 0
         self.model_name = self._model_cascade[0]
         try:
@@ -19164,7 +19178,7 @@ class MangaTranslator:
                 if not _HAS_GEMINI:
                     return False, "کتابخانه google-genai نصب نیست."
                 client = genai.Client(api_key=key)
-                m = (model or "").strip() or "gemini-3.8-flash"
+                m = (model or "").strip() or "gemini-3.5-flash-lite"
                 resp = client.models.generate_content(
                     model=m, contents="Reply with: OK",
                     config=genai_types.GenerateContentConfig(

@@ -1225,6 +1225,37 @@ class MainActivity : AppCompatActivity() {
                         override fun onTextChanged(p0: CharSequence?, p1: Int, p2: Int, p3: Int) {}
                     })
                 }
+                // v1.14.147 — value_if: با تغییرِ فیلدِ وابسته (سبکِ پرامپت)
+                // متنِ کادر زنده عوض میشود — فیکسِ «پرامپت عوض نمیشه، ثابت شده»
+                // initial=true فقط وقتی متنِ فعلی خالی یا خودش یکی از پریستهاست
+                // (متنِ سفارشیِ کاربر در بازشدنِ فرم له نمیشود)؛ با تغییرِ
+                // واقعیِ دروپ‌داون، پریستِ جدید بیقید و شرط مینشیند (مثلِ وب).
+                f.optJSONObject("value_if")?.let { vi ->
+                    val depId = vi.optString("field")
+                    val vals = vi.optJSONObject("values")
+                    if (depId.isNotBlank() && vals != null && vals.length() > 0) {
+                        fun applyValIf(initial: Boolean) {
+                            val cur = (values[depId] ?: prefs.getString(depId, null))
+                                ?.toString() ?: ""
+                            if (!vals.has(cur)) return
+                            val mapped = vals.optString(cur)
+                            if (mapped.isEmpty()) return
+                            val curText = et.text.toString()
+                            if (curText == mapped) return
+                            if (initial) {
+                                var isPreset = false
+                                for (k in vals.keys()) {
+                                    if (vals.optString(k) == curText) { isPreset = true; break }
+                                }
+                                if (!(curText.isBlank() || isPreset)) return
+                            }
+                            et.setText(mapped)
+                        }
+                        applyValIf(true)
+                        depListeners.getOrPut(depId) { mutableListOf() }
+                            .add { applyValIf(false) }
+                    }
+                }
                 row.addView(et)
                 infoView()?.let { row.addView(it) }
                 fieldViews[id] = et

@@ -254,10 +254,11 @@ def sanitize_prompt_mode(v) -> str:
 
 
 def resolve_prompt_preview(mode_v, provider_v, model_v, instr_v):
-    """(تیترِ وضعیت، متنِ کاملِ پرامپتِ مؤثر) — v1.14.144"""
+    """متنِ کاملِ پرامپتِ مؤثر — v1.14.147: تیترِ «پرامپت فعلی: …» حذف شد
+    (خواستهٔ کاربر)؛ فقط خودِ متنِ پرامپت برمی‌گردد."""
     t = (instr_v or "").strip()
     if t and is_custom_instruction(t):
-        return ("✍️ **پرامپت فعلی: سفارشی** — همین متنِ ویرایششده به مدل فرستاده می‌شود.", t)
+        return t
     m = sanitize_prompt_mode(mode_v)
     prov = (provider_v or "gemini").strip()
     mdl = (model_v or "").strip()
@@ -267,12 +268,7 @@ def resolve_prompt_preview(mode_v, provider_v, model_v, instr_v):
         txt = _PP[resolved]
     except Exception:
         resolved, txt = "classic", default_system_instruction()
-    which = {"professional": "⚡ پرامپت Flash (حرفه‌ای، انگلیسی)",
-             "lite": "🪶 پرامپت Flash Lite (سبک، انگلیسی)",
-             "classic": "📜 دستور فارسی کلاسیک"}.get(resolved, resolved)
-    head = (f"**پرامپت فعلی: {which}** — مود: {PROMPT_MODE_LABELS.get(m, m)} · "
-            f"سرویس: {prov or 'gemini'} · مدل: {mdl or 'پیش‌فرض'}")
-    return head, txt
+    return txt
 
 def ensure_dirs():
     for d in (WORK_DIR, UPLOAD_DIR, OUT_DIR, FONT_DIR):
@@ -2249,19 +2245,18 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 label="واژه‌نامهٔ اسامی و اصطلاحات (هر خط: English=فارسی)",
                 placeholder="Raphdonia=رافدونیا\nBarbarian=باربارین",
                 lines=3, value=str(cfg.get("glossary_text", "") or ""))
-            gr.Markdown("<div class='hint'><b>🧠 سبک پرامپت مترجم:</b> «auto» خودش بر اساسِ سرویس و مدل انتخاب می‌کند: مدلهایِ Gemini Flash/Pro → پرامپتِ حرفه‌ای؛ مدلهایِ Flash Lite و همهٔ سرویس‌هایِ غیرِ Gemini (ChatGPT/Groq/…) → پرامپتِ سبک. پرامپتِ مؤثر در کادرِ پایین نشان داده می‌شود و <b>همان کادر قابل ویرایش است</b> — اگر متنش را عوض کنید، متنِ شما بر همه مقدم می‌شود (برایِ برگشت به پیش‌فرض، سبک را دوباره انتخاب کنید). قوانینِ JSON و tone همیشه از داخلِ کد اعمال می‌شوند.</div>")
             # v1.14.145: چهار گزینه جمع شد در یک دروپ‌داون (کلیک → گزینه‌ها می‌آید)؛
             # مقادیرِ انگلیسیِ خالص — دقیقاً همان که manga.py میپذیرد (فیکسِ invalid choice).
             # مقدارِ literal «auto» تا استخراجِ فرمِ گوشی (APK قدیمی) هم پیشفرض را ببیند — v1.14.146
             prompt_mode = gr.Dropdown(
                 choices=["auto", "professional", "lite", "classic"],
                 value=PROMPT_MODE_DEFAULT,
-                label="سبک پرامپت ترجمه", scale=1)
+                label="سبک پرامپت مترجم", scale=1)
             # v1.14.145: پرامپتِ دستیِ جدا حذف شد — خودِ پرامپتِ اصلی قابلِ ویرایش است.
-            _pp_head0, _pp_body0 = resolve_prompt_preview(
+            # v1.14.147: تیترِ «پرامپت فعلی: ⚡…» هم حذف شد — فقط دروپ‌داون + کادرِ متن.
+            _pp_body0 = resolve_prompt_preview(
                 PROMPT_MODE_DEFAULT, cfg.get("provider"), cfg.get("model"),
                 str(cfg.get("instruction_text") or ""))
-            prompt_preview_head = gr.Markdown(_pp_head0)
             prompt_preview_body = gr.Textbox(
                 label="پرامپت مترجم (همین به مدل فرستاده می‌شود — قابل ویرایش)",
                 lines=10, max_lines=25, interactive=True,
@@ -3458,40 +3453,20 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             pass
 
 
-        def _prompt_body_edited(t):
-            t = (t or "").strip()
-            if not t:
-                return "📄 متن خالی شد — پرامپتِ پیشفرضِ سبکِ انتخابی اعمال میشود."
-            try:
-                if not is_custom_instruction(t):
-                    return ""
-            except Exception:
-                pass
-            return "✍️ **پرامپت فعلی: سفارشی** — همین متنِ ویرایششده به مدل فرستاده میشود."
-
         def _prompt_preview_update(mode_v, prov_v, mdl_v):
+            # v1.14.147: بدونِ تیتر — فقط متنِ کادرِ پرامپت رفرش میشود
             try:
-                head, body = resolve_prompt_preview(mode_v, prov_v, mdl_v, None)
-                return gr.update(value=head), gr.update(value=body)
+                return gr.update(value=resolve_prompt_preview(mode_v, prov_v, mdl_v, None))
             except Exception as e:
-                return gr.update(value=f"خطا در پیش‌نمایش پرامپت: {e}"), gr.update(value="")
+                return gr.update(value=f"خطا در پیش‌نمایش پرامپت: {e}")
         try:
             _pp_inputs = [prompt_mode, provider, model]
             for _pp_comp in (prompt_mode, provider, model):
                 _pp_comp.change(
                     _prompt_preview_update, inputs=_pp_inputs,
-                    outputs=[prompt_preview_head, prompt_preview_body],
+                    outputs=[prompt_preview_body],
                     api_name=f"prompt_preview_{id(_pp_comp)}",
                 )
-        except Exception:
-            pass
-        # v1.14.145: ویرایشِ دستیِ کادرِ پرامپت → تیترِ «سفارشی» (بدونِ بازنویسیِ متن)
-        try:
-            prompt_preview_body.input(
-                _prompt_body_edited,
-                inputs=[prompt_preview_body], outputs=[prompt_preview_head],
-                api_name="prompt_preview_edited",
-            )
         except Exception:
             pass
 
