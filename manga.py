@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.134"
+APP_VER = "1.14.136"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -17813,6 +17813,26 @@ class MangaTranslator:
                 except Exception:
                     pass
 
+            # v1.14.136 — گیتِ «هنر/سایه» (فقط اندروید — MANGA_VERIFY_ARTSKIP):
+            # اگر تنها تریگر «جوهرِ» ضعیف باشد (ink<0.30) و بیش از ۴۰٪
+            # ناحیه خاکستریِ خنثی (سایه/بافتِ هنر — نه متنِ جامانده)،
+            # LaMa×17/×33 هیچ‌وقت «OK» نمیشود (لاگِ گوشیِ 700×11362:
+            # crop@(573,3189) بوتهٔ تیره — ~۱۵-۳۰ ثانیه هدررفت در هر
+            # ناحیه، بارها) → ترمیم رد میشود. متنِ واقعی (ink≥0.30) و
+            # دودِ زمینهٔ سفید (bad_ghost) هرگز اینجا رد نمیشوند.
+            # PC بایت‌به‌بیت دست‌نخورده.
+            if (_android_gate("MANGA_VERIFY_ARTSKIP") and bad_ink
+                    and not (bad_gray or bad_ghost or bad_noise)
+                    and ink_m < 0.30 and neutr >= 40.0):
+                if self.debug:
+                    try:
+                        print(f"  [🔍]وارسی: جوهرِ ضعیف + زمینهٔ خنثیِ "
+                              f"هنر/سایه crop@({cx0},{cy0}) → ترمیم رد شد",
+                              flush=True)
+                    except Exception:
+                        pass
+                return
+
             # ماسکِ گشادِ محدود: قفل‌ها ممنوع، حداکثر ۲۵px از جوهرِ خام
             def _bounded(dil_k: int):
                 wb = cv2.dilate(
@@ -25480,6 +25500,43 @@ class MangaTranslator:
                             _cx1 = min(w, _bx0 + int(_xs.max()) + 13)
                             if _cx1 - _cx0 < 40 or _cy1 - _cy0 < 16:
                                 continue
+                            # v1.14.136 — ضدِ تکرار (فقط اندروید —
+                            # MANGA_SWEEP_DEDUP): ادغامِ نواحیِ همپوشان
+                            # «قبل از» جارو اجرا میشود؛ باندِ تازهای که
+                            # ≥۷۰٪ داخلِ rectِ ناحیهٔ موجود است، متنش را
+                            # همان ناحیه قبلاً استخراج کرده (لاگِ
+                            # 700×11362: 4 باندِ تکراری → استخراج/ترجمهٔ
+                            # دوبل رویِ همان حباب) → رد. باندِ واقعاً
+                            # بیرونِ ناحیهها (عنوانِ چاپتر) سرِ جایش.
+                            # PC بایت‌به‌بیت دست‌نخورده.
+                            if _android_gate("MANGA_SWEEP_DEDUP"):
+                                _ba136 = max(1, (_cx1 - _cx0) *
+                                             (_cy1 - _cy0))
+                                _dup136 = False
+                                for (_ox136, _oy136, _ow136, _oh136) \
+                                        in _own135:
+                                    _ix136 = max(
+                                        0, min(_cx1, _ox136 + _ow136)
+                                        - max(_cx0, _ox136))
+                                    _iy136 = max(
+                                        0, min(_cy1, _oy136 + _oh136)
+                                        - max(_cy0, _oy136))
+                                    if (_ix136 * _iy136) >= \
+                                            0.70 * _ba136:
+                                        _dup136 = True
+                                        break
+                                if _dup136:
+                                    if self.debug:
+                                        try:
+                                            print(
+                                                f"    [🔍]جارویِ شکافِ "
+                                                f"باکس: باندِ تکراری داخلِ "
+                                                f"ناحیهٔ موجود "
+                                                f"@({_cx0},{_cy0}) → رد شد",
+                                                flush=True)
+                                        except Exception:
+                                            pass
+                                    continue
                             _blk135 = [(x, y, x + ww, y + hh)
                                        for (x, y, ww, hh) in _own135
                                        if not (x >= _cx1 or _cx0 >= x + ww
