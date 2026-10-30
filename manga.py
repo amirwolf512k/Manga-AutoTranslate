@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.140"
+APP_VER = "1.14.141"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -11246,20 +11246,59 @@ class MangaTranslator:
                     _hf_in = float(np.median(_hf140[_fm]))
                     _hf_rg = float(np.median(_hf140[_ring]))
                     if _hf_in > 2.2 * _hf_rg + 4.0 and _hf_in > 6.0:
-                        _sd140 = float(np.std(_g140[_ring]))
-                        if _sd140 <= 34.0:
-                            _col140 = np.median(
-                                sub_img[_ring].astype(np.float32),
-                                axis=0)
+                        # v1.14.140b — پرِ «ردیفی» از حلقهٔ همان ردیف
+                        # (بهجایِ پرِ تختِ کل): هر ردیفِ ماسک که نمونهٔ
+                        # آزادِ کافیِ یکدست دارد با میانهٔ همان ردیف
+                        # پر میشود → گرادیانِ عمودیِ کت/دیوار حفظ و
+                        # چینِ کت (stdِ کلِ حلقه بالا ولی هر ردیف صاف)
+                        # هم پوشش داده میشود؛ ردیفِ شلوغ (هنر) همان
+                        # LaMa را نگه میدارد.
+                        _hW140 = _fm.shape[1]
+                        _rOK = np.zeros(_fm.shape[0], bool)
+                        _rC = np.zeros((_fm.shape[0], 3), np.float32)
+                        for _ri in range(_fm.shape[0]):
+                            _free = ~_fm[_ri]
+                            _nf = int(_free.sum())
+                            if _nf < 12 or _nf > int(0.9 * _hW140):
+                                continue
+                            _px = sub_img[_ri][_free].astype(
+                                np.float32)
+                            if float(_px.std()) > 26.0:
+                                continue
+                            _rC[_ri] = np.median(_px, axis=0)
+                            _rOK[_ri] = True
+                        _okI = np.nonzero(_rOK)[0]
+                        if _okI.size >= max(
+                                4, int(0.3 * _fm.shape[0])):
+                            _last = int(_okI[0])
+                            for _ri in range(_fm.shape[0]):
+                                if _rOK[_ri]:
+                                    _last = _ri
+                                    continue
+                                _j = int(np.searchsorted(
+                                    _okI, _ri))
+                                if _j >= _okI.size:
+                                    _rC[_ri] = _rC[_last]
+                                elif _j == 0:
+                                    _rC[_ri] = _rC[int(_okI[0])]
+                                else:
+                                    _ya2 = int(_okI[_j - 1])
+                                    _yb2 = int(_okI[_j])
+                                    _t2 = float(_ri - _ya2) / \
+                                        float(_yb2 - _ya2)
+                                    _rC[_ri] = _rC[_ya2] * \
+                                        (1.0 - _t2) + _rC[_yb2] * _t2
+                            _fill140 = np.repeat(
+                                _rC[:, None, :], _hW140, axis=1)
                             sub_bgr = sub_bgr.copy()
                             sub_bgr[_fm] = np.clip(
-                                np.rint(_col140), 0,
-                                255).astype(np.uint8)
+                                _fill140, 0, 255).astype(
+                                    np.uint8)[_fm]
                             print(f"    [✓] ضدِ دودِ زمینهٔ تیره: "
                                   f"hf={_hf_in:.1f} vs "
-                                  f"حلقه={_hf_rg:.1f} → پرِ تختِ "
-                                  f"حلقه rgb="
-                                  f"{_col140.round(0).tolist()}",
+                                  f"حلقه={_hf_rg:.1f} → پرِ ردیفیِ "
+                                  f"حلقه ({int(_okI.size)}/"
+                                  f"{_fm.shape[0]} ردیف)",
                                   flush=True)
         except Exception:
             pass
