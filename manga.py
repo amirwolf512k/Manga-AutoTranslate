@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.136"
+APP_VER = "1.14.137"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -18087,6 +18087,58 @@ class MangaTranslator:
                             return
             except Exception:
                 pass
+            # ۷ — v1.14.136 — تلاشِ بزرگ‌نمایی‌شده (فقط اندروید —
+            # MANGA_VERIFY_UP2): وقتی هیچ پلهای جواب نداد (لاگِ گوشیِ
+            # 700×11362: crop@(420,3261) ink=0.66 — LaMa×17 و ×33 هر دو
+            # «هنوز بد» و در نهایت «خروجیِ فعلی ماند» = متنِ کثیفِ پابرجا)،
+            # برش ×۲ بزرگ میشود (سقفِ 1600px — ضدفِ لهشدگیِ پچِ 384) و
+            # LaMa با ماسکِ گشادِ ×۲ دوباره ران میشود؛ بازسازیِ ریزتر
+            # جوهرِ جامانده را اغلب میگیرد. نتیجه با همان گیتِ کیفیت
+            # سنجیده میشود؛ قبول نشد → همان «خروجیِ فعلی ماند».
+            # PC بایت‌به‌بیت دست‌نخورده.
+            if lama is not None and _android_gate("MANGA_VERIFY_UP2") \
+                    and out.shape[0] * out.shape[1] <= 400_000:
+                try:
+                    _wb17 = _bounded(17)
+                    if _wb17 is None:
+                        _wb17 = m
+                    _uh = out.shape[0] * 2
+                    _uw = out.shape[1] * 2
+                    if _uh <= 1600 and _uw <= 1600:
+                        _o2 = cv2.resize(
+                            orig, (_uw, _uh),
+                            interpolation=cv2.INTER_CUBIC)
+                        _m2 = cv2.resize(
+                            _wb17, (_uw, _uh),
+                            interpolation=cv2.INTER_NEAREST)
+                        _r2raw = None
+                        try:
+                            _r2raw = lama(_o2, _m2)
+                        except Exception:
+                            _r2raw = None
+                        if _r2raw is not None:
+                            _r2b = _r2raw if isinstance(
+                                _r2raw, np.ndarray) else np.array(_r2raw)
+                            if _r2b.ndim == 2:
+                                _r2b = cv2.cvtColor(
+                                    _r2b, cv2.COLOR_GRAY2BGR)
+                            else:
+                                _r2b = cv2.cvtColor(
+                                    _r2b, cv2.COLOR_RGB2BGR)
+                            if _r2b.shape[:2] == (_uh, _uw):
+                                _r2 = cv2.resize(
+                                    _r2b, (out.shape[1], out.shape[0]),
+                                    interpolation=cv2.INTER_AREA)
+                                g7 = cv2.cvtColor(
+                                    _r2, cv2.COLOR_BGR2GRAY)
+                                ok_b7, ok_s7 = _quality(g7, "LaMa×2-برش")
+                                if ok_s7:
+                                    _blend(_r2)
+                                    return
+                                if ok_b7 and fallback is None:
+                                    fallback = (_r2, "LaMa×2-برش")
+                except Exception:
+                    pass
             # هیچ مرحله‌ای بارِ سفیدِ سخت را پاس نکرد — اگر دست‌کم یک
             # نتیجهٔ «بد-نیست» داشتیم، همان را blend می‌کنیم (به‌مراتب
             # بهتر از خروجیِ کثیفِ اولیهٔ EP)
