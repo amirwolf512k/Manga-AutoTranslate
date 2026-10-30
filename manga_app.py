@@ -228,12 +228,35 @@ PROMPT_MODE_LABELS = {
 }
 
 
+# برچسبهایِ نمایشیِ نسخههایِ قبلیِ وباپ (رادیو) — برایِ سازگاریِ کانفیگِ قدیمی
+_PROMPT_MODE_LEGACY_LABELS = {
+    "خودکار (بر اساس سرویس و مدل)": "auto",
+    "حرفه‌ای — Flash و Pro": "professional",
+    "سبک — Flash Lite و غیرِ Gemini": "lite",
+    "کلاسیک (فارسیِ قدیمی)": "classic",
+}
+
+
+def sanitize_prompt_mode(v) -> str:
+    """هر ورودیِ (مقدار یا برچسبِ قدیمی) به یکی از auto/professional/lite/classic —
+    v1.14.145: پیشفرضِ همیشه auto (فیکسِ ارورِ invalid choice در manga.py)."""
+    s = str(v or "").strip()
+    if s in ("auto", "professional", "lite", "classic"):
+        return s
+    if s in _PROMPT_MODE_LEGACY_LABELS:
+        return _PROMPT_MODE_LEGACY_LABELS[s]
+    for _k, _lab in PROMPT_MODE_LABELS.items():
+        if s == _lab:
+            return _k
+    return "auto"
+
+
 def resolve_prompt_preview(mode_v, provider_v, model_v, instr_v):
     """(تیترِ وضعیت، متنِ کاملِ پرامپتِ مؤثر) — v1.14.144"""
     t = (instr_v or "").strip()
     if t and is_custom_instruction(t):
-        return ("✍️ **پرامپت فعلی: سفارشی** — متنِ شما جایگزین همهٔ پیش‌فرض‌ها می‌شود.", t)
-    m = (mode_v or "auto").strip()
+        return ("✍️ **پرامپت فعلی: سفارشی** — همین متنِ ویرایششده به مدل فرستاده می‌شود.", t)
+    m = sanitize_prompt_mode(mode_v)
     prov = (provider_v or "gemini").strip()
     mdl = (model_v or "").strip()
     try:
@@ -2224,23 +2247,23 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 label="واژه‌نامهٔ اسامی و اصطلاحات (هر خط: English=فارسی)",
                 placeholder="Raphdonia=رافدونیا\nBarbarian=باربارین",
                 lines=3, value=str(cfg.get("glossary_text", "") or ""))
-            gr.Markdown("<div class='hint'><b>🧠 سبک پرامپت مترجم:</b> «خودکار» بر اساسِ سرویس و مدل انتخاب می‌کند: مدلهایِ Gemini Flash/Pro → پرامپتِ حرفه‌ای؛ مدلهایِ Flash Lite و همهٔ سرویس‌هایِ غیرِ Gemini (ChatGPT/Groq/…) → پرامپتِ سبک. پرامپتِ مؤثر در «پیش‌نمایش» نشان داده می‌شود؛ اگر متنِ System Instruction را عوض کنید، متنِ شما بر همه مقدم می‌شود. قوانینِ JSON و tone همیشه از داخلِ کد اعمال می‌شوند.</div>")
-            prompt_mode = gr.Radio(
-                choices=[["auto", "خودکار (بر اساس سرویس و مدل)"],
-                         ["professional", "حرفه‌ای — Flash و Pro"],
-                         ["lite", "سبک — Flash Lite و غیرِ Gemini"],
-                         ["classic", "کلاسیک (فارسیِ قدیمی)"]],
-                value=str(cfg.get("prompt_mode", "auto") or "auto"),
+            gr.Markdown("<div class='hint'><b>🧠 سبک پرامپت مترجم:</b> «auto» خودش بر اساسِ سرویس و مدل انتخاب می‌کند: مدلهایِ Gemini Flash/Pro → پرامپتِ حرفه‌ای؛ مدلهایِ Flash Lite و همهٔ سرویس‌هایِ غیرِ Gemini (ChatGPT/Groq/…) → پرامپتِ سبک. پرامپتِ مؤثر در کادرِ پایین نشان داده می‌شود و <b>همان کادر قابل ویرایش است</b> — اگر متنش را عوض کنید، متنِ شما بر همه مقدم می‌شود (برایِ برگشت به پیش‌فرض، سبک را دوباره انتخاب کنید). قوانینِ JSON و tone همیشه از داخلِ کد اعمال می‌شوند.</div>")
+            # v1.14.145: چهار گزینه جمع شد در یک دروپ‌داون (کلیک → گزینه‌ها می‌آید)؛
+            # مقادیرِ انگلیسیِ خالص — دقیقاً همان که manga.py میپذیرد (فیکسِ invalid choice).
+            _pm0 = sanitize_prompt_mode(cfg.get("prompt_mode"))
+            prompt_mode = gr.Dropdown(
+                choices=["auto", "professional", "lite", "classic"],
+                value=_pm0,
                 label="سبک پرامپت ترجمه", scale=1)
-            instruction_text = gr.Textbox(
-                label="System Instruction مترجم (اختیاری — پرامپتِ سفارشی شما)",
-                lines=8, max_lines=25,
-                value=str(cfg.get("instruction_text") or ""),
-                placeholder="خالی = انتخابِ خودکارِ سبک بر اساسِ مدل (متنِ مؤثر در پیش‌نمایشِ پایین) …")
-            prompt_preview_head = gr.Markdown("")
+            # v1.14.145: پرامپتِ دستیِ جدا حذف شد — خودِ پرامپتِ اصلی قابلِ ویرایش است.
+            _pp_head0, _pp_body0 = resolve_prompt_preview(
+                _pm0, cfg.get("provider"), cfg.get("model"),
+                str(cfg.get("instruction_text") or ""))
+            prompt_preview_head = gr.Markdown(_pp_head0)
             prompt_preview_body = gr.Textbox(
-                label="پیش‌نمایش پرامپت مؤثر (همین به مدل فرستاده می‌شود)",
-                lines=8, max_lines=20, interactive=False)
+                label="پرامپت مترجم (همین به مدل فرستاده می‌شود — قابل ویرایش)",
+                lines=10, max_lines=25, interactive=True,
+                value=_pp_body0)
             story_brief = gr.Checkbox(
                 label="بریف داستان قبل از ترجمه (AI یک‌بار فصل را می‌خواند تا لحن شخصیت‌ها حفظ شود)",
                 value=bool(cfg.get("story_brief", True)))
@@ -3156,7 +3179,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                             workers_v, bubbles_v, timeout_v,
                             batchw_v, maxre_v, reqdelay_v, temp_v, readord_v,
                             clean_method_v, two_pass_v,
-                            fake_test_v, clean_only_v, web_debug_v, prompt_mode_v, instruction_text_v,
+                            fake_test_v, clean_only_v, web_debug_v, prompt_mode_v, prompt_body_v,
                             glossary_text_v, story_brief_v, api_base_v,
                             *tone_args):
             _t_prep68 = time.time()  # v1.14.68 — زمانِ آماده‌سازیِ اپ
@@ -3330,13 +3353,13 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 cmd += ["--clean-only"]
             if web_debug_v:
                 cmd += ["--debug"]
-            instr_text = str(instruction_text_v or "").strip()
+            instr_text = str(prompt_body_v or "").strip()
             if is_custom_instruction(instr_text):
                 instr_path = os.path.join(user_out_dir, "instruction_user.txt")
                 with open(instr_path, "w", encoding="utf-8") as _inf:
                     _inf.write(instr_text + "\n")
                 cmd += ["--instruction", instr_path]
-            cmd += ["--prompt-mode", str(prompt_mode_v or "auto").strip() or "auto"]
+            cmd += ["--prompt-mode", sanitize_prompt_mode(prompt_mode_v)]
             glos_text = str(glossary_text_v or "").strip()
             if glos_text:
                 glos_path = os.path.join(user_out_dir, "glossary_user.txt")
@@ -3432,15 +3455,26 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
             pass
 
 
-        def _prompt_preview_update(mode_v, prov_v, mdl_v, instr_v):
+        def _prompt_body_edited(t):
+            t = (t or "").strip()
+            if not t:
+                return "📄 متن خالی شد — پرامپتِ پیشفرضِ سبکِ انتخابی اعمال میشود."
             try:
-                head, body = resolve_prompt_preview(mode_v, prov_v, mdl_v, instr_v)
+                if not is_custom_instruction(t):
+                    return ""
+            except Exception:
+                pass
+            return "✍️ **پرامپت فعلی: سفارشی** — همین متنِ ویرایششده به مدل فرستاده میشود."
+
+        def _prompt_preview_update(mode_v, prov_v, mdl_v):
+            try:
+                head, body = resolve_prompt_preview(mode_v, prov_v, mdl_v, None)
                 return gr.update(value=head), gr.update(value=body)
             except Exception as e:
                 return gr.update(value=f"خطا در پیش‌نمایش پرامپت: {e}"), gr.update(value="")
         try:
-            _pp_inputs = [prompt_mode, provider, model, instruction_text]
-            for _pp_comp in (prompt_mode, provider, model, instruction_text):
+            _pp_inputs = [prompt_mode, provider, model]
+            for _pp_comp in (prompt_mode, provider, model):
                 _pp_comp.change(
                     _prompt_preview_update, inputs=_pp_inputs,
                     outputs=[prompt_preview_head, prompt_preview_body],
@@ -3448,6 +3482,16 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                 )
         except Exception:
             pass
+        # v1.14.145: ویرایشِ دستیِ کادرِ پرامپت → تیترِ «سفارشی» (بدونِ بازنویسیِ متن)
+        try:
+            prompt_preview_body.input(
+                _prompt_body_edited,
+                inputs=[prompt_preview_body], outputs=[prompt_preview_head],
+                api_name="prompt_preview_edited",
+            )
+        except Exception:
+            pass
+
         _click_kw = dict(
             inputs=[session_id, sid_box, inp_path, inp_upload, provider, api_keys, model,
                     ocr_lang,
@@ -3455,7 +3499,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
                     workers, bubbles, timeout,
                     batchw, maxre, reqdelay, temp, readord,
                     clean_method, two_pass,
-                    fake_test, clean_only, web_debug, prompt_mode, instruction_text,
+                    fake_test, clean_only, web_debug, prompt_mode, prompt_preview_body,
                     glossary_text, story_brief, api_base] + tone_uploads + tone_enables,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
                      dl_btn_debug, btn_view_debug, debug_row, html_debug_state],
