@@ -3609,7 +3609,15 @@ class MlKitBackend:
             raise ImportError("MlKitBackend فقط روی اندروید (Chaquopy) کار می‌کند") from e
         self._bridge = jclass("com.amirwolf.mangatranslator.MlKitBridge")
         self.lang = self.LANG_MAP.get(str(lang).lower(), "latin")
-        print(f"[+] OCR گوشی: ML Kit | lang={self.lang}")
+        # v1.14.143 — کشفِ خودکارِ اسکریپت (الگویِ K3): با ocr_lang=en فقط
+        # کلاینتِ لاتین صدا زده میشد و ژاپنی/کره‌ای/چینی یا خالی برمیگشت یا
+        # درهم. حالا پلِ MlKitBridge با recognizeAuto خودش زبان را از رأیِ
+        # کانا/هانگول/هان میفهمد و قفلِ صفحه میکند. خاموش: MANGA_MLKIT_AUTO=0.
+        self._auto = 1 if _android_gate("MANGA_MLKIT_AUTO") else 0
+        self._has_auto = hasattr(self._bridge, "recognizeAuto")
+        self._eff_lang = self.lang
+        print(f"[+] OCR گوشی: ML Kit | lang={self.lang} | "
+              f"auto_script={'روشن' if self._auto and self._has_auto else 'خاموش'}")
 
     @staticmethod
     def _clean(txt: str, latin: bool) -> str:
@@ -3645,7 +3653,20 @@ class MlKitBackend:
         if not ok:
             return None
         try:
-            lines_j = self._bridge.recognize(bytes(buf.tobytes()), self.lang)
+            if self._auto and self._has_auto:
+                # v1.14.143 — نسبتِ جوهر (پیکسلِ تیره) برایِ پروبِ برشِ خالی؛
+                # برشِ بی‌جوهر هرگز پروب نمیشود تا حبابِ خالی متنِ ساختگی نگیرد.
+                _ink = 0
+                try:
+                    _g = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY) \
+                        if image_bgr.ndim == 3 else image_bgr
+                    _ink = 1 if float((_g < 128).mean()) >= 0.02 else 0
+                except Exception:
+                    _ink = 1
+                lines_j = self._bridge.recognizeAuto(
+                    bytes(buf.tobytes()), self.lang, 1, _ink)
+            else:
+                lines_j = self._bridge.recognize(bytes(buf.tobytes()), self.lang)
         except Exception as e:
             msg = str(e).lower()
             if "detection" in msg and "empty" in msg:
@@ -3663,6 +3684,14 @@ class MlKitBackend:
                 # (فرمتِ قدیمیِ APKهایِ قبلی) دوبارهِ تقسیم میشود تا متنی که
                 # خودش «|» دارد نشکند.
                 _s_item = str(item)
+                # v1.14.143 — سطرِ META از recognizeAuto (زبانِ کشفشده)
+                if _s_item.startswith("META|"):
+                    _mp = _s_item.split("|")
+                    if len(_mp) >= 2 and _mp[1] in ("latin", "ja", "ko", "zh") \
+                            and _mp[1] != self._eff_lang:
+                        self._eff_lang = _mp[1]
+                        print(f"    [OCR] ML Kit auto → {self._eff_lang}")
+                    continue
                 parts = _s_item.split("|", 4)
                 if len(parts) < 3:
                     continue
@@ -3708,7 +3737,8 @@ class MlKitBackend:
                 if len(nums) < 8 or not text.strip():
                     continue
                 box = np.asarray(nums[:8], dtype=np.float32).reshape(4, 2)
-                text = self._clean(text, latin=(self.lang == "latin"))
+                # v1.14.143 — زبانِ مؤثر از کشفِ خودکار (لاتین = حذفِ اعراب)
+                text = self._clean(text, latin=(self._eff_lang == "latin"))
                 if text:
                     lines.append([box, (text, score, float(ang), int(blk))])
             except Exception:

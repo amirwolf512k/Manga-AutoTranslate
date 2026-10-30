@@ -781,3 +781,23 @@
 **تست:** py_compile ✓؛ سموکِ PC: 01.jpg = ۴۴ خط مثل قبل، گارد فعال نمیشود ✓؛ شبیه‌سازیِ ۳ کیسِ اندرویدی: ban→skip با پیام، بدونِ ban→گارد نوشته/پاک در fallback، ban+اجباری→تلاشِ دوباره ✓. CI: Build APK + Emulator.
 
 **نکته برایِ جلسهٔ بعد:** اگر رویِ گوشیِ کاربر دوباره کرش کرد، متنِ ⚡/گزارش کرش «مرحله» را میگوید (init=inference اولِ paddle / run=وسطِ inference) — stage=run با کرشِ تکراری یعنی OpenCL درایورِ گوشی مشکل دارد؛ راهِ نهایی: بیلدِ openclِ بدونِ CL یا ML Kit برایِ همیشه برایِ آن گوشی.
+
+
+## v1.14.143 (2026-10-30) — دیکدِ کِی۳ v4.1.1 + کشفِ خودکارِ اسکریپت (JP/KR/CN در مسیرِ پیشفرض)
+
+**گزارشِ کاربر:** «فعلا پاکسازی بمونه؛ بچسب به استخراج — ml kit دقیق نیست؛ K3 v4.1.1 رو دیکد کن ببین چکار کرده اینقدر دقیق و سریع درمیاره؛ انگار PaddleOCR استفاده میکنه؛ ژاپنی/کره‌ای/چینی اصلا درست استخراج نمیکند.»
+
+**دیکدِ K3 v4.1.1 (APK ۵۰MB از ریلیزش):**
+- اپِ .NET MAUI (AOT) — نه PaddleOCR خالص: **ML Kit Text Recognition v2 باندلشدهٔ 16.0.1 با هر چهار کلاینتِ latin/japanese/korean/chinese** (assets/mlkit-google-ocr-models = taser + script-id + detector عمودی).
+- به‌علاوه **Microsoft.ML.OnnxRuntime (libonnxruntime.so ۲۸.۶MB)** + دیکشنریهایِ PaddleOCR در assets (ppocrv6_dict/korean_dict/JP_vocab) + شناسههایِ متد در متادیتا: `PaddleV5PipelineOnCrop`، `EnsurePaddleV5`، `RunOcrPhaseB`، `FetchAndDecryptCatalogWith`، `LamaDownload` — یعنی **فازِ B: PP-OCRv5 موبایلِ ONNX رویِ کراپهایِ ML Kit** + LaMa؛ مدلهایش رمزی در ریپویِ خودش (Models/data01..10.bin + catalog.dat؛ zipِ ۵۶۳MB LFS).
+- نتیجه: «دقیق و سریعِ» K3 = ML Kit باندلشدهٔ CJK برایِ کشف/استخراجِ فوری + PP-OCR موبایل فقط رویِ برشها.
+
+**وضعیتِ خودمان:** هر چهار آرتیفکتِ ML Kit باندلشده از v1.14.121 در gradle هست (همان 16.0.1) و `MlKitBridge` کلاینتِ ja/ko/zh داشت — ولی فقط وقتیِ کاربر زبان را دستی عوض کند؛ با پیشفرضِ `ocr_lang=en` مدلِ لاتین رویِ کانا/هانگول/هان خالی/درهم میداد = «اصلا استخراج نمیکند». مسیرِ PP-OCR موبایلِ رویِ برش (کاسکادِ K3) هم از قبل با MANGA_ANDROID_OCR=rapidocr هست (PP-OCRv6 det int8 + recِ کره‌ایِ v5/ژاپنیِ v4).
+
+**فیکس (فقط اندروید — MlKitBridge.kt + MlKitBackend در manga.py):**
+- `recognizeAuto(png, lang, auto, hasInk)`: با lang=latin و auto=1 اول کلاینتِ **ژاپنی** (همهٔ اسکریپتها را میبیند: کانا/هان/لاتین) → رأیِ اسکریپت: کانا≥1→ja، هانگول≥1→ko، هانِ خالص≥2→zh، فقطِ ASCII→گذرِ دومِ لاتین؛ زبانِ قفلشده تا ۴۸ برش «بهیاد میماند» (چسبندگیِ صفحه — جایگزینِ مدلِ script-idِ K3)؛ برشِ جوهرمندِ خالی بهترتیب ko→zh→latin پروب میشود (با hasInk از پایتون — حبابِ بی‌متن پروب نمیشود تا متنِ ساختگی نگیرد). خروجی با سطرِ `META|lang|n` شروع میشود.
+- کشِ هر ۴ کلاینت (قبلاً یکی — هر تعویض close+ساختِ مجدد).
+- سمتِ پایتون: گیتِ `MANGA_MLKIT_AUTO` (پیشفرضِ روشنِ اندروید؛ PC بیاثر)، محاسبهٔ hasInk (گرای<128 ≥۲٪)، پارسِ META، `_eff_lang` برایِ _clean (لاتین=حذفِ اعراب). فرمتِ ۵فیلدیِ قدیمیِ بدونِ META هم پارس میشود (سازگاری).
+- zh-علیهِ ja رویِ هانِ خالص مبهم است (بدونِ script-id) — قفلِ صفحه از اولین برشِ کانادار درستش میکند؛ کاربرِ چینی میتواند از دراپ‌داونِ زبان، چینی را صریح بزند.
+
+**تست:** py_compile ✓؛ هارنسِ پلِ شبیهساز (scripts/harness_mlkit_auto.py) ۱۱/۱۱ ✓ (JP/EN/KR/ZH/Legacy/empty/hasInk/AUTO=0)؛ رگرسیونِ PC بیت‌به‌بیت: 01.jpg fake-translate md5 یکسان (`a7063ea04f0e2c61c4f50a3bc69788d5`) قبل/بعد. versionCode=148.
