@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.137"
+APP_VER = "1.14.138"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -17916,7 +17916,7 @@ class MangaTranslator:
                               flush=True)
                     except Exception:
                         pass
-                return (not bad2), (not bad2 and not soft)
+                return (not bad2), (not bad2 and not soft), im2
 
             fallback = None  # (res، برچسب) — خوب ولی نه ناب
 
@@ -17938,7 +17938,7 @@ class MangaTranslator:
                     if _res0 is not None:
                         g0 = cv2.cvtColor(_res0,
                                           cv2.COLOR_BGR2GRAY)
-                        ok_b0, ok_s0 = _quality(
+                        ok_b0, ok_s0, _im0 = _quality(
                             g0, "پرِ حلقهٔ روشن-ضدنویز")
                         if ok_s0:
                             _blend(_res0)
@@ -17970,8 +17970,26 @@ class MangaTranslator:
                     lama = self._get_lama()
             except Exception:
                 lama = None
+            # v1.14.138 — خروجِ زودهنگام (فقط اندروید —
+            # MANGA_VERIFY_FASTEXIT): اگر LaMa جوهر را نسبت به ورودی
+            # عملاً کم نکرد (Δ<0.02 — لاگِ گوشیِ 700×11362:
+            # crop@(573,3189) 0.17→0.16 و crop@(420,3261) 0.66→0.60
+            # بعدش هم تخت)، دورِ بعدی هم بیاثر است → دورِ بعدی و
+            # (برایِ جوهرِ ضعیفِ هنرمانند) تلاشِ ×۲ هم حذف — صرفهٔ
+            # ۱-۲ اینفرنسِ LaMa در هر ناحیهٔ بیاثر. PC دست‌نخورده.
+            _fx138 = _android_gate("MANGA_VERIFY_FASTEXIT")
+            _lama_gain138 = True
             if lama is not None:
                 for _dk in (17, 33):
+                    if _fx138 and not _lama_gain138:
+                        if self.debug:
+                            try:
+                                print(f"    [🔍]ترمیم: LaMa بیاثر "
+                                      f"(Δجوهر<0.02) → دورِ بعدی حذف",
+                                      flush=True)
+                            except Exception:
+                                pass
+                        break
                     wb = _bounded(_dk)
                     if wb is None:
                         break
@@ -17991,10 +18009,11 @@ class MangaTranslator:
                     if res1 is None:
                         continue
                     g1 = cv2.cvtColor(res1, cv2.COLOR_BGR2GRAY)
-                    ok_b, ok_s = _quality(g1, f"LaMa×{_dk}")
+                    ok_b, ok_s, _im138 = _quality(g1, f"LaMa×{_dk}")
                     if ok_s:
                         _blend(res1)
                         return
+                    _lama_gain138 = bool(_im138 < ink_m - 0.02)
                     if ok_b and fallback is None:
                         fallback = (res1, f"LaMa×{_dk}")
 
@@ -18024,7 +18043,7 @@ class MangaTranslator:
                         res2 = None
             if res2 is not None:
                 g2 = cv2.cvtColor(res2, cv2.COLOR_BGR2GRAY)
-                ok_b2, ok_s2 = _quality(g2, _via or "fill")
+                ok_b2, ok_s2, _im2b = _quality(g2, _via or "fill")
                 if ok_s2:
                     _blend(res2)
                     return
@@ -18036,7 +18055,7 @@ class MangaTranslator:
                 try:
                     res3 = cv2.inpaint(orig, wb, 5, cv2.INPAINT_TELEA)
                     g3 = cv2.cvtColor(res3, cv2.COLOR_BGR2GRAY)
-                    ok_b3, ok_s3 = _quality(g3, "TELEA-گشاد")
+                    ok_b3, ok_s3, _im3b = _quality(g3, "TELEA-گشاد")
                     if ok_s3:
                         _blend(res3)
                         return
@@ -18055,7 +18074,7 @@ class MangaTranslator:
                             out.shape[1], axis=1)
                     g5 = cv2.cvtColor(flat.astype(np.uint8),
                                       cv2.COLOR_BGR2GRAY)
-                    ok_b5, _ok_s5 = _quality(g5, "پرِ تختِ حلقه")
+                    ok_b5, _ok_s5, _im5b = _quality(g5, "پرِ تختِ حلقه")
                     if ok_b5:
                         _blend(flat.astype(np.uint8))
                         return
@@ -18081,7 +18100,7 @@ class MangaTranslator:
                                 out.shape[1], axis=1)
                         g6 = cv2.cvtColor(flat6.astype(np.uint8),
                                           cv2.COLOR_BGR2GRAY)
-                        ok_b6, _s6 = _quality(g6, "پرِ سفیدِ ناب")
+                        ok_b6, _s6, _im6b = _quality(g6, "پرِ سفیدِ ناب")
                         if ok_b6:
                             _blend(flat6.astype(np.uint8))
                             return
@@ -18097,7 +18116,8 @@ class MangaTranslator:
             # سنجیده میشود؛ قبول نشد → همان «خروجیِ فعلی ماند».
             # PC بایت‌به‌بیت دست‌نخورده.
             if lama is not None and _android_gate("MANGA_VERIFY_UP2") \
-                    and out.shape[0] * out.shape[1] <= 400_000:
+                    and out.shape[0] * out.shape[1] <= 400_000 \
+                    and not (_fx138 and not _lama_gain138 and ink_m < 0.30):
                 try:
                     _wb17 = _bounded(17)
                     if _wb17 is None:
@@ -18131,12 +18151,114 @@ class MangaTranslator:
                                     interpolation=cv2.INTER_AREA)
                                 g7 = cv2.cvtColor(
                                     _r2, cv2.COLOR_BGR2GRAY)
-                                ok_b7, ok_s7 = _quality(g7, "LaMa×2-برش")
+                                ok_b7, ok_s7, _im7b = _quality(
+                                    g7, "LaMa×2-برش")
                                 if ok_s7:
                                     _blend(_r2)
                                     return
                                 if ok_b7 and fallback is None:
                                     fallback = (_r2, "LaMa×2-برش")
+                except Exception:
+                    pass
+
+            # ۸ — v1.14.138 — فالبکِ نهاییِ «پرِ ردیفی» (فقط اندروید —
+            # MANGA_VERIFY_ROWFILL): وقتی هیچ پلی جواب نداد و جوهرِ
+            # جامانده «واقعی» است (bad_ink با ink≥0.22 — لاگِ گوشیِ
+            # 700×11362: crop@(420,3261) ink=0.66 = متنِ شبحِ LaMaِ
+            # چندخطی که ×17/×33/×2 هر سه نگرفتند و «خروجیِ فعلی ماند»)،
+            # برایِ هر ردیفِ ماسک، رنگِ میانهٔ پیکسلهایِ بیرونِ ماسکِ
+            # همان ردیف (شکافِ بینِ خطها/حاشیهٔ بلوک) جایگزینِ ماسک
+            # میشود — گرادیانِ عمودیِ زمینه حفظ میشود و متنِ شبح حذف؛
+            # ردیفِ کاملاً ماسک از نزدیکترینِ ردیفهایِ زمینهدار
+            # درون‌یابی میشود. گاردِ ضدِ هنر: زمینهٔ رنگیِ قوی (نوتار
+            # >۴۰ — بوته/سایه مثلِ ARTSKIP) هرگز پر نمیشود. گیتِ
+            # قبولیِ آسانتر (جوهرِ پر ≈۰ و فاصله از میانهٔ حلقه ≤۳۵)
+            # چون حلقهٔ بلوکِ چندخطی خودش آلوده به خطهایِ دیگر است و
+            # گیتِ معمولی معیارِ غلط میگیرد.
+            # PC بایت‌به‌بیت دست‌نخورده.
+            def _row_fill_res():
+                mo = (m > 0)
+                if not mo.any():
+                    return None
+                hgt, wid = mo.shape
+                mfill = m_eval > 0
+                # نمونهگیری با دیلِ ۱۵ (نه بیشتر): درِ بلوکِ متراکمِ
+                # چندخطی حاشیهٔ بلوک + شکافِ بینِ خطها تنها نمونهٔ
+                # زمینهایِ هر ردیفاند (میانه در برابرِ گلیفِ جامانده
+                # مقاوم است)؛ دیلِ بزرگتر همهٔ ردیف را میبلعد
+                msamp = cv2.dilate(
+                    m, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (15, 15))) > 0
+                xs_idx = np.nonzero(mo.any(axis=0))[0]
+                if xs_idx.size < 20:
+                    return None
+                x0b, x1b = int(xs_idx[0]), int(xs_idx[-1]) + 1
+                rows = np.nonzero(mfill.any(axis=1))[0]
+                if rows.size < 4:
+                    return None
+                rowcol = {}
+                hrows = []
+                # نمونه از «همهٔ» ردیفهایِ برش (حاشیهٔ بالا/پایینِ بلوک
+                # هم لنگرِ گرادیاناند — نه فقط ردیفهایِ ماسک)
+                for yy in range(hgt):
+                    free = ~msamp[yy, x0b:x1b]
+                    if int(free.sum()) >= max(
+                            10, int(0.05 * (x1b - x0b))):
+                        rowcol[yy] = np.median(
+                            out[yy, x0b:x1b][free].astype(np.float32),
+                            axis=0)
+                        hrows.append(yy)
+                if not hrows:
+                    return None
+                hidx = np.asarray(hrows, dtype=np.int64)
+                bg = np.zeros((hgt, 3), np.float32)
+                _j = 0
+                for yy in range(hgt):
+                    if yy in rowcol:
+                        bg[yy] = rowcol[yy]
+                        continue
+                    j = int(np.searchsorted(hidx, yy))
+                    if j == 0:
+                        bg[yy] = rowcol[int(hidx[0])]      # گیرِ لبهٔ بالا
+                    elif j >= hidx.size:
+                        bg[yy] = rowcol[int(hidx[-1])]     # گیرِ لبهٔ پایین
+                    else:
+                        ya = int(hidx[j - 1])
+                        yb = int(hidx[j])
+                        t = float(yy - ya) / float(yb - ya)
+                        bg[yy] = rowcol[ya] * (1.0 - t) + \
+                            rowcol[yb] * t
+                fill = np.repeat(bg[:, None, :], wid, axis=1)
+                fill = cv2.blur(fill, (1, 9))
+                res = out.copy()
+                res[mfill] = np.clip(
+                    fill, 0, 255).astype(np.uint8)[mfill]
+                return res
+
+            if _android_gate("MANGA_VERIFY_ROWFILL") and bad_ink and \
+                    ink_m >= 0.22 and neutr <= 40.0:
+                try:
+                    _rf = _row_fill_res()
+                    if _rf is not None:
+                        g8 = cv2.cvtColor(_rf, cv2.COLOR_BGR2GRAY)
+                        _im8, _ir8 = _ink(g8, m_eval, ring)
+                        _med_r = float(np.median(g[ring])) \
+                            if int(ring.sum()) else 200.0
+                        _gm8 = float(np.median(g8[m_eval > 0]))
+                        _ok8 = (bool(_im8 <= 0.10) and
+                                abs(_gm8 - _med_r) <= 35.0)
+                        if self.debug:
+                            try:
+                                print(f"    [🔍ترمیم] پرِ ردیفی: "
+                                      f"ink={_im8:.2f}/حلقه={_ir8:.2f} "
+                                      f"lum={_gm8:.0f} (حلقه={_med_r:.0f}) "
+                                      f"→ {'OK' if _ok8 else 'رد'}",
+                                      flush=True)
+                            except Exception:
+                                pass
+                        if _ok8:
+                            _blend(_rf)
+                            return
                 except Exception:
                     pass
             # هیچ مرحله‌ای بارِ سفیدِ سخت را پاس نکرد — اگر دست‌کم یک
@@ -25506,6 +25628,7 @@ class MangaTranslator:
                                for r in unique_regions]
                     _newR = []
                     _nb135 = 0
+                    _nr138 = 0  # v1.14.138 — شمارندهٔ نجاتِ ناحیهٔ بدخوان
                     for (_bx0, _by0, _bx1, _by2, _bcl) in _bbxs:
                         if _nb135 >= 4:
                             break
@@ -25513,6 +25636,117 @@ class MangaTranslator:
                         if _bw < 60 or _bh < 40 \
                                 or (_bw * _bh) > 0.08 * _pgA135:
                             continue
+                        # v1.14.138 — نجاتِ ناحیهٔ بدخوان (فقط اندروید —
+                        # MANGA_SWEEP_RESCUE): اگر داخلِ این باکس، ناحیهٔ
+                        # موجودی است که پالیهایش <۳۵٪ مستطیلش را
+                        # میپوشانند (OCRِ اصلی شکست خورده — لاگِ گوشیِ
+                        # 700×11362: ناحیهٔ (11,3266) فقط 'DERSTHOSE'
+                        # خواند در حالی که ۶ خطِ کاملِ «PARAGRAPH 3 WHEN
+                        # THE EXERCISE…» دارد؛ ماسکِ گلیفیِ ناقص →
+                        # LaMaِ پچِ 384 «متنِ شبح» ساخت و ترمیم هم
+                        # نگرفت)، یک پاسِ OCRِ کراپ رویِ کلِ مستطیلِ
+                        # همان ناحیه زده میشود؛ اگر ≥۲ پالی و متنِ
+                        # بلندتر آمد، پالی/متنِ همان ناحیه جایگزین
+                        # میشود (نه ناحیهٔ نو — ضدِ دوبل) و _covM هم
+                        # آپدیت میشود تا باندِ اضافی در همین باکس ساخته
+                        # نشود. سقف: ۲ ناحیه/صفحه. PC دست‌نخورده.
+                        if _android_gate("MANGA_SWEEP_RESCUE") \
+                                and _nr138 < 2:
+                            try:
+                                _best138 = None
+                                for _r138 in unique_regions:
+                                    if getattr(_r138, "kind",
+                                               "dialogue") in (
+                                            "promo", "sfx"):
+                                        continue
+                                    _rx138, _ry138, _rw138, _rh138 = [
+                                        int(v) for v in _r138.rect]
+                                    _ix138 = max(
+                                        0, min(_bx1, _rx138 + _rw138)
+                                        - max(_bx0, _rx138))
+                                    _iy138 = max(
+                                        0, min(_by2, _ry138 + _rh138)
+                                        - max(_by0, _ry138))
+                                    if _ix138 <= 0 or _iy138 <= 0:
+                                        continue
+                                    _rc138 = _covM[
+                                        _ry138:_ry138 + _rh138,
+                                        _rx138:_rx138 + _rw138]
+                                    if _rc138.size == 0:
+                                        continue
+                                    _cf138 = float((_rc138 > 0).mean())
+                                    if _cf138 >= 0.35:
+                                        continue
+                                    _ov138 = _ix138 * _iy138
+                                    if _best138 is None or \
+                                            _ov138 > _best138[0]:
+                                        _best138 = (_ov138, _r138)
+                                if _best138 is not None:
+                                    _rb138 = _best138[1]
+                                    _rx138, _ry138, _rw138, _rh138 = [
+                                        int(v) for v in _rb138.rect]
+                                    if _rw138 >= 60 and _rh138 >= 40 \
+                                            and (_rw138 * _rh138) <= \
+                                            0.10 * _pgA135:
+                                        _rr = self._ocr_crop(
+                                            image,
+                                            (_rx138, _ry138,
+                                             _rx138 + _rw138,
+                                             _ry138 + _rh138),
+                                            block_rects=[])
+                                        _rt = str(_rr[0] or "").strip()
+                                        _rp = list(_rr[1] or []) \
+                                            if len(_rr) > 1 else []
+                                        if len(_rp) >= 2 and \
+                                                len(_rt) > len(str(
+                                                    _rb138.source_text
+                                                    or "")):
+                                            _okp138 = []
+                                            for _pq in _rp:
+                                                try:
+                                                    _pq2 = np.asarray(
+                                                        _pq,
+                                                        dtype=np.float32
+                                                    ).reshape(-1, 2)
+                                                except Exception:
+                                                    continue
+                                                if _pq2.shape[0] >= 3:
+                                                    _okp138.append(
+                                                        np.rint(
+                                                            _pq2
+                                                        ).astype(np.int32))
+                                            if len(_okp138) >= 2:
+                                                _rb138.ocr_polys = \
+                                                    _okp138
+                                                _rb138.source_text = \
+                                                    _rt.replace(
+                                                        "\n", " ").strip()
+                                                _rb138.angle = 0.0
+                                                for _pq2 in _okp138:
+                                                    cv2.fillPoly(
+                                                        _covM,
+                                                        [_pq2], 255)
+                                                _covM = cv2.dilate(
+                                                    _covM,
+                                                    np.ones((13, 13),
+                                                            np.uint8))
+                                                _nr138 += 1
+                                                if self.debug:
+                                                    try:
+                                                        print(
+                                                            f"    [*]جارویِ "
+                                                            f"شکافِ باکس: "
+                                                            f"نجاتِ ناحیهٔ "
+                                                            f"بدخوان "
+                                                            f"@({_rx138},"
+                                                            f"{_ry138}) "
+                                                            f"→ "
+                                                            f"{len(_okp138)} "
+                                                            f"خط ({_rt[:48]!r})")
+                                                    except Exception:
+                                                        pass
+                            except Exception:
+                                pass
                         _sub = _g135[_by0:_by2, _bx0:_bx1]
                         _ex = _covM[_by0:_by2, _bx0:_bx1] > 0
                         _nbg = int((~_ex).sum())
@@ -25565,18 +25799,43 @@ class MangaTranslator:
                                 _ba136 = max(1, (_cx1 - _cx0) *
                                              (_cy1 - _cy0))
                                 _dup136 = False
-                                for (_ox136, _oy136, _ow136, _oh136) \
-                                        in _own135:
+                                for _r136 in unique_regions:
+                                    _ox136, _oy136, _ow136, _oh136 = [
+                                        int(v) for v in _r136.rect]
                                     _ix136 = max(
                                         0, min(_cx1, _ox136 + _ow136)
                                         - max(_cx0, _ox136))
                                     _iy136 = max(
                                         0, min(_cy1, _oy136 + _oh136)
                                         - max(_cy0, _oy136))
-                                    if (_ix136 * _iy136) >= \
+                                    if (_ix136 * _iy136) < \
                                             0.70 * _ba136:
-                                        _dup136 = True
-                                        break
+                                        continue
+                                    # v1.14.138 — dedupِ پالی-آگاه (فقط
+                                    # اندروید — MANGA_SWEEP_COVDEDUP): ردِ
+                                    # باند فقط وقتی که ناحیهٔ «درستخوان»
+                                    # است (پالیهایِ کافی ≥۴۵٪ rect را
+                                    # پوشش میدهند). ناحیهٔ بدخوانِ OCR
+                                    # باندِ داخلش = خطِ جاماندهٔ واقعی
+                                    # است نه تکرار (لاگِ گوشی: باندِ
+                                    # (15,3256) داخلِ ناحیهٔ بدخوانِ
+                                    # (11,3266) که فقط 'DERSTHOSE' داشت
+                                    # رد شده بود = خطِ واقعیِ گم).
+                                    if _android_gate(
+                                            "MANGA_SWEEP_COVDEDUP"):
+                                        try:
+                                            _rc136 = _covM[
+                                                _oy136:_oy136 + _oh136,
+                                                _ox136:_ox136 + _ow136]
+                                            _cf136 = float(
+                                                (_rc136 > 0).mean()) \
+                                                if _rc136.size else 1.0
+                                        except Exception:
+                                            _cf136 = 1.0
+                                        if _cf136 < 0.45:
+                                            continue
+                                    _dup136 = True
+                                    break
                                 if _dup136:
                                     if self.debug:
                                         try:
@@ -25647,6 +25906,26 @@ class MangaTranslator:
                         if self.debug:
                             print(f"    [*]جارویِ شکافِ باکس: "
                                   f"+{len(_newR)} ناحیهٔ نو")
+                        # v1.14.138 — ادغامِ دوباره بعد از جارو (فقط
+                        # اندروید — همان MANGA_REGION_MERGE): باندِ تازه
+                        # گاهی با ناحیهٔ موجودِ همجوار رویهم میافتد
+                        # (لاگِ گوشی: (2,4439) 660×226 رویِ (32,4421)
+                        # 603×180 — ۶۵٪<۷۰٪ از dedup رد نشد) → دوبلِ
+                        # استخراج/پاکسازی و «حبابِ اشتباه جدا».
+                        if _android_gate("MANGA_REGION_MERGE"):
+                            try:
+                                _n_pre138b = len(unique_regions)
+                                unique_regions = \
+                                    MangaTranslator._merge_overlap_final_regions(
+                                        unique_regions, max_frac=0.25,
+                                        page_area=float(max(1, w * h)))
+                                if self.debug and len(unique_regions) != \
+                                        _n_pre138b:
+                                    print(f"    [*]ادغامِ پس از جارو: "
+                                          f"{_n_pre138b} → "
+                                          f"{len(unique_regions)} ناحیه")
+                            except Exception:
+                                pass
             except Exception as _bg135:
                 if self.debug:
                     print(f"    [!]جارویِ شکافِ باکس خطا: {_bg135}")
