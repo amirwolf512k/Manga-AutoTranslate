@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.156"
+APP_VER = "1.14.157"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3663,6 +3663,76 @@ class RapidOCRBackend:
         except Exception:
             return txt
 
+    def _mobile_banded_ocr(self, image_bgr):
+        """v1.14.157 — دستورِ سازندهٔ K3: «فقط باید در سطحِ کراپ کار کنی
+        نه رویِ تمام صفحه — رویِ گوشی خیلی خیلی مهمه». فالبکِ وقتی
+        ML Kit برشی نمیدهد: بهجایِ detِ تمامصفحه (کندِ گوشی)، صفحه به
+        باندهایِ افقیِ همپوشان تقسیم و کرابهکراو خوانده میشود
+        (هر باند = یک کراپ با crop_mode). صفحهٔ ≤1600px = یک کراپ
+        (رفتارِ قبل). فقط اندرویدِ واقعی؛ امولاتور/PC = قبل."""
+        if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+            return None
+        if (not _on_android()) or _android_x86_emulator() or \
+                os.environ.get("MANGA_FULLPAGE_BANDS", "1").strip() == "0":
+            return self._mobile.ocr(image_bgr, crop_mode=False)
+        _H, _W = image_bgr.shape[:2]
+        if _H <= 1600 or max(_H, _W) <= 1600:
+            return self._mobile.ocr(image_bgr, crop_mode=False)
+        _bh = max(600, int(1600 * 0.75))   # ارتفاعِ باند (≈1200)
+        _ov = max(60, int(_bh * 0.12))     # همپوشانیِ باندها
+        _ys, _y = [], 0
+        while _y < _H:
+            _ys.append(_y)
+            if _y + _bh >= _H:
+                break
+            _y += _bh - _ov
+        _all = []
+        for _y0 in _ys:
+            _y1 = min(_H, _y0 + _bh)
+            try:
+                _o = self._mobile.ocr(image_bgr[_y0:_y1], crop_mode=True)
+            except Exception:
+                _o = None
+            if not _o or not _o[0]:
+                continue
+            for _b, _p in _o[0]:
+                try:
+                    _bb = np.asarray(_b, dtype=np.float32).copy()
+                    _bb[:, 1] += _y0
+                    _all.append([_bb, _p])
+                except Exception:
+                    continue
+        if not _all:
+            return None
+        # حذفِ تکرارِ ناحیهٔ همپوشانی: همان متن + مرکزِ نزدیک
+        _all.sort(key=lambda e: float(np.asarray(e[0])[:, 1].mean()))
+        _kept = []
+        for _b, _p in _all:
+            try:
+                _t = str(_p[0]).strip()
+                _arr = np.asarray(_b)
+                _cy = float(_arr[:, 1].mean())
+                _hh = max(6.0, float(_arr[:, 1].max() - _arr[:, 1].min()))
+            except Exception:
+                _kept.append([_b, _p])
+                continue
+            _dup = False
+            for _kb, _kp in _kept:
+                if str(_kp[0]).strip() != _t:
+                    continue
+                try:
+                    _karr = np.asarray(_kb)
+                    if abs(float(_karr[:, 1].mean()) - _cy) < 0.6 * _hh:
+                        _dup = True
+                        break
+                except Exception:
+                    continue
+            if not _dup:
+                _kept.append([_b, _p])
+        print(f"[*] صفحهٔ بلند ({_H}px) → خواندنِ باندبه‌باندِ "
+              f"{len(_ys)} کراپ (دستورِ K3 — بدونِ detِ تمامصفحه)")
+        return [_kept] if _kept else None
+
     def ocr(self, image_bgr: np.ndarray, crop_mode: bool = False):
 
         if image_bgr is None or image_bgr.size == 0:
@@ -3673,7 +3743,12 @@ class RapidOCRBackend:
         # det_cap (فقط مسیرهایِ برشِ کاسکاد/نجات میفرستند؛ صفحه = False)
         if self._mobile is not None:
             try:
-                _out = self._mobile.ocr(image_bgr, crop_mode=bool(crop_mode))
+                # v1.14.157 — دستورِ K3: هیچ detِ تمامصفحه‌ای
+                # رویِ گوشی؛ صفحهٔ بیبرش → باندهایِ همپوشان
+                if crop_mode:
+                    _out = self._mobile.ocr(image_bgr, crop_mode=True)
+                else:
+                    _out = self._mobile_banded_ocr(image_bgr)
             except Exception:
                 return None
             if not _out or not _out[0]:

@@ -866,6 +866,150 @@ class RapidOcrMobile:
 
     def ocr(self, image_bgr: np.ndarray, crop_mode: bool = False,
             det_cap=None):
+        """v1.14.157 — نردبانِ K3 رویِ هر کراپ: برشِ کوچک اول با نسخهٔ
+        ارتقایافته (×۲+unsharp تا سقفِ det_cap)؛ اطمینانِ <0.80 یا خالی
+        → یک تلاشِ ارتقایافتهٔ دیگر؛ برنده = خطِ بیشتر/اطمینانِ بالاتر.
+        PC/امولاتورِ x86_64 (CI) = مستقیمِ _ocr_impl (بیت‌به‌بیت)."""
+        if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+            return None
+        if (not crop_mode) or (not _k3_on()):
+            return self._ocr_impl(image_bgr, crop_mode=crop_mode,
+                                  det_cap=det_cap)
+        _h, _w = image_bgr.shape[:2]
+        _s1 = _enh_scale_for(_w, _h, det_cap)
+        if _s1 > 1.0:
+            _r1 = _rescale_res(self._ocr_impl(
+                _enhance_crop(image_bgr, _s1), True, det_cap), 1.0 / _s1)
+        else:
+            _r1 = self._ocr_impl(image_bgr, crop_mode=True, det_cap=det_cap)
+        if not _low_quality(_r1):
+            return _r1
+        if _s1 > 1.0:
+            return _r1  # اول هم ارتقایافته بود - تکرار بیفایده
+        # تلاشِ ارتقایافته — عینِ پلهٔ بعدیِ نردبانِ K3 (زیرِ ۸۰٪ → بعدی)
+        _s2 = _enh_scale_for(_w, _h, det_cap)
+        if _s2 <= 1.0:
+            _cap = det_cap if det_cap else 960
+            _s2 = 2.0 if max(_w, _h) * 2.0 <= _cap else \
+                _cap / float(max(_w, _h))
+            if _s2 <= 1.05:
+                return _r1  # برشِ درشتِ کماطمینان — ارتقا در سقف جا نمیشود
+        _r2 = _rescale_res(self._ocr_impl(
+            _enhance_crop(image_bgr, _s2), True, det_cap), 1.0 / _s2)
+        if not _K3_NOTE_157["retry"]:
+            print("[⚡] کاسکادِ K3: "
+                  "کراپِ کماطمینان "
+                  "→ تلاشِ ارتقایافته "
+                  "(×" + ("%.1f" % _s2) + ")")
+            _K3_NOTE_157["retry"] = True
+        return _better_res(_r1, _r2)
+
+# ────────── v1.14.157 — دستورِ سازندهٔ K3 (روایتی از خودِ آنها) ──────────
+# «اول با RT-DETR در سطح بلوک متنها رو تشخیص میدم. اونا رو کراپ میکنم…
+# بعد از افزایشِ کیفیتِ کراپ… اگر درصدِ اطمینان زیر ۸۰ بود [موتورِ
+# بعدی]… نکته این است که فقط باید در سطحِ کراپ کار کنی نه رویِ تمام
+# صفحه — رویِ گوشی خیلی خیلی مهمه.»
+# سهمِ ما: بلوک = برشِ امنِ ML Kit ✓ (کاسکادِ 1.14.124)؛ استخراجِ نهایی
+# همچنان فقط PP-OCRv6 (قانونِ «ML Kit هرگز استخراج نمیکند»). چیزِ
+# نبود: ① افزایشِ کیفیتِ کراپ ② نردبانِ اطمینانِ هر کراپ. اینجا اضافه
+# میشود؛ فقط رویِ گوشیِ واقعی (CI/امولاتور بیت‌به‌بیتِ قبل).
+
+_K3_NOTE_157 = {"retry": False}
+
+
+def _k3_on() -> bool:
+    """دستورِ K3 فقط رویِ گوشیِ واقعی؛ PC/امولاتورِ x86_64 = قبل."""
+    try:
+        if str(os.environ.get("MANGA_CROP_K3", "1") or "1").strip() == "0":
+            return False
+        return bool(_android_env()) and not _x86_machine()
+    except Exception:
+        return False
+
+
+def _enh_scale_for(w: int, h: int, det_cap) -> float:
+    """① «افزایش کیفیت کراپ»: برشِ کوچک ×۲ تا سقفِ det_cap — متنِ ریز
+    که det/recِ 1:1 جا میاندازد. برشِ درشت = 1.0 (سرعت)."""
+    try:
+        _mn = float(os.environ.get("MANGA_CROP_ENH_MIN", "256") or 256)
+    except Exception:
+        _mn = 256.0
+    if min(int(w), int(h)) >= _mn:
+        return 1.0
+    try:
+        _s = float(os.environ.get("MANGA_CROP_ENH_SCALE", "2") or 2)
+    except Exception:
+        _s = 2.0
+    _s = max(1.0, min(3.0, _s))
+    try:
+        _cap = int(det_cap) if det_cap else 960
+    except Exception:
+        _cap = 960
+    if max(int(w), int(h)) * _s > _cap:
+        _s = _cap / float(max(int(w), int(h)))
+    return _s if _s > 1.05 else 1.0
+
+
+def _enhance_crop(img: np.ndarray, sc: float) -> np.ndarray:
+    """×۲ LANCZOS + unsharp (1.5/-0.5) — معادلِ سبکِ «افزایش کیفیت
+    کراپ»ِ K3 (آنها Waifu2x داشتند؛ اینجا بدونِ مدلِ اضافه)."""
+    _h, _w = img.shape[:2]
+    big = cv2.resize(img, (max(1, int(round(_w * sc))),
+                           max(1, int(round(_h * sc)))),
+                     interpolation=cv2.INTER_LANCZOS4)
+    try:
+        _bl = cv2.GaussianBlur(big, (0, 0), 1.0)
+        big = cv2.addWeighted(big, 1.5, _bl, -0.5, 0)
+    except Exception:
+        pass
+    return big
+
+
+def _lines_quality(res):
+    """(n, mean_score) — سنجهٔ نردبانِ اطمینانِ K3."""
+    if not res or not res[0]:
+        return 0, 0.0
+    _ls = res[0]
+    try:
+        return len(_ls), sum(float(p[1]) for _b, p in _ls) / max(1, len(_ls))
+    except Exception:
+        return len(_ls), 0.0
+
+
+def _low_quality(res) -> bool:
+    """«اگه درصدِ اطمینان زیر ۸۰ بود [موتورِ بعدی]» — خالی هم مردود."""
+    try:
+        _rs = float(os.environ.get("MANGA_CROP_RETRY_SCORE", "0.80") or 0.80)
+    except Exception:
+        _rs = 0.80
+    _n, _sc = _lines_quality(res)
+    return (_n == 0) or (_sc < _rs)
+
+
+def _rescale_res(res, k: float):
+    """باکسها از مختصاتِ برشِ ارتقایافته به کراپِ اصلی."""
+    if (not res) or (not res[0]) or k >= 0.999999:
+        return res
+    _out = []
+    for _b, _p in res[0]:
+        try:
+            _bb = np.asarray(_b, dtype=np.float32).copy() * float(k)
+        except Exception:
+            continue
+        _out.append([_bb, _p])
+    return [_out] if _out else None
+
+
+def _better_res(a, b):
+    """برنده = خطِ بیشتر؛ مساوی → اطمینانِ بالاتر (b = تلاشِ ارتقایافته)."""
+    _an = len(a[0]) if a and a[0] else 0
+    _bn = len(b[0]) if b and b[0] else 0
+    if _bn != _an:
+        return b if _bn > _an else a
+    return b if _lines_quality(b)[1] >= _lines_quality(a)[1] else a
+
+    def _ocr_impl(self, image_bgr: np.ndarray, crop_mode: bool = False,
+            det_cap=None):
         """خروجی: [ [box, (text, score)], ... ] یا None (خالی).
 
         خطِ کاملِ rapidocr: bounds-resize → vertical-padding → det →
