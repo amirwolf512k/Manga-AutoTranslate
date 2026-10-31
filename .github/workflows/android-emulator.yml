@@ -1,0 +1,376 @@
+name: Android Emulator Test (real APK — red-stain gate + 01.jpg)
+
+on:
+  workflow_dispatch:
+    inputs:
+      use_fixes:
+        description: 'test branch (fixes) — uncheck for main'
+        type: boolean
+        default: true
+  push:
+    branches: [test, main, mail]
+    paths:
+      - "manga.py"
+      - "manga_sections/**"
+      - "android/**"
+      - ".ci_scripts/**"
+      - ".github/workflows/android-emulator.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  emulator-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.use_fixes && 'test' || 'main' }}
+          fetch-depth: 1
+        if: github.event_name == 'workflow_dispatch'
+      - name: Checkout (push)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+        if: github.event_name == 'push'
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Python 3.10 (Chaquopy buildPython + verify tools)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install verify deps (host)
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install pymupdf pillow numpy requests opencv-python-headless
+
+      - name: Fetch vendored Python packages
+        run: |
+          python3 android/scripts/fetch_vendor.py --check || \
+            python3 android/scripts/fetch_vendor.py
+
+      - name: Sync engine sources into APK
+        run: python3 android/scripts/sync_sources.py
+
+      - name: Fetch RapidOCR models (PP-OCRv6 — det small + rec MEDIUM)
+        run: |
+          base="https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2"
+          rel="https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models"
+          A=android/app/src/main/assets/models
+          mkdir -p $A/det $A/cls $A/rec $A/rec_ko
+          curl -fL --retry 3 --max-time 600 -o $A/det/inference.onnx \
+            "$base/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx"
+          curl -fL --retry 3 --max-time 900 -o $A/rec/inference.onnx \
+            "$rel/PP-OCRv6_medium_rec_onnx.onnx"
+          curl -fL --retry 3 --max-time 300 -o $A/rec/dict.txt \
+            "$rel/ppocrv6_chars.txt"
+          curl -fL --retry 3 --max-time 600 -o $A/cls/inference.onnx \
+            "$base/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+          curl -fL --retry 3 --max-time 600 -o $A/rec_ko/inference.onnx \
+            "$base/onnx/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx"
+          curl -fL --retry 3 --max-time 600 -o $A/rec_ko/dict.txt \
+            "$base/paddle/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile/ppocrv5_korean_dict.txt"
+          test $(stat -c%s $A/det/inference.onnx) -gt 8000000
+          test $(stat -c%s $A/cls/inference.onnx) -gt 300000
+          test $(stat -c%s $A/rec/inference.onnx) -gt 60000000
+          test $(stat -c%s $A/rec/dict.txt) -gt 60000
+          test $(stat -c%s $A/rec_ko/inference.onnx) -gt 12000000
+
+      - name: Inject version from VERSION
+        run: |
+          VC=$(sed -n 's/^versionCode=//p' VERSION | tr -d '[:space:]')
+          VN=$(sed -n 's/^versionName=//p' VERSION | tr -d '[:space:]')
+          echo "versionCode=$VC versionName=$VN"
+          sed -i -E "s/versionCode = .*/versionCode = $VC/; s/versionName = .*/versionName = \"$VN\"/" \
+            android/app/build.gradle.kts
+
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build x86_64 debug APK (emulator — arm64 under libndk translation SIGSEGVs in libpython)
+        working-directory: android
+        run: |
+          gradle :app:assembleDebug -PappAbis="x86_64" -PlegacyJni=true \
+            -PchaquopyBuildPython="$(command -v python3)"
+          mkdir -p ../dist
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-x86_64.apk
+          ls -la ../dist
+
+      - name: Prepare test assets (01.jpg + img5 red-stain + models)
+        run: |
+          mkdir -p /tmp/mt/imgs /tmp/models
+          B1="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
+          B2="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/ci_imgs"
+          curl -sL --max-time 120 -o /tmp/mt/imgs/01.jpg \
+            "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/examples/01.jpg" || true
+          curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/img5.webp "$B1/img5.webp" \
+            || curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/img5.webp "$B2/img5.webp" \
+            || echo "::warning::img5.webp download failed from both refs"
+          ls -la /tmp/mt/imgs
+          test -s /tmp/mt/imgs/01.jpg
+          test -s /tmp/mt/imgs/img5.webp
+          curl -fL --retry 3 --max-time 300 -o /tmp/models/detector-v4-s_int8.onnx \
+            "https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models/detector-v4-s_int8.onnx" || true
+          curl -fL --retry 3 --max-time 600 -o /tmp/models/lama-manga-dyn.onnx \
+            "https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models/lama-manga-dyn.onnx" || true
+          ls -la /tmp/models
+
+      - name: Check KVM
+        run: |
+          ls -la /dev/kvm || true
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          ls -la /dev/kvm
+          "${ANDROID_HOME}/emulator/emulator" -accel-check || true
+
+      - name: Install platform-tools (adb)
+        run: |
+          P="$ANDROID_HOME/platform-tools/adb"
+          if [ ! -x "$P" ]; then yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" > /dev/null 2>&1 || true; fi
+          "$P" version
+          "$P" start-server
+
+      - name: Create AVD (4 cores, 5GB)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"; yes | "$SDKM" "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || true
+          echo no | "$AVDM" create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
+          CFG=$("$AVDM" list avd | grep -A5 'Name: ciavd' | grep 'Path:' | awk '{print $2}')
+          CFG="${CFG:-$HOME/.android/avd/ciavd.avd}"
+          echo "AVD path: $CFG"
+          grep -q "hw.cpu.ncore" "$CFG/config.ini" && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG/config.ini" || echo "hw.cpu.ncore=4" >> "$CFG/config.ini"
+          echo "hw.ramSize=5120MB" >> "$CFG/config.ini"
+          mkdir -p "$HOME/.android/avd"
+          ln -sfn "$CFG" "$HOME/.android/avd/ciavd.avd"
+          INI="$(dirname "$CFG")/ciavd.ini"
+          if [ -f "$INI" ]; then ln -sfn "$INI" "$HOME/.android/avd/ciavd.ini"; else printf 'avd.ini.encoding=UTF-8\npath=%s\n' "$CFG" > "$HOME/.android/avd/ciavd.ini"; fi
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          tail -5 "$CFG/config.ini"
+
+      - name: Boot emulator
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb start-server || true
+          "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 5120 > /tmp/emu_boot.log 2>&1 &
+          EMU_PID=$!
+          echo "emulator started in background (pid $EMU_PID)"
+          OK=0
+          for i in $(seq 1 144); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then echo "=== emulator process DIED at $((i*5))s ==="; break; fi
+            V=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$V" = "1" ]; then OK=1; echo "boot completed after ~$((i*5))s"; break; fi
+            if [ $((i % 12)) = 0 ]; then echo "--- boot wait $((i*5))s ---"; tail -2 /tmp/emu_boot.log; fi
+            sleep 5
+          done
+          if [ "$OK" != "1" ]; then echo "=== emulator boot FAILED — log tail:"; tail -40 /tmp/emu_boot.log; exit 1; fi
+          adb shell input keyevent 82 || true
+          adb devices
+          tail -3 /tmp/emu_boot.log
+
+      - name: Run APK on real Android emulator + red-stain gate
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          set -x
+          adb devices
+          mkdir -p /tmp/emulout emul-artifacts
+          adb install -r -t dist/MangaTranslator-x86_64.apk
+          adb push /tmp/mt/imgs/img5.webp /data/local/tmp/test.webp
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files && cat /data/local/tmp/test.webp > /data/user/0/com.amirwolf.mangatranslator/files/test.webp'"
+          adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
+          adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models && cp /data/local/tmp/det.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/detector-v4-s_int8.onnx && cp /data/local/tmp/lama.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/lama-manga-dyn.onnx'"
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0nMS4wJyBlbmNvZGluZz0ndXRmLTgnIHN0YW5kYWxvbmU9J3llcycgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0LndlYnA8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX29ubHkiPnRydWU8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0id2ViX2RlYnVnIj50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX21ldGhvZCI+bGFtYS1tYW5nYTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJvdXRfZm10Ij5QREY8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0icmVhZG9yZCI+cnRsPC9zdHJpbmc+CiAgICA8Ym9vbGVhbiBuYW1lPSJiYXR0ZXJ5X2Fza2VkIiB2YWx1ZT0idHJ1ZSIgLz4KICAgIDxib29sZWFuIG5hbWU9InZpZXdlcl9oaW50X3YzIiB2YWx1ZT0idHJ1ZSIgLz4KPC9tYXA+Cg== | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+          adb logcat -c || true
+          adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+          sleep 15
+          adb shell pidof com.amirwolf.mangatranslator > /tmp/emulout/pid.txt 2>&1 || true
+          adb logcat -d -t 600 > /tmp/emulout/logcat_start.txt 2>/dev/null || true
+          adb logcat -d -b crash > /tmp/emulout/logcat_crash.txt 2>/dev/null || true
+          sleep 10
+          python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail.png || true; adb pull /sdcard/scr_fail.png /tmp/emulout/scr_fail.png || true; adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga.log || true; adb exec-out run-as com.amirwolf.mangatranslator ls -R files/work > /tmp/emulout/work_ls.txt || true; adb logcat -d -t 4000 > /tmp/emulout/logcat_fail.txt || true; adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          adb logcat -d -t 3000 > /tmp/emulout/logcat_after.txt 2>/dev/null || true
+          adb logcat -d -s PaddleOcrBridge:V OpenCVUtils:V > /tmp/emulout/logcat_bridge.txt 2>/dev/null || true
+          python3 .ci_scripts/wait_done.py 60
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_emulator.log || true
+          adb shell "run-as com.amirwolf.mangatranslator ls -la files/work/out" | tee /tmp/emulout/out_ls.txt || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test.pdf > /tmp/emulout/test_out.pdf || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test_debug.pdf > /tmp/emulout/test_debug.pdf || true
+          adb shell rm -f /data/local/tmp/test.webp /data/local/tmp/det.onnx /data/local/tmp/lama.onnx || true
+          test -s /tmp/emulout/test_out.pdf
+          python3 .ci_scripts/check_red.py /tmp/emulout/test_out.pdf /tmp/mt/imgs/img5.webp
+          sleep 8
+          adb shell ls -la /sdcard/Download/manga/ | tee /tmp/emulout/dl_ls_run1.txt || true
+          adb exec-out run-as com.amirwolf.mangatranslator sh -c ': > files/manga.log' || true
+          python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr_fail2.png || true; adb pull /sdcard/scr_fail2.png /tmp/emulout/scr_fail2.png || true; adb logcat -d -t 4000 > /tmp/emulout/logcat_fail_run2.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          python3 .ci_scripts/wait_done.py 60
+          sleep 10
+          adb shell ls -la /sdcard/Download/manga/ | tee /tmp/emulout/dl_ls_run2.txt || true
+          python3 .ci_scripts/check_logs.py
+          cp /tmp/emulout/* emul-artifacts/ || true
+
+      - name: Run APK with 01.jpg (extraction-completeness gate)
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          set -x
+          adb devices
+          adb push /tmp/mt/imgs/01.jpg /data/local/tmp/test2.jpg
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/test2.jpg > /data/user/0/com.amirwolf.mangatranslator/files/test2.jpg'"
+          adb shell am force-stop com.amirwolf.mangatranslator || true
+          sleep 3
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiIHN0YW5kYWxvbmU9InllcyIgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0Mi5qcGc8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX29ubHkiPnRydWU8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0id2ViX2RlYnVnIj50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX21ldGhvZCI+bGFtYTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJvdXRfZm10Ij5QREY8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0icmVhZGVyIj5ydGw8L3N0cmluZz4KICAgIDxib29sZWFuIG5hbWU9ImJhdHRlcnlfYXNrZWQiIHZhbHVlPSJ0cnVlIiAvPgogICAgPGJvb2xlYW4gbmFtZT0idmlld2VyX2hpbnRfdjMiIHZhbHVlPSJ0cnVlIiAvPgo8L21hcD4K | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+          adb logcat -c || true
+          adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+          sleep 15
+          adb shell pidof com.amirwolf.mangatranslator > /tmp/emulout/pid2.txt 2>&1 || true
+          adb logcat -d -t 600 > /tmp/emulout/logcat_start2.txt 2>/dev/null || true
+          adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt 2>/dev/null || true
+          sleep 5
+          python3 .ci_scripts/tap_run.py || { adb shell screencap -p /sdcard/scr2_fail.png || true; adb pull /sdcard/scr2_fail.png /tmp/emulout/scr2_fail.png || true; adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_01.log || true; adb logcat -d -t 4000 > /tmp/emulout/logcat_fail2.txt || true; adb logcat -d -b crash > /tmp/emulout/logcat_crash2.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          python3 .ci_scripts/wait_done.py 60
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_01.log || true
+          adb shell "run-as com.amirwolf.mangatranslator ls -la files/work/out" | tee /tmp/emulout/out_ls2.txt || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test2.pdf > /tmp/emulout/test2_out.pdf || true
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/work/out/test2_debug.pdf > /tmp/emulout/test2_debug.pdf || true
+          adb shell rm -f /data/local/tmp/test2.jpg || true
+          python3 .ci_scripts/check_extract.py /tmp/emulout/manga_01.log 7 content
+          test -s /tmp/emulout/test2_out.pdf
+          echo "[✓] 01.jpg emulator gate passed"
+          cp /tmp/emulout/* emul-artifacts/ || true
+
+      - name: Run APK with OCR-direction fixture (tilted + curved text)
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          set -x
+          B1="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs/fixtures/page_mixed.png"
+          B2="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/ci_imgs/fixtures/page_mixed.png"
+          curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/page_mixed.png "$B1" \
+            || curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/page_mixed.png "$B2"
+          test -s /tmp/mt/imgs/page_mixed.png
+          adb push /tmp/mt/imgs/page_mixed.png /data/local/tmp/test3.png
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/test3.png > /data/user/0/com.amirwolf.mangatranslator/files/test3.png'"
+          adb shell am force-stop com.amirwolf.mangatranslator || true
+          sleep 3
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0iMS4wIiBlbmNvZGluZz0idXRmLTgiIHN0YW5kYWxvbmU9InllcyIgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0My5wbmc8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX29ubHkiPnRydWU8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0id2ViX2RlYnVnIj50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9Im91dF9mbXQiPlBERjwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJyZWFkZXIiPnJ0bDwvc3RyaW5nPgogICAgPGJvb2xlYW4gbmFtZT0iYmF0dGVyeV9hc2tlZCIgdmFsdWU9InRydWUiIC8+CjwvbWFwPgo= | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+          adb logcat -c || true
+          adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+          sleep 15
+          adb logcat -d -b crash > /tmp/emulout/logcat_crash3.txt 2>/dev/null || true
+          python3 .ci_scripts/tap_run.py || { adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_pm_fail.log || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          python3 .ci_scripts/wait_done.py 60
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > /tmp/emulout/manga_pm.log || true
+          adb shell rm -f /data/local/tmp/test3.png || true
+          python3 .ci_scripts/check_extract.py /tmp/emulout/manga_pm.log 4
+          echo "[✓] OCR-direction fixture emulator gate passed"
+          cp /tmp/emulout/* emul-artifacts/ || true
+
+      - name: Run APK on extended test set (3 uploads + ja/ko/zh pages)
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          set -x
+          B1="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
+          B2="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/ci_imgs"
+          mkdir -p /tmp/mt/ext
+          EXT_SET="img4.jpg:en up0929_zh.jpg:zh_en up0904_en.jpg:en up0822_en.jpg:en lang_ja_bw.jpg:ja_en lang_ja_color.jpg:ja_en lang_ko.jpg:ko_en lang_zh.jpg:zh_en img6.jpg:en"
+          for tok in $EXT_SET; do
+            F="${tok%%:*}"; L="${tok#*:}"; L="${L//_/ }"
+            curl -fsSL --retry 2 --max-time 120 -o "/tmp/mt/ext/$F" "$B1/$F" \
+              || curl -fsSL --retry 2 --max-time 120 -o "/tmp/mt/ext/$F" "$B2/$F" \
+              || echo "::warning::$F download failed — skipped"
+          done
+          ls -la /tmp/mt/ext
+          FAIL=0; RAN=0
+          for tok in $EXT_SET; do
+            F="${tok%%:*}"; L="${tok#*:}"; L="${L//_/ }"
+            IMG="/tmp/mt/ext/$F"
+            if [ ! -s "$IMG" ]; then echo "::error::$F missing"; FAIL=1; continue; fi
+            N="${F%.*}"
+            RAN=$((RAN+1))
+            echo "════ [$RAN] $F (ocr_lang=$L) ════"
+            adb shell am force-stop com.amirwolf.mangatranslator || true
+            sleep 2
+            adb push "$IMG" "/data/local/tmp/ext_$F"
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'cat /data/local/tmp/ext_$F > /data/user/0/com.amirwolf.mangatranslator/files/ext_$F'"
+            python3 .ci_scripts/ext_settings.py "$F" "$L" > /tmp/mt/ext_settings.xml
+            adb push /tmp/mt/ext_settings.xml /data/local/tmp/ext_settings.xml
+            adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && cat /data/local/tmp/ext_settings.xml > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
+            adb logcat -c || true
+            adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
+            sleep 12
+            if ! python3 .ci_scripts/tap_run.py; then
+              echo "::error::$F — tap_run failed"
+              adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > "/tmp/emulout/ext_${N}_fail.log" || true
+              adb shell screencap -p /sdcard/scr_ext.png 2>/dev/null || true
+              adb pull /sdcard/scr_ext.png "/tmp/emulout/ext_${N}_scr.png" || true
+              FAIL=1; continue
+            fi
+            if ! python3 .ci_scripts/wait_done.py 15; then
+              echo "::error::$F — engine did not finish OK"
+              adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > "/tmp/emulout/ext_${N}_fail.log" || true
+              FAIL=1; continue
+            fi
+            adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > "/tmp/emulout/ext_${N}.log" || true
+            adb exec-out run-as com.amirwolf.mangatranslator cat "files/work/out/ext_${F%.*}.pdf" > "/tmp/emulout/ext_${N}.pdf" || true
+            if [ ! -s "/tmp/emulout/ext_${N}.pdf" ]; then
+              echo "::error::$F — no PDF produced"; FAIL=1; continue
+            fi
+            SZ=$(stat -c%s "/tmp/emulout/ext_${N}.pdf")
+            if [ "$SZ" -lt 8000 ]; then
+              echo "::error::$F — PDF too small ($SZ bytes)"; FAIL=1; continue
+            fi
+            if grep -q "OpenCV': [1-9]" "/tmp/emulout/ext_${N}.log" 2>/dev/null || \
+               grep -qE "Cleanup: .*'OpenCV': [1-9]" "/tmp/emulout/ext_${N}.log"; then
+              echo "::warning::$F — OpenCV fallback in cleanup"
+            fi
+            _WORD171=""
+            if [ "$F" = "img6.jpg" ]; then _WORD171="Youre"; fi
+            if [ "$F" = "lang_ko.jpg" ]; then
+              echo "[i] $F — official ppocr rec has no hangul; PDF-only gate"
+            else
+              python3 .ci_scripts/check_ocr_gate.py "/tmp/emulout/ext_${N}.log" "$L" "$_WORD171" \
+                || { echo "::error::$F — mobile-OCR multilang gate failed"; FAIL=1; continue; }
+            fi
+            echo "[✓] $F → PDF ${SZ} bytes + multilang text gate OK"
+          done
+          adb shell rm -f /data/local/tmp/ext_settings.xml || true
+          cp /tmp/emulout/* emul-artifacts/ 2>/dev/null || true
+          if [ "$FAIL" != "0" ]; then echo "::error::extended test set FAILED"; exit 1; fi
+          if [ "$RAN" -lt 8 ]; then echo "::error::only $RAN/8 images ran"; exit 1; fi
+          echo "[✓] extended test set passed ($RAN images)"
+
+      - name: Capture diagnostics (always on failure)
+        if: failure()
+        run: |
+          mkdir -p emul-artifacts
+          cp /tmp/emulout/* emul-artifacts/ 2>/dev/null || true
+          ls -la emul-artifacts || true
+
+      - name: Shutdown emulator
+        if: always()
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb emu kill || true
+          sleep 5
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-android-emulator
+          path: |
+            emul-artifacts/**
+          if-no-files-found: warn
+          retention-days: 10
+
