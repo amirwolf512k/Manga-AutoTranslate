@@ -790,12 +790,13 @@ def _run(job):
         shutil.rmtree(job["live_dbg"], ignore_errors=True)
         os.environ["MANGA_LIVE_DEBUG_DIR"] = job["live_dbg"]
         langs = [x for x in str(p.get("ocr_lang") or "en").split() if x.strip()]
-        # v1.14.120 — انتخابِ موتورِ استخراج از تنظیماتِ اپ →
-        # MANGA_ANDROID_OCR = mlkit | rapidocr (paddlelite حذف شد)
+        # v1.14.150 — انتخابِ موتورِ استخراج از تنظیماتِ اپ؛ پیشفرضِ
+        # پایتون: استخراجِ متن = PP-OCRv6 ONNX + برشِ امن = ML Kit →
+        # MANGA_ANDROID_OCR = rapidocr | mlkit
         try:
             _oe = str(p.get("ocr_engine") or "").strip().lower()
             if _oe and _oe not in ("mlkit", "rapidocr"):
-                _log(job, "[!] موتورِ «%s» حذف/ناشناخته است → ML Kit نیتیو" % _oe)
+                _log(job, "[!] موتورِ «%s» ناشناخته است → پیشفرض (PP-OCRv6 ONNX)" % _oe)
                 _oe = ""
             if _oe:
                 os.environ["MANGA_ANDROID_OCR"] = _oe

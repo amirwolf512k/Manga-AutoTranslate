@@ -150,17 +150,50 @@ class MainActivity : AppCompatActivity() {
                     "MangaApp:translation")
             }
             wakeLock?.takeIf { !it.isHeld }?.acquire(4 * 60 * 60 * 1000L)
+            startTranslationForeground()
         } catch (_: Exception) {
         }
     }
 
     private fun releaseKeepAwake() {
+        stopTranslationForeground()
         try {
             window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             wakeLock?.takeIf { it.isHeld }?.release()
         } catch (_: Exception) {
         }
         wakeLock = null
+    }
+
+    // v1.14.150 — سرویسِ پیشزمینه: با رفتنِ کاربر رویِ اپِ دیگر، اندروید
+    // پروسهٔ اپ را «انبارشده» (cached) و منجمد میکند و ترجمه میخوابد؛
+    // سرویسِ Foreground با نوتیفیکیشنِ «در حال ترجمه» پروسه را زنده
+    // نگه میدارد تا کار تمام شود (شروع: شروعِ کار، توقف: پایانِ کار).
+    private fun startTranslationForeground() {
+        try {
+            if (Build.VERSION.SDK_INT >= 33 &&
+                checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED &&
+                !prefs.getBoolean("notif_asked", false)) {
+                prefs.edit().putBoolean("notif_asked", true).apply()
+                try {
+                    requestPermissions(
+                        arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 4150)
+                } catch (_: Exception) {
+                }
+            }
+            val i = Intent(this, TranslationService::class.java)
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(i)
+            else startService(i)
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun stopTranslationForeground() {
+        try {
+            stopService(Intent(this, TranslationService::class.java))
+        } catch (_: Exception) {
+        }
     }
 
     private fun maybeAskBatteryExemption() {

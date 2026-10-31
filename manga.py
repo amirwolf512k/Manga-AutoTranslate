@@ -5145,32 +5145,33 @@ class MangaTranslator:
                 print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
         if self.ocr is None and _on_android():
-            # v1.14.126 — پیشفرضِ اندروید = ML Kit خالص (نیتیوِ گوگل،
-            # بدونِ PaddleOCR/ONNX و بدونِ هیچ دانلودی). گزارشِ واقعیِ
-            # کاربر رویِ 1.14.125: استخراجِ کاسکادِ PP-OCRv6 رویِ گوشی
-            # تا «یک ساعت» طول میکشد (det/recِ ONNX رویِ CPUِ گوشی از
-            # راهِ پلِ جاوا — حتی با int8/crop-mode). درخواستِ صریحِ
-            # کاربر: «راهی واسه استفادهٔ سریع تو گوشی بدونِ paddleocr».
-            # PP-OCRv6/کاسکاد فقط با انتخابِ صریح:
-            # MANGA_ANDROID_OCR=rapidocr (برایِ گوشیهایِ پرچمدار)
+            # v1.14.150 — پیشفرضِ جدیدِ اندروید به درخواستِ کاربر:
+            # «رویِ گوشی هم PaddleOCR فعال کن؛ فقط قسمتِ استخراجِ متن از
+            # آن استفاده کند — PaddleOCR ONNX بدونِ DFT — ببینم چقدر
+            # سرعت دارد؛ فقط برشِ امن ML Kit استفاده کند».
+            # پس: استخراجِ متن = PP-OCRv6 ONNX (PaddleOCR-ONNX)؛
+            # پاکسازی هم از قبل LaMaِ بدونِ DFT است (v1.14.147).
+            # ML Kit فقط «راهنمایِ برشِ امن» (کاسکادِ K3) و فال‌بکِ
+            # بارگذاری است. فرارِ دستی: MANGA_ANDROID_OCR=mlkit
             _aocr = os.environ.get("MANGA_ANDROID_OCR", "").strip().lower()
             if _aocr and _aocr not in ("mlkit", "rapidocr"):
-                print(f"[!] موتورِ «{_aocr}» ناشناخته است → ML Kit")
+                print(f"[!] موتورِ «{_aocr}» ناشناخته است → PP-OCRv6 ONNX")
                 _aocr = ""
-            if _aocr == "rapidocr":
+            if _aocr != "mlkit":
                 try:
                     self.ocr = RapidOCRBackend(
                         lang=main_lang, prefer_gpu=self.use_gpu)
                     self._ocr_backend_name = "rapidocr"
-                    print("[*] اندروید: PP-OCRv6 ONNX با انتخابِ صریحِ "
-                          "MANGA_ANDROID_OCR=rapidocr (کندتر از ML Kit).")
+                    print("[*] اندروید: استخراجِ متن = PP-OCRv6 ONNX "
+                          "(PaddleOCR) — v1.14.150")
                     # راهنمایِ برشِ امنِ ML Kit (کاسکادِ K3): استخراجِ
-                    # یک بار با ML Kit، بعدِ PP-OCRv6 فقط رویِ همان نقاط.
+                    # یک بار با ML Kit، بعدِ PP-OCRv6 فقط رویِ همان نقاط —
+                    # برشِ امن همیشه با ML Kit، مثلِ خواستهٔ کاربر.
                     self._mlkit_guide = None
                     try:
                         self._mlkit_guide = MlKitBackend(lang=main_lang)
-                        print("[*] کاسکادِ K3 فعال: ML Kit → برشِ امن → "
-                              "PP-OCRv6 رویِ برش‌ها")
+                        print("[*] برشِ امن = ML Kit (کاسکادِ K3: "
+                              "PP-OCRv6 فقط رویِ برش‌ها)")
                     except Exception as _e2:
                         print(f"[!] راهنمایِ ML Kit در دسترس نیست ({_e2}) "
                               "→ PP-OCRv6 تمام‌صفحه")
@@ -5180,8 +5181,11 @@ class MangaTranslator:
                 try:
                     self.ocr = MlKitBackend(lang=main_lang)
                     self._ocr_backend_name = "mlkit"
-                    print("[*] اندروید: موتورِ پیشفرض = ML Kit نیتیوِ گوگل "
-                          "(سریعترین حالتِ گوشی — بدونِ PaddleOCR/دانلود)")
+                    if _aocr == "mlkit":
+                        print("[*] اندروید: موتور = ML Kit نیتیوِ گوگل "
+                              "(انتخابِ صریحِ MANGA_ANDROID_OCR=mlkit)")
+                    else:
+                        print("[*] اندروید: فال‌بک = ML Kit نیتیوِ گوگل")
                 except Exception as e:
                     print(f"[!] ML Kit لود نشد ({e}) → RapidOCR ONNX")
                     try:
@@ -26243,6 +26247,7 @@ class MangaTranslator:
     def extract_regions_phase(self, image: np.ndarray) -> Tuple[List[TextRegion], Optional[np.ndarray]]:
 
         h, w = image.shape[:2]
+        _t_ext150 = time.time()  # v1.14.150 — کرونومترِ استخراج (نمایشِ سرعت)
         unique_regions: List[TextRegion] = []
 
         _raise_if_stop()
@@ -26783,8 +26788,11 @@ class MangaTranslator:
         except Exception:
             pass
 
+        _ob150 = getattr(self, "_ocr_backend_name", "") or "?"
+        _dt150 = time.time() - _t_ext150
         if unique_regions:
-            print(f"[+] متن استخراج شد: {len(unique_regions)} ناحیه")
+            print(f"[+] متن استخراج شد: {len(unique_regions)} ناحیه | "
+                  f"زمانِ استخراج: {_dt150:.1f} ثانیه | موتور: {_ob150}")
         else:
             print("[!] هیچ متن/حبابی یافت نشد.")
         return unique_regions, dbg
