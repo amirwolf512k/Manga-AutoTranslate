@@ -21,6 +21,13 @@ extra» بازسازی میکند تا داخلِ APK (Chaquopy) اجرا شود
 
 خروجیِ `ocr()` همان قالبِ RapidOCRBackend است:
   [ [box(np.float32 4×2), (text, score)], ... ]
+
+v1.14.152 — مجموعهٔ K3: رویِ گوشیِ واقعی det/rec از فایلهایِ رسمیِ
+PaddlePaddle است (PP-OCRv6_medium_det_onnx / PP-OCRv6_medium_rec_onnx /
+PP-OCRv5_korean_rec + جفتِ ch_PP-OCRv4 برایِ چینی) — دقیقاً همان ۵ فایلِ
+اپِ K3. charset از فایلهایِ باندلشده خوانده میشود (ppocrv6_chars /
+korean_chars / ppocr_keys_v1). شبیهسازِ x86_64 (CI) همان مدلهایِ small
+قبلی را میگیرد تا گیتها دستنخورده بمانند.
 """
 import math
 import os

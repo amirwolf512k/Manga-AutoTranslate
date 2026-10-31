@@ -3053,6 +3053,13 @@ class RTDetrV2ONNXDetector:
 # (همان amirwolf512k/Manga-AutoTranslate)؛ assetsها دقیقاً با همین نام‌ها
 # آنجاست: PP-OCRv6_det_small.onnx (det) / PP-OCRv6_rec_small.onnx (rec
 # en+ch) / korean_PP-OCRv5_rec_mobile.onnx / japan_PP-OCRv4_rec_mobile.onnx
+# v1.14.152 — مجموعهٔ K3 اضافه شد (درخواست: «از همین نسخه که k3 استفاده
+# میکنه استفاده کن»): PP-OCRv6_medium_det_onnx.onnx (59.16MiB) /
+# PP-OCRv6_medium_rec_onnx.onnx (73.01MiB) / PP-OCRv5_korean_rec.onnx
+# (12.80MiB) = عینِ فایلهایِ رسمیِ PaddlePaddle رویِ HuggingFace که خودِ
+# K3 دانلود میکند (حجمها مو به مو با پوشهٔ K3) + ch_PP-OCRv4_det_infer
+# .onnx (4.53MiB) + ch_PP-OCRv4_rec_infer.onnx (10.35MiB؛ dict داخلیِ
+# metadata = ppocr_keys_v1 با 6623 کاراکتر).
 # / ch_ppocr_mobile_v2.0_cls_mobile.onnx (cls — در رانِ عادی استفاده
 # نمی‌شود). مسیرِ دوم فقط فال‌بکِ قطعِ گیت‌هاب است (modelscope).
 _RAPIDOCR_MIRROR = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
@@ -3070,7 +3077,53 @@ _RAPIDOCR_FILES = {
         _RAPIDOCR_MS + "/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx",
     "japan_PP-OCRv4_rec_mobile.onnx":
         _RAPIDOCR_MS + "/PP-OCRv4/rec/japan_PP-OCRv4_rec_mobile.onnx",
+    # v1.14.152 — مجموعهٔ K3 (منبعِ فالبک = رسمیِ PaddlePaddle/modelscope؛
+    # منبعِ اصلی = ریلیزِ «models» خودمان با همین نامها)
+    "PP-OCRv6_medium_det_onnx.onnx":
+        "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_det_onnx"
+        "/resolve/main/inference.onnx",
+    "PP-OCRv6_medium_rec_onnx.onnx":
+        "https://huggingface.co/PaddlePaddle/PP-OCRv6_medium_rec_onnx"
+        "/resolve/main/inference.onnx",
+    "PP-OCRv5_korean_rec.onnx":
+        "https://huggingface.co/PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx"
+        "/resolve/main/inference.onnx",
+    "ch_PP-OCRv4_det_infer.onnx":
+        _RAPIDOCR_MS + "/PP-OCRv4/det/ch_PP-OCRv4_det_mobile.onnx",
+    "ch_PP-OCRv4_rec_infer.onnx":
+        _RAPIDOCR_MS + "/PP-OCRv4/rec/ch_PP-OCRv4_rec_mobile.onnx",
 }
+
+
+def _rapidocr_model_pair(lang: str, small: bool = False):
+    """v1.14.152 — جفتِ (det, rec) بر اساسِ زبان.
+
+    پیشفرض = مجموعهٔ K3 (دقیقاً همان ۵ فایلِ پوشهٔ K3):
+      det = PP-OCRv6_medium_det_onnx.onnx (رسمیِ PaddlePaddle، 59.16MiB)
+      recِ en/سایر = PP-OCRv6_medium_rec_onnx.onnx (73.01MiB)
+      recِ ko = PP-OCRv5_korean_rec.onnx (رسمی، 12.80MiB)
+      zh = جفتِ کاملِ ch_PP-OCRv4 (det 4.53MiB + rec 10.35MiB)
+      ja = japan_PP-OCRv4_rec_mobile قبلی (K3 برایِ ژاپنی encoder-decoder
+           جداگانه دارد — خارج از scopeِ این تغییر)
+    small=True (فقط شبیهسازِ x86_64 در CI) = مجموعهٔ سبکِ قبلی تا
+    بودجهٔ زمانی و گیتهایِ CI دستنخورده بمانند.
+    """
+    _low = str(lang).lower()
+    if small:
+        _det = "PP-OCRv6_det_small.onnx"
+        if _low in ("korean", "ko"):
+            return _det, "korean_PP-OCRv5_rec_mobile.onnx"
+        if _low in ("japan", "ja", "japanese"):
+            return _det, "japan_PP-OCRv4_rec_mobile.onnx"
+        return _det, "PP-OCRv6_rec_small.onnx"
+    if _low in ("ch", "zh", "chinese", "ch_sim", "chinese_cht"):
+        return "ch_PP-OCRv4_det_infer.onnx", "ch_PP-OCRv4_rec_infer.onnx"
+    _det = "PP-OCRv6_medium_det_onnx.onnx"
+    if _low in ("korean", "ko"):
+        return _det, "PP-OCRv5_korean_rec.onnx"
+    if _low in ("japan", "ja", "japanese"):
+        return _det, "japan_PP-OCRv4_rec_mobile.onnx"
+    return _det, "PP-OCRv6_medium_rec_onnx.onnx"
 
 
 def _fmt_mb(n: float) -> str:
@@ -3153,7 +3206,10 @@ def _ensure_rapidocr_models(mdir, files=None):
     wanted = files or list(_RAPIDOCR_FILES)
     for fname in wanted:
         dst = os.path.join(mdir, fname)
-        if os.path.isfile(dst) and os.path.getsize(dst) > 100_000:
+        # v1.14.152 — فایلهایِ dict (txt) کوچکاند (47-75KB)؛ آستانهٔ
+        # 100KB فقط برایِ مدلهاست وگرنه dict هر بار دوباره دانلود میشد.
+        _min_sz = 100 if fname.endswith(".txt") else 100_000
+        if os.path.isfile(dst) and os.path.getsize(dst) > _min_sz:
             continue
         done = False
         for url in (_RAPIDOCR_MIRROR + fname, _RAPIDOCR_FILES.get(fname)):
@@ -3182,7 +3238,8 @@ class RapidOCRBackend:
     # استخراج شدهاند — عینِ دیکشنریِ داخلِ فایلِ onnx)
     _MOBILE_CHARS = {
         "en": "ppocrv6_chars.txt",
-        "ch": "ppocrv6_chars.txt",
+        "ch": "ppocr_keys_v1.txt", "zh": "ppocr_keys_v1.txt",
+        "chinese": "ppocr_keys_v1.txt", "ch_sim": "ppocr_keys_v1.txt",
         "korean": "korean_chars.txt", "ko": "korean_chars.txt",
         "japan": "japan_chars.txt", "ja": "japan_chars.txt",
     }
@@ -3264,14 +3321,10 @@ class RapidOCRBackend:
                 try:
                     # v1.14.29: فقط مدل‌های همین زبان دانلود می‌شود — نه همهٔ زبان‌ها
                     # (det مشترک است؛ rec مخصوص زبان؛ cls دیگر استفاده نمی‌شود)
-                    _files = ["PP-OCRv6_det_small.onnx"]
-                    if _low in ("korean", "ko"):
-                        _files.append("korean_PP-OCRv5_rec_mobile.onnx")
-                    elif _low in ("japan", "ja", "japanese"):
-                        _files.append("japan_PP-OCRv4_rec_mobile.onnx")
-                    else:
-                        _files.append("PP-OCRv6_rec_small.onnx")
-                    _ensure_rapidocr_models(_mdir, files=_files)
+                    # v1.14.152 — مجموعهٔ K3 با helperِ مشترک
+                    _det_n52, _rec_n52 = _rapidocr_model_pair(lang)
+                    _ensure_rapidocr_models(_mdir,
+                                            files=[_det_n52, _rec_n52])
                 except Exception as _e:
                     print(f"[!] پیش‌دانلود مدل‌ها ناموفق: {_e}")
             # v1.14.96-speed — مدل‌هایِ det/rec (و cls اگر فایلش موجود باشد)
@@ -3283,19 +3336,34 @@ class RapidOCRBackend:
             _gpu_flags69 = {}
             if _mdir:
                 try:
-                    _rec_name69 = ("korean_PP-OCRv5_rec_mobile.onnx"
-                                   if _low in ("korean", "ko") else
-                                   ("japan_PP-OCRv4_rec_mobile.onnx"
-                                    if _low in ("japan", "ja", "japanese")
-                                    else "PP-OCRv6_rec_small.onnx"))
+                    # v1.14.152 — مسیرِ صریحِ مدلها از helperِ مجموعهٔ K3
+                    _det_n52, _rec_n52 = _rapidocr_model_pair(lang)
                     for _sec69, _fn69 in (
-                            ("Det", "PP-OCRv6_det_small.onnx"),
-                            ("Rec", _rec_name69),
+                            ("Det", _det_n52),
+                            ("Rec", _rec_n52),
                             ("Cls", "ch_ppocr_mobile_v2.0_cls_mobile.onnx")):
                         _mp69 = _os.path.join(_mdir, _fn69)
                         if _os.path.isfile(_mp69) \
                                 and _os.path.getsize(_mp69) > 100_000:
                             _base[f"{_sec69}.model_path"] = _mp69
+                    # v1.14.152 — مدلهایِ رسمیِ PaddlePaddle (medium/korean)
+                    # dict را داخلِ metadata ندارند → rapidocr بدونِ
+                    # rec_keys_path دنبالِ dict_url میگردد و «Missing key
+                    # dict_url» میدهد. فایلِ dict محلیِ همان مدل را میدهیم
+                    # (ch v4 و japan خودشان dictِ داخلی دارند — دست نمیخورند).
+                    if _rec_n52 in ("PP-OCRv6_medium_rec_onnx.onnx",
+                                    "PP-OCRv5_korean_rec.onnx"):
+                        _keys52 = ("ppocrv6_chars.txt"
+                                   if _rec_n52.startswith("PP-OCRv6")
+                                   else "korean_chars.txt")
+                        try:
+                            _ensure_rapidocr_models(_mdir, files=[_keys52])
+                        except Exception:
+                            pass
+                        _kp52 = _os.path.join(_mdir, _keys52)
+                        if _os.path.isfile(_kp52) \
+                                and _os.path.getsize(_kp52) > 100:
+                            _base["Rec.rec_keys_path"] = _kp52
                 except Exception as _e69:
                     print(f"[!] مسیرِ صریحِ مدلِ OCR نشد ({_e69}) → auto")
             # v1.14.96-speed — EPِ سشن‌هایِ OCR هم از انتخابگرِ مرکزیِ
@@ -3459,13 +3527,18 @@ class RapidOCRBackend:
             # u8s8ِ MLAS سریعتر. توافقِ باکس رویِ 01.jpg: ۴۸/۴۸ باکسِ
             # fp32 (بنچمارکِ v1.14.125). خاموش: MANGA_MOBILE_DET_INT8=0.
             # دانلودِ ناموفق/نبودِ فایل → fp32 (بیصدا).
-            _det_name = "PP-OCRv6_det_small.onnx"
+            # v1.14.152 — مجموعهٔ K3 (دقیقاً فایل‌های اپِ K3): PP-OCRv6
+            # medium det/rec + korean v5 + ch v4 (fp32 کامل، بدونِ int8 —
+            # عینِ K3). شبیه‌سازِ x86_64 (CI) با مجموعهٔ سبک قبلی میماند
+            # تا بودجهٔ زمانی و گیتهای CI دست‌نخورده بمانند.
+            _small_set = _android_x86_emulator()
+            _det_name, _rec = _rapidocr_model_pair(lang, small=_small_set)
             try:
                 _int8_on = os.environ.get(
                     "MANGA_MOBILE_DET_INT8", "1").strip() != "0"
             except Exception:
                 _int8_on = True
-            if _int8_on:
+            if _int8_on and _det_name == "PP-OCRv6_det_small.onnx":
                 _det8 = "PP-OCRv6_det_small.int8.onnx"
                 try:
                     _ensure_rapidocr_models(_mdir, files=[_det8])
@@ -3475,12 +3548,6 @@ class RapidOCRBackend:
                 if os.path.isfile(_p8) and os.path.getsize(_p8) > 100_000:
                     _det_name = _det8
             _det = _det_name
-            if _low in ("korean", "ko"):
-                _rec = "korean_PP-OCRv5_rec_mobile.onnx"
-            elif _low in ("japan", "ja", "japanese"):
-                _rec = "japan_PP-OCRv4_rec_mobile.onnx"
-            else:
-                _rec = "PP-OCRv6_rec_small.onnx"
             _ensure_rapidocr_models(_mdir, files=[_det, _rec])
             _p_det = os.path.join(_mdir, _det)
             _p_rec = os.path.join(_mdir, _rec)
@@ -3502,9 +3569,10 @@ class RapidOCRBackend:
                         sys.modules["rapidocr_mobile"].__file__)),
                     _chars),
                 intra_threads=_intra, det_cap=max(320, _det_cap))
-            print(f"[+] OCR گوشی: PP-OCRv6 ONNX (موتورِ PC/K3) | "
-                  f"lang={lang} | threads={_intra} | "
-                  f"det={'int8' if _det_name.endswith('int8.onnx') else 'fp32'}"
+            print(f"[+] OCR گوشی: "
+                  f"{'مجموعهٔ K3' if not _small_set else 'مجموعهٔ سبک (شبیهساز)'}"
+                  f" | det={_det_name} | rec={_rec} | "
+                  f"lang={lang} | threads={_intra}"
                   f" | crop-cap={max(320, _det_cap)}")
         except ImportError:
             raise

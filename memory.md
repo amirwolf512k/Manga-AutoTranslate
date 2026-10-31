@@ -849,3 +849,28 @@
 **۲) رفتارِ بستن:** ریشه: `START_STICKY` بعد از بستنِ اپ سرویس را دوباره بالا میآورد (اعلانِ زامبی). درمان: `START_NOT_STICKY` + `onTaskRemoved` → `stopForeground(true)` + `stopSelf()` — با بستنِ اپ توسطِ کاربر، اعلان میرود، سرویس میایستد و کار هم تمام میشود (خواستهٔ صریحِ کاربر). خروجِ موقت به بقیهٔ اپها همچنان کار را ادامه میدهد (همان v1.14.150).
 
 **تست:** py_compile bridge ✓؛ شبیهسازیِ پارسِ فاز/صفحه با ۱۰ چک (همهٔ نشانهها + جریانِ کاملِ یک صفحه + بیاثر بودنِ خطِ معمولی) ✓؛ ترازِ براکتِ Kotlin ✓. versionCode=156.
+
+
+## v1.14.152 (2026-10-31) — مجموعهٔ مدلهایِ OCR = دقیقاً همان ۵ فایلِ K3
+
+**درخواستِ کاربر:** اسکرینشاتِ پوشهٔ `/data/com.k3.manga.autotranslate/files` (Root Explorer) + «هنوز نگفتی اینا چین؟ noise3.onnx / JP_encoder_model.onnx / JP_decoder_model.onnx — بعد از همین نسخه که k3 استفاده میکنه استفاده کن؛ منظورم PP-OCRv6_medium_rec/det_onnx، PP-OCRv5_korean_rec، ch_PP-OCRv4_det/rec_infer — حجمشون فرق داره».
+
+**۱) منبعِ کشف شد:** فایلهایِ K3 = ONNXهایِ **رسمیِ PaddlePaddle رویِ HuggingFace** (اسمگذاریِ `<model>_onnx.onnx` مالِ orgِ رسمی است). دانلود و تطبیقِ بایتبهبایت با پوشهٔ K3:
+- PP-OCRv6_medium_det_onnx.onnx = 62,032,837 B = **59.16MiB** ✓ (HF: PaddlePaddle/PP-OCRv6_medium_det_onnx/inference.onnx)
+- PP-OCRv6_medium_rec_onnx.onnx = 76,554,979 B = **73.01MiB** ✓ (PaddlePaddle/PP-OCRv6_medium_rec_onnx)
+- PP-OCRv5_korean_rec.onnx = 13,418,787 B = **12.80MiB** ✓ (PaddlePaddle/korean_PP-OCRv5_mobile_rec_onnx)
+- ch_PP-OCRv4_det_infer.onnx = 4,745,517 B = **4.53MiB** ✓ و ch_PP-OCRv4_rec_infer.onnx = 10,857,958 B = **10.35MiB** ✓ (ModelScope RapidOCR — rec دارایِ metadataِ `character` = ppocr_keys_v1 با 6623 کاراکتر)
+- ۵ فایل + ۲ dict (ppocrv6_chars.txt 74,946B / korean_chars.txt 47,450B) به ریلیزِ «models» آپلود شدند (assetهایِ جدید؛ توکن از gh_models_release.py).
+
+**۲) پاسخِ «اینا چین» (برایِ کاربر):** noise3.onnx (4.93MB) = مدلِ کوچکِ حذفِ نویز/پالایشِ K3؛ JP_encoder_model (21.32MB) + JP_decoder_model (112.58MB) = OCRِ ژاپنیِ encoder-decoder (خانوادهٔ manga-ocr؛ دیکدِ قبلی: transformers 4.52.4، beams=4) — انکودر تصویرِ خط را میخواند، دیکودر حرفبهحرف متنِ ژاپنی تولید میکند. lama.onnx (196.74MB) = big-lama؛ detector_int8.onnx (41.81MB) = comic-text-detectorِ INT8 (نسخهٔ int8ِ همان detector.onnxِ 168MB خودمان).
+
+**۳) کد (manga.py):**
+- helperِ `_rapidocr_model_pair(lang, small=False)`: پیشفرض = مجموعهٔ K3 (detِ medium برایِ همه؛ rec: en→medium، ko→PP-OCRv5_korean_rec، ja→japan_PP-OCRv4 قبلی، zh→جفتِ کاملِ ch v4 با detِ ch)؛ `small=True` = مجموعهٔ سبکِ قبلی.
+- **شبیهسازِ x86_64 (CI) عمداً رویِ مجموعهٔ small ماند** (`_android_x86_emulator()`) تا بودجهٔ زمانیِ گیتها (f92b32c) و رفتارِ گیتها دستنخورده بماند؛ گوشیِ واقعیِ arm64 و PC = مجموعهٔ K3 (fp32 کامل — بدونِ int8، عینِ K3؛ int8ِ det فقط برایِ مسیرِ small).
+- `_MOBILE_CHARS`: ch/zh/chinese/ch_sim → **ppocr_keys_v1.txt** (فایل در rapidocr_mobile/ باندل شد تا داخلِ APK باشد).
+- **فیکسِ PC مهم:** مدلهایِ رسمیِ HF metadataِ dict ندارند → rapidocrِ v3 «Missing key dict_url» میداد و فالبکِ قدیمی 0 خط میداد. درمان: `Rec.rec_keys_path` با فایلِ dictِ محلی (ppocrv6_chars برایِ medium / korean_chars برایِ korean) + `_ensure_rapidocr_models` برایِ txt آستانهٔ 100B گرفت (100KB قبلی dict را هر بار دانلود میکرد).
+- URLهایِ فالبکِ `_RAPIDOCR_FILES`: HF رسمی برایِ ۳ فایلِ paddle، ModelScope برایِ جفتِ ch.
+
+**تست:** dictِ رسمیِ v6 medium و korean v5 از inference.yml استخراج و با باندل مو به مو یکی اعلام شد (18708 و 11945؛ classes = len+2 ✓). موتورِ موبایل رویِ PC: en 39 خط conf 0.994 (small: 37/0.965)، ko 12 خطِ کره‌ایِ درست، zh 13 خط conf 0.994 — نکتهٔ دیباگ: تستِ اولِ ko خراب بود چون اسکریپتِ تست برایِ ko charsetِ v6 داده بود (باگِ تست، نه مدل). RapidOCRBackendِ PC: en 42 خط / ko 11 / ch 13 — همه سالم. پایپلاینِ کاملِ 01.jpg fake-translate: exit 0، ۹ ناحیه، extract=107s رویِ سندباکسِ ۲هسته‌ای (مدلِ medium طبیعتاً سنگینتر است؛ رویِ GPUِ کاربر و کاسکادِ برشِ گوشی سقفِ det=960 است). py_compile ✓.
+
+**باقیمانده/نکته:** ژاپنی همان japan_PP-OCRv4 است (K3 برایِ ja از JP_encoder/decoder استفاده میکند — اگر کاربر خواست، فازِ بعدی). اولین اجرایِ گوشی ~132MB (det+recِ medium) دانلود میکند — مثلِ خودِ K3. اندازهٔ فایلها در پوشهٔ اپ حالا موبهمو با پوشهٔ K3 است (59.16/73.01/12.80/4.53/10.35).
