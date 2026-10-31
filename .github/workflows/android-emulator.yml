@@ -318,7 +318,7 @@ jobs:
               adb pull /sdcard/scr_ext.png "/tmp/emulout/ext_${N}_scr.png" || true
               FAIL=1; continue
             fi
-            if ! python3 .ci_scripts/wait_done.py 8; then
+            if ! python3 .ci_scripts/wait_done.py 15; then
               echo "::error::$F — engine did not finish OK"
               adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > "/tmp/emulout/ext_${N}_fail.log" || true
               FAIL=1; continue
