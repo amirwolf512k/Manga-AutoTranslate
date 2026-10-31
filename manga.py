@@ -20574,12 +20574,199 @@ class MangaTranslator:
             try:
                 self._render_one_region(pil_img, draw, image, original_image, region)
             except Exception as e:
-
-
-                print(f"  [!] رندر ناحیه {region.id} خطا داد ({e}) → رد شد.")
+                # v1.14.149 — «حبابِ سیاه ممنوع»: رندرِ خطاخورده
+                # هرگز ناحیهٔ پاکشدهٔ بی‌متن نمیگذارد. گام۱:
+                # GC + تلاشِ دوباره (بیشترِ خطاها تخصیصِ لحظهای
+                # است). گام۲: رندرِ سادهٔ فال‌بک. گام۳: برگرداندنِ
+                # پیکسلهایِ اصلی — هیچ مسیری به باکسِ خالی نیست.
+                print(f"  [!] رندر ناحیه {region.id} خطا داد ({e}) → فال‌بک…")
+                _done149 = False
+                try:
+                    import gc as _gc149
+                    _gc149.collect()
+                    self._render_one_region(pil_img, draw, image, original_image, region)
+                    _done149 = True
+                    print(f"  [+] ناحیه {region.id} در تلاشِ دوم رندر شد.")
+                except Exception:
+                    pass
+                if not _done149:
+                    try:
+                        self._render_one_region_fallback(
+                            pil_img, draw, image, original_image, region)
+                        _done149 = True
+                        print(f"  [+] ناحیه {region.id} با رندرِ فال‌بک رندر شد.")
+                    except Exception as _e149b:
+                        print(f"  [!] فال‌بکِ ناحیه {region.id} هم مرد ({_e149b})")
+                if not _done149:
+                    try:
+                        self._restore_region_pixels(
+                            pil_img, image, original_image, region)
+                        print(f"  [+] ناحیه {region.id} به پیکسلهایِ اصلی برگشت (حبابِ سیاه ساخته نشد).")
+                    except Exception as _e149c:
+                        print(f"  [!] بازگردانیِ ناحیه {region.id} ناموفق ({_e149c})")
                 continue
 
         return cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
+
+    def _render_one_region_fallback(self, pil_img, draw, image,
+                                    original_image, region) -> None:
+        """v1.14.149 — سادهترین رندرِ ممکن برایِ ناحیه‌ای که
+        رندرِ اصلی مرد: متنِ چندخطیِ وسطچین با رنگِ خودکار.
+        هر گام گاردشده است؛ خطا به caller برمیگردد تا گامِ سوم
+        (بازگردانیِ پیکسل) اجرا شود."""
+        txt = str(getattr(region, "translated_text", "") or "").strip()
+        if not txt:
+            return
+        try:
+            x, y, w, h = region.rect
+            x, y, w, h = int(x), int(y), int(w), int(h)
+        except Exception:
+            return
+        try:
+            text_rgb, stroke_rgb = self._pick_text_and_stroke(
+                image, original_image, region)
+        except Exception:
+            text_rgb, stroke_rgb = (255, 255, 255), (0, 0, 0)
+        sw = 0
+        try:
+            font = self._load_font(
+                max(10, min(48, max(12, h // 3))),
+                (getattr(region, "bubble_style", None) or ""))
+        except Exception:
+            font = self._load_font(18)
+        try:
+            raw_lines = [s for s in txt.splitlines() if s.strip()] or [txt]
+        except Exception:
+            raw_lines = [txt]
+        max_w = max(20, w - 8)
+        lines = []
+        for _ln in raw_lines:
+            try:
+                _sh = self._shape_farsi(_ln.strip())
+            except Exception:
+                _sh = _ln.strip()
+            try:
+                _lw = draw.textbbox((0, 0), _sh, font=font,
+                                    stroke_width=sw)[2]
+            except Exception:
+                _lw = 0
+            if _lw <= max_w or not _sh:
+                lines.append(_sh)
+                continue
+            _cur = ""
+            for _wd in _sh.split(" "):
+                _cand = (_cur + " " + _wd).strip()
+                try:
+                    _cw = draw.textbbox((0, 0), _cand, font=font,
+                                        stroke_width=sw)[2]
+                except Exception:
+                    _cw = 0
+                if _cur and _cw > max_w:
+                    lines.append(_cur)
+                    _cur = _wd
+                else:
+                    _cur = _cand
+            if _cur:
+                lines.append(_cur)
+        if not lines:
+            lines = [txt]
+        try:
+            _lh = font.getbbox("آیگ", stroke_width=sw)[3] + 6
+        except Exception:
+            _lh = (getattr(font, "size", 16) or 16) + 8
+        total_h = _lh * len(lines)
+        _ty = max(0, y + max(0, (h - total_h) // 2))
+        for _ln in lines:
+            try:
+                _tw = draw.textbbox((0, 0), _ln, font=font,
+                                    stroke_width=sw)[2]
+            except Exception:
+                _tw = 0
+            _tx = max(0, x + max(0, (w - _tw) // 2))
+            draw.text((_tx, _ty), _ln, font=font,
+                      fill=tuple(text_rgb)[:3],
+                      stroke_width=sw,
+                      stroke_fill=tuple(stroke_rgb)[:3])
+            _ty += _lh
+
+    def _restore_region_pixels(self, pil_img, image, original_image,
+                               region) -> None:
+        """v1.14.149 — آخرین گاردِ ضدحبابِ سیاه: پیکسلهایِ
+        اورجینالِ ناحیه برمیگردند (متنِ اصلی دیده میشود)."""
+        try:
+            x, y, w, h = region.rect
+            x, y, w, h = int(x), int(y), int(w), int(h)
+        except Exception:
+            return
+        H, W = original_image.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(W, x + w), min(H, y + h)
+        if x1 - x0 < 2 or y1 - y0 < 2:
+            return
+        _crop149 = original_image[y0:y1, x0:x1]
+        _rgb149 = cv2.cvtColor(_crop149, cv2.COLOR_BGR2RGB)
+        pil_img.paste(Image.fromarray(_rgb149), (x0, y0))
+
+    def _rescue_empty_ocr_1149(self, image: np.ndarray,
+                               regions: List[TextRegion]) -> None:
+        """v1.14.149 — نجاتِ OCR برایِ نواحیِ ocr_empty: برشِ
+        استانداردِ _ocr_crop + معکوس (متنِ سفید-روی-تیره). متنِ
+        نجاتیده → source_text/ocr_polys → ناحیه ترجمه و رندر
+        میشود؛ بهجایِ «پاکسازیِ بی‌متن» (حبابِ سیاه)."""
+        _resc = 0
+        for _r149 in regions:
+            if (_r149.source_text or "").strip() \
+                    or not getattr(_r149, "ocr_empty", False):
+                continue
+            try:
+                _rx149, _ry149, _rw149, _rh149 = [
+                    int(v) for v in _r149.rect]
+                _oc149 = self._ocr_crop(
+                    image, (_rx149, _ry149,
+                            _rx149 + _rw149, _ry149 + _rh149))
+                _t2149 = (_oc149[0] or "").strip()
+                _p2149 = list(_oc149[1] or []) if len(_oc149) > 1 else []
+            except Exception:
+                _t2149, _p2149 = "", []
+            if not _t2149:
+                try:
+                    _crop149 = image[
+                        max(0, _ry149):_ry149 + _rh149,
+                        max(0, _rx149):_rx149 + _rw149]
+                    if _crop149.size:
+                        _res2149 = None
+                        try:
+                            _res2149 = self.ocr.ocr(
+                                cv2.bitwise_not(_crop149))
+                        except Exception:
+                            _res2149 = None
+                        _txts149 = []
+                        if _res2149:
+                            for _ln149 in (_res2149[0] or []):
+                                try:
+                                    _tv149 = _ln149[1]
+                                    if isinstance(_tv149, (tuple, list)):
+                                        _tv149 = _tv149[0]
+                                    if str(_tv149).strip():
+                                        _txts149.append(
+                                            str(_tv149).strip())
+                                except Exception:
+                                    continue
+                        _t2149 = " ".join(_txts149).strip()
+                except Exception:
+                    pass
+            if _t2149:
+                _r149.source_text = _t2149
+                if _p2149:
+                    _r149.ocr_polys = _p2149
+                _r149.ocr_empty = False
+                _resc += 1
+                try:
+                    print(f"    [+] نجاتِ OCR ناحیه {_r149.id}: {_t2149[:48]!r}")
+                except Exception:
+                    pass
+        if _resc:
+            print(f"    [+] {_resc} ناحیه با نجاتِ OCR متن گرفت → ترجمه میشوند")
 
     def _process_chunk_worker(self, args_tuple) -> List[TextRegion]:
         idx, y0, y1, image = args_tuple
@@ -27008,6 +27195,13 @@ class MangaTranslator:
                 final_image = image.copy()
             return final_image, page_debug
 
+        # v1.14.149 — نجاتِ OCR: ناحیههایِ «حبابِ پیدا شده ولی
+        # متنِ نخوانده» یک تلاشِ دیگر میگیرند (متدِ مشترک — مسیرِ
+        # ترجمهٔ درونصفحهای؛ مسیرِ بچ هم قبل از صف فراخوانی میکند).
+        if (not skip_translate and dialogue_regions
+                and not getattr(self, "clean_only", False)):
+            self._rescue_empty_ocr_1149(image, dialogue_regions)
+
         if skip_translate:
             pass
         elif dialogue_regions:
@@ -27015,9 +27209,20 @@ class MangaTranslator:
             self.translate_regions(dialogue_regions)
 
         translated_regions = [r for r in dialogue_regions if r.translated_text]
-        _ocr_empty_regions = [r for r in dialogue_regions
-                              if not r.translated_text
-                              and getattr(r, "ocr_empty", False)]
+        # v1.14.149 — ناحیههایِ بدونِ متن (حتی بعد از نجاتِ OCR)
+        # دیگر «فقط پاکسازی» نمیشوند: پاکسازیِ بی‌متن رویِ زمینهٔ
+        # تیره = «حبابِ سیاه» (باگِ v1.14.148 رویِ 012_p1). متنِ
+        # اصلی دیده میماند و لاگ مکانش را میگوید.
+        _ocr_empty_regions = []
+        _oe149 = [r for r in dialogue_regions
+                  if not r.translated_text
+                  and getattr(r, "ocr_empty", False)]
+        if _oe149:
+            for _r in _oe149:
+                try:
+                    print(f"  [!] ناحیهٔ {_r.id} بدونِ متنِ OCR ماند → پاک نشد (rect={tuple(int(v) for v in _r.rect)}) — متنِ اصلی ماند")
+                except Exception:
+                    pass
         # v1.14.95 — قانونِ نهاییِ کاربر: «متنِ تبلیغِ سایت حسابش نکن —
         # ازش رد شه.» بنرِ تبلیغ/واترمارک دیگر در هیچ حالتی پاک نمی‌شود
         # (قبلاً در حالتِ ترجمه‌دار کلِ بنر توپر ماسک و LaMa می‌شد که
@@ -29674,6 +29879,8 @@ html, body { background: #0a0a0b; }
             extracted_map[page_i] = (out_file, image, None, regions, dbg)
             if image is not None and regions:
                 try:
+                    # v1.14.149 — نجاتِ OCR قبل از صفِ ترجمه
+                    self._rescue_empty_ocr_1149(image, regions)
                     _queue_dialogues(regions, page_i)
                 except GeminiQuotaExhausted as e:
                     print(f"\n[!] {e}")
