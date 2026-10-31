@@ -4,7 +4,6 @@ import android.app.Service
 import android.content.Intent
 import android.os.IBinder
 import ai.onnxruntime.OnnxTensor
-import ai.onnxruntime.OnnxValue
 import ai.onnxruntime.OrtEnvironment
 import ai.onnxruntime.OrtSession
 import java.nio.FloatBuffer
@@ -130,7 +129,7 @@ class EpProbeService : Service() {
                 var lastOut: OnnxTensor? = null
                 try {
                     for (i in 0..1) {
-                        val inputs = java.util.LinkedHashMap<String, OnnxValue>()
+                        val inputs = java.util.LinkedHashMap<String, OnnxTensor>()
                         inputs[inName] = t
                         val t0 = System.nanoTime()
                         val res = eps.run(inputs)
@@ -139,7 +138,7 @@ class EpProbeService : Service() {
                         else res.close()
                         if (ms < best) best = ms
                     }
-                    val inputs = java.util.LinkedHashMap<String, OnnxValue>()
+                    val inputs = java.util.LinkedHashMap<String, OnnxTensor>()
                     inputs[inName] = t
                     val refRes = ref.run(inputs)
                     val refT = refRes.get(0) as OnnxTensor
