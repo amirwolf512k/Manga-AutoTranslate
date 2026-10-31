@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.157"
+APP_VER = "1.14.158"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3907,6 +3907,632 @@ def _android_gate(env_name: str) -> bool:
     if _v in ("0", "false", "no", "off"):
         return False
     return bool(_on_android())
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v1.14.158 — پلهٔ Paddle-Lite کاسکادِ K3 (دستورِ سازندهٔ K3: «اگر پوششِ
+# متنِ ML Kit زیرِ ۷۰٪ بود مدلِ پدل را برای همان کراپ صدا میزنم؛ اگر
+# اطمینانش زیرِ ۸۰٪ بود مدلِ رپید را»).
+#
+# مجموعهٔ مدل = رسمیِ ppocr_demo (Paddle-Lite-Demo/PaddleOCR android_demo)
+# با optِ همان نسخهٔ v2.14-rcِ runtime و «فقط-CPU» (valid_targets=arm) —
+# کرنلهایِ OpenCL تنها مظنونِ سیگفالتهایِ RuntimeProgramِ 1.14.106-119
+# رویِ POCO F4/Adreno بودند. درسِ EpProbeService (1.14.156): قبل از هر
+# استفاده در پروسهٔ اصلی، PliteProbeService در پروسهٔ :pliteprobe همان
+# مدلها را واقعاً run میکند؛ سیگفالت فقط پروب را میکشد، اپِ اصلی سالم
+# میماند و مدل بن میشود (plite_banned.txt — بنِ خود-ترمیم با عوضشدنِ
+# مدلها). خاموشیِ پله: MANGA_K3_PLITE=0.
+# ═══════════════════════════════════════════════════════════════════════
+_PLITE_NB = {
+    "det": "pplite_det_arm_cpu.nb",
+    "en": "pplite_rec_ch_arm_cpu.nb",   # ch rec_slim = لاتینِ کامل در dict
+    "zh": "pplite_rec_ch_arm_cpu.nb",
+    "ja": "pplite_rec_ja_arm_cpu.nb",
+    "ko": "pplite_rec_ko_arm_cpu.nb",
+}
+_PLITE_DICT = {
+    "en": "ppocr_keys_v1.txt", "zh": "ppocr_keys_v1.txt",
+    "ja": "japan_dict.txt", "ko": "korean_dict.txt",
+}
+_PADDLE_LANG_MAP = {
+    "en": "en", "latin": "en", "english": "en",
+    "korean": "ko", "ko": "ko",
+    "japan": "ja", "ja": "ja", "japanese": "ja",
+    "ch": "zh", "zh": "zh", "chinese": "zh", "ch_sim": "zh",
+}
+
+
+def _plite_lang(lang):
+    return _PADDLE_LANG_MAP.get(str(lang or "en").lower(), "en")
+
+
+def _plocri_load_dict_txt(path):
+    """dictِ PP-OCR: هر خط یک کاراکتر."""
+    chars = []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            for _ln in f:
+                _c = _ln.rstrip("\r\n")
+                chars.append(_c)
+    except Exception:
+        pass
+    return chars
+
+
+def _plite_model_key(paths):
+    """کلیدِ بن/کَشِ پروب از حجمِ فایلهایِ مدل (+کتابخانه)."""
+    _bits = []
+    for p in paths:
+        try:
+            _bits.append("%s=%d" % (os.path.basename(p),
+                                    os.path.getsize(p) if os.path.isfile(p) else -1))
+        except Exception:
+            _bits.append("%s=?" % os.path.basename(p))
+    return ";".join(_bits)
+
+
+def _plite_banned(bdir, key):
+    """v1.14.118 الگو: بنِ خود-ترمیم — مدلها عوض شدند → بن میسوزد."""
+    try:
+        p = os.path.join(bdir, "plite_banned.txt")
+        if not os.path.isfile(p):
+            return False
+        try:
+            _old = (open(p, "r", encoding="utf-8").read() or "").strip()
+        except Exception:
+            _old = ""
+        if _old and _old != key:
+            try:
+                os.remove(p)
+            except Exception:
+                pass
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _plite_ban_write(bdir, key):
+    try:
+        os.makedirs(bdir, exist_ok=True)
+        with open(os.path.join(bdir, "plite_banned.txt"), "w",
+                  encoding="utf-8") as f:
+            f.write(key)
+        print("[!] Paddle-Lite بن شد (پروبِ پروسهٔ جدا مرد/مردود) → "
+              "کاسکاد بدونِ پلهٔ پدل ادامه میدهد")
+    except Exception:
+        pass
+
+
+def _plite_probe_alive() -> bool:
+    """پروسهٔ :pliteprobe هنوز زنده است؟ (الگویِ _ep_probe_proc_alive)"""
+    try:
+        from java import jclass
+        _ctx = _app_ctx()
+        if _ctx is None:
+            return True
+        _am = _ctx.getSystemService("activity")
+        _procs = _am.getRunningAppProcesses() or []
+        for _p in _procs:
+            try:
+                if str(_p.processName).endswith(":pliteprobe"):
+                    return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return True
+
+
+def _app_ctx_158():
+    """Context فعلی برایِ startService (همان الگویِ اثباتشدهٔ
+    rapidocr_mobile._app_ctx: AndroidPlatform → ActivityThread)."""
+    try:
+        from java import jclass
+        try:
+            _c = jclass(
+                "com.chaquo.python.android.AndroidPlatform").getApplication()
+        except Exception:
+            _c = None
+        if _c is None:
+            try:
+                _c = jclass("android.app.ActivityThread").currentApplication()
+            except Exception:
+                _c = None
+        return _c
+    except Exception:
+        return None
+
+
+def _start_plite_probe(det_path, rec_path, out_path, threads):
+    """شروعِ PliteProbeService در پروسهٔ :pliteprobe (الگویِ EP-probe)."""
+    try:
+        _ctx = _app_ctx_158()
+        if _ctx is None:
+            return False
+        from java import jclass
+        _Intent = jclass("android.content.Intent")
+        _Srv = jclass("com.amirwolf.mangatranslator.PliteProbeService")
+        _it = _Intent(_ctx, _Srv)
+        _it.putExtra("det", str(det_path))
+        _it.putExtra("rec", str(rec_path))
+        _it.putExtra("out", str(out_path))
+        _it.putExtra("threads", str(threads))
+        _ctx.startService(_it)
+        return True
+    except Exception:
+        return False
+
+
+def _plite_probe_ensure(pdir, det_path, rec_path):
+    """تأییدِ سالم بودنِ Paddle-Lite رویِ همین گوشی با پروبِ پروسهٔ جدا.
+
+    کَش: <pdir>/.plite_probe.json (کلید = حجمِ مدلها + نسخهٔ اپ) → بارِ
+    اول بعد از هر آپدیتِ مدل، پروب واقعی؛ بارهای بعد فوری.
+    خروجی: (ok, ms_desc) — ok=False یعنی پلهٔ پدل از کاسکاد حذف شود."""
+    import time as _time
+    import json as _json
+    _key = _plite_model_key([det_path, rec_path])
+    _cachef = os.path.join(pdir, ".plite_probe.json")
+    try:
+        if os.path.isfile(_cachef):
+            _c = _json.loads(open(_cachef, "r", encoding="utf-8").read() or "{}")
+            if _c.get("key") == _key:
+                return bool(_c.get("ok")), str(_c.get("ms") or "")
+    except Exception:
+        pass
+    if _plite_banned(pdir, _key):
+        return False, "banned"
+    _out = os.path.join(pdir, ".plite_probe.txt")
+    try:
+        os.remove(_out)
+    except Exception:
+        pass
+    _thr = 2
+    if not _start_plite_probe(det_path, rec_path, _out, _thr):
+        return False, "service-start-failed"
+    print("[⚡] پروبِ Paddle-Lite در پروسهٔ جدا (:pliteprobe) ...")
+    _t0 = _time.time()
+    try:
+        _tmo = float(os.environ.get("MANGA_PLITE_PROBE_TIMEOUT", "60") or 60)
+    except Exception:
+        _tmo = 60.0
+    _verdict = ""
+    while _time.time() - _t0 < _tmo:
+        if os.path.isfile(_out):
+            try:
+                _verdict = (open(_out, "r", encoding="utf-8").read()
+                            or "").strip()
+            except Exception:
+                _verdict = ""
+            break
+        if not _plite_probe_alive():
+            _verdict = ""
+            break
+        _time.sleep(0.25)
+    _ok = _verdict.startswith("verdict ok")
+    _ms = _verdict.replace("verdict ok", "").strip() if _ok else \
+        (_verdict.replace("verdict fail", "").strip() or "native-crash/timeouts"
+         if _verdict else "native-crash")
+    try:
+        with open(_cachef, "w", encoding="utf-8") as f:
+            _json.dump({"key": _key, "ok": bool(_ok),
+                        "ms": str(_ms)[:80],
+                        "app": str(APP_VER)}, f)
+    except Exception:
+        pass
+    if not _ok:
+        _plite_ban_write(pdir, _key)
+    return _ok, _ms
+
+
+class _PLOCR_LiteRunner:
+    """رانرِ Paddle-Lite جاوا (پلِ PaddleLiteBridge — فقط inference)."""
+
+    def __init__(self, model_path, threads=2, power="NO_BIND"):
+        from java import jclass, jarray
+        from java import jfloat as _jf
+        self._bridge = jclass(
+            "com.amirwolf.mangatranslator.PaddleLiteBridge")
+        self.path = str(model_path)
+        self.threads = max(1, min(8, int(threads or 2)))
+        self.power = str(power or "NO_BIND").strip().upper()
+        self._jarray = jarray
+        self._jf = _jf
+        if not self._bridge.ready(self.path, self.threads, self.power):
+            raise RuntimeError("PaddleLiteBridge.ready=False: " + self.path)
+
+    @property
+    def gpu_head(self):
+        try:
+            return self._bridge.backend(self.path) or "paddle-lite-cpu"
+        except Exception:
+            return "paddle-lite-cpu"
+
+    def run(self, arr):
+        _x = np.ascontiguousarray(arr.astype(np.float32))
+        ja = self._jarray(self._jf)(_x.reshape(-1))
+        fb = self._bridge.predict(self.path, [int(v) for v in _x.shape],
+                                  ja, self.threads, self.power)
+        if fb is None:
+            raise RuntimeError("PaddleLite predict returns null")
+        out = np.frombuffer(memoryview(fb), dtype=np.float32)
+        shp = self._bridge.predictShape(self.path)
+        if shp:
+            out = out.reshape([int(v) for v in shp])
+        return out.copy()
+
+
+class PliteCropOCR:
+    """OCRِ کراپ با Paddle-Lite نیتیو (پلهٔ ۲ کاسکادِ K3 — دستورِ سازندهٔ
+    K3). پیش/پسپردازشِ det(DB)/rec(CTC) در پایتون؛ فقط tensor به پل.
+    خروجی: [[box, (text, score)], ...] در مختصاتِ همان کراپ (همان
+    قراردادِ بقیهٔ موتورها)."""
+
+    DET_CAP = 960      # سقفِ ضلعِ بزرگ (1:1 — برشِ درشت کوچک نمیشود)
+    DET_MIN = 128      # کفِ ضلعِ کوچک (کراپِ خیلی ریز کمی بزرگ میشود)
+    REC_H = 48
+    REC_MAX_W = 1280
+    BATCH = 8
+
+    def __init__(self, lang: str = "en"):
+        self.lang = _plite_lang(lang)
+        self.debug = True
+        _pdir = _model_cache_dir("paddle_models")
+        _det_name, _rec_name = _PLITE_NB["det"], _PLITE_NB[self.lang]
+        try:
+            _ensure_rapidocr_models(_pdir, files=[
+                _det_name, _rec_name, _PLITE_DICT[self.lang]])
+        except Exception as e:
+            raise RuntimeError(f"دانلودِ مدلهایِ Paddle-Lite ناموفق: {e}")
+        _det = os.path.join(_pdir, _det_name)
+        _rec = os.path.join(_pdir, _rec_name)
+        for _p in (_det, _rec):
+            if not (os.path.isfile(_p) and os.path.getsize(_p) > 10_000):
+                raise RuntimeError("مدلِ nb نیست: " + _p)
+        _ok, _ms = _plite_probe_ensure(_pdir, _det, _rec)
+        if not _ok:
+            raise RuntimeError("پروبِ Paddle-Lite مردود: " + str(_ms))
+        self.det_runner = _PLOCR_LiteRunner(_det, threads=2)
+        self.rec_runner = _PLOCR_LiteRunner(_rec, threads=2)
+        _df = os.path.join(_model_cache_dir("rapidocr_models"),
+                           _PLITE_DICT[self.lang])
+        _lines = _plocri_load_dict_txt(_df)
+        if not _lines:
+            raise RuntimeError("dict خالی: " + _df)
+        self._charset = [""] + _lines + [" "]
+        self._cls_count = 0
+        print(f"[+] پلهٔ Paddle-Lite آماده (کاسکادِ K3): lang={self.lang} "
+              f"| {_det_name} + {_rec_name} | پروب: {_ms}")
+
+    # ── det: پیش‌پردازش + run + پس‌پردازشِ DB (بازیابی از 1.14.119،
+    #        سبکِ کراپ: 1:1 با سقفِ cap — بدونِ بزرگنماییِ 736) ─────────
+    def _det(self, image_bgr):
+        h, w = image_bgr.shape[:2]
+        ratio = 1.0
+        if min(h, w) < self.DET_MIN:
+            ratio = self.DET_MIN / max(1, min(h, w))
+        if max(h, w) * ratio > self.DET_CAP:
+            ratio = self.DET_CAP / max(1, max(h, w))
+        rh, rw = max(32, int(round(h * ratio))), max(32, int(round(w * ratio)))
+        _img = cv2.resize(image_bgr, (rw, rh),
+                          interpolation=cv2.INTER_AREA if ratio < 1
+                          else cv2.INTER_CUBIC)
+        # DBNet: نرمال‌سازیِ ImageNet رویِ RGB
+        _img = cv2.cvtColor(_img, cv2.COLOR_BGR2RGB)
+        _x = (_img.astype(np.float32) / 255.0
+              - np.array([0.485, 0.456, 0.406], dtype=np.float32)) \
+            / np.array([0.229, 0.224, 0.225], dtype=np.float32)
+        _x = cv2.copyMakeBorder(_x, 0, (-rh) % 32, 0, (-rw) % 32,
+                                cv2.BORDER_CONSTANT, value=0.0)
+        _x = _x.transpose(2, 0, 1)[None]  # NCHW
+        _out = self.det_runner.run(_x)
+        _p = np.asarray(_out)
+        while _p.ndim > 2:
+            _p = _p[0]
+        if _p.shape[0] != _x.shape[2] or _p.shape[1] != _x.shape[3]:
+            _p = cv2.resize(_p, (_x.shape[3], _x.shape[2]))
+        return _p.astype(np.float32)
+
+    @staticmethod
+    def _box_score(prob, box):
+        h, w = prob.shape[:2]
+        bx = np.rint(np.clip(box, 0, [w - 1, h - 1])).astype(np.int32)
+        msk = np.zeros((h, w), dtype=np.uint8)
+        cv2.fillPoly(msk, [bx], 1)
+        n = int(msk.sum())
+        if n <= 0:
+            return 0.0
+        return float((prob * msk).sum() / n)
+
+    def _det_boxes(self, prob, orig_hw, det_thresh=0.3, box_thresh=0.5,
+                   unclip_ratio=1.8, min_size=3):
+        bitmap = (prob > det_thresh).astype(np.uint8)
+        oh, ow = orig_hw
+        sh, sw = prob.shape[:2]
+        sx, sy = ow / float(sw), oh / float(sh)
+        boxes = []
+        try:
+            _cnts, _ = cv2.findContours(bitmap * 255, cv2.RETR_LIST,
+                                        cv2.CHAIN_APPROX_SIMPLE)
+        except Exception:
+            return boxes
+        try:
+            import pyclipper as _pc
+        except Exception:
+            _pc = None
+        for cnt in _cnts:
+            if len(cnt) < 4:
+                continue
+            try:
+                rect = cv2.minAreaRect(cnt)
+                pts = cv2.boxPoints(rect)
+            except Exception:
+                continue
+            sc = self._box_score(prob, pts)
+            if sc < box_thresh:
+                continue
+            if _pc is not None:
+                try:
+                    _path = [(float(p[0]), float(p[1])) for p in pts]
+                    area = max(1.0, abs(cv2.contourArea(cnt)))
+                    _pa = np.asarray(pts, dtype=np.float64)
+                    _seg = np.linalg.norm(np.diff(
+                        np.vstack([_pa, _pa[:1]]), axis=0), axis=1)
+                    per = max(1.0, float(_seg.sum()))
+                    dist = area * unclip_ratio / per
+                    po = _pc.PyclipperOffset()
+                    po.AddPath(_path, _pc.JT_ROUND, _pc.ET_CLOSEDPOLYGON)
+                    _sol = po.Execute(dist)
+                    if not _sol:
+                        continue
+                    _big = max(_sol, key=lambda p: abs(_pc.Area(p)))
+                    nbox = np.asarray(_big, dtype=np.float32)
+                except Exception:
+                    nbox = None
+            else:
+                _m = np.zeros((sh, sw), dtype=np.uint8)
+                cv2.fillPoly(_m, [np.rint(pts).astype(np.int32)], 1)
+                _d = max(1, int(round(
+                    cv2.contourArea(cnt) * unclip_ratio /
+                    max(1.0, cv2.arcLength(cnt, True)) / max(1.0, sy))))
+                _k = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (2 * _d + 1, 2 * _d + 1))
+                _m = cv2.dilate(_m, _k)
+                _c2, _ = cv2.findContours(_m * 255, cv2.RETR_EXTERNAL,
+                                          cv2.CHAIN_APPROX_SIMPLE)
+                if not _c2:
+                    continue
+                nbox = cv2.boxPoints(cv2.minAreaRect(max(
+                    _c2, key=cv2.contourArea))).astype(np.float32)
+            if nbox is None or len(nbox) < 3:
+                continue
+            try:
+                if len(nbox) != 4:
+                    nbox = cv2.boxPoints(
+                        cv2.minAreaRect(nbox.astype(np.float32)))
+                nbox = np.asarray(nbox, dtype=np.float32)
+            except Exception:
+                continue
+            if len(nbox) != 4:
+                continue
+            nbox[:, 0] = np.clip(nbox[:, 0] * sx, 0, ow - 1)
+            nbox[:, 1] = np.clip(nbox[:, 1] * sy, 0, oh - 1)
+            _bw = float(np.max(np.linalg.norm(
+                nbox[[1, 2]] - nbox[[0, 3]], axis=1)))
+            _bh = float(np.max(np.linalg.norm(
+                nbox[[3, 2]] - nbox[[0, 1]], axis=1)))
+            if _bw < min_size or _bh < min_size:
+                continue
+            boxes.append(np.rint(nbox).astype(np.float32))
+        boxes.sort(key=lambda b: (float(np.min(b[:, 1])) // 24,
+                                  float(np.min(b[:, 0]))))
+        return boxes
+
+    @staticmethod
+    def _order_pts(pts):
+        """ترتیبِ کانونیِ [TL,TR,BR,BL] — درسِ «THERE → THRE»."""
+        pts = np.asarray(pts, dtype=np.float32)
+        s = pts.sum(axis=1)
+        d = pts[:, 1] - pts[:, 0]
+        tl = pts[int(np.argmin(s))]
+        br = pts[int(np.argmax(s))]
+        tr = pts[int(np.argmin(d))]
+        bl = pts[int(np.argmax(d))]
+        return np.asarray([tl, tr, br, bl], dtype=np.float32)
+
+    @classmethod
+    def _crop_box(cls, img, box):
+        pts = cls._order_pts(box)
+        w = max(float(np.linalg.norm(pts[0] - pts[1])),
+                float(np.linalg.norm(pts[2] - pts[3])))
+        h = max(float(np.linalg.norm(pts[0] - pts[3])),
+                float(np.linalg.norm(pts[1] - pts[2])))
+        if w < 2 or h < 2:
+            return None
+        dst = np.float32([[0, 0], [w, 0], [w, h], [0, h]])
+        try:
+            M = cv2.getPerspectiveTransform(pts, dst)
+            crop = cv2.warpPerspective(img, M, (int(round(w)), int(round(h))))
+        except Exception:
+            return None
+        if crop.shape[0] > crop.shape[1] * 1.5:
+            crop = np.ascontiguousarray(np.rot90(crop))
+        return crop
+
+    # ── rec: دسته‌بندی + CTC ────────────────────────────────────────────
+    def _rec_all(self, crops):
+        items = []
+        for i, c in enumerate(crops):
+            items.append((i, self._rec_prep(c)))
+        items.sort(key=lambda t: t[1][2])
+        batches, cur = [], []
+        for it in items:
+            cur.append(it)
+            if len(cur) >= self.BATCH:
+                batches.append(cur)
+                cur = []
+        if cur:
+            batches.append(cur)
+        outs = [None] * len(crops)
+        self._rec_batches(batches, self.rec_runner, outs)
+        return outs
+
+    def _rec_batches(self, batches, runner, outs):
+        for bt in batches:
+            try:
+                _x, _ratios = self._rec_batch_tensor(bt)
+                _out = runner.run(_x)
+                for _j, (idx, _p) in enumerate(bt):
+                    outs[idx] = self._ctc(_out[_j])
+            except Exception:
+                for idx, _p in bt:
+                    try:
+                        _x1 = self._rec_single_tensor(_p)
+                        outs[idx] = self._ctc(runner.run(_x1)[0])
+                    except Exception:
+                        outs[idx] = ("", 0.0)
+
+    def _rec_prep(self, crop):
+        h, w = crop.shape[:2]
+        ratio = w / float(max(1, h))
+        rw = int(np.ceil(self.REC_H * ratio))
+        rw = max(8, min(self.REC_MAX_W, rw))
+        img = cv2.resize(crop, (rw, self.REC_H),
+                         interpolation=cv2.INTER_AREA if rw < w
+                         else cv2.INTER_CUBIC)
+        img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        return img, ratio, ratio
+
+    def _rec_batch_tensor(self, bt):
+        max_w = max(self.REC_H * 4,
+                    max(img.shape[1] for img, _r, _rr in bt))
+        max_w = min(self.REC_MAX_W, int(np.ceil(max_w / 8.0) * 8))
+        _x = np.zeros((len(bt), 3, self.REC_H, max_w), dtype=np.float32)
+        for i, (img, _r, _rr) in enumerate(bt):
+            _t = (img.astype(np.float32) / 255.0 - 0.5) / 0.5
+            _t = _t.transpose(2, 0, 1)
+            _x[i, :, :, :_t.shape[2]] = _t
+        return _x, None
+
+    def _rec_single_tensor(self, prep):
+        img = prep[0]
+        _t = (img.astype(np.float32) / 255.0 - 0.5) / 0.5
+        _t = _t.transpose(2, 0, 1)[None]
+        return np.ascontiguousarray(_t)
+
+    def _ctc(self, out_row):
+        out_row = np.asarray(out_row)
+        if out_row.ndim == 3:
+            out_row = out_row[0]
+        # کالیبراسیونِ یک‌بارهٔ charset با تعدادِ کلاسِ واقعی
+        try:
+            _n = int(out_row.shape[-1])
+            if getattr(self, "_cls_count", 0) != _n:
+                self._cls_count = _n
+                _chars = self._charset
+                if _chars is not None and len(_chars) != _n:
+                    _lines = _chars[1:] if (_chars and _chars[0] == "") \
+                        else _chars
+                    if _lines and _lines[-1] == " ":
+                        _lines = _lines[:-1]
+                    if len(_lines) + 2 == _n:
+                        self._charset = [""] + _lines + [" "]
+                    elif len(_lines) + 1 == _n:
+                        self._charset = [""] + _lines
+        except Exception:
+            pass
+        chars = self._charset
+        if not chars:
+            return ("", 0.0)
+        idx = out_row.argmax(axis=-1)
+        prb = out_row.max(axis=-1)
+        keep, prev = [], -1
+        for _i, _v in enumerate(idx):
+            _v = int(_v)
+            if _v != prev and _v != 0:
+                keep.append((_v, float(prb[_i])))
+            prev = _v
+        txts, probs = [], []
+        for _v, _p in keep:
+            if 0 < _v < len(chars):
+                txts.append(chars[_v])
+                probs.append(_p)
+        if not txts:
+            return ("", 0.0)
+        return ("".join(txts), float(np.mean(probs)))
+
+    # ── خط لولهٔ کامل رویِ یک کراپ ──────────────────────────────────────
+    def ocr(self, image_bgr):
+        if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+            return None
+        prob = self._det(image_bgr)
+        boxes = self._det_boxes(prob, image_bgr.shape[:2])
+        if not boxes:
+            return None
+        pairs = []
+        for b in boxes:
+            c = self._crop_box(image_bgr, b)
+            if c is not None and min(c.shape[0], c.shape[1]) >= 8:
+                pairs.append((b, c))
+        if not pairs:
+            return None
+        results = self._rec_all([c for _b, c in pairs])
+        lines = []
+        for _bi, (b, _c) in enumerate(pairs):
+            if _bi >= len(results) or results[_bi] is None:
+                continue
+            txt, sc = results[_bi]
+            txt = str(txt).strip()
+            if not txt or sc < 0.35:
+                continue
+            lines.append([np.asarray(b, dtype=np.float32),
+                          (txt, float(sc))])
+        return [lines] if lines else None
+
+
+# تک‌نمونهٔ Paddle-Lite برایِ کلِ نشست — ساختِ تنبل؛ هر خطا = پله خاموش
+_PLITE_STATE = {"obj": None, "lang": None, "dead": False, "note": False}
+# predictorهایِ پدل-لایت per-instance نیستند thread-safe → احضارِ پلهٔ
+# پدل از ورکرهایِ موازیِ کاسکاد سریال میشود (کراپِ نوبتی؛ هر کراپ
+# ~۱۵۰-۳۰۰ms — از هزینهش کمتر از ریسکِ raceِ بومی).
+_PLITE_LOCK = threading.Lock()
+
+
+def _plite_crop_ocr(lang, image_bgr):
+    """APIِ دوستانهٔ کاسکاد: پلهٔ Paddle-Lite یا None (خطا/خاموش/خالی).
+
+    هر استثنا (لودِ مدل/پروب/inference) = «مرگِ این نشست» → از این به
+    بعدِ همین نشست مستقیم به پلهٔ رپید (PP-OCRv6) میرود — کاسکاد هرگز
+    بهخاطرِ پدل نمیایستد."""
+    if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
+        return None
+    if str(os.environ.get("MANGA_K3_PLITE", "1") or "1").strip() == "0":
+        return None
+    if (not _on_android()) or _android_x86_emulator():
+        return None
+    st = _PLITE_STATE
+    if st["dead"]:
+        return None
+    _lg = _plite_lang(lang)
+    if st["obj"] is None or st["lang"] != _lg:
+        try:
+            st["obj"] = PliteCropOCR(lang=_lg)
+            st["lang"] = _lg
+        except Exception as e:
+            st["obj"] = None
+            st["dead"] = True
+            print(f"[!] پلهٔ Paddle-Lite غیرفعال شد ({str(e)[:120]}) "
+                  "→ کاسکاد: رپیدِ PP-OCRv6")
+            return None
+    try:
+        with _PLITE_LOCK:
+            return st["obj"].ocr(image_bgr)
+    except Exception as e:
+        st["dead"] = True
+        print(f"[!] خطایِ inference پدل-لایت ({str(e)[:120]}) → "
+              "پله خاموش؛ رپیدِ PP-OCRv6")
+        return None
 
 
 class MlKitBackend:
@@ -22754,6 +23380,53 @@ class MangaTranslator:
                 _min_c = _ml_min
         return _min_c
 
+    @staticmethod
+    def _mlkit_ink_coverage(crop_bgr, polys):
+        """v1.14.158 — گیتِ «درصدِ پوششِ متن» (دستورِ سازندهٔ K3: «اگر
+        پوششِ متن زیرِ ۷۰٪ بود مدلِ پدل را صدا میزنم»).
+
+        سنجه: چند درصد از «پیکسلهایِ جوهرِ متنِ» کراپ داخلِ پالیهایِ
+        خطهایِ ML Kit افتادهاند؟ جوهر = قطبِ اقلیتِ اوستو (متنِ تیره روی
+        حبابِ روشن = جوهرِ تیره؛ متنِ سفید روی پنلِ تیره = جوهرِ روشن —
+        اقلیت همیشه متن است نه زمینه). گاردها:
+          — جوهرِ <۰٫۴٪ کراپ = متنی در کار نیست → ۱٫۰ (پوششِ کاملِ بی‌متن)
+          — بدونِ پالی = ۰٫۰
+        هنرِ داخلِ باکسِ bubble هم جوهر حساب میشود → گیتِ سختگیرانهتر
+        برایِ حبابهایِ پر-هنر = درستِ همان چیزی که K3 میخواهد (متنِ
+        ناخوانده → پدل)."""
+        try:
+            if crop_bgr is None or getattr(crop_bgr, "size", 0) == 0:
+                return 0.0
+            _g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+            _t, _bw = cv2.threshold(_g, 0, 255,
+                                    cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            _ink = (_bw == 0) if (_bw > 0).mean() > 0.5 else (_bw > 0)
+            _frac = float(_ink.mean())
+            if _frac < 0.004:
+                return 1.0
+            if not polys:
+                return 0.0
+            _h, _w = _ink.shape[:2]
+            _pm = np.zeros((_h, _w), dtype=np.uint8)
+            for p in polys:
+                try:
+                    _pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                    _pp = np.rint(np.clip(
+                        _pp, 0, [_w - 1, _h - 1])).astype(np.int32)
+                    cv2.fillPoly(_pm, [_pp], 1)
+                except Exception:
+                    continue
+            if not _pm.any():
+                return 0.0
+            _k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            _pm = cv2.dilate(_pm, _k)
+            _tot = int(_ink.sum())
+            if _tot <= 0:
+                return 1.0
+            return float(_ink[_pm > 0].sum()) / float(_tot)
+        except Exception:
+            return 0.0
+
     def _mlkit_page_lines(self, image: np.ndarray):
         """v1.14.122 — OCRِ تمام‌صفحه با ML Kit (دقیقاً راهِ موتورِ K3).
 
@@ -23642,22 +24315,30 @@ class MangaTranslator:
             return False
 
     def _cascade_page_ocr(self, image: np.ndarray, cand):
-        """v1.14.124 — کاسکادِ موتورِ K3 (دیکدِ واقعیِ APKِ v4.1.1 —
-        رشته‌هایِ 105.dll: RunRapidOcrPipelineOnCrop، detector_int8.onnx،
-        GroupNearbyBoxes، DropContainedBoxes، EnhanceCropWithWaifu2x):
-          ۱) استخراجِ «یک بار» با ML Kit رویِ کلِ صفحه (نیتیو و سریع)
-          ۲) «برشِ امن»: هر خوشهٔ خطِ مجاور → کادرِ union + پدِ امن
-             (ادغامِ همپوشان = GroupNearbyBoxes/DropContainedBoxes)
-          ۳) PP-OCRv6 (موتورِ PC/K3) «فقط رویِ همان برش‌ها» — مثلِ
-             RunRapidOcrPipelineOnCrop؛ تصویرِ کوچک = det/recِ سریع
-             (مثلِ lama.onnx: سشنِ ONNX رویِ ورودیِ کوچک)
-          ۴) خطِ Rapid جانشینِ خطِ ML Kitِ همان ناحیه میشود (دقتِ PC)
-             و خطِ تازه اضافه میشود (استخراجِ بیشتر). شمارهٔ بلوکِ
-             ML Kit حفظ میشود (layout-analysis). برشِ بی‌نتیجه →
-             متنِ ML Kit می‌ماند (پوششِ کامل).
-        فال‌بک: ML Kit خالی → None (مسیرِ قبلی). خاموش‌کننده‌ها:
-        MANGA_CASCADE=0 | نجاتِ کراپ: MANGA_CROP_RESCUE=0 | ورکرِ
-        کاسکاد: MANGA_CASCADE_WORKERS (۰ = خودکار تا ۳)"""
+        """v1.14.158 — کاسکادِ کاملِ دستورِ سازندهٔ K3 (روایتِ خودشان):
+        «اول با RT-DETR در سطحِ بلوک متنها را تشخیص میدم؛ کراپشان
+        میکنم؛ بعد از افزایشِ کیفیتِ کراپ میدم به ML Kit؛ اگر پوششِ
+        متن زیرِ ۷۰٪ بود مدلِ پدل را برای همان کراپ صدا میزنم؛ اگر
+        اطمینانش زیرِ ۸۰٪ بود مدلِ رپید را. نکتهٔ اصلی: فقط در سطحِ
+        کراپی که از RT-DETR گرفتی کار کن، نه رویِ تمامِ صفحه — رویِ
+        گوشی خیلی خیلی مهمه»:
+          • کراپها = باکسهایِ RT-DETR (cand: bubble/text_bubble/
+            text_free — دیتکتورِ اپ همان ogkalu/comic-text-and-bubble-
+            detector یعنی RT-DETR-v2 r50vd است)
+          • پلهٔ ۱: ML Kit رویِ کراپ — پوششِ جوهرِ متنِ ≥۷۰٪ (گیتِ
+            MANGA_K3_COV) = قبول (K3-وفادار؛ خاموشیِ متنی:
+            MANGA_K3_MLKIT_TEXT=0 → قانونِ «ML Kit هرگز استخراج
+            نمیکند» و مستقیمِ پلهٔ ۲)
+          • پلهٔ ۲: Paddle-Lite نیتیو (مدلهایِ رسمیِ ppocr_demo، فقط-
+            CPU + پروبِ پروسهٔ جدا) — میانگینِ اطمینانِ ≥۸۰٪ = قبول
+          • پلهٔ ۳: رپیدِ PP-OCRv6 (همان موتورِ همیشگی با نردبانِ
+            ارتقایِ کراپِ 1.14.157) — موتورِ نهاییِ همیشه-در-دسترس
+          • هیچ پلهای متن نداد → بهترینِ موجود (ml/pl) — متن هرگز
+            از دست نمیرود
+        فال‌بک: کراپِ خالیِ همهٔ پله‌ها → None (مسیرِ باندهایِ 1.14.157).
+        خاموش‌کننده‌ها: MANGA_CASCADE=0 | MANGA_CROP_K3=0 (کلِ دستورِ K3
+        → مسیرِ 1.14.157) | MANGA_K3_PLITE=0 (پلهٔ پدل) | نجاتِ کراپ:
+        MANGA_CROP_RESCUE=0 | ورکر: MANGA_CASCADE_WORKERS"""
         if (image is None or not isinstance(image, np.ndarray)
                 or image.size == 0 or not cand):
             return None
@@ -23666,27 +24347,59 @@ class MangaTranslator:
             return None
         import time as _time
         _t0 = _time.time()
-        plines = self._mlkit_page_lines(image)
-        if not plines:
+        # ═══ v1.14.158 — حالتِ «دستورِ K3» (فقط گوشیِ واقعی) ═══
+        _k3mode = bool(
+            os.environ.get("MANGA_CROP_K3", "1").strip() != "0"
+            and _on_android() and not _android_x86_emulator())
+        try:
+            _k3_cov = float(os.environ.get("MANGA_K3_COV", "0.70") or 0.70)
+        except Exception:
+            _k3_cov = 0.70
+        try:
+            _k3_conf = float(os.environ.get("MANGA_K3_CONF", "0.80") or 0.80)
+        except Exception:
+            _k3_conf = 0.80
+        _k3_mlkit_text = os.environ.get(
+            "MANGA_K3_MLKIT_TEXT", "1").strip() != "0"
+        _plite_lang_now = _plite_lang(getattr(
+            getattr(self, "ocr", None), "lang", "en") or "en")
+        plines = [] if _k3mode else self._mlkit_page_lines(image)
+        if not _k3mode and not plines:
             return None
         _H, _W = image.shape[:2]
 
-        # ۲) برشِ امن — کادرِ هر خط + پدِ امن → ادغامِ همپوشان‌ها
+        # ۲) کراپها — دو منبع:
+        #    K3-وفادار = باکسهایِ RT-DETR (cand) + پدِ امن؛
+        #    غیرِ K3 (امولاتور/خاموش) = برشِ امنِ ML Kit (1.14.124).
         _rects = []
-        for ent in plines:
-            try:
-                p = ent[2]
-            except Exception:
-                continue
-            rx1 = int(np.floor(float(p[:, 0].min())))
-            ry1 = int(np.floor(float(p[:, 1].min())))
-            rx2 = int(np.ceil(float(p[:, 0].max())))
-            ry2 = int(np.ceil(float(p[:, 1].max())))
-            lh = max(4, ry2 - ry1)
-            _px = int(max(14.0, 0.55 * lh))
-            _py = int(max(10.0, 0.45 * lh))
-            _rects.append((max(0, rx1 - _px), max(0, ry1 - _py),
-                           min(_W, rx2 + _px), min(_H, ry2 + _py)))
+        if _k3mode:
+            for c in cand:
+                try:
+                    x1, y1, x2, y2 = int(c[2]), int(c[3]), \
+                        int(c[4]), int(c[5])
+                except Exception:
+                    continue
+                _px = max(8, int(0.02 * (x2 - x1)))
+                _py = max(8, int(0.10 * (y2 - y1)))
+                _rects.append((max(0, x1 - _px), max(0, y1 - _py),
+                               min(_W, x2 + _px), min(_H, y2 + _py)))
+            if not _rects:
+                return None  # فالبکِ باندهایِ 1.14.157 در تماسگیرنده
+        else:
+            for ent in plines:
+                try:
+                    p = ent[2]
+                except Exception:
+                    continue
+                rx1 = int(np.floor(float(p[:, 0].min())))
+                ry1 = int(np.floor(float(p[:, 1].min())))
+                rx2 = int(np.ceil(float(p[:, 0].max())))
+                ry2 = int(np.ceil(float(p[:, 1].max())))
+                lh = max(4, ry2 - ry1)
+                _px = int(max(14.0, 0.55 * lh))
+                _py = int(max(10.0, 0.45 * lh))
+                _rects.append((max(0, rx1 - _px), max(0, ry1 - _py),
+                               min(_W, rx2 + _px), min(_H, ry2 + _py)))
         _changed = True
         while _changed:
             _changed = False
@@ -23722,13 +24435,74 @@ class MangaTranslator:
             _det_cap = 960
 
         def _run_one(crect):
+            """v1.14.158 — نردبانِ دستورِ K3 رویِ هر کراپ:
+            پلهٔ ۱: ML Kit (پوششِ جوهرِ متنِ ≥۷۰٪ = قبول؛ K3-وفادار)
+            پلهٔ ۲: Paddle-Lite نیتیو (اطمینانِ ≥۸۰٪ = قبول)
+            پلهٔ ۳: رپیدِ PP-OCRv6 (نهایی)
+            خروجی: (crect, (tier, res, cov)) — tier: ml|pl|rp|ml!|pl!|none
+            «!» = هیچ آستانه‌ای قبول نشد ولی متنِ پلهٔ پایینتر نگه داشته
+            شد (هیچوقت متن از دست نمیرود). غیرِ K3 = فقط رپید (قبل)."""
             cx1, cy1, cx2, cy2 = crect
             try:
                 _crop = image[cy1:cy2, cx1:cx2]
-                return crect, _mob.ocr(_crop, crop_mode=True,
-                                       det_cap=_det_cap)
             except Exception:
-                return crect, None
+                return crect, (None, None, None)
+            if not _k3mode:
+                try:
+                    return crect, ("rp", _mob.ocr(
+                        _crop, crop_mode=True, det_cap=_det_cap), None)
+                except Exception:
+                    return crect, (None, None, None)
+            # ── پلهٔ ۰: «افزایشِ کیفیتِ کراپ» (عینِ دستورِ K3 — بعدِ
+            #    کراپ، قبلِ موتورها؛ همان مقیاسِ 1.14.157: برشِ کوچک
+            #    ×۲ LANCZOS+unsharp در سقفِ cap؛ برشِ درشت = 1:1) ──────
+            _feed = _crop
+            _s1 = 1.0
+            try:
+                import rapidocr_mobile as _rm158
+                _s1 = _rm158._enh_scale_for(
+                    _crop.shape[1], _crop.shape[0], _det_cap)
+                if _s1 > 1.0:
+                    _feed = _rm158._enhance_crop(_crop, _s1)
+            except Exception:
+                _feed = _crop
+                _s1 = 1.0
+            # ── پلهٔ ۱: ML Kit رویِ کراپ + گیتِ پوششِ جوهر ──────────
+            _ml = []
+            _cov = -1.0
+            if self._mlkit_guide is not None:
+                try:
+                    _ml = self._mlkit_page_lines(_feed)
+                except Exception:
+                    _ml = []
+                if _ml:
+                    _cov = self._mlkit_ink_coverage(
+                        _feed, [e[2] for e in _ml])
+                    if _k3_mlkit_text and _cov >= _k3_cov:
+                        return crect, ("ml", _rescale_ml(_ml, _s1), _cov)
+            # ── پلهٔ ۲: Paddle-Lite (پوششِ زیرِ ۷۰٪ → مدلِ پدل) ──────
+            _pl = _plite_crop_ocr(_plite_lang_now, _feed)
+            if _pl and _pl[0]:
+                try:
+                    _sc = [float(p[1]) for _b, p in _pl[0]]
+                    _msc = sum(_sc) / max(1, len(_sc))
+                except Exception:
+                    _msc = 0.0
+                if _msc >= _k3_conf:
+                    return crect, ("pl", _pl, _cov)
+            # ── پلهٔ ۳: رپیدِ PP-OCRv6 (زیرِ ۸۰٪ → مدلِ رپید) ─────────
+            try:
+                _rp = _mob.ocr(_crop, crop_mode=True, det_cap=_det_cap)
+            except Exception:
+                _rp = None
+            if _rp and _rp[0]:
+                return crect, ("rp", _rp, _cov)
+            # هیچ پلهای قبول نشد → بهترینِ موجود
+            if _pl and _pl[0]:
+                return crect, ("pl!", _pl, _cov)
+            if _ml:
+                return crect, ("ml!", _rescale_ml(_ml, _s1), _cov)
+            return crect, (None, None, _cov)
 
         def _collect(crect, out):
             cx1, cy1 = crect[0], crect[1]
@@ -23753,6 +24527,63 @@ class MangaTranslator:
                         continue
             return _got
 
+        def _conv_ml(crect, lines):
+            """خطهایِ ML Kitِ کراپ (۵تاییِ _mlkit_page_lines) → خطِ
+            صفحه‌ایِ همان قراردادِ _collect (آفستِ کراپ)."""
+            cx1, cy1 = crect[0], crect[1]
+            _got = []
+            for ent in lines or []:
+                try:
+                    _t = str(ent[0]).strip()
+                    _s = float(ent[1])
+                    if not _t:
+                        continue
+                    _pp = np.asarray(
+                        ent[2], dtype=np.float32).reshape(-1, 2).copy()
+                    _pp[:, 0] += cx1
+                    _pp[:, 1] += cy1
+                    _got.append((_t, _s,
+                                 np.rint(_pp).astype(np.int32),
+                                 0.0, -1))
+                except Exception:
+                    continue
+            return _got
+
+        def _rescale_ml(lines5, s):
+            """مختصاتِ خطهایِ ML Kit از کراپِ ارتقایافته به کراپِ اصلی
+            (×1/s — همان درسِ rescaleِ 1.14.157)."""
+            if not lines5 or not s or s <= 1.0:
+                return lines5
+            _out = []
+            for ent in lines5:
+                try:
+                    _pp = np.asarray(ent[2], dtype=np.float32) / float(s)
+                    _out.append((ent[0], ent[1],
+                                 np.rint(_pp).astype(np.int32),
+                                 ent[3], ent[4]))
+                except Exception:
+                    _out.append(ent)
+            return _out
+
+        def _handle(crect, _out3):
+            """خروجیِ نردبانِ یک کراپ → خطهایِ صفحه‌ای + آمارِ پله‌ها."""
+            _tier, _res, _cov = _out3
+            _got = []
+            if _tier in ("ml", "ml!"):
+                _got = _conv_ml(crect, _res)
+            elif _res is not None:
+                _got = _collect(crect, _res)
+            if _tier:
+                _tstats[_tier] = _tstats.get(_tier, 0) + 1
+                try:
+                    if _cov is not None and _cov >= 0.0:
+                        _tcovs.append(float(_cov))
+                except Exception:
+                    pass
+            return _got
+
+        _tstats = {}
+        _tcovs = []
         try:
             _w_env = int(os.environ.get("MANGA_CASCADE_WORKERS", "0") or 0)
         except Exception:
@@ -23765,12 +24596,16 @@ class MangaTranslator:
         _rapid = []
         if _workers > 1:
             with ThreadPoolExecutor(max_workers=_workers) as _ex:
-                for _cr, _o in _ex.map(_run_one, _rects):
-                    _rapid.extend(_collect(_cr, _o))
+                for _cr, _o3 in _ex.map(_run_one, _rects):
+                    _rapid.extend(_handle(_cr, _o3))
         else:
             for _cr in _rects:
-                _cr2, _o = _run_one(_cr)
-                _rapid.extend(_collect(_cr2, _o))
+                _cr2, _o3 = _run_one(_cr)
+                _rapid.extend(_handle(_cr2, _o3))
+        if _k3mode and not _rapid:
+            # v1.14.158 — هیچ پلهای هیچ متنی نداد → None تا تماسگیرنده
+            # به فالبکِ باندهایِ 1.14.157 برود (هیچ ناحیه‌ای بی‌متن نمیماند)
+            return None
 
         # ۴) v1.14.153 — استخراجِ متنِ خالصِ PP-OCRv6 (درخواستِ کاربر:
         # «استخراجِ متن از ML Kit استفاده نکنه؛ برشِ امن فقط ML Kit»).
@@ -23829,8 +24664,13 @@ class MangaTranslator:
                 _py = max(6, int(0.15 * (y2 - y1)))
                 cx1, cy1 = max(0, x1 - _px), max(0, y1 - _py)
                 cx2, cy2 = min(_W, x2 + _px), min(_H, y2 + _py)
-                _cr2, _o = _run_one((cx1, cy1, cx2, cy2))
-                _got = _collect(_cr2, _o)
+                _cr2, _o3 = _run_one((cx1, cy1, cx2, cy2))
+                # v1.14.158 — نجات هم از نردبانِ K3 میگذرد (پلههایِ
+                # ml/pl/rp همانجا انتخاب میشوند)
+                if _o3 and _o3[0] in ("ml", "ml!"):
+                    _got = _conv_ml(_cr2, _o3[1])
+                else:
+                    _got = _collect(_cr2, _o3[1] if _o3 else None)
                 if _got:
                     # v1.14.154 — join با ترتیبِ مرکز→x (نجاتِ «Alright!
                     # I'll the speed increase» ← درهمِ y-minِ خام)
@@ -23863,12 +24703,25 @@ class MangaTranslator:
         # ۷) خط‌هایِ بیرون از همهٔ باکس‌ها → ناحیهٔ مستقل
         ec, er = self._page_leftover_cands(cand, merged)
         if self.debug:
-            print(f"    [*]K3-کاسکاد: برشِ امنِ MLKit={len(plines)}خط | "
-                  f"برش={len(_rects)} | PP-OCRv6={len(_rapid)}خط "
-                  f"(جایگزین={_nrep}) | باکس="
-                  f"{sum(1 for _u in used if _u)}/{len(cand)} "
-                  f"+{_nresc} نجات | +{len(ec)} بیرون | "
-                  f"{int((_time.time() - _t0) * 1000)}ms")
+            if _k3mode:
+                _ts = " ".join(f"{k}={v}" for k, v in
+                               sorted(_tstats.items()))
+                _tc = ("، پوششِ MLKitِ میانگین="
+                       + ("%.0f%%" % (100.0 * sum(_tcovs) / len(_tcovs)))
+                       if _tcovs else "")
+                print(f"    [*]K3-کاسکادِ ۱۵۸: کراپِ RT-DETR={len(_rects)} "
+                      f"| پله‌ها: {_ts}{_tc} | خط={len(_rapid)} "
+                      f"(جایگزین={_nrep}) | باکس="
+                      f"{sum(1 for _u in used if _u)}/{len(cand)} "
+                      f"+{_nresc} نجات | +{len(ec)} بیرون | "
+                      f"{int((_time.time() - _t0) * 1000)}ms")
+            else:
+                print(f"    [*]K3-کاسکاد: برشِ امنِ MLKit={len(plines)}خط | "
+                      f"برش={len(_rects)} | PP-OCRv6={len(_rapid)}خط "
+                      f"(جایگزین={_nrep}) | باکس="
+                      f"{sum(1 for _u in used if _u)}/{len(cand)} "
+                      f"+{_nresc} نجات | +{len(ec)} بیرون | "
+                      f"{int((_time.time() - _t0) * 1000)}ms")
         return res, ec, er
 
     @staticmethod
