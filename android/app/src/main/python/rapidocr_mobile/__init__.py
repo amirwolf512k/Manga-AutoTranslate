@@ -28,6 +28,10 @@ PP-OCRv5_korean_rec + جفتِ ch_PP-OCRv4 برایِ چینی) — دقیقاً
 اپِ K3. charset از فایلهایِ باندلشده خوانده میشود (ppocrv6_chars /
 korean_chars / ppocr_keys_v1). شبیهسازِ x86_64 (CI) همان مدلهایِ small
 قبلی را میگیرد تا گیتها دستنخورده بمانند.
+v1.14.155-speed — سشنِ OCR گوشی حالا XNNPACK/NNAPI دارد
+(پیشفرض XNNPACK با کانفیگِ رسمی؛ MANGA_MOBILE_OCR_EP=auto
+بنچمارکِ NNAPI/GPU هم میکند) + درمانِ EACCES در لحظهٔ
+بازکردنِ مدل + دورِ دومِ آستانهٔ بازِ det بدونِ اجرایِ دوباره.
 """
 import math
 import os
@@ -49,20 +53,285 @@ def _load_charset(path: str = _CHARS_TXT):
     return ["blank"] + chars + [" "]
 
 
+def _android_env() -> bool:
+    """محیطِ اندروید (Chaquopy): ANDROID_ROOT/ANDROID_DATA ست میشوند."""
+    try:
+        if "ANDROID_ROOT" in os.environ and "ANDROID_DATA" in os.environ:
+            return True
+    except Exception:
+        pass
+    try:
+        return os.path.exists("/system/build.prop")
+    except Exception:
+        return False
+
+
+def _x86_machine() -> bool:
+    try:
+        import platform as _pf
+        return _pf.machine().lower() in ("x86_64", "amd64")
+    except Exception:
+        return False
+
+
+def _avail_eps():
+    try:
+        return set(onnxruntime.get_available_providers())
+    except Exception:
+        return set()
+
+
+def _big_core_count() -> int:
+    """هستههایِ سریع (big) از cpufreq — برایِ threadpoolِ XNNPACK.
+    Snapdragon 870: 1×3.2 + 3×2.42 + 4×1.8GHz → آستانهٔ ۶۰٪ → ۴."""
+    import glob as _glob
+    _freqs = []
+    try:
+        for _p in _glob.glob(
+                "/sys/devices/system/cpu/cpu[0-9]*/cpufreq/cpuinfo_max_freq"):
+            try:
+                with open(_p) as _fh:
+                    _freqs.append(int(_fh.read().strip() or 0))
+            except Exception:
+                pass
+    except Exception:
+        pass
+    if len(_freqs) >= 4:
+        _mx = max(_freqs)
+        if _mx > 0:
+            return max(1, sum(1 for _v in _freqs if _v >= _mx * 0.6))
+    try:
+        return max(1, os.cpu_count() or 4)
+    except Exception:
+        return 4
+
+
+def _xnn_threads() -> int:
+    try:
+        _v = int(os.environ.get("MANGA_XNN_THREADS", "0") or 0)
+        if _v > 0:
+            return max(1, min(8, _v))
+    except Exception:
+        pass
+    try:
+        return max(2, min(6, _big_core_count()))
+    except Exception:
+        return 4
+
+
+def _is_eacces(e) -> bool:
+    """«system error number 13» / Permission denied — EACCESِ مدل."""
+    try:
+        _m = str(e).lower()
+    except Exception:
+        return False
+    return ("error number 13" in _m or "errno 13" in _m
+            or "permission denied" in _m or "eacces" in _m)
+
+
+def _heal_model_file(path: str) -> None:
+    """ترمیمِ مجوزِ خواندنِ فایلِ مدل (بعد از بهروزرسانیِ اپ/بازیابی)."""
+    try:
+        os.chmod(path, 0o644)
+    except Exception:
+        pass
+    try:
+        os.chmod(os.path.dirname(path) or ".", 0o755)
+    except Exception:
+        pass
+    try:
+        from java import jclass as _jc
+        _f = _jc("java.io.File")(path)
+        _f.setReadable(True, False)
+    except Exception:
+        pass
+
+
+def _probe_input(path: str, small: bool = True) -> np.ndarray:
+    """ورودیِ نمونه برایِ پروب/بنچمارک بر اساسِ نوعِ مدل (det/rec)."""
+    _p = str(path).lower()
+    if "_det" in _p:
+        return np.zeros((1, 3, 64, 64) if small else (1, 3, 512, 512),
+                        dtype=np.float32)
+    return np.zeros((1, 3, 48, 320), dtype=np.float32)
+
+
+def _bench_ep(path: str, ep: str, probe: np.ndarray):
+    """auto: سشنِ EP + دو run؛ خروجی بهترینِ زمانِ run (ثانیه) یا None."""
+    try:
+        _so = onnxruntime.SessionOptions()
+        _so.inter_op_num_threads = 1
+        if ep == "XnnpackExecutionProvider":
+            _so.intra_op_num_threads = 1
+            _so.append_execution_provider(
+                ep, {"intra_op_num_threads": str(_xnn_threads())})
+        else:
+            _so.intra_op_num_threads = 4
+            _so.append_execution_provider(ep)
+        try:
+            _so.add_session_config_entry(
+                "session.intra_op.allow_spinning", "0")
+        except Exception:
+            pass
+        _s = onnxruntime.InferenceSession(
+            path, sess_options=_so, providers=[ep, "CPUExecutionProvider"])
+        _in_name = _s.get_inputs()[0].name
+        _out_name = _s.get_outputs()[0].name
+        import time as _time
+        _best = None
+        for _i in range(2):
+            _t0 = _time.perf_counter()
+            _s.run([_out_name], {_in_name: probe})
+            _dt = _time.perf_counter() - _t0
+            if _best is None or _dt < _best:
+                _best = _dt
+        return _best
+    except Exception:
+        return None
+
+
+_EP_NOTE_155 = False
+
+
+def _choose_ep(path: str):
+    """v1.14.155-speed — EPِ سشنِ OCR گوشیِ واقعیِ arm64.
+
+    ریشهٔ کندیِ 1.14.154b: _Sess با providers=None میساخت → سشنِ
+    CPU-خالص بدونِ هیچ شتابی (MANGA_MOBILE_OCR_EP خوانده ولی استفاده
+    نمیشد!) در حالیکه ORT-android 1.31 Maven هم XNNPACK دارد هم NNAPI
+    (عینِ APKِ رقیبِ K3 که libonnxruntime آن همین EPها را دارد).
+
+    پیشفرض: XNNPACK (کرنلهایِ dotprod ARM) با کانفیگِ رسمیِ مستندات:
+      ORT intra=1 + XNNPACK intra=هستههایِ سریع + spinning خاموش.
+    MANGA_MOBILE_OCR_EP: cpu | xnnpack | nnapi | auto (بنچمارک).
+    خروجی: (name|None, opts) — None = CPU خالصِ همیشگی (PC/امولاتور)."""
+    global _EP_NOTE_155
+    try:
+        _e = str(os.environ.get("MANGA_MOBILE_OCR_EP", "") or "").strip().lower()
+    except Exception:
+        _e = ""
+    if _e == "cpu":
+        return None, {}
+    if not _android_env() or _x86_machine():
+        # PC / امولاتورِ x86_64: رفتارِ قبلی (providers=None) — CI دستنخورده
+        return None, {}
+    _av = _avail_eps()
+    if _e == "nnapi":
+        if "NnapiExecutionProvider" in _av:
+            return "NnapiExecutionProvider", {}
+        print("[!] NNAPI در این ORT-android نیست → CPU")
+        return None, {}
+    if _e == "auto":
+        _probe = _probe_input(path, small=False)
+        _winner, _win_t = None, None
+        for _name in ("XnnpackExecutionProvider", "NnapiExecutionProvider"):
+            if _name not in _av:
+                continue
+            _t = _bench_ep(path, _name, _probe)
+            if _t is not None and (_win_t is None or _t < _win_t):
+                _winner, _win_t = _name, _t
+        if _winner == "NnapiExecutionProvider":
+            print(f"[⚡] EP=auto → NNAPI (GPU) برنده — probe "
+                  f"{(_win_t or 0) * 1000:.0f}ms")
+        elif _winner == "XnnpackExecutionProvider":
+            print(f"[⚡] EP=auto → XNNPACK برنده — probe "
+                  f"{(_win_t or 0) * 1000:.0f}ms")
+        else:
+            if not _EP_NOTE_155:
+                print("[⚡] EP=auto → هیچ شتابدهندهٔ سالمی نیست → CPU")
+                _EP_NOTE_155 = True
+            return None, {}
+        return _winner, {}
+    # پیشفرض: xnnpack
+    if "XnnpackExecutionProvider" in _av:
+        _n = _xnn_threads()
+        if not _EP_NOTE_155:
+            print(f"[⚡] OCR گوشی: EP=XNNPACK (intra={_n}) — کانفیگِ "
+                  "رسمی؛ MANGA_MOBILE_OCR_EP=auto برایِ آزمایشِ NNAPI/GPU")
+            _EP_NOTE_155 = True
+        return "XnnpackExecutionProvider", {"intra_op_num_threads": str(_n)}
+    return None, {}
+
+
 class _Sess:
     def __init__(self, path: str, intra: int):
+        self._intra = max(1, int(intra))
         so = onnxruntime.SessionOptions()
-        so.intra_op_num_threads = max(1, int(intra))
         so.inter_op_num_threads = 1
-        ep = str(os.environ.get("MANGA_MOBILE_OCR_EP", "") or "").strip()
-        self.sess = onnxruntime.InferenceSession(
-            path, sess_options=so, providers=None)
+        _ep, _ep_opts = _choose_ep(path)
+        if _ep == "XnnpackExecutionProvider":
+            # کانفیگِ رسمیِ XNNPACK: threadpoolِ ORT تکنخی؛ XNNPACK خودش
+            # threadpoolِ هستههایِ سریع را میسازد (بدونِ رقابت/اسپین).
+            so.intra_op_num_threads = 1
+        else:
+            so.intra_op_num_threads = self._intra
+        try:
+            so.add_session_config_entry(
+                "session.intra_op.allow_spinning", "0")
+        except Exception:
+            pass
+        _prov = None
+        if _ep:
+            _prov = [_ep, "CPUExecutionProvider"]
+            try:
+                so.append_execution_provider(_ep, _ep_opts or None)
+            except Exception:
+                pass
+        self.sess = self._open(path, so, _prov)
         self.in_name = self.sess.get_inputs()[0].name
         self.out_name = self.sess.get_outputs()[0].name
+
+    def _open(self, path, so, prov):
+        try:
+            _sess = onnxruntime.InferenceSession(
+                path, sess_options=so, providers=prov)
+        except Exception as e:
+            if not _is_eacces(e):
+                raise
+            # v1.14.155 — درمانِ EACCES در لحظهٔ بازکردن («system error
+            # number 13»): chmod + تستِ خواندن؛ هنوز قفل؟ → دانلودِ دوباره
+            print("[!] فایلِ مدلِ OCR خواندنی نیست (errno 13) → ترمیمِ مجوز…")
+            _heal_model_file(path)
+            if not _selfread_ok(path):
+                try:
+                    os.remove(path)
+                    print("[!] مدلِ ناخوانا حذف شد → دانلودِ دوباره لازم است")
+                except Exception:
+                    pass
+            _sess = onnxruntime.InferenceSession(
+                path, sess_options=so, providers=prov)
+        if prov:
+            # v1.14.66 محفوظ — پروبِ واقعیِ run: اگر EP با شکلِ داینامیک
+            # بشکند (ORT_FAIL) → سشنِ CPUِ خالص؛ هیچ فالبکِ بیصدایی به
+            # موتورِ دیگر در کار نیست.
+            try:
+                _in = _sess.get_inputs()[0].name
+                _out = _sess.get_outputs()[0].name
+                _sess.run([_out], {_in: _probe_input(path)})
+            except Exception:
+                try:
+                    _so2 = onnxruntime.SessionOptions()
+                    _so2.inter_op_num_threads = 1
+                    _so2.intra_op_num_threads = self._intra
+                    _sess = onnxruntime.InferenceSession(
+                        path, sess_options=_so2, providers=None)
+                    print("[!] EP در پروب شکست → سشنِ CPUِ خالص")
+                except Exception:
+                    raise
+        return _sess
 
     def __call__(self, x: np.ndarray) -> np.ndarray:
         outs = self.sess.run(None, {self.in_name: x})
         return outs[0]
+
+
+def _selfread_ok(path: str) -> bool:
+    try:
+        with open(path, "rb") as _f:
+            _f.read(64)
+        return True
+    except Exception:
+        return False
 
 
 class RapidOcrMobile:
@@ -158,7 +427,8 @@ class RapidOcrMobile:
         cv2.fillPoly(mask, box.reshape(1, -1, 2).astype(np.int32), 1)
         return float(cv2.mean(bitmap[ymin:ymax + 1, xmin:xmax + 1], mask)[0])
 
-    def _unclip(self, box: np.ndarray) -> np.ndarray:
+    def _unclip(self, box: np.ndarray,
+                unclip_ratio: float = None) -> np.ndarray:
         """معادلِ PyclipperOffset(JT_ROUND, distance=area*ratio/length).
 
         ورودی: ۴ گوشهٔ rect (ترتیبِ حلقه: TL,TR,BR,BL — خروجیِ
@@ -166,12 +436,13 @@ class RapidOcrMobile:
         بیرون میرود — برایِ rect دقیقاً معادلِ offsetِ کلایپر است
         (گوشههایِ گردِ JT_ROUND بعداً minAreaRect میشوند = همان rect)."""
         pts = np.asarray(box, dtype=np.float32).reshape(-1, 2)
+        _ur = self.unclip_ratio if unclip_ratio is None else float(unclip_ratio)
         # rect واقعی از طولِ ضلعها (حلقهٔ TL,TR,BR,BL)
         w1 = float(np.linalg.norm(pts[1] - pts[0]))
         h1 = float(np.linalg.norm(pts[3] - pts[0]))
         area = max(1.0, w1 * h1)
         perim = max(1.0, 2.0 * (w1 + h1))
-        dist = area * self.unclip_ratio / perim
+        dist = area * _ur / perim
         out = np.empty_like(pts)
         n = len(pts)
         for i in range(n):
@@ -200,9 +471,14 @@ class RapidOcrMobile:
             p2, p3 = points[3], points[2]
         return np.array([p1, p2, p3, p4], dtype=np.float32)
 
-    def _det_postprocess(self, pred: np.ndarray, src_h: int, src_w: int):
+    def _det_postprocess(self, pred: np.ndarray, src_h: int, src_w: int,
+                         thresh: float = None, box_thresh: float = None,
+                         unclip_ratio: float = None):
+        _t = self.thresh if thresh is None else float(thresh)
+        _bt = self.box_thresh if box_thresh is None else float(box_thresh)
+        _ur = self.unclip_ratio if unclip_ratio is None else float(unclip_ratio)
         pred = pred[:, 0, :, :]  # [1,H,W]
-        mask = (pred[0] > self.thresh).astype(np.uint8)  # [H,W]
+        mask = (pred[0] > _t).astype(np.uint8)  # [H,W]
         mask = cv2.dilate(mask, self.dilation_kernel)
         bitmap = mask
         height, width = bitmap.shape
@@ -220,9 +496,9 @@ class RapidOcrMobile:
             if sside < self.min_size:
                 continue
             score = self._box_score_fast(pred[0], points.reshape(-1, 2))
-            if self.box_thresh > score:
+            if _bt > score:
                 continue
-            box = self._unclip(points)
+            box = self._unclip(points, _ur)
             box, sside = self._get_mini_boxes(box)
             if sside < self.min_size + 2:
                 continue
@@ -232,14 +508,18 @@ class RapidOcrMobile:
             scores.append(float(score))
         return boxes, scores
 
-    def _detect(self, img: np.ndarray, crop_mode: bool = False,
-                det_cap=None):
-        src_h, src_w = img.shape[:2]
-        pre = self._det_preprocess(img, crop_mode=crop_mode, det_cap=det_cap)
-        if pre is None:
-            return []
-        pred = self.det(pre)
-        boxes, scores = self._det_postprocess(pred, src_h, src_w)
+    def _boxes_from_pred(self, pred: np.ndarray, src_h: int, src_w: int,
+                         thresh: float = None, box_thresh: float = None,
+                         unclip_ratio: float = None):
+        """v1.14.155 — فیلتر + مرتبسازیِ باکسها رویِ predِ موجود.
+
+        بدونِ اجرایِ دوبارهٔ مدل؛ دورِ دومِ آستانهٔ بازِ `ocr()` رویِ
+        همین متد سوار است (متنِ کمکنتراست/حبابهایِ کموبه که در
+        thresh=0.3/box=0.5 حذف میشدند — شکایتِ «حتی عکسِ دومتنی هم
+        استخراج نمیشود»)."""
+        boxes, scores = self._det_postprocess(
+            pred, src_h, src_w, thresh=thresh, box_thresh=box_thresh,
+            unclip_ratio=unclip_ratio)
 
         # filter_det_res: مرتبسازیِ ساعتگرد + حذفِ ضلعِ ≤3
         final = []
@@ -266,7 +546,15 @@ class RapidOcrMobile:
             final = [final[i] for i in order2]
         return final
 
-    # ─────────────────────────── rec ───────────────────────────
+    def _detect(self, img: np.ndarray, crop_mode: bool = False,
+                det_cap=None):
+        src_h, src_w = img.shape[:2]
+        pre = self._det_preprocess(img, crop_mode=crop_mode, det_cap=det_cap)
+        if pre is None:
+            return [], None
+        pred = self.det(pre)
+        return self._boxes_from_pred(pred, src_h, src_w), pred
+
 
     def _resize_norm(self, img: np.ndarray, img_w: int) -> np.ndarray:
         img_c, img_h, _ = self.rec_img_shape
@@ -383,7 +671,18 @@ class RapidOcrMobile:
                 cv2.BORDER_CONSTANT, value=(0, 0, 0))
 
         # ۳) det
-        dets = self._detect(work, crop_mode=crop_mode, det_cap=det_cap)
+        dets, pred = self._detect(work, crop_mode=crop_mode, det_cap=det_cap)
+        if not dets and pred is not None:
+            # v1.14.155 — دورِ دومِ آستانهٔ باز رویِ همان pred (بدونِ
+            # اجرایِ دوبارهٔ مدل): متنِ کمکنتراست/سبکِ مانگا که در
+            # thresh=0.3/box=0.5 حذف میشد (شکایتِ «عکسِ دومتنی هم
+            # استخراج نمیشود»). فقط وقتی دورِ اول «هیچ» نداد —
+            # بقیهٔ مسیرها بیتبهبیت مثلِ قبل.
+            dets = self._boxes_from_pred(
+                pred, work.shape[0], work.shape[1],
+                thresh=max(0.15, self.thresh - 0.15),
+                box_thresh=max(0.30, self.box_thresh - 0.20),
+                unclip_ratio=self.unclip_ratio + 0.4)
         if not dets:
             return None
 

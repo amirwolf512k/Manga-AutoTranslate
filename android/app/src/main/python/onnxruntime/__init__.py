@@ -16,7 +16,11 @@
 
 import numpy as np
 
-__version__ = "1.31.0-android-shim-v3"
+# v4 — 1.14.155: add_session_config_entry واقعاً اعمال میشود (spinning=0
+#   کانفیگِ رسمیِ XNNPACK) — قبلاً no-op بود و در اندروید نادیده گرفته
+#   میشد؛ _cfg در _build_java_session_options به addSessionConfigEntry
+#   جاوا میرسد.
+__version__ = "1.31.0-android-shim-v4"
 
 
 def preload_dlls(*a, **k):
@@ -123,6 +127,7 @@ class SessionOptions:
         # 🎮 v3: درخواست EP سخت‌افزاری — لیستی از (نام, opts_dict).
         # در _build_java_session_options به متدهای جاوا ترجمه می‌شود.
         self._eps = []
+        self._cfg = {}
 
     def append_execution_provider(self, name, opts=None):
         try:
@@ -133,8 +138,13 @@ class SessionOptions:
     def __setattr__(self, k, v):
         self.__dict__[k] = v
 
-    def add_session_config_entry(self, *a, **k):
-        pass
+    def add_session_config_entry(self, k, v=None):
+        # v4 — 1.14.155: واقعاً ذخیره میشود (قبلاً pass بود) تا
+        # session.intra_op.allow_spinning=0 و امثالِ آن به ORT برسد
+        try:
+            self._cfg[str(k)] = str(v)
+        except Exception:
+            pass
 
 
 def get_available_providers():
@@ -496,6 +506,15 @@ def _build_java_session_options(sess_options):
         pass
     try:
         _apply_java_eps(jopt, sess_options)
+    except Exception:
+        pass
+    try:
+        _cfg = dict(getattr(sess_options, "_cfg", {}) or {})
+        for _ck in _cfg:
+            try:
+                jopt.addSessionConfigEntry(str(_ck), str(_cfg[_ck]))
+            except Exception:
+                pass
     except Exception:
         pass
     return jopt
