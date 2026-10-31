@@ -23724,6 +23724,18 @@ class MangaTranslator:
             else:
                 merged.append(rl)
 
+        # ۴ب) v1.14.154 — حالتِ خالصِ PP-OCRv6: هر خط بلوکِ خودش
+        # (blk≥0) تا مسیرِ «بلوکمحور» _page_assign_lines با مرتبسازیِ
+        # مرکزِ خطها بخواند. ریشهٔ «GO! FASTER... EVEN» (شکستِ گیتِ
+        # محتوایِ امولاتور در 1.14.153): همهٔ خطهایِ خالص blk=-1
+        # گرفتند و به درجِ yِ تکبهتک (y-minِ درهم با باکسهایِ
+        # همپوشانِ حباب) میرفتند؛ در ≤1.14.152 پایهٔ بلوکهایِ ML Kit
+        # مرتب بود. ترتیبِ درونِ بلوک = ترتیبِ نیتیوِ خروجیِ کراپ.
+        if not _mlk_txt:
+            for _bi in range(len(merged)):
+                _m = merged[_bi]
+                merged[_bi] = (_m[0], _m[1], _m[2], _m[3], _bi)
+
         # ۵) تخصیصِ خط‌ها به باکس‌هایِ دیتکتور (همان مسیرِ v1.14.122)
         res, used = self._page_assign_lines(cand, merged)
 
@@ -23745,6 +23757,14 @@ class MangaTranslator:
                 _cr2, _o = _run_one((cx1, cy1, cx2, cy2))
                 _got = _collect(_cr2, _o)
                 if _got:
+                    # v1.14.154 — join با ترتیبِ مرکز→x (نجاتِ «Alright!
+                    # I'll the speed increase» ← درهمِ y-minِ خام)
+                    try:
+                        _got.sort(key=lambda g: (
+                            float(g[2][:, 1].mean()),
+                            float(g[2][:, 0].min())))
+                    except Exception:
+                        pass
                     used[_k] = True
                     res[_k] = (" ".join(g[0] for g in _got),
                                [g[2] for g in _got],
@@ -23838,8 +23858,12 @@ class MangaTranslator:
                         _gi = [t for t in range(len(ls))
                                if _blks_raw[t] == _b]
                         _groups.append(
-                            (min(float(polys[t][:, 1].min())
-                                 for t in _gi), _b, _gi))
+                            (sum(float(polys[t][:, 1].mean())
+                                 for t in _gi) / max(1, len(_gi)),
+                             _b, _gi))
+                    # v1.14.154 — کلیدِ مرتبسازیِ بلوک = مرکزِ خطها
+                    # (نه y-min): باکسهایِ همپوشان/موربِ حباب با y-min
+                    # جابجا میشدند؛ مرکزِ خطهایِ رویهم صعودی است.
                     _groups.sort(key=lambda g: g[0])
                     _seq = []
                     for _, _b, _gi in _groups:
