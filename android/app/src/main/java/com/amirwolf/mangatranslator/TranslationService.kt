@@ -99,11 +99,21 @@ class TranslationService : Service() {
         } else {
             @Suppress("DEPRECATION") Notification.Builder(this)
         }
+        // v1.14.153 — «مربعِ سیاه» نشون میداد: smallIcon فقط کانالِ آلفا را
+        // میخواند و ic_launcher مربعِ قرمزِ توپر بود → silhouetteِ مربع.
+        // درمان: ic_notif = نویسهٔ «漫» سفیدِ خودِ لوگو (زمینهٔ شفاف) +
+        // largeIcon = لوگویِ رنگیِ واقعیِ اپ (مربعِ قرمز) در بدنهٔ اعلان.
         b.setContentTitle("مانگا مترجم")
             .setContentText(txt)
-            .setSmallIcon(R.mipmap.ic_launcher)
+            .setSmallIcon(R.drawable.ic_notif)
             .setOngoing(true)
             .setOnlyAlertOnce(true)
+        try {
+            val lp = android.graphics.BitmapFactory.decodeResource(
+                resources, R.mipmap.ic_launcher)
+            if (lp != null) b.setLargeIcon(lp)
+        } catch (_: Exception) {
+        }
         if (total > 0) {
             b.setProgress(total, done.coerceIn(0, total), false)
         } else {

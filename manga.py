@@ -23617,9 +23617,18 @@ class MangaTranslator:
                 _cr2, _o = _run_one(_cr)
                 _rapid.extend(_collect(_cr2, _o))
 
-        # ۴) ادغام — خطِ Rapid جانشینِ خطِ ML Kitِ همان ناحیه (دقتِ PC)
-        # و خطِ تازه اضافه میشود (استخراجِ بیشتر). بلوکِ ML Kit حفظ.
-        merged = list(plines)
+        # ۴) v1.14.153 — استخراجِ متنِ خالصِ PP-OCRv6 (درخواستِ کاربر:
+        # «استخراجِ متن از ML Kit استفاده نکنه؛ برشِ امن فقط ML Kit»).
+        # ML Kit فقط برشِ امن میدهد (بالا)؛ متنِ نهایی فقط خطهایِ
+        # PP-OCRv6 (۵ مدلِ ONNX) رویِ برش‌هاست — نه یک کلمه از ML Kit.
+        # فالبکِ متنیِ ML Kit (رفتارِ قبل از 1.14.153):
+        # MANGA_CASCADE_MLKIT_TEXT=1
+        _mlk_txt = os.environ.get(
+            "MANGA_CASCADE_MLKIT_TEXT", "0").strip() == "1"
+        if _mlk_txt:
+            merged = list(plines)
+        else:
+            merged = []
         _nrep = 0
         for rl in _rapid:
             rp = rl[2]
@@ -23679,7 +23688,7 @@ class MangaTranslator:
         # ۷) خط‌هایِ بیرون از همهٔ باکس‌ها → ناحیهٔ مستقل
         ec, er = self._page_leftover_cands(cand, merged)
         if self.debug:
-            print(f"    [*]K3-کاسکاد: MLKit={len(plines)}خط | "
+            print(f"    [*]K3-کاسکاد: برشِ امنِ MLKit={len(plines)}خط | "
                   f"برش={len(_rects)} | PP-OCRv6={len(_rapid)}خط "
                   f"(جایگزین={_nrep}) | باکس="
                   f"{sum(1 for _u in used if _u)}/{len(cand)} "
