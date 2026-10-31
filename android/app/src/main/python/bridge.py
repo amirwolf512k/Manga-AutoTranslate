@@ -539,13 +539,25 @@ def start_job(params_json, files_dir):
 _PROG_PHASES_1151 = (
     ("بارگذاری موتور", "بارگذاری مدلها"),
     ("لود نشد", "فالبکِ ML Kit"),
+    # v1.14.154 — نشانگرهایِ شروعِ فازِ هر صفحه (پرینتهایِ جدیدِ manga.py)
+    # + حالتهایِ پایانی. ترتیب مهم است (اولین تطبیق برنده): خطهایِ
+    # «[OCR] … خطا: …» اول گاردِ استخراج را میگیرند نه «خطا» را.
+    ("استخراج متن", "استخراج متن"),
+    ("متن استخراج شد", "استخراج متن"),
     ("(PaddleOCR)", "استخراج متن"),
-    ("OCR:", "استخراج متن"),
-    ("ML Kit", "استخراج متن"),
-    ("روش پاکسازی", "پاکسازی"),
-    ("پاکسازی:", "پاکسازی"),
+    ("OCR]", "استخراج متن"),
+    ("ترجمه:", "ترجمه"),
     ("فاز ۳", "ترجمه"),
     ("ترجمه با", "ترجمه"),
+    ("پاکسازی متن", "پاکسازی"),
+    ("روش پاکسازی", "پاکسازی"),
+    ("پاکسازی:", "پاکسازی"),
+    ("[✓] تمام شد", "تمام شد"),
+    ("لغو شد", "لغو شد"),
+    ("خطا:", "خطا"),
+    ("آماده شد", "رندر و ذخیره"),
+    ("OCR:", "استخراج متن"),
+    ("ML Kit", "استخراج متن"),
 )
 
 
@@ -566,6 +578,40 @@ def _update_prog_1151(job, msg):
                     job["prog_phase"] = ph
     except Exception:
         pass
+
+
+def _heal_models_dirs(job):
+    """v1.14.154 — پیشدرمانِ EACCES (system error 13): رویِ بعضیِ گوشیها
+    فایلهایِ مدل بعد از بهروزرسانیِ اپ مجوزِ خواندن ندارند → ONNX
+    Runtime میشکند و موتور بیصدا به ML Kit فالبک میشود. اینجا قبل از
+    بارگذاریِ موتور، مجوزِ همهٔ فایلهایِ پوشههایِ مدل اصلاح میشود
+    (chmodِ 0o644). فقط اندروید؛ خروجی/کارِ قبلی دستنخورده."""
+    if not _android():
+        return
+    fd = str((job or {}).get("files_dir") or "").strip()
+    if not fd or not os.path.isdir(fd):
+        return
+    _skip = {"work", "cache", "updates", "tmp"}
+    _targets = ("rapidocr_models", "models")
+    _n = 0
+    try:
+        for _root, _dirs, _files in os.walk(fd):
+            _dirs[:] = [d for d in _dirs if d not in _skip]
+            if os.path.basename(_root) not in _targets:
+                continue
+            for _fn in _files:
+                _fp = os.path.join(_root, _fn)
+                try:
+                    _st = os.stat(_fp)
+                    if (_st.st_mode & 0o444) != 0o444:
+                        os.chmod(_fp, 0o644)
+                        _n += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    if _n:
+        _log(job, "[*] مجوزِ خواندنِ %d فایلِ مدل اصلاح شد (درمانِ EACCES)" % _n)
 
 
 def _log(job, msg):
@@ -917,6 +963,7 @@ def _run(job):
 
         try:
             with contextlib.redirect_stdout(tee), contextlib.redirect_stderr(tee):
+                _heal_models_dirs(job)  # v1.14.154 — پیشدرمانِ EACCES
                 _log(job, "در حال بارگذاری موتور و مدل‌ها…"
                           " (بار اول مدل‌ها دانلود می‌شوند)")
                 mf = _MF_CACHE["mf"]
@@ -1125,6 +1172,16 @@ def poll():
         job = STATE["job"]
         if not job:
             return json.dumps({"idle": True}, ensure_ascii=False)
+        # v1.14.154 — «کدوم قسمته، کدوم عکسه، چند درصده»: صفحهٔ جاری
+        # (در حال کار = آمادهشده + ۱) و درصد، اینجا حساب میشود تا
+        # اعلان فقط نمایش بدهد.
+        _pt = _live_total(job)
+        _pp = int(job.get("prog_page") or 0)
+        if _pt > 0:
+            _pn = _pp if job.get("done") else min(_pp + 1, _pt)
+            _ppct = int(_pn * 100 / _pt)
+        else:
+            _pn, _ppct = _pp, 0
         return json.dumps({
             "idle": False,
             "done": bool(job.get("done")),
@@ -1143,6 +1200,9 @@ def poll():
             "live_total_dbg": _live_total(job, dbg=True),
             "prog_page": int(job.get("prog_page") or 0),
             "prog_phase": str(job.get("prog_phase") or ""),
+            "prog_now": _pn,
+            "prog_total": _pt,
+            "prog_pct": _ppct,
         }, ensure_ascii=False)
 
 

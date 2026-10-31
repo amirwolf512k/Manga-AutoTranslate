@@ -1879,9 +1879,10 @@ class MainActivity : AppCompatActivity() {
                     }
                     if (s.optInt("live_total", 0) > 0) liveTotal = s.optInt("live_total")
                     if (s.optInt("live_total_dbg", 0) > 0) liveDbgTotal = s.optInt("live_total_dbg")
-                    // v1.14.151 — پیشرفت (صفحهٔ N از M + فاز) به اعلانِ پیشزمینه
+                    // v1.14.154 — فاز + صفحهٔ جاری + درصد از bridge
+                    // (prog_now = صفحهٔ در حال کار، prog_pct = درصد)
                     TranslationService.updateProgress(
-                        s.optInt("prog_page", 0), s.optInt("live_total", 0),
+                        s.optInt("prog_now", 0), s.optInt("prog_total", 0),
                         s.optString("prog_phase", ""))
                     s.optJSONArray("live_images")?.let { a ->
                         val live = mutableListOf<String>()

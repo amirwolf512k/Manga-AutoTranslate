@@ -93,7 +93,11 @@ class TranslationService : Service() {
             )
         }
         val ph = phase.ifBlank { "در حال ترجمه…" }
-        val txt = if (total > 0 && done > 0) "$ph — صفحهٔ $done از $total" else ph
+        // v1.14.154 — «کدوم قسمته کدوم عکسه چند درصده»:
+        // «استخراج متن — صفحهٔ ۳ از ۵ (٪۶۰)»
+        val pct = if (total > 0 && done > 0) done * 100 / total else 0
+        val txt = if (total > 0 && done > 0)
+            "$ph — صفحهٔ $done از $total (٪$pct)" else ph
         val b = if (Build.VERSION.SDK_INT >= 26) {
             Notification.Builder(this, CH_ID)
         } else {

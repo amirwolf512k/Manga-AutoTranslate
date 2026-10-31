@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0  # v1.14.68 — سنجشِ زمانِ importها (باید اول باشد)
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.142"
+APP_VER = "1.14.154"
 
 DEFAULT_SYSTEM_INSTRUCTION_STYLE = """
 تو مترجم حرفه‌ای مانگا، مانهوا، مانهوآ و کمیک برای چاپ هستی. خروجی‌ات عیناً داخل حباب می‌نشیند؛ باید مثل دیالوگ یک کتاب ترجمه‌شدهٔ خوب خوانده شود.
@@ -3202,6 +3202,47 @@ def _mirror_model(fname):
         return None
 
 
+def _android_heal_model_dir(mdir, quiet=False):
+    """v1.14.154 — درمانِ EACCES («system error number 13») مدلها رویِ گوشی.
+
+    ریشه: بعد از بهروزرسانیِ اپ/بازیابیِ بکاپ، مجوزِ خواندنِ فایلِ مدلِ
+    دانلودشده از ONNX Runtime گرفته میشود → «PP-OCRv6 … failed: system
+    error number 13» → فالبکِ بیصدای ML Kit (شکایتِ «هنوز از ml kit
+    واسه استخراج استفاده میکنه»). درمان: chmodِ 0o644 همهٔ فایلهایِ
+    پوشهٔ مدل؛ فایلِ هنوزناخوانا → حذف (تا _ensure دوباره دانلود کند).
+    فقط اندروید (گیتِ MANGA_MODEL_HEAL) — PC بیت‌به‌بیت دستنخورده."""
+    try:
+        if not mdir or not os.path.isdir(mdir):
+            return
+        if not _android_gate("MANGA_MODEL_HEAL"):
+            return
+        _n_heal = 0
+        for _fn in sorted(os.listdir(mdir)):
+            _fp = os.path.join(mdir, _fn)
+            if not os.path.isfile(_fp):
+                continue
+            try:
+                os.chmod(_fp, 0o644)
+            except Exception:
+                pass
+            try:
+                with open(_fp, "rb") as _f:
+                    _f.read(64)
+            except PermissionError:
+                try:
+                    os.remove(_fp)
+                    _n_heal += 1
+                except Exception:
+                    pass
+            except Exception:
+                pass
+        if _n_heal and not quiet:
+            print(f"[*] {_n_heal} فایلِ مدلِ ناخوانا (EACCES) حذف شد "
+                  "→ دانلودِ دوباره")
+    except Exception:
+        pass
+
+
 def _ensure_rapidocr_models(mdir, files=None):
     wanted = files or list(_RAPIDOCR_FILES)
     for fname in wanted:
@@ -3232,6 +3273,29 @@ def _ensure_rapidocr_models(mdir, files=None):
             pass
 
 
+def _cjk_dominant_154(t: str) -> bool:
+    """v1.14.154 — «بعد فارسی بحرف چرا چینی میحرفی» — ریشهٔ واقعی:
+    dictِ PP-OCRv6 medium (ppocrv6_chars.txt) = ۱۸۷۰۷ نویسه که ۱۵۷۴۵
+    تایش CJK است و فقط ۵۲ تا لاتین؛ با ocr_lang=en رویِ متنِ استایل‌دار،
+    argmax میافتد رویِ نویسههایِ CJK → خطِ «انگلیسی» پر از 汉字 میشود
+    (ML Kitِ لاتین هرگز نمیساخت). True = خطِ با غلبهٔ CJK → حذف.
+    فقط برایِ زبانِ لاتین صدا زده میشود؛ خاموشی: MANGA_CJK_GUARD=0."""
+    try:
+        _cjk = 0
+        _lat = 0
+        for _c in t:
+            if "\u2e80" <= _c <= "\u9fff" or "\uf900" <= _c <= "\ufaff" \
+                    or "\uff00" <= _c <= "\uffef":
+                _cjk += 1
+            elif _c.isascii() and _c.isalpha():
+                _lat += 1
+        if _cjk == 0:
+            return False
+        return _cjk >= max(2, _lat)
+    except Exception:
+        return False
+
+
 class RapidOCRBackend:
 
     # v1.14.123 — مپِ charsetهایِ باندلشدهٔ موبایل (از metadataِ خودِ مدل
@@ -3248,6 +3312,13 @@ class RapidOCRBackend:
         self.lang = lang
         self._new_api = False
         self._mobile = None
+        # v1.14.154 — گاردِ CJK برایِ زبانِ لاتین (اندروید؛ PC بدونِ گیت
+        # همیشه خاموش — رفتارِ PC بیت‌به‌بیت)
+        try:
+            self._cjk_guard = _android_gate("MANGA_CJK_GUARD") and \
+                str(lang).lower() in ("en", "latin", "english")
+        except Exception:
+            self._cjk_guard = False
         # v1.14.123 — اندروید: موتورِ PP-OCRv6 ONNX (عینِ PC/K3) از
         # rapidocr_mobile (بدونِ پکیجِ rapidocr/pyclipper/shapely).
         # زمینه: دیکدِ K3 v4.1.1 نشان داد K3 رویِ گوشی هم همین پایپلاینِ
@@ -3322,7 +3393,7 @@ class RapidOCRBackend:
                     # v1.14.29: فقط مدل‌های همین زبان دانلود می‌شود — نه همهٔ زبان‌ها
                     # (det مشترک است؛ rec مخصوص زبان؛ cls دیگر استفاده نمی‌شود)
                     # v1.14.152 — مجموعهٔ K3 با helperِ مشترک
-                    _det_n52, _rec_n52 = _rapidocr_model_pair(lang)
+                    _det_n52, _rec_n52 = _rapidocr_model_pair(lang, small=True)  # v1.14.154 — PC = مجموعهٔ سبکِ قبلی (دستنخورده)
                     _ensure_rapidocr_models(_mdir,
                                             files=[_det_n52, _rec_n52])
                 except Exception as _e:
@@ -3337,7 +3408,7 @@ class RapidOCRBackend:
             if _mdir:
                 try:
                     # v1.14.152 — مسیرِ صریحِ مدلها از helperِ مجموعهٔ K3
-                    _det_n52, _rec_n52 = _rapidocr_model_pair(lang)
+                    _det_n52, _rec_n52 = _rapidocr_model_pair(lang, small=True)  # v1.14.154 — PC = مجموعهٔ سبکِ قبلی (دستنخورده)
                     for _sec69, _fn69 in (
                             ("Det", _det_n52),
                             ("Rec", _rec_n52),
@@ -3508,6 +3579,8 @@ class RapidOCRBackend:
                 os.environ.get("MANGA_FILES_DIR") or os.getcwd(),
                 "rapidocr_models")
             os.makedirs(_mdir, exist_ok=True)
+            # v1.14.154 — EACCES: مجوزِ فایلهایِ مدل قبل از هر استفاده
+            _android_heal_model_dir(_mdir)
             _low = str(lang).lower()
             _chars = self._MOBILE_CHARS.get(_low, "ppocrv6_chars.txt")
             try:
@@ -3606,15 +3679,22 @@ class RapidOCRBackend:
             if not _out or not _out[0]:
                 return None
             _lines = []
+            _ncjk = 0
             for _box, _pair in _out[0]:
                 try:
                     _t = self._deaccent(str(_pair[0])).strip()
                     if not _t:
                         continue
+                    if self._cjk_guard and _cjk_dominant_154(_t):
+                        _ncjk += 1
+                        continue
                     _s = float(_pair[1])
                     _lines.append([_box, (_t, _s)])
                 except Exception:
                     continue
+            if _ncjk:
+                print(f"    [OCR] {_ncjk} خطِ پر از نویسهٔ چینی حذف شد "
+                      "(گاردِ لاتین — v1.14.154)")
             return [_lines] if _lines else None
         if self._new_api:
             try:
@@ -26325,6 +26405,10 @@ class MangaTranslator:
 
         h, w = image.shape[:2]
         _t_ext150 = time.time()  # v1.14.150 — کرونومترِ استخراج (نمایشِ سرعت)
+        # v1.14.154 — نشانگرِ شروعِ فاز برایِ اعلان (فقط اندروید؛ PC بدونِ
+        # این خط = لاگِ PC بیت‌به‌بیت)
+        if _android_gate("MANGA_PHASE_PRINTS"):
+            print("[*] استخراج متن…", flush=True)
         unique_regions: List[TextRegion] = []
 
         _raise_if_stop()
@@ -27273,6 +27357,8 @@ class MangaTranslator:
                 except Exception:
                     pass
             if clean_targets:
+                if _android_gate("MANGA_PHASE_PRINTS"):
+                    print("[*] پاکسازی متن…", flush=True)
                 _t0 = time.time()
                 final_image = self.clean_image(image, clean_targets)
                 print(f"[+] پاکسازی: {time.time() - _t0:.1f} ثانیه با {self._clean_label()}")
@@ -27350,6 +27436,8 @@ class MangaTranslator:
             if precleaned is not None:
                 cleaned_image = precleaned
             else:
+                if _android_gate("MANGA_PHASE_PRINTS"):
+                    print("[*] پاکسازی متن…", flush=True)
                 _t0 = time.time()
                 cleaned_image = self.clean_image(image, _clean_regions)
                 print(f"[+] پاکسازی: {time.time() - _t0:.1f} ثانیه با {self._clean_label()}")
@@ -29984,6 +30072,9 @@ html, body { background: #0a0a0b; }
                             if r.kind == "dialogue"]
                     if _dlg:
                         try:
+                            if _android_gate("MANGA_PHASE_PRINTS"):
+                                print(f"[*] پاکسازی متنِ صفحهٔ {page_i + 1}…",
+                                      flush=True)
                             _pc = self.clean_image(image, _dlg)
                             extracted_map[page_i] = (out_file, image, _pc, regions, dbg)
                             print(f"    [*] Early cleaning of page #{page_i + 1} done (parallel with background translation).")
