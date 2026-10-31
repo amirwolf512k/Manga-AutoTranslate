@@ -39,6 +39,13 @@
             android:name=".TranslationService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <!-- v1.14.156 — پروبِ XNNPACK/NNAPI در پروسهٔ جدا: سیگ‌فالتِ نیتیوِ
+             شتابدهنده فقط این پروسه را میکشد؛
+             اپِ اصلیِ ترجمه دستنخورده میماند -->
+        <service
+            android:name=".EpProbeService"
+            android:exported="false"
+            android:process=":epprobe" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.files"

@@ -605,6 +605,7 @@ class MainActivity : AppCompatActivity() {
                 // v1.14.59 — دانلودِ سنگینِ بی‌صدا حذف شد؛ فقط ردیفِ «دانلود
                 // و نصب» نشان داده می‌شود — دانلود خودِ لحظه‌ای که کاربر
                 // «نصب» را می‌زند شروع می‌شود با درصد و ادامه از نقطهٔ قطع
+                cleanOldUpdateApks(remote)
                 showUpdateRow()
             }
         } catch (_: Exception) {
@@ -1182,12 +1183,49 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // v1.14.156 — درخواستِ کاربر: «هر اپدیتی که به گوشی میآید نصبِ
+    // نسخههایِ قبلی را از حافظه حذف کن» — فایلهایِ update_<vc>.apk و
+    // update_<vc>.apk.partِ نسخههایِ دیگر (بهجز keepVerCode) از
+    // Android/data/<pkg>/files و files حذف میشوند + کلیدهایِ
+    // apk_url_<vc>/apk_size_<vc>ِ قدیمی از prefs پاک میشوند.
+    private fun cleanOldUpdateApks(keepVerCode: Int) {
+        try {
+            val dirs = listOfNotNull(getExternalFilesDir(null), filesDir)
+            for (d in dirs) {
+                val fs = d.listFiles() ?: continue
+                for (f in fs) {
+                    val n = f.name
+                    val vc = when {
+                        n.startsWith("update_") && n.endsWith(".apk.part") ->
+                            n.removePrefix("update_")
+                                .removeSuffix(".apk.part").toIntOrNull()
+                        n.startsWith("update_") && n.endsWith(".apk") ->
+                            n.removePrefix("update_")
+                                .removeSuffix(".apk").toIntOrNull()
+                        else -> null
+                    }
+                    if (vc != null && vc != keepVerCode) f.delete()
+                }
+            }
+            for (k in prefs.all.keys.toList()) {
+                val m = Regex("^(apk_url_|apk_size_)(\\d+)$").find(k)
+                if (m != null &&
+                    (m.groupValues[2].toIntOrNull() ?: 0) != keepVerCode) {
+                    prefs.edit().remove(k).apply()
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MangaApp", "cleanOldUpdateApks", e)
+        }
+    }
+
     private fun clearOldCaches() {
         try {
             File(filesDir, "work").deleteRecursively()
             cacheDir.listFiles()?.forEach {
                 if (it.name.startsWith("pick_")) it.delete()
             }
+            cleanOldUpdateApks(installedVersionCode())
         } catch (e: Exception) {
             android.util.Log.e("MangaApp", "clearOldCaches", e)
         }

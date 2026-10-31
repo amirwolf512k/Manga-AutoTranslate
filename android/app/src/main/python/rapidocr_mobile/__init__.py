@@ -32,6 +32,13 @@ v1.14.155-speed — سشنِ OCR گوشی حالا XNNPACK/NNAPI دارد
 (پیشفرض XNNPACK با کانفیگِ رسمی؛ MANGA_MOBILE_OCR_EP=auto
 بنچمارکِ NNAPI/GPU هم میکند) + درمانِ EACCES در لحظهٔ
 بازکردنِ مدل + دورِ دومِ آستانهٔ بازِ det بدونِ اجرایِ دوباره.
+v1.14.156 — درمانِ کرشِ سیگ‌فالتِ 1.14.155: پروبِ EP در پروسهٔ
+اصلی بود و سیگ‌فالتِ نیتیوِ XNNPACK (رویِ بعضی مدلها/گوشیها) اپ را
+میکشت — در پایتون قابلِ گرفتن نیست. حالا EP فقط با تأییدِ پروبِ
+پروسهٔ جدا (:epprobe → EpProbeService.kt: بنچِ det 64²/512² + rec
+48×320 + چکِ صحتِ خروجی مقابلِ CPU) فعال میشود؛ برنده = سالمِ
+سریعتر؛ کَش: <models>/.ep_probe.json. هیچ EP بدونِ تأیید در پروسهٔ
+اصلی ساخته نمیشود → کرشِ EP دیگر اپ را تهدید نمیکند.
 """
 import math
 import os
@@ -156,127 +163,335 @@ def _probe_input(path: str, small: bool = True) -> np.ndarray:
     return np.zeros((1, 3, 48, 320), dtype=np.float32)
 
 
-def _bench_ep(path: str, ep: str, probe: np.ndarray):
-    """auto: سشنِ EP + دو run؛ خروجی بهترینِ زمانِ run (ثانیه) یا None."""
+_APP_CTX = None
+
+
+def _app_ctx():
+    """کانتکستِ اپ برایِ startService (چاکوپی؛ فال‌بکِ ActivityThread)."""
+    global _APP_CTX
+    if _APP_CTX is not None:
+        return _APP_CTX
     try:
-        _so = onnxruntime.SessionOptions()
-        _so.inter_op_num_threads = 1
-        if ep == "XnnpackExecutionProvider":
-            _so.intra_op_num_threads = 1
-            _so.append_execution_provider(
-                ep, {"intra_op_num_threads": str(_xnn_threads())})
-        else:
-            _so.intra_op_num_threads = 4
-            _so.append_execution_provider(ep)
+        from java import jclass
         try:
-            _so.add_session_config_entry(
-                "session.intra_op.allow_spinning", "0")
+            _c = jclass(
+                "com.chaquo.python.android.AndroidPlatform").getApplication()
+        except Exception:
+            _c = None
+        if _c is None:
+            try:
+                _c = jclass("android.app.ActivityThread").currentApplication()
+            except Exception:
+                _c = None
+        if _c is not None:
+            _APP_CTX = _c
+    except Exception:
+        _APP_CTX = None
+    return _APP_CTX
+
+
+def _android_build_model() -> str:
+    try:
+        from java import jclass
+        return str(jclass("android.os.Build").MODEL or "")
+    except Exception:
+        return ""
+
+
+# v1.14.156 — تغییرِ کانفیگِ پروب/گیت → این رشته عوض شود تا پروبِ دوباره بگیرد
+_EP_PROBE_VER = "v156.1"
+_EP_PLAN_CACHE = {"key": None, "plan": (None, {})}
+_EP_NOTE_156 = False
+
+
+def _ep_flag_path(mdir: str) -> str:
+    return os.path.join(mdir, ".ep_probe.json")
+
+
+def _probe_key(paths) -> str:
+    st = [getattr(onnxruntime, "__version__", "?"), _EP_PROBE_VER,
+          _android_build_model()]
+    for _p in paths:
+        try:
+            st.append("%s:%d:%d" % (os.path.basename(_p),
+                                    os.path.getsize(_p),
+                                    int(os.path.getmtime(_p)) // 60))
+        except Exception:
+            # فایل هنوز نیست (دانلود نشده) — basename کافی است تا کلید
+            # نسبت به مدلِ انتخابی حساس بماند
+            st.append(str(os.path.basename(_p)) + ":?")
+    return "|".join(st)
+
+
+def _ep_probe_read(mdir: str, key: str):
+    try:
+        import json
+        with open(_ep_flag_path(mdir), "r", encoding="utf-8") as _f:
+            _d = json.load(_f)
+        if str(_d.get("key") or "") != key:
+            return {}
+        return dict(_d.get("eps") or {})
+    except Exception:
+        return {}
+
+
+def _ep_probe_write(mdir: str, key: str, eps: dict) -> None:
+    try:
+        import json
+        _p = _ep_flag_path(mdir)
+        _tmp = _p + ".tmp"
+        with open(_tmp, "w", encoding="utf-8") as _f:
+            json.dump({"key": key, "eps": eps}, _f)
+        os.replace(_tmp, _p)
+    except Exception:
+        pass
+
+
+def _parse_probe_txt(txt):
+    """«verdict ok <ms>» → ok؛ «verdict fail …» → fail؛
+    غایب = کرشِ نیتیو (سیگ‌فالت) یا تایم‌اوت → EP مردود."""
+    if not txt:
+        return {"ok": False, "why": "probe-crash-or-timeout"}
+    for _ln in str(txt).splitlines():
+        _ln = _ln.strip()
+        if _ln.startswith("verdict ok"):
+            try:
+                _ms = float(_ln.split()[2])
+            except Exception:
+                _ms = 1e9
+            return {"ok": True, "ms": _ms}
+        if _ln.startswith("verdict fail"):
+            return {"ok": False, "why": _ln[12:120].strip()}
+    return {"ok": False, "why": "no-verdict"}
+
+
+def _ep_probe_proc_alive() -> bool:
+    """پروسهٔ :epprobe هنوز زنده است؟ (getRunningAppProcesses فقط
+    پروسههایِ خودِ اپ را میدهد؛ خطا → True تا تایم‌اوت منتظر بماند)."""
+    try:
+        _ctx = _app_ctx()
+        if _ctx is None:
+            return True
+        _am = _ctx.getSystemService("activity")
+        _procs = _am.getRunningAppProcesses() or []
+        for _p in _procs:
+            try:
+                if str(_p.processName).endswith(":epprobe"):
+                    return True
+            except Exception:
+                pass
+        return False
+    except Exception:
+        return True
+
+
+def _start_ep_probe_service(det_path, rec_path, ep_short, out_path, threads):
+    try:
+        _ctx = _app_ctx()
+        if _ctx is None:
+            return False
+        from java import jclass
+        _Intent = jclass("android.content.Intent")
+        _Srv = jclass("com.amirwolf.mangatranslator.EpProbeService")
+        _it = _Intent(_ctx, _Srv)
+        _it.putExtra("det", str(det_path))
+        _it.putExtra("rec", str(rec_path))
+        _it.putExtra("ep", str(ep_short))
+        _it.putExtra("out", str(out_path))
+        _it.putExtra("threads", str(threads))
+        _ctx.startService(_it)
+        return True
+    except Exception:
+        return False
+
+
+def _ep_probe_timeout() -> float:
+    try:
+        return float(os.environ.get("MANGA_EP_PROBE_TIMEOUT", "90") or 90)
+    except Exception:
+        return 90.0
+
+
+def _ep_gate_ensure(mdir, det_path, rec_path, wanted, threads):
+    """پروبِ پروسهٔ جدا برایِ EPهایِ هنوزتأییدنشده؛ خروجی: name→info."""
+    global _EP_NOTE_156
+    import time as _time
+    _res = _ep_probe_read(mdir, _probe_key([det_path, rec_path]))
+    for _name in wanted:
+        if _name in _res:
+            continue
+        _short = "nnapi" if "Nnapi" in _name else "xnnpack"
+        _out = os.path.join(mdir, ".ep_probe_%s.txt" % _short)
+        try:
+            os.remove(_out)
         except Exception:
             pass
-        _s = onnxruntime.InferenceSession(
-            path, sess_options=_so, providers=[ep, "CPUExecutionProvider"])
-        _in_name = _s.get_inputs()[0].name
-        _out_name = _s.get_outputs()[0].name
-        import time as _time
-        _best = None
-        for _i in range(2):
-            _t0 = _time.perf_counter()
-            _s.run([_out_name], {_in_name: probe})
-            _dt = _time.perf_counter() - _t0
-            if _best is None or _dt < _best:
-                _best = _dt
-        return _best
-    except Exception:
-        return None
+        if not _start_ep_probe_service(det_path, rec_path, _short,
+                                       _out, threads):
+            _res[_name] = {"ok": False, "why": "service-start-failed"}
+            continue
+        if not _EP_NOTE_156:
+            print("[⚡] آزمونِ "
+                  + _short + " در پروسهٔ "
+                  "جدا (:epprobe) — بارِ "
+                  "اول پس از آپدیت؛ "
+                  "بارهایِ بعد "
+                  "از کَش میآید")
+            _EP_NOTE_156 = True
+        _t0 = _time.time()
+        _tmo = _ep_probe_timeout()
+        _info = None
+        while _time.time() - _t0 < _tmo:
+            _txt = None
+            if os.path.isfile(_out):
+                try:
+                    with open(_out, "r", encoding="utf-8") as _f:
+                        _txt = _f.read()
+                except Exception:
+                    _txt = None
+                if _txt and "verdict" in _txt:
+                    _info = _parse_probe_txt(_txt)
+                    break
+            if not _ep_probe_proc_alive():
+                # پروسه رفت — ۲ ثانیه فرصتِ آخر برایِ نوشتنِ فایل
+                _time.sleep(2.0)
+                if os.path.isfile(_out):
+                    try:
+                        with open(_out, "r", encoding="utf-8") as _f:
+                            _txt = _f.read()
+                    except Exception:
+                        _txt = None
+                    if _txt and "verdict" in _txt:
+                        _info = _parse_probe_txt(_txt)
+                if _info is None:
+                    _info = {"ok": False, "why": "probe-crash"}
+                break
+            _time.sleep(0.4)
+        if _info is None:
+            _info = {"ok": False, "why": "timeout"}
+        _res[_name] = _info
+    _ep_probe_write(mdir, _probe_key([det_path, rec_path]), _res)
+    return _res
 
 
-_EP_NOTE_155 = False
+def _ep_plan(det_path: str, rec_path: str):
+    """v1.14.156 — EPِ سشنِ OCRِ گوشی فقط با تأییدِ پروبِ پروسهٔ جدا.
 
+    ریشهٔ کرشِ 1.14.155: پروبِ EP در پروسهٔ اصلی اجرا میشد؛ سیگ‌فالتِ
+    نیتیوِ XNNPACK (رویِ بعضی مدلها/گوشیها — onnxruntime#23826 «حساس
+    به لایهٔ/چیدمانِ مدل») در پایتون قابلِ گرفتن نیست (try/except فقط
+    ORT_FAIL را میگیرد) → اپ موقعِ ساختِ سشنِ اولین OCR میمرد.
+    حالا: هیچ سشنِ EP بدونِ «verdict ok» از پروبِ :epprobe ساخته
+    نمیشود؛ برنده = سالمِ سریعتر (ms از پروب). کَش:
+    <models>/.ep_probe.json (کلید = نسخهٔ ORT + حجم/زمانِ مدلها +
+    مدلِ گوشی) → بارِ اول پس از هر آپدیت، بارهایِ بعد فوری.
 
-def _choose_ep(path: str):
-    """v1.14.155-speed — EPِ سشنِ OCR گوشیِ واقعیِ arm64.
-
-    ریشهٔ کندیِ 1.14.154b: _Sess با providers=None میساخت → سشنِ
-    CPU-خالص بدونِ هیچ شتابی (MANGA_MOBILE_OCR_EP خوانده ولی استفاده
-    نمیشد!) در حالیکه ORT-android 1.31 Maven هم XNNPACK دارد هم NNAPI
-    (عینِ APKِ رقیبِ K3 که libonnxruntime آن همین EPها را دارد).
-
-    پیشفرض: XNNPACK (کرنلهایِ dotprod ARM) با کانفیگِ رسمیِ مستندات:
-      ORT intra=1 + XNNPACK intra=هستههایِ سریع + spinning خاموش.
-    MANGA_MOBILE_OCR_EP: cpu | xnnpack | nnapi | auto (بنچمارک).
-    خروجی: (name|None, opts) — None = CPU خالصِ همیشگی (PC/امولاتور)."""
-    global _EP_NOTE_155
+    MANGA_MOBILE_OCR_EP: cpu | xnnpack | nnapi | auto (پیشفرض) —
+    MANGA_EP_NO_PROBE=1 فقط برایِ توسعه (EP خام، خطرِ کرش به عهدهٔ
+    گیرنده). خروجی: (ep_name|None, opts) — None = CPU خالص."""
+    global _EP_PLAN_CACHE
     try:
-        _e = str(os.environ.get("MANGA_MOBILE_OCR_EP", "") or "").strip().lower()
+        _e = str(os.environ.get("MANGA_MOBILE_OCR_EP", "") or "")             .strip().lower()
     except Exception:
         _e = ""
     if _e == "cpu":
         return None, {}
     if not _android_env() or _x86_machine():
-        # PC / امولاتورِ x86_64: رفتارِ قبلی (providers=None) — CI دستنخورده
+        # PC / امولاتورِ x86_64: رفتارِ قبل (providers=None) — CI دستنخورده
         return None, {}
-    _av = _avail_eps()
-    if _e == "nnapi":
-        if "NnapiExecutionProvider" in _av:
-            return "NnapiExecutionProvider", {}
-        print("[!] NNAPI در این ORT-android نیست → CPU")
+    if str(os.environ.get("MANGA_EP_NO_PROBE", "") or "").strip() == "1":
+        if "XnnpackExecutionProvider" in _avail_eps():
+            return "XnnpackExecutionProvider", {}
         return None, {}
-    if _e == "auto":
-        _probe = _probe_input(path, small=False)
-        _winner, _win_t = None, None
-        for _name in ("XnnpackExecutionProvider", "NnapiExecutionProvider"):
-            if _name not in _av:
-                continue
-            _t = _bench_ep(path, _name, _probe)
-            if _t is not None and (_win_t is None or _t < _win_t):
-                _winner, _win_t = _name, _t
-        if _winner == "NnapiExecutionProvider":
-            print(f"[⚡] EP=auto → NNAPI (GPU) برنده — probe "
-                  f"{(_win_t or 0) * 1000:.0f}ms")
-        elif _winner == "XnnpackExecutionProvider":
-            print(f"[⚡] EP=auto → XNNPACK برنده — probe "
-                  f"{(_win_t or 0) * 1000:.0f}ms")
+    if _e in ("", "auto", "xnnpack,nnapi", "nnapi,xnnpack"):
+        _wanted = ["XnnpackExecutionProvider", "NnapiExecutionProvider"]
+    elif _e == "xnnpack":
+        _wanted = ["XnnpackExecutionProvider"]
+    elif _e == "nnapi":
+        _wanted = ["NnapiExecutionProvider"]
+    else:
+        _wanted = ["XnnpackExecutionProvider"]
+    _wanted = [w for w in _wanted if w in _avail_eps()]
+    if not _wanted:
+        return None, {}
+    _key = _probe_key([det_path, rec_path])
+    if _EP_PLAN_CACHE.get("key") == _key:
+        return _EP_PLAN_CACHE["plan"]
+    _mdir = os.path.dirname(det_path) or "."
+    _res = _ep_gate_ensure(_mdir, det_path, rec_path, _wanted,
+                           _xnn_threads())
+    _winner, _wt = None, None
+    for _name in _wanted:
+        _inf = _res.get(_name) or {}
+        if _inf.get("ok"):
+            try:
+                _ms = float(_inf.get("ms") or 1e9)
+            except Exception:
+                _ms = 1e9
+            if _wt is None or _ms < _wt:
+                _winner, _wt = _name, _ms
+    if _winner is None:
+        _why = "; ".join(
+            "%s=%s" % (n.replace("ExecutionProvider", ""),
+                       str((_res.get(n) or {}).get("why", "?"))[:48])
+            for n in _wanted)
+        print("[⚡] هیچ شتابدهندهٔ "
+              "سالمی تأیید نشد → CPU ("
+              + _why + ")")
+        _plan = (None, {})
+    else:
+        if _winner == "XnnpackExecutionProvider":
+            _plan = (_winner, {"intra_op_num_threads": str(_xnn_threads())})
         else:
-            if not _EP_NOTE_155:
-                print("[⚡] EP=auto → هیچ شتابدهندهٔ سالمی نیست → CPU")
-                _EP_NOTE_155 = True
-            return None, {}
-        return _winner, {}
-    # پیشفرض: xnnpack
-    if "XnnpackExecutionProvider" in _av:
-        _n = _xnn_threads()
-        if not _EP_NOTE_155:
-            print(f"[⚡] OCR گوشی: EP=XNNPACK (intra={_n}) — کانفیگِ "
-                  "رسمی؛ MANGA_MOBILE_OCR_EP=auto برایِ آزمایشِ NNAPI/GPU")
-            _EP_NOTE_155 = True
-        return "XnnpackExecutionProvider", {"intra_op_num_threads": str(_n)}
-    return None, {}
-
+            _plan = (_winner, {})
+        print("[⚡] EP=" + _winner.replace("ExecutionProvider", "")
+              + " تأیید شد "
+              "(پروبِ پروسهٔ جدا؛ "
+              "ms=" + ("%.0f" % _wt) + ")")
+    _EP_PLAN_CACHE = {"key": _key, "plan": _plan}
+    return _plan
 
 class _Sess:
-    def __init__(self, path: str, intra: int):
+    def __init__(self, path: str, intra: int, ep: str = None,
+                 ep_opts: dict = None):
         self._intra = max(1, int(intra))
         so = onnxruntime.SessionOptions()
         so.inter_op_num_threads = 1
-        _ep, _ep_opts = _choose_ep(path)
-        if _ep == "XnnpackExecutionProvider":
+        if ep == "XnnpackExecutionProvider":
             # کانفیگِ رسمیِ XNNPACK: threadpoolِ ORT تکنخی؛ XNNPACK خودش
-            # threadpoolِ هستههایِ سریع را میسازد (بدونِ رقابت/اسپین).
+            # threadpoolِ هستههایِ سریع را میسازد.
             so.intra_op_num_threads = 1
-        else:
-            so.intra_op_num_threads = self._intra
-        try:
-            so.add_session_config_entry(
-                "session.intra_op.allow_spinning", "0")
-        except Exception:
-            pass
-        _prov = None
-        if _ep:
-            _prov = [_ep, "CPUExecutionProvider"]
+        elif ep == "NnapiExecutionProvider":
+            # نیازمندیهایِ مستندِ NNAPI EP (شکلِ داینامیک):
+            # memory pattern خاموش + arena خاموش — نبودشان منبعِ
+            # کرش/خرابیِ خروجی است.
+            so.intra_op_num_threads = 1
             try:
-                so.append_execution_provider(_ep, _ep_opts or None)
+                so.enable_mem_pattern = False
             except Exception:
                 pass
+            try:
+                so.enable_cpu_mem_arena = False
+            except Exception:
+                pass
+        else:
+            so.intra_op_num_threads = self._intra
+        if ep == "XnnpackExecutionProvider":
+            try:
+                so.add_session_config_entry(
+                    "session.intra_op.allow_spinning", "0")
+            except Exception:
+                pass
+        _prov = None
+        if ep:
+            _prov = [ep, "CPUExecutionProvider"]
+            try:
+                so.append_execution_provider(ep, dict(ep_opts or {}) or None)
+            except Exception:
+                try:
+                    so.append_execution_provider(ep)
+                except Exception:
+                    pass
         self.sess = self._open(path, so, _prov)
         self.in_name = self.sess.get_inputs()[0].name
         self.out_name = self.sess.get_outputs()[0].name
@@ -352,8 +567,12 @@ class RapidOcrMobile:
                  max_candidates: int = 1000, text_score: float = 0.5,
                  rec_img_shape=(3, 48, 320), rec_batch_num: int = 6,
                  det_cap: int = 960):
-        self.det = _Sess(det_path, intra_threads)
-        self.rec = _Sess(rec_path, intra_threads)
+        # v1.14.156 — پلنِ EP یک بار برایِ هر دو مدل (پروبِ پروسهٔ جدا)
+        _ep, _ep_opts = _ep_plan(det_path, rec_path)
+        self.det = _Sess(det_path, intra_threads, ep=_ep,
+                         ep_opts=_ep_opts)
+        self.rec = _Sess(rec_path, intra_threads, ep=_ep,
+                         ep_opts=_ep_opts)
         self.character = _load_charset(charset_path)
         self.limit_side_len = int(limit_side_len)
         self.det_cap = int(det_cap)
