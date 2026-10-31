@@ -10,14 +10,22 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 
-// v1.14.150 — سرویسِ پیشزمینهٔ ترجمه: تا وقتی کاری در جریان است، اپ را
+// v1.14.150/151 — سرویسِ پیشزمینهٔ ترجمه: تا وقتی کاری در جریان است، اپ را
 // از فریزِ «پردازهٔ انبارشده» (cached-app freezer، اندروید ۱۱+) در امان
-// نگه میدارد. کاربر میرود سراغِ اپِ دیگر، استخراج/پاکسازی/ترجمه ادامه
-// پیدا میکند. کنترل از MainActivity: شروع با acquireKeepAwake (شروعِ
-// کار)، توقف با releaseKeepAwake (پایانِ کار).
+// نگه میدارد و اعلانِ «در حال ترجمه» با پیشرفت (صفحهٔ N از M + فاز) نشان
+// میدهد. کنترل از MainActivity: شروع با acquireKeepAwake (شروعِ کار)،
+// توقف با releaseKeepAwake (پایانِ کار).
+// v1.14.151 — رفتارِ بستن: کاربر اپ را از recentها ببندد → onTaskRemoved
+// اعلان را کامل برمیدارد و سرویس میایستد (START_NOT_STICKY → هیچوقت
+// خودش بالا نمیآید و اعلانِ زامبی نمیگذارد).
 class TranslationService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        current = this
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         try {
@@ -28,7 +36,25 @@ class TranslationService : Service() {
             } catch (_: Exception) {
             }
         }
-        return START_STICKY
+        return START_NOT_STICKY
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        try {
+            stopForeground(true)
+        } catch (_: Exception) {
+        }
+        try {
+            stopSelf()
+        } catch (_: Exception) {
+        }
+        if (current === this) current = null
+        super.onTaskRemoved(rootIntent)
+    }
+
+    override fun onDestroy() {
+        if (current === this) current = null
+        super.onDestroy()
     }
 
     private fun goForeground() {
@@ -41,16 +67,10 @@ class TranslationService : Service() {
                 )
             )
         }
-        val b = if (Build.VERSION.SDK_INT >= 26) {
-            Notification.Builder(this, CH_ID)
-        } else {
-            @Suppress("DEPRECATION") Notification.Builder(this)
-        }
-        b.setContentTitle("مانگا مترجم")
-            .setContentText("در حال ترجمه… میتوانید بروید سراغ اپهای دیگر؛ کار ادامه پیدا میکند")
-            .setSmallIcon(R.mipmap.ic_launcher)
-            .setOngoing(true)
-        val n = b.build()
+        startFg(buildNotif(0, 0, ""))
+    }
+
+    private fun startFg(n: Notification) {
         if (Build.VERSION.SDK_INT >= 29) {
             startForeground(
                 NOTIF_ID, n,
@@ -62,8 +82,58 @@ class TranslationService : Service() {
         }
     }
 
+    private fun buildNotif(done: Int, total: Int, phase: String): Notification {
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (Build.VERSION.SDK_INT >= 26) {
+            nm.createNotificationChannel(
+                NotificationChannel(
+                    CH_ID, "ترجمه در جریان",
+                    NotificationManager.IMPORTANCE_LOW
+                )
+            )
+        }
+        val ph = phase.ifBlank { "در حال ترجمه…" }
+        val txt = if (total > 0 && done > 0) "$ph — صفحهٔ $done از $total" else ph
+        val b = if (Build.VERSION.SDK_INT >= 26) {
+            Notification.Builder(this, CH_ID)
+        } else {
+            @Suppress("DEPRECATION") Notification.Builder(this)
+        }
+        b.setContentTitle("مانگا مترجم")
+            .setContentText(txt)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+        if (total > 0) {
+            b.setProgress(total, done.coerceIn(0, total), false)
+        } else {
+            b.setProgress(0, 0, true)
+        }
+        return b.build()
+    }
+
+    private fun notifyProgress(done: Int, total: Int, phase: String) {
+        try {
+            val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.notify(NOTIF_ID, buildNotif(done, total, phase))
+        } catch (_: Exception) {
+        }
+    }
+
     companion object {
         private const val CH_ID = "translation"
         private const val NOTIF_ID = 4150
+
+        @Volatile
+        var current: TranslationService? = null
+            private set
+
+        @JvmStatic
+        fun updateProgress(done: Int, total: Int, phase: String) {
+            try {
+                current?.notifyProgress(done, total, phase)
+            } catch (_: Exception) {
+            }
+        }
     }
 }

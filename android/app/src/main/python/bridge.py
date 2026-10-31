@@ -531,7 +531,40 @@ def start_job(params_json, files_dir):
     return json.dumps({"ok": True}, ensure_ascii=False)
 
 
+_PROG_PHASES_1151 = (
+    ("بارگذاری موتور", "بارگذاری مدلها"),
+    ("آماده شد", "رندر و ذخیره"),
+    ("فاز ۳", "ترجمه"),
+    ("ترجمه با", "ترجمه"),
+    ("روش پاکسازی", "پاکسازی"),
+    ("پاکسازی:", "پاکسازی"),
+    ("متن استخراج شد", "استخراج متن"),
+    ("OCR:", "استخراج متن"),
+    ("تشخیص حباب", "آمادهسازی"),
+)
+
+
+def _update_prog_1151(job, msg):
+    """v1.14.151 — فازِ فعلی و شمارهٔ صفحه برای اعلانِ پیشزمینه."""
+    try:
+        m = re.search(r"(\d{1,4})\s+آماده شد", msg)
+        ph = None
+        for _k, _v in _PROG_PHASES_1151:
+            if _k in msg:
+                ph = _v
+                break
+        if m or ph:
+            with STATE["lock"]:
+                if m:
+                    job["prog_page"] = int(m.group(1))
+                if ph:
+                    job["prog_phase"] = ph
+    except Exception:
+        pass
+
+
 def _log(job, msg):
+    _update_prog_1151(job, str(msg))
     with STATE["lock"]:
         txt = str(job.get("log") or "")
         job["log"] = (txt + "\n" + str(msg))[-12000:]
@@ -1097,6 +1130,8 @@ def poll():
             "live_debug_images": _live_pages(job, dbg=True),
             "live_total": _live_total(job),
             "live_total_dbg": _live_total(job, dbg=True),
+            "prog_page": int(job.get("prog_page") or 0),
+            "prog_phase": str(job.get("prog_phase") or ""),
         }, ensure_ascii=False)
 
 
