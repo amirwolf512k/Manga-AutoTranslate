@@ -21052,6 +21052,38 @@ class MangaTranslator:
         except Exception:
             return []
 
+    def _ocr_pool_workers(self, n_tasks: int) -> int:
+        """v1.14.148 — تعدادِ workerِ موازیِ OCR برایِ حلقههایِ کراپ.
+        فقط RapidOCRBackend (سشنهای det/recِ ORT مشترک و thread-safe
+        هستند — الگویِ _ocr_one90 از v1.14.120). بقیهٔ بکاندها (Paddle/
+        ML Kit) ترتیبی میمانند. پیشفرض: min(4, هستهٔ فیزیکی) —
+        MANGA_OCR_WORKERS=N اورراید. خروجیِ OCR در همهٔ حالتها یکسان
+        است (همان فراخوانیها، فقط همزمان)."""
+        try:
+            if n_tasks is None or int(n_tasks) <= 1:
+                return 1
+            if not isinstance(getattr(self, "ocr", None), RapidOCRBackend):
+                return 1
+        except Exception:
+            return 1
+        try:
+            w = int(os.environ.get("MANGA_OCR_WORKERS", "0") or 0)
+        except Exception:
+            w = 0
+        if w <= 0:
+            try:
+                # v1.14.148b — سشنِ OCR خودش intra=2 نخ دارد (تuned در
+                # RapidOCRBackend) → workerِ موازی = هستهٔ فیزیکی ÷ 2 تا
+                # مجموعِ نخها اشباع نشود (واگرنه حتی کندتر از ترتیبی
+                # میشود — بنچمارکِ 2core: 19.1s→18.6s با workers=2×intra2).
+                w = max(1, min(4, int(_physical_core_count()) // 2))
+            except Exception:
+                w = 1
+        try:
+            return max(1, min(int(w), int(n_tasks)))
+        except Exception:
+            return 1
+
     def _ocr_crop(self, image_bgr: np.ndarray, rect,
                   block_rects: Optional[List[Tuple[int, int, int, int]]] = None) \
             -> Tuple[str, List[np.ndarray]]:
@@ -25501,68 +25533,92 @@ class MangaTranslator:
             self.two_pass_ocr = False
         except Exception:
             pass
-        try:
-            for bi, (bx0, by0, bw_, bh_) in enumerate(_band_boxes):
-                _raise_if_stop()
-                if bx0 <= 2 and bw_ >= w - 4:
-                    if bh_ <= 320 and bh_ >= 40:
-                        _band = image[by0:by0 + bh_, 0:w]
-                        _big = cv2.resize(_band, (w * 2, bh_ * 2),
-                                          interpolation=cv2.INTER_CUBIC)
-                        try:
-                            got = self._process_chunk_worker(
-                                (1000 + bi, 0, bh_ * 2, _big))
-                        except Exception:
-                            continue
-                        for r in got:
-                            try:
-                                rx, ry, rw2, rh2 = [int(v) for v in r.rect]
-                                r.rect = (rx // 2, ry // 2 + by0,
-                                          max(6, rw2 // 2), max(6, rh2 // 2))
-                                _pol = getattr(r, "ocr_polys", None) or []
-                                if _pol:
-                                    _sc2 = np.array([0.5, 0.5],
-                                                    dtype=np.float32)
-                                    _off2 = np.array([0.0, float(by0)],
-                                                     dtype=np.float32)
-                                    r.ocr_polys = [
-                                        (np.asarray(p, dtype=np.float32)
-                                         .reshape(-1, 2) * _sc2 + _off2
-                                         ).tolist() for p in _pol]
-                            except Exception:
-                                pass
-                    else:
-                        try:
-                            got = self._process_chunk_worker(
-                                (1000 + bi, by0, by0 + bh_, image))
-                        except Exception:
-                            continue
-                else:
-                    _pad = 16
-                    _sx0, _sy0 = max(0, bx0 - _pad), max(0, by0 - _pad)
-                    _sx1, _sy1 = min(w, bx0 + bw_ + _pad), min(h, by0 + bh_ + _pad)
-                    if _sx1 - _sx0 < 24 or _sy1 - _sy0 < 24:
-                        continue
-                    _sub = image[_sy0:_sy1, _sx0:_sx1]
-                    try:
-                        got = self._process_chunk_worker(
-                            (1000 + bi, 0, _sy1 - _sy0, _sub))
-                    except Exception:
-                        continue
+        # v1.14.148 — باندها بچهای (W=workerِ OCR) موازی OCR میشوند؛
+        # فیلتر/سقفها در همان ترتیبِ باندها اعمال میشود → خروجی یکسان.
+        def _gap_run_band(bi, bx0, by0, bw_, bh_):
+            if bx0 <= 2 and bw_ >= w - 4:
+                if bh_ <= 320 and bh_ >= 40:
+                    _band = image[by0:by0 + bh_, 0:w]
+                    _big = cv2.resize(_band, (w * 2, bh_ * 2),
+                                      interpolation=cv2.INTER_CUBIC)
+                    got = self._process_chunk_worker(
+                        (1000 + bi, 0, bh_ * 2, _big))
                     for r in got:
                         try:
-                            rx, ry, rw_, rh_ = [int(v) for v in r.rect]
-                            r.rect = (rx + _sx0, ry + _sy0, rw_, rh_)
+                            rx, ry, rw2, rh2 = [int(v) for v in r.rect]
+                            r.rect = (rx // 2, ry // 2 + by0,
+                                      max(6, rw2 // 2), max(6, rh2 // 2))
                             _pol = getattr(r, "ocr_polys", None) or []
                             if _pol:
-                                _off = np.array([_sx0, _sy0], dtype=np.float32)
+                                _sc2 = np.array([0.5, 0.5],
+                                                dtype=np.float32)
+                                _off2 = np.array([0.0, float(by0)],
+                                                 dtype=np.float32)
                                 r.ocr_polys = [
                                     (np.asarray(p, dtype=np.float32)
-                                     .reshape(-1, 2) + _off).tolist()
-                                    for p in _pol]
+                                     .reshape(-1, 2) * _sc2 + _off2
+                                     ).tolist() for p in _pol]
                         except Exception:
                             pass
-                for r in got:
+                    return got
+                return self._process_chunk_worker(
+                    (1000 + bi, by0, by0 + bh_, image))
+            _pad = 16
+            _sx0, _sy0 = max(0, bx0 - _pad), max(0, by0 - _pad)
+            _sx1, _sy1 = min(w, bx0 + bw_ + _pad), min(h, by0 + bh_ + _pad)
+            if _sx1 - _sx0 < 24 or _sy1 - _sy0 < 24:
+                return []
+            _sub = image[_sy0:_sy1, _sx0:_sx1]
+            got = self._process_chunk_worker(
+                (1000 + bi, 0, _sy1 - _sy0, _sub))
+            for r in got:
+                try:
+                    rx, ry, rw_, rh_ = [int(v) for v in r.rect]
+                    r.rect = (rx + _sx0, ry + _sy0, rw_, rh_)
+                    _pol = getattr(r, "ocr_polys", None) or []
+                    if _pol:
+                        _off = np.array([_sx0, _sy0], dtype=np.float32)
+                        r.ocr_polys = [
+                            (np.asarray(p, dtype=np.float32)
+                             .reshape(-1, 2) + _off).tolist()
+                            for p in _pol]
+                except Exception:
+                    pass
+            return got
+
+        try:
+            _gap_pw = self._ocr_pool_workers(len(_band_boxes))
+            _gap_i = 0
+            while _gap_i < len(_band_boxes):
+                _raise_if_stop()
+                _gbatch = list(enumerate(_band_boxes))[
+                    _gap_i:_gap_i + max(1, _gap_pw)]
+                _gap_i += len(_gbatch)
+                _gots = []
+                if _gap_pw > 1:
+                    def _gap_one148(_jt):
+                        _bi, (_bx0, _by0, _bw_, _bh_) = _jt
+                        try:
+                            return _gap_run_band(_bi, _bx0, _by0,
+                                                 _bw_, _bh_)
+                        except Exception:
+                            return []
+                    try:
+                        with ThreadPoolExecutor(
+                                max_workers=_gap_pw) as _gex148:
+                            _gots = list(_gex148.map(_gap_one148, _gbatch))
+                    except Exception:
+                        _gots = []
+                if not _gots:
+                    for _bi, (_bx0, _by0, _bw_, _bh_) in _gbatch:
+                        try:
+                            _gots.append(_gap_run_band(
+                                _bi, _bx0, _by0, _bw_, _bh_))
+                        except Exception:
+                            continue
+                for got in _gots:
+                  if got is None:
+                    continue
                     if (r.kind or "") != "dialogue":
                         continue
                     txt = (r.source_text or "").strip()
@@ -25758,6 +25814,10 @@ class MangaTranslator:
             _cap70 = 80
             blocks.sort(key=lambda bl: -((bl[0][2] - bl[0][0])
                                          * (bl[0][3] - bl[0][1])))
+        # v1.14.148 — فازِ ۱ (ترتیبی): آمادهسازیِ کراپ + فیلترهایِ ارزان
+        # (عینِ قبل)؛ فازِ ۲ (موازی): فقط self.ocr.ocr؛ فازِ ۳ (ترتیبی):
+        # پارسِ نتایج در همان ترتیب → خروجی بیت‌به‌بیت مثلِ قبل.
+        _ft_jobs = []
         for bl in blocks[:_cap70]:
             try:
                 xs0 = max(0, int(min(b[0] for b in bl)) - 8)
@@ -25796,9 +25856,33 @@ class MangaTranslator:
                     crop = cv2.copyMakeBorder(
                         crop, _pad70, _pad70, _pad70, _pad70,
                         cv2.BORDER_CONSTANT, value=(255, 255, 255))
+                _ft_jobs.append((xs0, ys0, xs1, ys1, crop, _pad70))
+            except Exception:
+                continue
+        _ft_pw = self._ocr_pool_workers(len(_ft_jobs))
+        if _ft_pw > 1:
+            def _ft_ocr(job):
                 try:
-                    res = self.ocr.ocr(crop)
+                    return self.ocr.ocr(job[4])
                 except Exception:
+                    return None
+            try:
+                with ThreadPoolExecutor(max_workers=_ft_pw) as _ftx:
+                    _ft_res = list(_ftx.map(_ft_ocr, _ft_jobs))
+            except Exception:
+                _ft_res = [None] * len(_ft_jobs)
+        else:
+            _ft_res = [None] * len(_ft_jobs)
+        for _fti, (xs0, ys0, xs1, ys1, _crop70, _pad70) in enumerate(_ft_jobs):
+            try:
+                if _ft_pw > 1:
+                    res = _ft_res[_fti]
+                else:
+                    try:
+                        res = self.ocr.ocr(_crop70)
+                    except Exception:
+                        continue
+                if res is None:
                     continue
                 if not res or not res[0]:
                     continue
@@ -26688,7 +26772,84 @@ class MangaTranslator:
                 except Exception:
                     _tlimit69 = 8.0
             _t069 = time.time()
-            for (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) in _ordered:
+            # v1.14.148 — کاندیدها بچهای (W=workerِ OCR) موازی OCR میشوند؛
+            # داوری/بودجه/streak در همان ترتیبِ قبل اعمال میشود → نتیجه
+            # همان (یا یادآوریِ بیشترِ محدود به W-1 کاندیدِ اضافه). پلّهٔ
+            # زومِ داخلِ هر کاندید ترتیبی میماند (برندهٔ همان واریانتِ اول).
+            _wm_pw = self._ocr_pool_workers(len(_ordered))
+            _wm_i = 0
+
+            def _wm_scan_one(_c148):
+                (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) = _c148
+                out = {"calls": 0, "empty": 0, "nonempty": False,
+                       "txt": "", "found": False}
+                try:
+                    crop = image[cy0:cy1, cx0:cx1]
+                    if crop.size == 0:
+                        return out
+                    _pad_h = max(0, 48 - crop.shape[0])
+                    _pad_w = max(0, 160 - crop.shape[1])
+                    if _pad_h or _pad_w:
+                        crop = cv2.copyMakeBorder(
+                            crop, _pad_h // 2, _pad_h - _pad_h // 2,
+                            _pad_w // 2, _pad_w - _pad_w // 2,
+                            cv2.BORDER_REPLICATE)
+                    _txt = ""
+                    for _zm in (3, 2):
+                        _big = cv2.resize(
+                            crop, (crop.shape[1] * _zm,
+                                   crop.shape[0] * _zm),
+                            interpolation=cv2.INTER_CUBIC)
+                        for _var in (0, 1):
+                            _try = _big
+                            if _var == 1:
+                                try:
+                                    _lab2 = cv2.cvtColor(_big,
+                                                         cv2.COLOR_BGR2LAB)
+                                    _clahe = cv2.createCLAHE(
+                                        2.2, (8, 8))
+                                    _l2 = _clahe.apply(_lab2[..., 0])
+                                    _try = cv2.cvtColor(
+                                        cv2.merge([_l2, _l2, _l2]),
+                                        cv2.COLOR_BGR2GRAY)
+                                    _try = cv2.cvtColor(
+                                        _try, cv2.COLOR_GRAY2BGR)
+                                except Exception:
+                                    _try = _big
+                            try:
+                                _res = self.ocr.ocr(_try)
+                            except Exception:
+                                _res = None
+                            out["calls"] += 1
+                            _txts = []
+                            if _res:
+                                for _ln in (_res[0] or []):
+                                    try:
+                                        _tv = _ln[1]
+                                        if isinstance(_tv, (tuple, list)):
+                                            _tv = _tv[0]
+                                        if str(_tv).strip():
+                                            _txts.append(str(_tv).strip())
+                                    except Exception:
+                                        continue
+                            _txt = " ".join(_txts)
+                            if _txt:
+                                out["nonempty"] = True
+                            else:
+                                out["empty"] += 1
+                            if self._is_watermark_text(_txt):
+                                break
+                            if _txt:
+                                break
+                    if _txt and self._is_watermark_text(_txt):
+                        out["found"] = True
+                        out["txt"] = _txt
+                except Exception:
+                    pass
+                return out
+
+            _wm_results: list = []
+            while _wm_i < len(_ordered):
                 if _tlimit69 > 0 and time.time() - _t069 > _tlimit69:
                     if self.debug:
                         try:
@@ -26718,118 +26879,57 @@ class MangaTranslator:
                         except Exception:
                             pass
                     break
-                crop = image[cy0:cy1, cx0:cx1]
-                if crop.size == 0:
-                    continue
-                # v1.14.64c — OCRِ بنر باید به نسخهٔ OCR بی‌ربط باشد:
-                # rapidocrِ جدید (PP-OCRv5/v6) روی کراپِ کوچک «det خالی»
-                # می‌دهد → اول پد (حداقل ۴۸px بلندی) بعد بزرگ‌نمایی، و
-                # چند واریانت امتحان می‌شود.
-                _pad_h = max(0, 48 - crop.shape[0])
-                _pad_w = max(0, 160 - crop.shape[1])
-                if _pad_h or _pad_w:
-                    crop = cv2.copyMakeBorder(
-                        crop, _pad_h // 2, _pad_h - _pad_h // 2,
-                        _pad_w // 2, _pad_w - _pad_w // 2,
-                        cv2.BORDER_REPLICATE)
-                _txt = ""
-                # v1.14.67b — نردبانِ کاملِ خواندن (زوم۳ ساده/CLAHE + زوم۲
-                # ساده/CLAHE): بنرِ img1 فقط با زوم۲ خوانده شد — حذفِ زوم۲
-                # باعثِ رگرسیون شد. جبرانش: بودجه + شایست پس از اولین بنر.
-                for _zm in (3, 2):
-                    _big = cv2.resize(
-                        crop, (crop.shape[1] * _zm,
-                               crop.shape[0] * _zm),
-                        interpolation=cv2.INTER_CUBIC)
-                    for _var in (0, 1):
-                        _try = _big
-                        if _var == 1:
-                            try:
-                                _lab2 = cv2.cvtColor(_big,
-                                                     cv2.COLOR_BGR2LAB)
-                                _clahe = cv2.createCLAHE(
-                                    2.2, (8, 8))
-                                _l2 = _clahe.apply(_lab2[..., 0])
-                                _try = cv2.cvtColor(
-                                    cv2.merge([_l2, _l2, _l2]),
-                                    cv2.COLOR_BGR2GRAY)
-                                _try = cv2.cvtColor(
-                                    _try, cv2.COLOR_GRAY2BGR)
-                            except Exception:
-                                _try = _big
-                        try:
-                            _res = self.ocr.ocr(_try)
-                        except Exception:
-                            _res = None
-                        _ocr_calls += 1
-                        _txts = []
-                        if _res:
-                            for _ln in (_res[0] or []):
-                                try:
-                                    _tv = _ln[1]
-                                    if isinstance(_tv, (tuple, list)):
-                                        _tv = _tv[0]
-                                    if str(_tv).strip():
-                                        _txts.append(str(_tv).strip())
-                                except Exception:
-                                    continue
-                        _txt = " ".join(_txts)
-                        # v1.14.68 — شمارِ فراخوانیِ بی‌متنِ پیاپی؛
-                        # بنرِ واقعی det/OCR را جواب می‌دهد، پس
-                        # زنجیرهٔ خالیِ بلند یعنی بافتِ هنر — صرفه‌جوییِ
-                        # بزرگِ RapidOCRِ کندِ PC (تا ۱۶ فراخوانی کمتر)
-                        if _txt:
-                            _empty_streak68 = 0
-                        else:
-                            _empty_streak68 += 1
-                            if (_empty_max68 > 0
-                                    and _empty_streak68 >= _empty_max68):
-                                _stop_all68 = True
-                                break
-                        if self._is_watermark_text(_txt):
-                            break
-                        # v1.14.67 — متنِ خوانا ولی غیرِتبلیغ → این بلاب
-                        # بنر نیست؛ CLAHE/زومِ بعدی کمکی نمی‌کند → کاندیدِ
-                        # بعدی (صرفه: تا ۳ فراخوانی به ازای هر بلاب)
-                        if _txt:
-                            break
-                    if _txt and self._is_watermark_text(_txt):
-                        break
-                    if _stop_all68:
-                        break
-                if not (_txt and self._is_watermark_text(_txt)):
-                    # v1.14.64d — فال‌بکِ بدونِ OCR حذف شد: گیتِ گلیف روی
-                    # بافتِ هنر (زنگار/تسمه/هاشور) فال‌پزیتیو می‌داد و
-                    # تکه‌هایی از هنر پاک می‌شد. فقط تأییدِ متنیِ
-                    # (دامنه/برند) معتبر است — OCRِ پد‌شده/واریانتی
-                    # بنرهایِ واقعی را می‌خواند.
-                    continue
-                _tr = TextRegion(
-                    id=10000 + len(found),
-                    boxes=[np.array([[cx0, cy0], [cx1, cy0],
-                                     [cx1, cy1], [cx0, cy1]],
-                                    dtype=np.float32)],
-                    source_text=_txt,
-                    rect=(cx0, cy0, cx1 - cx0, cy1 - cy0),
-                    kind="promo")
-                found.append(_tr)
-                _found_rects.append((cx0, cy0, cx1, cy1))
-                # v1.14.67b — بعد از اولین بنر، بودجهٔ باقی‌مانده به
-                # یک‌سوم فشرده می‌شود (چند بنر در یک صفحه نادر است؛
-                # ادامه با بودجهٔ کامل فقط وقت می‌گیرد)
-                try:
-                    _max_calls = min(
-                        _max_calls,
-                        _ocr_calls + max(6,
-                                         (_max_calls - _ocr_calls) // 3))
-                except Exception:
-                    pass
-                if self.debug:
+                # v1.14.148 — یک بچِ W کاندید موازی OCR میشود
+                _batch148 = _ordered[_wm_i:_wm_i + max(1, _wm_pw)]
+                _wm_i += len(_batch148)
+                if _wm_pw > 1:
                     try:
-                        print(f"  [🔍] بنرِ تبلیغ: rect={_tr.rect} "
-                              f"متن: {_txt[:60]}")
+                        with ThreadPoolExecutor(max_workers=_wm_pw) as _wmx:
+                            _wm_res148 = list(_wmx.map(_wm_scan_one, _batch148))
                     except Exception:
-                        pass
+                        _wm_res148 = [_wm_scan_one(_c) for _c in _batch148]
+                else:
+                    _wm_res148 = [_wm_scan_one(_c) for _c in _batch148]
+                for (_c148, _r148) in zip(_batch148, _wm_res148):
+                    (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) = _c148
+                    _ocr_calls += int(_r148.get("calls", 0))
+                    _txt = str(_r148.get("txt", "") or "")
+                    # v1.14.68 — شمارِ فراخوانیِ بی‌متنِ پیاپی (به همان
+                    # ترتیبِ کاندیدها؛ بینِ بچها ارزیابی میشود)
+                    if _r148.get("nonempty"):
+                        _empty_streak68 = 0
+                    else:
+                        _empty_streak68 += int(_r148.get("empty", 0))
+                        if (_empty_max68 > 0
+                                and _empty_streak68 >= _empty_max68):
+                            _stop_all68 = True
+                    if _r148.get("found"):
+                        _tr = TextRegion(
+                            id=10000 + len(found),
+                            boxes=[np.array([[cx0, cy0], [cx1, cy0],
+                                             [cx1, cy1], [cx0, cy1]],
+                                            dtype=np.float32)],
+                            source_text=_txt,
+                            rect=(cx0, cy0, cx1 - cx0, cy1 - cy0),
+                            kind="promo")
+                        found.append(_tr)
+                        _found_rects.append((cx0, cy0, cx1, cy1))
+                        # v1.14.67b — بعد از اولین بنر، بودجهٔ باقی‌مانده
+                        # به یک‌سوم فشرده می‌شود (چند بنر در یک صفحه
+                        # نادر است؛ ادامه با بودجهٔ کامل فقط وقت می‌گیرد)
+                        try:
+                            _max_calls = min(
+                                _max_calls,
+                                _ocr_calls + max(6,
+                                                 (_max_calls - _ocr_calls) // 3))
+                        except Exception:
+                            pass
+                        if self.debug:
+                            try:
+                                print(f"  [🔍] بنرِ تبلیغ: rect={_tr.rect} "
+                                      f"متن: {_txt[:60]}")
+                            except Exception:
+                                pass
             if self.debug:
                 try:
                     print(f"  [🔍] جارویِ بنر: {len(found)} تبلیغ شناسایی شد")
