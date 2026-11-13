@@ -284,9 +284,14 @@ gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-4-hydrogen, gemini-3.8-flas
 
 ---
 
-## پنج روش اجرا
+## شش روش اجرا
+### 1) huggingface (پیشنهادی)
 
-### ۱) Google Colab (پیشنهادی)
+[![Open In huggingface](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=black)](https://amirwolf512-manga-autotranslate.hf.space/)
+
+[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-FFD21E?logo=huggingface&logoColor=black)](https://huggingface.co/spaces/amirwolf512/Manga-AutoTranslate)
+
+### 2) Google Colab (پیشنهادی)
 
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/amirwolf512k/Manga-AutoTranslate/blob/main/Manga_Translator_Colab.ipynb)
 
@@ -296,7 +301,7 @@ gemini-3.5-flash-lite, gemini-3.1-flash-lite, gemini-4-hydrogen, gemini-3.8-flas
 
 لینک عمومی `gradio.live` خودکار چاپ می‌شود. ⚠ هر دو فایل `manga.py` (مترجم) و `manga_app.py` (برنامه) باید کنار هم باشند.
 
-### 2) molab marimo
+### 3) molab marimo (پیشنهادی)
 
 [![Open In marimo](https://marimo.io/shield.svg)](https://molab.marimo.io/github/amirwolf512k/Manga-AutoTranslate/blob/main/Manga-AutoTranslate.py/server)
 
@@ -306,7 +311,7 @@ bash manga.sh
 
 لینک عمومی `gradio.live` خودکار چاپ می‌شود. ⚠ هر دو فایل `manga.py` (مترجم) و `manga_app.py` (برنامه) باید کنار هم باشند.
 
-### 3) GitHub Codespaces
+### 4) GitHub Codespaces
 
 ```bash
 bash manga.sh
@@ -319,18 +324,17 @@ tmux new -s manga 'python3 manga_app.py --web'
 # detach: Ctrl+B بعد D | بازگشت: tmux attach -t manga
 ```
 
-### 4) GitHub Actions
+### 5) GitHub Actions
 
 ریپو را Fork کن.
 
-از تب Actions یکی از دو ورک‌فلو را Run کن:
+از تب Actions
 
 - **Manga Web (موقت)** — رابط وب با لینک gradio.live در لاگ؛ بعد از زمان تعیین‌شده خاموش می‌شود؛ خروجی را قبل از خاموش شدن از UI دانلود کن
-- **Manga CLI (ترجمه یک‌باره)** — لینک فصل + کلید API را می‌گیرد و خروجی را به‌صورت artifact تحویل می‌دهد
 
 Runnerهای GitHub معمولاً GPU ندارند؛ اجرا روی CPU است. وب فقط موقت است و لینک دائمی نمی‌دهد.
 
-### 5) اجرای لوکال
+### 6) اجرای لوکال
 
 ```bash
 git clone https://github.com/amirwolf512k/Manga-AutoTranslate.git
