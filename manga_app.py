@@ -3773,7 +3773,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (mcatState === 'st-read' && !mcatSayUntil && Math.random() < 0.02) mcatSayNow(faR(MCAT_READ), 5200);
   }, 900);
   var welcomeT = setTimeout(function () {
-    if (mcatState === 'st-read') mcatSayNow('سلام! من نکو-گِرلم — بکشم ببر جاهای مختلف!', 3600);
+    if (mcatState === 'st-read') mcatSayNow('سلام!', 3600);
   }, 900);
   try {
     var sp = JSON.parse(localStorage.getItem('mangaCatPos') || 'null');
