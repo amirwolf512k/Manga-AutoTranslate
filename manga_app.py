@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.299"
+APP_VER = "1.14.301"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -406,9 +406,15 @@ CUSTOM_MODELS_PATH = os.path.join(WORK_DIR, "manga_models.json")
 def _web_host() -> bool:
     return (os.environ.get("GITHUB_ACTIONS", "").strip() not in ("", "false")
             or os.environ.get("MANGA_WEB", "").strip() == "1"
-            or os.environ.get("RAILWAY_STATIC_URL", "").strip() != "")
+            or os.environ.get("RAILWAY_STATIC_URL", "").strip() != ""
+            or os.environ.get("SPACE_ID", "").strip() != ""
+            or os.environ.get("HF_SPACE_ID", "").strip() != "")
 
 def load_custom_models() -> list:
+    # 🛡 میزبانِ وبِ عمومی (Space/CI/…): مدلهایِ سرور هرگز به مرورگرِ
+    # بازدیدکنندهها فرستاده نمیشوند — مدلها فقط در localStorage خودِ کاربر است.
+    if _web_host():
+        return []
     try:
         with open(CUSTOM_MODELS_PATH, encoding="utf-8") as f:
             data = json.load(f)
@@ -440,6 +446,28 @@ def save_custom_models(models: list) -> bool:
         return True
     except Exception:
         return False
+
+def purge_web_secrets(log=print) -> None:
+    """🛡 میزبانِ وبِ عمومی (HF Space / CI / Railway):
+    هیچ فایلِ حاویِ کلیدِ API نباید روی دیسک بماند — این فایلها از
+    نسخههایِ قدیمی یا اجراهایِ قبلی ماندهاند و از مسیرِ /file= قابلِ
+    گرفتن هستند؛ در بوتِ وب پاک میشوند."""
+    if not _web_host():
+        return
+    import glob as _glob
+    victims = [CUSTOM_MODELS_PATH, CFG_PATH, HIST_PATH]
+    victims += _glob.glob(os.path.join(WORK_DIR, "manga_backup_*.json"))
+    for p in victims:
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+                try:
+                    log(f"[🛡] وبِ عمومی — فایلِ حساس از دیسک پاک شد: "
+                        f"{os.path.basename(p)}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 def _cm_names(models: list) -> list:
     out = []
@@ -1860,7 +1888,13 @@ def _dark_js_src() -> str:
 """
 
 def run_web():
-    
+    # 🛡 اولِ کار: روی میزبانِ وبِ عمومی، فایلهایِ حساسِ مانده (مدلها/بکاپ/
+    # کانفیگ/تاریخچه) پاک شوند تا از مسیرِ /file= بیرون نروند.
+    try:
+        purge_web_secrets()
+    except Exception:
+        pass
+
     os.environ["GRADIO_ALLOWED_PATHS"] = os.pathsep.join(
         {str(WORK_DIR), str(OUT_DIR), str(UPLOAD_DIR), str(FONT_DIR), str(HERE)})
     os.environ.setdefault("GRADIO_ANALYTICS_CACHE_FREQUENCY", "1000000000")
@@ -5787,6 +5821,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     elem_id="manga_import_file")
             backup_out = gr.File(label=str(TX("app.backup_file", "فایلِ پشتیبان — اگر دانلودِ خودکار شروع نشد، از همین‌جا دانلودش کنید")),
                                  visible=False, elem_id="manga_backup_out")
+            # 🛡 کانالِ بکاپِ فقط-مرورگری: JSON در همین تکست‌باکسِ مخفی برمیگردد و
+            # جاوااسکریپت با Blob آن را دانلود میکند (لینکش در مرورگرِ دیگری مرده است).
+            backup_json = gr.Textbox(value="", visible=False, container=False,
+                                     elem_id="manga_backup_json")
             backup_status = gr.Textbox(
                 label="", show_label=False, interactive=False, visible=False,
                 elem_id="manga_backup_status")
@@ -7132,14 +7170,30 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             out_v = os.path.join(user_out_dir, base + ext)
 
             try:
+                _run_sids = set()
+                for _jsid, _jb in list(live_jobs.items()):
+                    try:
+                        if _job_running(_jb):
+                            _run_sids.add(str(_jsid)[:12])
+                    except Exception:
+                        pass
                 for _sn in os.listdir(OUT_DIR):
                     _sd = os.path.join(OUT_DIR, _sn)
                     if not os.path.isdir(_sd) or _sn == sid[:12]:
                         continue
+                    if _sn in _run_sids:
+                        continue
                     for _cn in os.listdir(_sd):
-                        if _cn.endswith(".cache"):
-                            shutil.rmtree(os.path.join(_sd, _cn),
-                                          ignore_errors=True)
+                        if not _cn.endswith(".cache"):
+                            continue
+                        _cp = os.path.join(_sd, _cn)
+                        try:
+                            if (time.time() - os.path.getmtime(_cp)) < 900:
+                                continue
+                        except Exception:
+                            pass
+                        print(f"[*] GC کش: {_sn}/{_cn} (سشن غیرفعال)")
+                        shutil.rmtree(_cp, ignore_errors=True)
             except Exception:
                 pass
 
@@ -7862,6 +7916,23 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     "custom_models": models,
                     "settings": settings,
                 }
+                # نانسِ یکتا برای اینترنتِ دانلودِ دوباره: رویدادِ change حتی وقتیِ
+                # محتوای بکاپ یکسان باشد دوباره شعله‌ور میشود.
+                payload["_dl"] = time.time_ns()
+                if _web_host():
+                    # 🛡 میزبانِ وبِ عمومی: هیچ فایلی روی سرور نوشته نمیشود.
+                    # JSON فقط به مرورگرِ خودِ کاربر برمیگردد و دانلود با Blob
+                    # همان‌جا انجام میشود — لینکش در مرورگرِ دیگری کار نمیکند.
+                    return (gr.update(visible=False),
+                            gr.update(value=("✅ پشتیبان ساخته شد و دانلودش فقط در "
+                                             "همین مرورگر شروع شد: "
+                                             f"{len(models)} مدل + "
+                                             f"{len(settings)} تنظیم.\n"
+                                             "🛡 روی میزبانِ اشتراکی هیچ فایلی "
+                                             "ذخیره نمیشود و لینکِ این بکاپ "
+                                             "در مرورگرِ دیگری کار نمیکند."),
+                                      visible=True),
+                            json.dumps(payload, ensure_ascii=False, indent=2))
                 ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
                 path = os.path.join(WORK_DIR, f"manga_backup_{ts}.json")
                 with open(path, "w", encoding="utf-8") as f:
@@ -7873,10 +7944,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                         f"\n(اگر مرورگرتان دانلود را بلاک کرد، "
                                         f"از کارتِ «فایلِ پشتیبان» همین‌جا "
                                         f"دستیش کنید.)",
-                                  visible=True))
+                                  visible=True),
+                        "")
             except Exception as e:
                 return (gr.update(),
-                        gr.update(value=f"❌ پشتیبان ناموفق: {e}", visible=True))
+                        gr.update(value=f"❌ پشتیبان ناموفق: {e}", visible=True),
+                        "")
 
         def _do_import(file_info, models_cur, prov_cur, bank_cur):
             n = len(_BACKUP_FIELDS)
@@ -7947,9 +8020,41 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
         try:
             _backup_inputs = [c for _, c in _BACKUP_FIELDS] + [custom_models_state]
+            # 🛡 دانلودِ فقط-مرورگریِ بکاپ: JSON از سرور به همین صفحه می‌آید و با
+            # Blob دانلود میشود — blob: URL فقط در همین سندِ مرورگر زنده است و
+            # اگر کسی لینکش را به دیگری بدهد، در مرورگرِ او کار نمیکند.
+            _BK_BLOB_JS = """(v) => {
+  try {
+    if (!v || typeof v !== "string" || !v.trim()
+        || v.trim().charAt(0) !== '{') return [];
+    let name = "manga_backup.json";
+    try {
+      const j = JSON.parse(v);
+      const t = String(j.exported_at || "").replace(/[^0-9]/g, "");
+      if (t.length >= 14)
+        name = "manga_backup_" + t.slice(0, 8) + "_" + t.slice(8, 14) + ".json";
+    } catch (e) {}
+    const blob = new Blob([v], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () {
+      try { URL.revokeObjectURL(url); } catch (e) {}
+    }, 5000);
+  } catch (e) {}
+  return [];
+}"""
             backup_btn.click(
                 _do_backup, inputs=_backup_inputs,
-                outputs=[backup_out, backup_status], api_name="backup_settings")
+                outputs=[backup_out, backup_status, backup_json],
+                api_name="backup_settings")
+            backup_json.change(
+                fn=None, inputs=[backup_json], outputs=[],
+                js=_BK_BLOB_JS)
             backup_out.change(
                 fn=None, inputs=[backup_out], outputs=[],
                 js="""(v) => {
@@ -8731,9 +8836,18 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                         live_jobs.pop(sid, None)
 
                     if os.path.isdir(OUT_DIR):
+                        _busy12 = set()
+                        for _jsid, _jb in list(live_jobs.items()):
+                            try:
+                                if _job_running(_jb):
+                                    _busy12.add(str(_jsid)[:12])
+                            except Exception:
+                                pass
                         for name in os.listdir(OUT_DIR):
                             p = os.path.join(OUT_DIR, name)
                             if not os.path.isdir(p):
+                                continue
+                            if name in _busy12:
                                 continue
                             if len(name) == 12 and all(c in "0123456789abcdef" for c in name.lower()):
                                 try:
@@ -9025,6 +9139,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if _gradio_major() >= 6:
         launch_kw["theme"] = gr.themes.Soft(primary_hue="indigo", neutral_hue="slate")
         launch_kw["css"] = WEB_CSS_RUNTIME
+    _blocked_paths = None
+    if _web_host():
+        # 🛡 دفاعِ چندلایه: حتی اگر فایلی جا مانده باشد، مسیرِ /file= آن را
+        # می‌بندد (فایلهایِ زیرِ workspace برای بازدیدکنندهها ممنوع).
+        _blocked_paths = [str(CUSTOM_MODELS_PATH), str(CFG_PATH), str(HIST_PATH)]
+        print("[🛡] میزبانِ وبِ عمومی: فایلهایِ حساسِ workspace از /file= بسته شدند.")
     demo.queue(max_size=64).launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("MANGA_APP_PORT", "7860")),
@@ -9032,6 +9152,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         inline=on_colab,
         show_error=True,
         allowed_paths=[str(WORK_DIR), str(OUT_DIR), str(UPLOAD_DIR), str(FONT_DIR)],
+        blocked_paths=_blocked_paths,
         **launch_kw,
     )
 

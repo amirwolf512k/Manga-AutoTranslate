@@ -792,10 +792,13 @@ class _MangaTranslatorBody_95:
         except Exception:
             pass
 
+        _unreadable_streak = {"n": 0}
+
         def _extract_one(item):
             page_i, f, out_file = item
             _raise_if_stop()
             _t_ext = time.time()
+            image = None
             if page_i == 0:
                 MangaTranslator._title_skip_enabled = True
             _ex_cache = os.path.join(extract_dir, f"page_{page_i:04d}.json")
@@ -889,6 +892,17 @@ class _MangaTranslatorBody_95:
             except GeminiQuotaExhausted:
                 raise
             except Exception as e:
+                _unread = (image is None and not os.path.isfile(f))
+                if _unread:
+                    _unreadable_streak["n"] += 1
+                    if _unreadable_streak["n"] == 3:
+                        print("    [!!] چندین تصویرِ پیاپی از کش ناپدید شده‌اند — "
+                              "پوشهٔ کش وسطِ اجرا حذف/پاک شده (سشن یا GC دیگر). "
+                              "صفحات باقی‌مانده از دست می‌روند؛ ورودی از "
+                              "cache/src هم پاک شده باشد، ادامه ممکن نیست.",
+                              file=sys.stderr)
+                else:
+                    _unreadable_streak["n"] = 0
                 print(f"    [!] خطا در استخراج {os.path.basename(f)}: {e}", file=sys.stderr)
                 return page_i, out_file, None, None, None
             finally:

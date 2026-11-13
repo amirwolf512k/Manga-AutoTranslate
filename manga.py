@@ -9,7 +9,7 @@ import re as _re
 import sys as _sys
 import time as _time
 
-APP_VER = "1.14.299"
+APP_VER = "1.14.301"
 
 _HERE = _os.path.dirname(_os.path.abspath(__file__))
 _SECTIONS_DIR = _os.path.join(_HERE, "manga_sections")
