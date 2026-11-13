@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 import json
 import os
 import re
@@ -15,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.299"
+APP_VER = "1.14.303"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -406,9 +405,13 @@ CUSTOM_MODELS_PATH = os.path.join(WORK_DIR, "manga_models.json")
 def _web_host() -> bool:
     return (os.environ.get("GITHUB_ACTIONS", "").strip() not in ("", "false")
             or os.environ.get("MANGA_WEB", "").strip() == "1"
-            or os.environ.get("RAILWAY_STATIC_URL", "").strip() != "")
+            or os.environ.get("RAILWAY_STATIC_URL", "").strip() != ""
+            or os.environ.get("SPACE_ID", "").strip() != ""
+            or os.environ.get("HF_SPACE_ID", "").strip() != "")
 
 def load_custom_models() -> list:
+    if _web_host():
+        return []
     try:
         with open(CUSTOM_MODELS_PATH, encoding="utf-8") as f:
             data = json.load(f)
@@ -440,6 +443,24 @@ def save_custom_models(models: list) -> bool:
         return True
     except Exception:
         return False
+
+def purge_web_secrets(log=print) -> None:
+    if not _web_host():
+        return
+    import glob as _glob
+    victims = [CUSTOM_MODELS_PATH, CFG_PATH, HIST_PATH]
+    victims += _glob.glob(os.path.join(WORK_DIR, "manga_backup_*.json"))
+    for p in victims:
+        try:
+            if os.path.isfile(p):
+                os.remove(p)
+                try:
+                    log(f"[🛡] وبِ عمومی — فایلِ حساس از دیسک پاک شد: "
+                        f"{os.path.basename(p)}")
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
 def _cm_names(models: list) -> list:
     out = []
@@ -967,7 +988,9 @@ def _cache_dir_for(output_path) -> str:
     return _p + ".cache"
 
 def _trans_sig_of(provider, model, api_base, prompt_mode,
-                  instruction, fake, temperature, top_p) -> str:
+                  instruction, fake, temperature, top_p,
+                  deep_thinking=True, safety_settings=False,
+                  max_tokens=None) -> str:
     import hashlib as _hl
 
     def _ms(v) -> str:
@@ -994,6 +1017,10 @@ def _trans_sig_of(provider, model, api_base, prompt_mode,
         instr = str(instruction or "").strip()
         if instr and not is_custom_instruction(instr):
             instr = ""
+        try:
+            _mt = ("mt%d" % int(max_tokens)) if max_tokens else "mt-"
+        except Exception:
+            _mt = "mt-"
         parts = [
             "t1", prov, mdl, ab, pm,
             (_hl.sha256(instr.encode("utf-8", "ignore")).hexdigest()[:12]
@@ -1001,6 +1028,9 @@ def _trans_sig_of(provider, model, api_base, prompt_mode,
             "fake" if fake else "real",
             "%.2f" % float(temperature if temperature is not None else 0.7),
             "%.2f" % float(top_p if top_p is not None else 0.9),
+            "think" if deep_thinking else "nothink",
+            "sbn" if safety_settings else "nosbn",
+            _mt,
         ]
         return _hl.sha256("|".join(parts).encode("utf-8", "ignore")).hexdigest()[:16]
     except Exception:
@@ -1360,6 +1390,56 @@ body, .gradio-container, footer, .gradio-container .prose {
   max-width: 100% !important;
 }
 #manga_cm_info code, .hint code { white-space: normal !important; }
+
+#manga_out_fmt fieldset > div,
+#manga_out_fmt .wrap {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 6px 10px !important;
+  align-items: center;
+}
+#manga_out_fmt .wrap label {
+  margin: 0 !important; padding: 5px 4px !important;
+  min-height: 38px; justify-content: flex-start !important;
+}
+
+#manga_mode_grid {
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 2px 8px !important;
+  align-items: center;
+  margin: 2px 0 10px 0;
+}
+#manga_mode_grid > .form {
+  grid-column: 1 / -1;
+  display: grid !important;
+  grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+  gap: 2px 8px !important;
+  align-items: center;
+}
+#manga_mode_grid > * { min-width: 0 !important; }
+#manga_mode_grid > .form > * { min-width: 0 !important; }
+#manga_mode_grid label { overflow-wrap: anywhere !important; }
+button.k3q {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 17px; height: 17px; border-radius: 50%;
+  border: 1px solid var(--ink-line); background: var(--ink-surface2);
+  color: var(--ink-dim); font-size: 10px; font-weight: 800; line-height: 1;
+  cursor: pointer; padding: 0; margin: 0 5px; flex: none;
+  vertical-align: middle; font-family: inherit; user-select: none;
+}
+button.k3q:hover { color: var(--ink-text); border-color: var(--ink-red); }
+button.k3q:active { transform: scale(.9); }
+div.k3tip {
+  position: fixed; z-index: 99999;
+  background: #15151b; border: 1px solid var(--ink-line);
+  color: var(--ink-text); font-size: .8rem; line-height: 1.8;
+  padding: 10px 14px; border-radius: 12px;
+  box-shadow: 0 14px 34px rgba(0,0,0,.65);
+  max-width: min(320px, 86vw);
+  direction: rtl; text-align: right; white-space: normal;
+  animation: rise .25s cubic-bezier(.2,.7,.2,1) both;
+}
 
 div.styler{background:transparent !important;border:none !important;
   box-shadow:none !important}
@@ -1860,7 +1940,11 @@ def _dark_js_src() -> str:
 """
 
 def run_web():
-    
+    try:
+        purge_web_secrets()
+    except Exception:
+        pass
+
     os.environ["GRADIO_ALLOWED_PATHS"] = os.pathsep.join(
         {str(WORK_DIR), str(OUT_DIR), str(UPLOAD_DIR), str(FONT_DIR), str(HERE)})
     os.environ.setdefault("GRADIO_ANALYTICS_CACHE_FREQUENCY", "1000000000")
@@ -3773,7 +3857,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (mcatState === 'st-read' && !mcatSayUntil && Math.random() < 0.02) mcatSayNow(faR(MCAT_READ), 5200);
   }, 900);
   var welcomeT = setTimeout(function () {
-    if (mcatState === 'st-read') mcatSayNow('سلام! من نکو-گِرلم — بکشم ببر جاهای مختلف!', 3600);
+    if (mcatState === 'st-read') mcatSayNow('سلام!', 3600);
   }, 900);
   try {
     var sp = JSON.parse(localStorage.getItem('mangaCatPos') || 'null');
@@ -3984,7 +4068,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".rdr-btn{padding:7px 10px;font-size:.9rem;min-width:36px}"
             ".rdr-title{font-size:.72rem;order:10;flex:1 1 100%;text-align:center}"
             "}"
-                        "/* —— هم‌خوانِ نکو-گِرل v272: دخترِ گربه‌گوشِ استیکری — سرِ گردِ توپُش + بدنِ خُرد — ۲۴ حالت + قایم‌شدن پشتِ دیوار + خاموش‌کردنِ صفحه —— */"
             ".mcat{position:fixed;z-index:57;right:10px;top:58px;width:70px;touch-action:none;-webkit-tap-highlight-color:transparent;user-select:none;filter:drop-shadow(0 3px 8px rgba(0,0,0,.45));cursor:pointer;transition:opacity .3s}"
             ".mcat svg{display:block;width:100%;height:auto;pointer-events:none}"
             "@media (min-width:768px){.mcat{width:76px;right:18px;top:auto;bottom:112px;filter:drop-shadow(0 6px 14px rgba(0,0,0,.55))}}"
@@ -3996,13 +4079,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".mcat-say{position:absolute;top:calc(100% + 22px);right:-2px;white-space:nowrap;background:#fff;color:#1d1d21;border-radius:12px;padding:4px 10px;font-size:.72rem;pointer-events:none;opacity:0;transform:translateY(4px) scale(.9);transition:opacity .18s ease,transform .18s ease;z-index:2}"
             ".mcat-say.show{opacity:1;transform:translateY(0) scale(1)}"
             ".mcat-say:after{content:'';position:absolute;top:-4px;right:14px;width:9px;height:9px;background:#fff;transform:rotate(45deg)}"
-            "/* — گروههای پنهان — */"
             ".cg-eyes,.cg-mv,.cg-zzz,.cg-sweat,.cg-tears,.cg-heart,.cg-spark,.cg-anger,.cg-steam,.cg-ball,.cg-music,.cg-glass,.cg-shyhands,.cg-shyblush,.cg-hand-chin,.cg-arms-up,.cg-arms-stretch,.cg-snack,.cg-crumbs,.cg-rumble,.cg-think,.cg-speed{display:none}"
-            "/* — چشم‌ها بر اساس حالت — */"
             ".mcat.st-read .cg-eyes-open,.mcat.st-study .cg-eyes-open,.mcat.st-hide .cg-eyes-open,.mcat.st-peek .cg-eyes-open,.mcat.st-exc .cg-eyes-happy,.mcat.st-pat .cg-eyes-happy,.mcat.st-spin .cg-eyes-happy,.mcat.st-music .cg-eyes-happy,.mcat.st-dance .cg-eyes-happy,.mcat.st-run .cg-eyes-happy,.mcat.st-sleep .cg-eyes-sleep,.mcat.st-yawn .cg-eyes-sleep,.mcat.st-think .cg-eyes-think,.mcat.st-stress .cg-eyes-worry,.mcat.st-sad .cg-eyes-sad,.mcat.st-shy .cg-eyes-down,.mcat.st-hungry .cg-eyes-down,.mcat.st-eat .cg-eyes-shifty,.mcat.st-annoy .cg-eyes-annoy,.mcat.st-angry .cg-eyes-angry,.mcat.st-ball .cg-eyes-up,.mcat.st-hang .cg-eyes-happy,.mcat.st-edgesit .cg-eyes-happy,.mcat.st-sidepeek .cg-eyes-open{display:block}"
-            "/* — دهان‌ها بر اساس حالت — */"
             ".mcat.st-read .cg-mv-smile,.mcat.st-exc .cg-mv-smile,.mcat.st-sleep .cg-mv-smile,.mcat.st-stress .cg-mv-smile,.mcat.st-sad .cg-mv-smile,.mcat.st-pat .cg-mv-smile,.mcat.st-spin .cg-mv-smile,.mcat.st-peek .cg-mv-smile,.mcat.st-hide .cg-mv-smile,.mcat.st-dance .cg-mv-smile,.mcat.st-run .cg-mv-smile,.mcat.st-hang .cg-mv-smile,.mcat.st-edgesit .cg-mv-smile,.mcat.st-sidepeek .cg-mv-smile,.mcat.st-study .cg-mv-focus,.mcat.st-think .cg-mv-focus,.mcat.st-shy .cg-mv-tee,.mcat.st-hungry .cg-mv-tee,.mcat.st-annoy .cg-mv-pout,.mcat.st-angry .cg-mv-shout,.mcat.st-ball .cg-mv-o,.mcat.st-music .cg-mv-song,.mcat.st-yawn .cg-mv-yawn,.mcat.st-eat .cg-mv-munch{display:block}"
-            "/* — افکت‌های هر حالت — */"
             ".mcat.st-sleep .cg-zzz{display:block}"
             ".mcat.st-stress .cg-sweat{display:block}"
             ".mcat.st-sad .cg-tears{display:block}"
@@ -4023,11 +4102,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".mcat.st-run .cg-speed{display:block}"
             ".mcat.st-eat .cg-snack{display:block}"
             ".mcat.st-eat .cg-crumbs{display:block}"
-            "/* — بازوها و کتاب در حالتهای ویژه — */"
             ".mcat.st-dance .cg-hug,.mcat.st-dance .cg-book,.mcat.st-yawn .cg-hug,.mcat.st-yawn .cg-book,.mcat.st-eat .cg-hug,.mcat.st-hang .cg-hug,.mcat.st-hang .cg-book{display:none}"
             ".mcat.st-dance .cg-arms-up{display:block}"
             ".mcat.st-yawn .cg-arms-stretch,.mcat.st-hang .cg-arms-stretch{display:block}"
-            "/* — کی‌فریم‌ها — */"
             "@keyframes mcBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}"
             "@keyframes mcBounce{0%,100%{transform:translateY(0) scale(1)}30%{transform:translateY(-7px) scale(1.05)}60%{transform:translateY(0) scale(.97)}}"
             "@keyframes mcBreath{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}"
@@ -4059,7 +4136,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             "@keyframes mcHang{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(4px) rotate(2deg)}}"
             "@keyframes mcCrumbs{0%{opacity:0;transform:translateY(0)}30%{opacity:1}100%{opacity:0;transform:translateY(9px)}}"
             "@keyframes mcSpeedFlick{0%,100%{opacity:.15}50%{opacity:1}}"
-            "/* — انیمیشنِ بدنه — */"
             ".mcat .cg-all{transform-origin:60px 108px;animation:mcBob 3.4s ease-in-out infinite}"
             ".mcat.st-exc .cg-all{animation:mcBounce .55s ease-in-out infinite}"
             ".mcat.st-sleep .cg-all{animation:mcBreath 2.8s ease-in-out infinite}"
@@ -4079,7 +4155,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".mcat.st-shy .cg-all{animation:mcShyWig 2.2s ease-in-out infinite}"
             ".mcat.st-hide .cg-all{animation:mcPeekBob 3s ease-in-out infinite}"
             ".mcat.st-peek .cg-all{animation:mcPeekBob 2.4s ease-in-out infinite}"
-            "/* — سر و گوش و دُم — */"
             ".mcat .cg-head{transform-origin:60px 82px}"
             ".mcat.st-annoy .cg-head{transform:translateX(-7px) rotate(-10deg)}"
             ".mcat.st-annoy .cg-blush{display:none}"
@@ -4095,7 +4170,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".mcat .cg-ear-r{transform-origin:80px 28px;animation:mcEarT 6s ease-in-out .8s infinite}"
             ".mcat.st-sleep .cg-ear-l,.mcat.st-sleep .cg-ear-r,.mcat.st-pat .cg-ear-l,.mcat.st-pat .cg-ear-r{animation:none}"
             ".mcat.st-eat .cg-ear-l,.mcat.st-eat .cg-ear-r{animation:mcEarT 2.2s ease-in-out infinite}"
-            "/* — جزئیاتِ متحرک — */"
             ".mcat .cg-eyes-open{transform-origin:60px 56px;animation:mcBlink 5.6s infinite}"
             ".mcat .cg-heart{animation:mcPop 1.6s ease-out}"
             ".mcat .cg-zzz text{animation:mcPop 2.4s ease-in-out infinite}"
@@ -4125,7 +4199,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".mcat.st-dance .cg-arms-up .arm-l{transform-origin:38px 94px;animation:mcWave 1.1s ease-in-out infinite}"
             ".mcat.st-dance .cg-arms-up .arm-r{transform-origin:82px 94px;animation:mcWave 1.1s ease-in-out .55s infinite}"
             ".mcat.st-think .cg-hand-chin{transform-origin:72px 97px;animation:mcBob 2.6s ease-in-out infinite}"
-            "/* — قایم‌شدن در گوشه‌ها (رندوم از ۴ گوشه) — */"
             ".mcat.st-hide .mcat-bub,.mcat.st-peek .mcat-bub,.mcat.st-hang .mcat-bub,.mcat.st-edgesit .mcat-bub,.mcat.st-sidepeek .mcat-bub{display:none}"
             ".mcat.st-hide .mcat-say{top:auto;bottom:calc(100% + 10px)}"
             ".mcat.st-hide .mcat-say:after{top:auto;bottom:-4px}"
@@ -4135,9 +4208,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".mcat.peek-r .mcat-say:after{left:auto;right:18px}"
             ".mcat.away{opacity:0;pointer-events:none;transition:opacity .35s .7s}"
             ".mcat.glide{transition:left .75s cubic-bezier(.35,.8,.35,1),top .75s cubic-bezier(.35,.8,.35,1),opacity .3s}"
-            "/* — v271: چشم‌های دنبال‌کنندهٔ موس (پی‌سی/لینوکس) — */"
             ".cg-eyes-open .cg-pupil{transition:transform .18s ease-out}"
-            "/* — v271: حالتهای رهاکردنِ کاراکتر در نقاط صفحه — */"
             ".mcat.st-hang svg{transform:scaleY(-1)}"
             ".mcat.st-hang .cg-all{animation:mcHangSway 2.6s ease-in-out infinite;transform-origin:60px 26px}"
             ".mcat.st-hang .cg-tail{animation:none}"
@@ -4155,7 +4226,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             "@keyframes mcSitBob{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-2px) rotate(2deg)}}"
             "@keyframes mcLean{0%,100%{transform:translateX(0)}50%{transform:translateX(5px)}}"
             "@keyframes mcBite{0%,40%,100%{transform:translate(0,0)}55%,70%{transform:translate(-5px,-6px)}}"
-            "/* — v271: راهنمای نقاطِ رهاکردن هنگام درگ — */"
             "#mcatzones{position:fixed;left:0;top:0;right:0;bottom:0;z-index:56;pointer-events:none;display:none}"
             "#mcatzones.show{display:block}"
             ".mz{position:absolute;border:2.5px dashed rgba(217,89,112,.5);border-radius:16px;background:rgba(217,89,112,.05);display:flex;align-items:center;justify-content:center;color:#d95970;font-size:12px;font-weight:800;opacity:.8;transition:opacity .15s,background .15s,transform .15s}"
@@ -4165,10 +4235,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".mz-left{left:8px;top:24%;bottom:24%;width:13%}"
             ".mz-right{right:8px;top:24%;bottom:24%;width:13%}"
             ".mz-center{left:17%;right:17%;top:24%;bottom:24%;border-radius:26px}"
-            "/* — v272 (از v269): قایم‌شدن پشتِ دیوارِ لبهٔ صفحه — دیوارِ کرم داخلِ SVG نیمهٔ پشتی را می‌پوشاند — */"
             ".cg-wall{display:none}"
             ".mcat.st-hide .cg-wall{display:block}"
-            "/* — v272 (از v269): اذیتِ پیوسته (۱۰ بار) = خاموش‌کردنِ صفحه‌ی نمایش — */"
             "#mcatOff{position:fixed;inset:0;z-index:95;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;opacity:0;pointer-events:none;transition:opacity .5s ease;direction:rtl}"
             "#mcatOff.show{opacity:1;pointer-events:auto;cursor:pointer}"
             "#mcatOff .off-eyes{width:min(220px,46vw);height:auto;animation:offBlink 4.6s ease-in-out infinite}"
@@ -5665,7 +5733,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 if _of0 not in ("PDF", "ZIP", "HTML", "PSD"):
                     _of0 = "PDF"
                 out_fmt = gr.Radio(["PDF", "ZIP", "HTML", "PSD"],
-                                   value=_of0, label=TX("app.out_fmt", "قالب"))
+                                   value=_of0, label=TX("app.out_fmt", "قالب"),
+                                   elem_id="manga_out_fmt")
                 quality = gr.Slider(60, 100, value=int(cfg.get("quality", 92)),
                                     step=1, label=TX("app.quality", "کیفیت تصویر"))
 
@@ -5745,15 +5814,57 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                              ["opencv", "opencv"]],
                     value=_cm0,
                     label=TX("app.cleanup", "روش پاکسازی"))
-            with gr.Row():
-                two_pass = gr.Checkbox(label=TX("app.two_pass", "OCR دومرحله‌ای"), value=True)
-                fake_test = gr.Checkbox(label=TX("app.fake_test", "حالت تست"),
-                                        value=bool(cfg.get("fake_test", False)))
+            with gr.Row(elem_id="manga_mode_grid"):
+                two_pass = gr.Checkbox(
+                    label=TX("app.two_pass", "OCR دومرحله‌ای"), value=True,
+                    elem_id="manga_cb_twopass")
+                deep_thinking = gr.Checkbox(
+                    label=TX("app.thinking", "حالت تفکر عمیق"),
+                    value=bool(cfg.get("deep_thinking", True)),
+                    elem_id="manga_cb_thinking")
+                fake_test = gr.Checkbox(
+                    label=TX("app.fake_test", "حالت تست"),
+                    value=bool(cfg.get("fake_test", False)),
+                    elem_id="manga_cb_faketest")
                 clean_only = gr.Checkbox(
                     label=TX("app.cleanup_mode", "حالت پاکسازی"),
-                    value=bool(cfg.get("clean_only", False)))
-                web_debug = gr.Checkbox(label=TX("app.web_debug", "حالت دیباگ"),
-                                        value=bool(cfg.get("web_debug", False)))
+                    value=bool(cfg.get("clean_only", False)),
+                    elem_id="manga_cb_cleanup")
+                web_debug = gr.Checkbox(
+                    label=TX("app.web_debug", "حالت دیباگ"),
+                    value=bool(cfg.get("web_debug", False)),
+                    elem_id="manga_cb_debug")
+                safety_settings = gr.Checkbox(
+                    label=TX("app.safety", "تنظیمات ایمنی"),
+                    value=bool(cfg.get("safety_settings", False)),
+                    elem_id="manga_cb_safety")
+            with gr.Row():
+                _mt0 = str(cfg.get("max_tokens_mode", "auto") or "auto").strip().lower()
+                if _mt0 not in ("auto", "8192", "16384", "32768",
+                                "65536", "custom"):
+                    _mt0 = "auto"
+                max_tokens = gr.Dropdown(
+                    choices=[("خودکار (پیش‌فرض)", "auto"),
+                             ("۸۱۹۲", "8192"), ("۱۶۳۸۴", "16384"),
+                             ("۳۲۷۶۸", "32768"), ("۶۵۵۳۶", "65536"),
+                             ("دلخواه", "custom")],
+                    value=_mt0,
+                    label=TX("app.max_tokens", "حداکثر توکن خروجی (Max Tokens)"),
+                    scale=2,
+                    elem_id="manga_max_tokens")
+                _mtc0 = int(cfg.get("max_tokens_custom", 4096) or 4096)
+                max_tokens_custom = gr.Number(
+                    value=_mtc0,
+                    label=TX("app.max_tokens_custom", "مقدار دلخواه (حداقل ۱۰۲۴)"),
+                    precision=0, minimum=1024, scale=1,
+                    visible=(_mt0 == "custom"),
+                    elem_id="manga_max_tokens_custom")
+                try:
+                    max_tokens.change(
+                        lambda v: gr.update(visible=(str(v) == "custom")),
+                        inputs=[max_tokens], outputs=[max_tokens_custom])
+                except Exception:
+                    pass
             prompt_mode = gr.Dropdown(
                 choices=["professional", "lite"],
                 value=PROMPT_MODE_DEFAULT,
@@ -5787,6 +5898,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     elem_id="manga_import_file")
             backup_out = gr.File(label=str(TX("app.backup_file", "فایلِ پشتیبان — اگر دانلودِ خودکار شروع نشد، از همین‌جا دانلودش کنید")),
                                  visible=False, elem_id="manga_backup_out")
+            backup_json = gr.Textbox(value="", visible=False, container=False,
+                                     elem_id="manga_backup_json")
             backup_status = gr.Textbox(
                 label="", show_label=False, interactive=False, visible=False,
                 elem_id="manga_backup_status")
@@ -6400,7 +6513,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         LS_KEY = "manga_autotranslate_form_v2"
         JOB_KEY = "manga_job_v1"
         save_form_js = f"""
-(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, twopass, fake, cleano) => {{
+(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, twopass, fake, cleano, think, safety, mtmode, mtcust) => {{
   try {{
     const realSid = (sid || sidBox || "").toString().trim();
     const clean = (v) => {{
@@ -6428,6 +6541,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       twopass: twopass === null || twopass === undefined ? true : !!twopass,
       fake_test: !!fake,
       clean_only: !!cleano,
+      deep_thinking: think === null || think === undefined ? true : !!think,
+      safety_settings: !!safety,
+      max_tokens: clean(mtmode) || "auto",
+      max_tokens_custom: (mtcust === null || mtcust === undefined) ? 4096 : Number(mtcust),
       ts: Date.now()
     }};
     localStorage.setItem("{LS_KEY}", JSON.stringify(data));
@@ -6700,9 +6817,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       if (raw) {{
         const d = JSON.parse(raw);
         if (d && (!d.ts || PERM || (Date.now() - d.ts) <= TTL)) {{
-          // کلید/مدلِ اسنپ‌شات مالِ providerِ لحظهٔ ذخیره است
-          // اگر منو الآن رویِ providerِ دیگری است پر نمیشود تا مقادیرِ
-          // کاستوم زیرِ Gemini نشان داده نشود.
           let curProv = "";
           try {{
             const pe = document.querySelector("#manga_provider_row input, #manga_provider_row select, #manga_provider_row textarea");
@@ -6716,10 +6830,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
               if (k) setVal(k, d.keys);
             }}
             if (d.model) {{
-              // v1.14.295 — بازیابیِ مدل از localStorage: زبالهٔ سریالایز
-              // (بک‌اسلش/دکمه/براکتِ چسبیده به اسمِ مدل — باگِ قدیمیِ repr)
-              // همینجا پاک میشود تا فیلدِ مدل همیشه تمیز دیده شود و به
-              // درخواستها هم نرود.
               const mRaw = String(d.model || "");
               const mClean = mRaw.replace(/[\\'"\[\]{{}}()<>]+/g, "")
                                  .replace(/\s+/g, " ").trim();
@@ -6735,7 +6845,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         }}
       }}
 
-      // مدلهایِ سفارشیِ مرورگر → پایتون (ادغام با دیسک)
       try {{
         const cmRaw = (localStorage.getItem("manga_custom_models") || "").trim();
         if (cmRaw && cmRaw.charAt(0) === "[") {{
@@ -6810,12 +6919,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   setInterval(syncSidHolder, 1000);
   [200, 500, 1000, 2000, 4000].forEach((t) => setTimeout(syncSidHolder, t));
 
-  // خواستهٔ سازنده (PC/لینوکس = همین رابطِ وب): «وقتی لاگ میده
-  // باید خودش با لاگ بره پایین نه ثابت بمونه تا وقتی ک خودم دست نزدم
-  // بخوام برم بالا». Gradio فقط هنگامِ streaming اسکرول میکند و با
-  // بهروزرسانیِ poll رها میشود — اینجا دنبالکردنِ دستی: اگر کاربر
-  // نزدیکِ ته است (یا دستش را نزده) با هر تغییرِ متن به ته میرود؛
-  // بهمحضِ بالا بردنِ دست، دنبال کردن قطع و با برگشتن به ته وصل میشود.
   try {{
     const attachFollow = () => {{
       const ta = findLogEl();
@@ -6850,9 +6953,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     [1200, 4000].forEach((t) => setTimeout(attachFollow, t));
   }} catch (e) {{}}
 
-  // فیلدِ کلید از سمتِ سرور type="password"
-  // است (پیشفرضِ مخفی) و دکمهٔ 👁 داخلِ فیلد آن را نشان/مخفی میکند
-  // (gradio 6 دکمهٔ خودکارِ چشم ندارد؛ وبِ PC/لینوکس/گوشی همه همین است)
   try {{
     const attachEye = () => {{
       const kb = document.getElementById("manga_api_keys");
@@ -6885,13 +6985,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     attachEye();
     [300, 800, 1500, 3000, 5000].forEach((t) => setTimeout(attachEye, t));
     if (!window.__mangaEyeObs) {{
-      // ریشهٔ «وقتی دکمه ویرایش میزنم شکل نمایش کلید نمیاد
-      // تو Gemini میاد ولی تو کاستوم خودم نمیاد»: gradio وقتی ردیفِ کلید
-      // پنهان/آشکار میشود (انتخابِ مدلِ ذخیرهشده → ✎ ویرایش) فیلد را از
-      // DOM میبرد و دوباره میسازد؛ آبسرورِ چسبیدهبه خودِ فیلد با فیلدِ
-      // قدیمی میمیرد و چشم دیگر برنمیگردد (چشمِ Gemini در بارِ اول کار
-      // میکرد چون هنوز زنده بود) — حالا همیشه به خودِ body وصل میشود که
-      // هرگز از DOM نمیافتد؛ هر ساختِ دوبارهٔ فیلد چشم را برمیگرداند
       let pend = false;
       window.__mangaEyeObs = new MutationObserver(() => {{
         if (pend) return;
@@ -6905,8 +6998,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     }}
   }} catch (e) {{}}
 
-  // ↗ «دریافت توکن» — دکمهٔ فقط-فلش است (v1.14.292)؛ متنِ راهنما
-  // در tooltip/aria-label میآید تا کارِ دکمه بدونِ برچسب معلوم بماند.
   try {{
     const attachTokTip = () => {{
       const root = document.getElementById("manga_token_btn");
@@ -6970,6 +7061,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             clean_method_v, two_pass_v,
                             fake_test_v, clean_only_v, web_debug_v, prompt_mode_v, prompt_body_v,
                             api_base_v,
+                            thinking_v, safety_v, max_tokens_v, max_tokens_custom_v,
                             models_v,
                             *tone_args):
             _t_prep = time.time()
@@ -7132,14 +7224,30 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             out_v = os.path.join(user_out_dir, base + ext)
 
             try:
+                _run_sids = set()
+                for _jsid, _jb in list(live_jobs.items()):
+                    try:
+                        if _job_running(_jb):
+                            _run_sids.add(str(_jsid)[:12])
+                    except Exception:
+                        pass
                 for _sn in os.listdir(OUT_DIR):
                     _sd = os.path.join(OUT_DIR, _sn)
                     if not os.path.isdir(_sd) or _sn == sid[:12]:
                         continue
+                    if _sn in _run_sids:
+                        continue
                     for _cn in os.listdir(_sd):
-                        if _cn.endswith(".cache"):
-                            shutil.rmtree(os.path.join(_sd, _cn),
-                                          ignore_errors=True)
+                        if not _cn.endswith(".cache"):
+                            continue
+                        _cp = os.path.join(_sd, _cn)
+                        try:
+                            if (time.time() - os.path.getmtime(_cp)) < 900:
+                                continue
+                        except Exception:
+                            pass
+                        print(f"[*] GC کش: {_sn}/{_cn} (سشن غیرفعال)")
+                        shutil.rmtree(_cp, ignore_errors=True)
             except Exception:
                 pass
 
@@ -7148,12 +7256,29 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 _instr_sig = str(prompt_body_v or "").strip()
                 if _instr_sig and not is_custom_instruction(_instr_sig):
                     _instr_sig = ""
+                _mt_mode_q = str(max_tokens_v or "auto").strip().lower()
+                if _mt_mode_q not in ("auto", "8192", "16384", "32768",
+                                      "65536", "custom"):
+                    _mt_mode_q = "auto"
+                if _mt_mode_q == "custom":
+                    try:
+                        _mtc_q = int(max_tokens_custom_v or 4096)
+                    except Exception:
+                        _mtc_q = 4096
+                    _mt_eff_q = max(1024, _mtc_q)
+                elif _mt_mode_q == "auto":
+                    _mt_eff_q = None
+                else:
+                    _mt_eff_q = int(_mt_mode_q)
                 _sig_cur = _trans_sig_of(
                     prov_s, _model_str(model_v), str(api_base_v or ""),
                     sanitize_prompt_mode(prompt_mode_v), _instr_sig,
                     bool(fake_test_v),
                     (temp_v if temp_v not in (None, "") else 0.7),
-                    (top_p_v if top_p_v not in (None, "") else 0.9))
+                    (top_p_v if top_p_v not in (None, "") else 0.9),
+                    bool(thinking_v if thinking_v is not None else True),
+                    bool(safety_v),
+                    _mt_eff_q)
                 _cache_dir_q = _cache_dir_for(out_v)
                 _sig_prev = ""
                 _fake_prev = None
@@ -7254,6 +7379,22 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 cmd += ["--translate-retranslate"]
             if web_debug_v:
                 cmd += ["--debug"]
+            cmd += [("--deep-thinking"
+                     if (thinking_v is None or bool(thinking_v))
+                     else "--no-deep-thinking")]
+            if safety_v:
+                cmd += ["--safety-settings"]
+            _mt_mode_c = str(max_tokens_v or "auto").strip().lower()
+            if _mt_mode_c not in ("auto", "8192", "16384", "32768",
+                                  "65536", "custom"):
+                _mt_mode_c = "auto"
+            cmd += ["--max-tokens", _mt_mode_c]
+            if _mt_mode_c == "custom":
+                try:
+                    _mtc_c = int(max_tokens_custom_v or 4096)
+                except Exception:
+                    _mtc_c = 4096
+                cmd += ["--max-tokens-custom", str(max(1024, _mtc_c))]
             instr_text = str(prompt_body_v or "").strip()
             if is_custom_instruction(instr_text):
                 instr_path = os.path.join(user_out_dir, "instruction_user.txt")
@@ -7843,6 +7984,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ("fake_test", fake_test), ("clean_only", clean_only),
             ("web_debug", web_debug), ("prompt_mode", prompt_mode),
             ("prompt_body", prompt_preview_body),
+            ("deep_thinking", deep_thinking),
+            ("safety_settings", safety_settings),
+            ("max_tokens", max_tokens),
+            ("max_tokens_custom", max_tokens_custom),
         ]
 
         def _do_backup(*args):
@@ -7862,6 +8007,18 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     "custom_models": models,
                     "settings": settings,
                 }
+                payload["_dl"] = time.time_ns()
+                if _web_host():
+                    return (gr.update(visible=False),
+                            gr.update(value=("✅ پشتیبان ساخته شد و دانلودش فقط در "
+                                             "همین مرورگر شروع شد: "
+                                             f"{len(models)} مدل + "
+                                             f"{len(settings)} تنظیم.\n"
+                                             "🛡 روی میزبانِ اشتراکی هیچ فایلی "
+                                             "ذخیره نمیشود و لینکِ این بکاپ "
+                                             "در مرورگرِ دیگری کار نمیکند."),
+                                      visible=True),
+                            json.dumps(payload, ensure_ascii=False, indent=2))
                 ts = _dt.datetime.now().strftime("%Y%m%d_%H%M%S")
                 path = os.path.join(WORK_DIR, f"manga_backup_{ts}.json")
                 with open(path, "w", encoding="utf-8") as f:
@@ -7873,10 +8030,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                         f"\n(اگر مرورگرتان دانلود را بلاک کرد، "
                                         f"از کارتِ «فایلِ پشتیبان» همین‌جا "
                                         f"دستیش کنید.)",
-                                  visible=True))
+                                  visible=True),
+                        "")
             except Exception as e:
                 return (gr.update(),
-                        gr.update(value=f"❌ پشتیبان ناموفق: {e}", visible=True))
+                        gr.update(value=f"❌ پشتیبان ناموفق: {e}", visible=True),
+                        "")
 
         def _do_import(file_info, models_cur, prov_cur, bank_cur):
             n = len(_BACKUP_FIELDS)
@@ -7947,9 +8106,38 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
         try:
             _backup_inputs = [c for _, c in _BACKUP_FIELDS] + [custom_models_state]
+            _BK_BLOB_JS = """(v) => {
+  try {
+    if (!v || typeof v !== "string" || !v.trim()
+        || v.trim().charAt(0) !== '{') return [];
+    let name = "manga_backup.json";
+    try {
+      const j = JSON.parse(v);
+      const t = String(j.exported_at || "").replace(/[^0-9]/g, "");
+      if (t.length >= 14)
+        name = "manga_backup_" + t.slice(0, 8) + "_" + t.slice(8, 14) + ".json";
+    } catch (e) {}
+    const blob = new Blob([v], {type: "application/json"});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function () {
+      try { URL.revokeObjectURL(url); } catch (e) {}
+    }, 5000);
+  } catch (e) {}
+  return [];
+}"""
             backup_btn.click(
                 _do_backup, inputs=_backup_inputs,
-                outputs=[backup_out, backup_status], api_name="backup_settings")
+                outputs=[backup_out, backup_status, backup_json],
+                api_name="backup_settings")
+            backup_json.change(
+                fn=None, inputs=[backup_json], outputs=[],
+                js=_BK_BLOB_JS)
             backup_out.change(
                 fn=None, inputs=[backup_out], outputs=[],
                 js="""(v) => {
@@ -8009,6 +8197,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     clean_method, two_pass,
                     fake_test, clean_only, web_debug, prompt_mode, prompt_preview_body,
                     api_base,
+                    deep_thinking, safety_settings, max_tokens, max_tokens_custom,
                     custom_models_state,
                 ] + tone_uploads + tone_enables,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
@@ -8090,6 +8279,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             session_id, sid_box, inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
             clean_method, two_pass, fake_test, clean_only,
+            deep_thinking, safety_settings, max_tokens, max_tokens_custom,
         ]
 
         try:
@@ -8120,7 +8310,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 except Exception:
                     pass
         for _comp in (quality, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
-                      clean_method, two_pass, fake_test, clean_only):
+                      clean_method, two_pass, fake_test, clean_only,
+                      deep_thinking, safety_settings, max_tokens, max_tokens_custom):
             try:
                 _comp.change(fn=None, inputs=_save_inputs, outputs=[], js=save_form_js)
             except Exception:
@@ -8141,7 +8332,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             else:
                 sid = ""
             if not sid:
-                return (gr.update(),) * 28
+                return (gr.update(),) * 32
             job = _get_job(sid)
             meta = _load_job_meta(sid) if sid else {}
             
@@ -8242,6 +8433,26 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     return gr.update(value="lama-big")
                 return gr.update(value="lama-manga")
 
+            _MT_OK = ("auto", "8192", "16384", "32768", "65536", "custom")
+
+            def u_max_tokens():
+                v = str(data.get("max_tokens") or "").strip().lower()
+                if v not in _MT_OK:
+                    v = "auto"
+                return gr.update(value=v)
+
+            def u_max_tokens_custom():
+                v = str(data.get("max_tokens") or "auto").strip().lower()
+                if v not in _MT_OK:
+                    v = "auto"
+                if "max_tokens_custom" not in data:
+                    return gr.update(visible=(v == "custom"))
+                try:
+                    n = int(float(data.get("max_tokens_custom") or 4096))
+                except Exception:
+                    n = 4096
+                return gr.update(value=n, visible=(v == "custom"))
+
             return (
                 sid,
                 gr.update(value=sid),
@@ -8271,6 +8482,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 u_bool("twopass"),
                 u_bool("fake_test"),
                 u_bool("clean_only"),
+                u_bool("deep_thinking"),
+                u_bool("safety_settings"),
+                u_max_tokens(),
+                u_max_tokens_custom(),
             )
 
         _restore_outputs = [
@@ -8278,6 +8493,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
             clean_method, two_pass, fake_test, clean_only,
+            deep_thinking, safety_settings, max_tokens, max_tokens_custom,
         ]
 
         hidden_restore_tb = gr.Textbox(visible=False, elem_id="manga_hidden_restore", container=False)
@@ -8731,9 +8947,18 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                         live_jobs.pop(sid, None)
 
                     if os.path.isdir(OUT_DIR):
+                        _busy12 = set()
+                        for _jsid, _jb in list(live_jobs.items()):
+                            try:
+                                if _job_running(_jb):
+                                    _busy12.add(str(_jsid)[:12])
+                            except Exception:
+                                pass
                         for name in os.listdir(OUT_DIR):
                             p = os.path.join(OUT_DIR, name)
                             if not os.path.isdir(p):
+                                continue
+                            if name in _busy12:
                                 continue
                             if len(name) == 12 and all(c in "0123456789abcdef" for c in name.lower()):
                                 try:
@@ -8989,6 +9214,101 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             except Exception:
                 pass
 
+        _qtip_texts = {
+            "manga_cb_twopass": TX("app.two_pass_info",
+                                   "پاسِ اول بلوکها را مییابد، پاسِ دوم متنِ داخلشان را دقیق بازمیخواند — پیش‌فرض روشن"),
+            "manga_cb_thinking": TX("app.thinking_info",
+                                    "سطح High — برای جمینای و OpenAI-سازگارها؛ پیش‌فرض روشن"),
+            "manga_cb_faketest": TX("app.fake_test_info",
+                                    "به‌جای API، متنِ الکی داخل حباب‌ها رندر میشود — چکِ استخراج/پاکسازی/رندر بدون کلید"),
+            "manga_cb_cleanup": TX("app.cleanup_mode_info",
+                                   "فقط پاکسازی متن (inpaint) بدون ترجمه — کلید API لازم نیست"),
+            "manga_cb_debug": TX("app.web_debug_info",
+                                 "مربعِ رنگی دور هر بلوک + خروجیِ دیباگ جدا (مثلاً PDF → *_debug.pdf)"),
+            "manga_cb_safety": TX("app.safety_info",
+                                  "فیلترهای گوگل BLOCK_NONE میشوند (ضدِ سانسور) — پیش‌فرض خاموش"),
+            "manga_max_tokens": TX("app.max_tokens_info",
+                                   "خودکار = سرویس‌دهنده خودش مدیریت میکند؛ چپترِ طولانیِ ناتمام؟ عدد را بالا ببرید"),
+        }
+        try:
+            _qtip_json = json.dumps(_qtip_texts, ensure_ascii=False)
+        except Exception:
+            _qtip_json = "{}"
+        _qtips_js = """
+() => {
+  const T = __QTIP_JSON__;
+  const hideAll = () => {
+    document.querySelectorAll('div.k3tip').forEach((el) => {
+      if (el.__t) clearTimeout(el.__t);
+      el.remove();
+    });
+  };
+  const show = (btn, text) => {
+    hideAll();
+    const tip = document.createElement('div');
+    tip.className = 'k3tip';
+    tip.textContent = text;
+    document.body.appendChild(tip);
+    const r = btn.getBoundingClientRect();
+    let x = r.left + (r.width / 2) - (tip.offsetWidth / 2);
+    x = Math.max(8, Math.min(x, window.innerWidth - tip.offsetWidth - 8));
+    let y = r.bottom + 8;
+    if (y + tip.offsetHeight > window.innerHeight - 8)
+      y = Math.max(8, r.top - tip.offsetHeight - 8);
+    tip.style.left = x + 'px';
+    tip.style.top = y + 'px';
+    tip.__src = btn;
+    tip.__t = setTimeout(() => tip.remove(), 10000);
+  };
+  const attach = () => {
+    for (const id in T) {
+      const root = document.getElementById(id);
+      if (!root || root.querySelector('button.k3q')) continue;
+      const lab = root.querySelector('label')
+        || root.querySelector('div.container > span')
+        || root.querySelector('span.label-wrap')
+        || root;
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'k3q';
+      btn.textContent = '؟';
+      btn.title = '?';
+      btn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const cur = document.querySelector('div.k3tip');
+        if (cur && cur.__src === btn) {
+          if (cur.__t) clearTimeout(cur.__t);
+          cur.remove();
+          return;
+        }
+        show(btn, T[id]);
+      });
+      lab.appendChild(btn);
+    }
+  };
+  attach();
+  const mo = new MutationObserver(() => {
+    try { attach(); } catch (err) {}
+  });
+  mo.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener('click', (e) => {
+    try {
+      if (!e.target || !e.target.closest) return;
+      if (e.target.closest('button.k3q')) return;
+      hideAll();
+    } catch (err) {}
+  }, true);
+}
+""".replace("__QTIP_JSON__", _qtip_json)
+        try:
+            demo.load(None, None, None, js=_qtips_js)
+        except Exception:
+            try:
+                demo.load(js=_qtips_js)
+            except Exception:
+                pass
+
         gr.Markdown(
             "<div style='text-align:center; opacity:.45; margin-top:16px'>"
             f"مانگا مترجم PRO v{APP_VER} · RT-DETR + Gemini/… + LaMa-Manga · اجرا روی CPU</div>"
@@ -9025,6 +9345,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if _gradio_major() >= 6:
         launch_kw["theme"] = gr.themes.Soft(primary_hue="indigo", neutral_hue="slate")
         launch_kw["css"] = WEB_CSS_RUNTIME
+    _blocked_paths = None
+    if _web_host():
+        _blocked_paths = [str(CUSTOM_MODELS_PATH), str(CFG_PATH), str(HIST_PATH)]
+        print("[🛡] میزبانِ وبِ عمومی: فایلهایِ حساسِ workspace از /file= بسته شدند.")
     demo.queue(max_size=64).launch(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("MANGA_APP_PORT", "7860")),
@@ -9032,6 +9356,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         inline=on_colab,
         show_error=True,
         allowed_paths=[str(WORK_DIR), str(OUT_DIR), str(UPLOAD_DIR), str(FONT_DIR)],
+        blocked_paths=_blocked_paths,
         **launch_kw,
     )
 

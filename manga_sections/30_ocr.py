@@ -325,7 +325,6 @@ class MtLadderOCR:
         return [lines1] if lines1 else None
 
 
-
 _MT_MODE_FA = {
     "padandroid": "رپیدِ رسمیِ اندروید",
 }

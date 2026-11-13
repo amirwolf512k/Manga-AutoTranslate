@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.302"
+APP_VER = "1.14.303"
 
 
 FLASH_PROMPT = "فرایند پردازش و ترجمه (مبتنی بر خود-اصلاحی): شما باید این فرآیند را در سه گام ذهنی و متوالی اجرا کنید:\\n\r\nگام ۱: تحلیل جامع و تولید پیش‌نویس اولیه\\n\r\n* پیش از شروع ترجمه، کل محتوای متن را بخوانید تا ژانر، فضای داستانی، کنایه‌ها و ویژگی‌های شخصیتی کاراکترها را درک کنید.\\n\r\n* در مرحلهٔ اندیشیدن، بر اساس این درک، یک پیش‌نویس اولیه از ترجمه را در ذهن تولید کنید.\\n\\n\r\nگام ۲: بازبینی موشکافانه و پالایش (مرحلهٔ خود-اصلاحی)\\n\r\n* با نگاه یک ویراستار سخت‌گیر، پیش‌نویس خود را به چالش بکشید و بازبینی کنید.\\n\r\n* از خود بپرسید: آیا این جمله روان است یا بوی ترجمه می‌دهد؟ آیا لحن شخصیت حفظ شده؟ آیا معادل بهتری برای این اصطلاح وجود دارد؟\\n\\n\r\nگام ۳: ارائه خروجی نهایی\\n\r\n* نسخهٔ نهایی، سلیس و بی‌نقص را که حاصل گام دوم است، به‌عنوان خروجی قطعی ارائه دهید.\\n\\n\r\n---\\n\\n\r\nاصول کلیدی ترجمه (قوانین حاکم بر گام‌های بالا):\\n\\n\r\n1. روانی، سلیس بودن و زبان محاوره‌ای زنده (پرهیز از ترجمه تحت‌اللفظی):\\n\r\nهدف اصلی، انتقال دقیق پیام و حس دیالوگ است. از ترجمهٔ کلمه‌به‌کلمه، کتابی، نوشتاری و عبارات ماشینی اکیداً پرهیز کنید؛ ترجمه باید به زبان فارسی امروزی، طبیعی، پویا و کاملاً گیرا باشد.\\n\\n\r\n2. حفظ و بازتاب دقیق لحن و سبک شخصیت‌ها (حیاتی و بدون سانسور):\\n\r\nلحن و شیوه گفتار هر کاراکتر (رسمی، دوستانه، طنز، جدی، خشن، معصومانه و...) باید با ظرافت رعایت شود. مدل زبانی باید مانند یک بازیگر نقش‌آفرینی کند:\\n\r\n- برای شخصیت‌های بی‌پروا، لات‌منش یا بی‌سواد: ترجمه باید کاملاً عامیانه، کوچه‌بازاری و دارای اصطلاحات خیابانی باشد. از اتوکشیده کردن، مؤدب‌سازی یا رسمی کردن دیالوگ‌های این شخصیت‌ها اکیداً خودداری کنید.\\n\r\n- برای شخصیت‌های باوقار، مرموز یا اشرافی: لحن باید محترمانه باشد، اما همچنان طبیعی و روان بماند (از تبدیل گفت‌وگو به متن نوشتاری و کتابی خودداری کنید).\\n\\n\r\nتذکر بسیار مهم: ترجمه حرفه‌ای به معنای سانسور، تلطیف یا پاستوریزه کردن کلمات نیست؛ بلکه به معنای انتقال دقیق حس جمله است. اگر متن اصلی دارای کلمات رکیک، جنسی یا خشن است، ترجمه فارسی نیز باید با همان شدت و حدت (بدون سانسور) ارائه شود تا اصالت اثر حفظ گردد.\\n\\n\r\n3. بومی‌سازی هوشمندانه اصطلاحات و ارجاعات فرهنگی:\\n\r\nاصطلاحات، ضرب‌المثل‌ها، شوخی‌ها و عبارات خاص فرهنگی مانگا را شناسایی کنید. اولویت با یافتن معادل‌های دقیق، رایج و طبیعی در زبان و فرهنگ فارسی است. در صورت نبود معادل مستقیم، مفهوم را با خلاقیت و به‌گونه‌ای که برای مخاطب فارسی‌زبان جذاب و ملموس باشد منتقل کنید.\\n\\n\r\n4. دقت و یکپارچگی در اسامی و جزئیات:\\n\r\nتمامی جزئیات متن اصلی (شامل اعداد، اسامی خاص شخصیت‌ها، مکان‌ها، تکنیک‌ها و علائم نگارشی) باید با دقت کامل ترجمه شوند و در سرتاسر تمام فایل‌ها کاملاً یکسان و هماهنگ استفاده شود.\\n"
@@ -45,11 +45,6 @@ MT_SYSTEM_PROTOCOL_ITEMS = ("2. IDENTITY & TASK: You are an Expert Manga & Comic
 MT_JP_USER_DIRECTIVE = "\r\n*** CRITICAL MANDATORY DIRECTIVE FOR JAPANESE DIALOGUE BLOCKS ***\r\n1. FURIGANA / DUPLICATE CLEANUP: The input dialogue may contain both Kanji and its small Furigana phonetic reading captured together (e.g., '宿夏ライカ' or duplicated phrases). Identify the intended word/name and translate it ONLY ONCE. Do NOT translate both the Kanji and its phonetic reading.\r\n2. DEDUPLICATION: Eliminate accidental repeated words/syllables in the source block and produce exactly ONE clean, unified Persian translation.\r\n"
 MT_JP_SYSTEM_RULE = "\r\n1. MANDATORY FURIGANA & DEDUPLICATION PURGE (HIGHEST PRIORITY):\r\n   - Input dialogue blocks may contain Kanji together with their small Furigana phonetic readings (e.g. '宿夏ライカ' or duplicated phrases).\r\n   - Recognize the word and translate it ONLY ONCE. Strip away phonetic duplicate readings and repeated words.\r\n   - Provide strictly ONE clean, unified Persian translation for each dialogue block.\r\n"
 
-# 🪶 v1.14.302 (هم‌ترازِ K3 v4.4.0):
-#  – response_schema از payload حذف شد؛ جای آن «مثالِ عینیِ خروجی» در
-#    System Instruction آمد → ورودیِ سبک‌تر و خطایِ شلوغیِ سرورِ کمتر.
-#  – خروجی از {en_text,fa_text} به {id,fa} تغییر کرد → مدل دیگر متنِ
-#    اصلی را بازتاب نمیدهد → کاهش تا ~۶۰٪ توکنِ خروجی.
 def mt_system_instruction(japanese: bool = False, **_kw) -> str:
     out = ("SYSTEM BEHAVIOR PROTOCOL:\r\n"
            + (MT_JP_SYSTEM_RULE if japanese else "")
@@ -59,7 +54,6 @@ def mt_system_instruction(japanese: bool = False, **_kw) -> str:
 def mt_user_prompt(rules: str, pages, japanese: bool = False,
                    style_ref=None) -> str:
     import json as _json
-    # 🪶 JSON فشرده (بدون تورفتگی/فاصله) → کاهش ~۲۰٪ توکنِ ورودی (K3 v4.4)
     pages_json = _json.dumps(list(pages), ensure_ascii=False,
                              separators=(",", ":"))
     _style = ""

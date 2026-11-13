@@ -205,17 +205,12 @@ class MangaTranslator:
         self.fake_translate = bool(fake_translate)
         self.clean_only = bool(clean_only)
         self.translate_retranslate = bool(translate_retranslate)
-        # 🧠 v1.14.302 (K3 v4.4): حالتِ تفکرِ عمیق — پیش‌فرض روشن، بدونِ
-        # محدودیتِ مدل (جمینای: thinkingLevel=high؛ OpenAI: reasoning_effort)
         self.deep_thinking = bool(deep_thinking) and (
             os.environ.get("MANGA_NO_THINKING", "").strip().lower()
             not in ("1", "true", "yes"))
-        # 🛡 v1.14.302 (K3 v4.4): فیلترهای ایمنی فقط با انتخابِ کاربر —
-        # پیش‌فرض خاموش (درخواستِ سبک‌تر و سازگار با همهٔ سرورها)
         self.safety_settings = bool(safety_settings)
         self._last_finish_reason = ""
         self._reasoning_unsupported = False
-        # 🔖 v1.14.302 (K3 v4.4): حداکثر توکنِ خروجی — auto = نمی‌فرستد
         _mt_mode = str(max_tokens_mode or "auto").strip().lower()
         if _mt_mode not in ("auto", "8192", "16384", "32768",
                             "65536", "custom"):

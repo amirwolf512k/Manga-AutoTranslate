@@ -111,7 +111,6 @@ class _MangaTranslatorBody_95:
                 "fake" if fake else "real",
                 "%.2f" % float(temperature if temperature is not None else 0.7),
                 "%.2f" % float(top_p if top_p is not None else 0.9),
-                # 🧠 v1.14.302: تفکر/ایمنی/سقفِ توکن هم بخشی از امضای کش
                 "think" if deep_thinking else "nothink",
                 "sbn" if safety_settings else "nosbn",
                 _mt,

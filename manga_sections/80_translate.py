@@ -39,8 +39,6 @@ class _MangaTranslatorBody_80:
             _jp = bool(self._ocr_lang_flags()[2])
         except Exception:
             _jp = False
-        # v1.14.302: با سبکِ K3 v4.4 — مثالِ عینیِ خروجی همیشه داخلِ خودِ
-        # System Instruction است (بدونِ response_schema)
         return mt_system_instruction(japanese=_jp)
 
     @staticmethod
@@ -214,9 +212,6 @@ class _MangaTranslatorBody_80:
                 page_regions = [r for r in regions if id(r) not in done]
             used_items: set = set()
             for i, it in enumerate(trans):
-                # 🪶 v1.14.302 (K3 v4.4): قالبِ فشردهٔ {id, fa} — مدل دیگر
-                # متنِ اصلی را بازتاب نمیدهد (کاهشِ ~۶۰٪ توکنِ خروجی).
-                # قالبِ کهنهٔ {en_text, fa_text} هم هنوز پذیرفته میشود.
                 en = str(it.get("en_text") or "")
                 fa = (it.get("fa_text") or it.get("fa") or "")
                 if not isinstance(fa, str) or not fa.strip():
@@ -238,8 +233,6 @@ class _MangaTranslatorBody_80:
                                         if id(r) not in done
                                         and self._mt_norm(r.source_text) == _ne),
                                        None)
-                # تطبیق با id (۱-مبنا) — ترتیبِ dialogues همان ترتیبِ
-                # ساختِ payload است؛ بدونِ region_page قابلِ اتکا نیست.
                 if reg is None and it.get("id") is not None and region_page:
                     try:
                         _idx = int(it.get("id")) - 1
@@ -387,8 +380,6 @@ class _MangaTranslatorBody_80:
         return s.strip().upper()
 
     def _note_gemini_finish(self, resp) -> None:
-        """🏁 v1.14.302: دلیلِ پایانِ پاسخ (finishReason/blockReason) را ثبت
-        میکند — مثلِ K3 v4.4 برای پیامِ خطای دقیق و سقفِ تلاشِ مجدد."""
         try:
             cands = getattr(resp, "candidates", None) or []
             if cands:
@@ -423,8 +414,6 @@ class _MangaTranslatorBody_80:
         )
         if structured:
             config_args["top_p"] = _g_top_p
-            # 🛡 v1.14.302 (K3 v4.4): فیلترهای ایمنی فقط وقتی کاربر
-            # «تنظیمات ایمنی» را روشن کرده باشد فرستاده میشوند (BLOCK_NONE).
             if getattr(self, "safety_settings", False) \
                     and getattr(self, "_sbn_ok", True):
                 try:
@@ -441,9 +430,6 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
             config_args["response_mime_type"] = "application/json"
-            # 🪶 v1.14.302: response_schema حذف شد (سبک‌سازی K3 v4.4) —
-            # مثالِ عینیِ خروجی در System Instruction نشسته است.
-            # 🧠 حالتِ تفکرِ عمیق (K3 v4.4): بدونِ محدودیتِ مدل، level=high
             if getattr(self, "deep_thinking", True):
                 try:
                     config_args["thinking_config"] = \
@@ -532,12 +518,9 @@ class _MangaTranslatorBody_80:
         )
         if structured:
             kwargs["top_p"] = self.translation_top_p
-            # 🧠 v1.14.302 (K3 v4.4): تفکرِ عمیق رویِ OpenAI-سازگارها
             if getattr(self, "deep_thinking", True) \
                     and not getattr(self, "_reasoning_unsupported", False):
                 kwargs["reasoning_effort"] = "high"
-            # 🔖 v1.14.302 (K3 v4.4): حداکثر توکنِ خروجی (حالتِ خودکار =
-            # نمی‌فرستد؛ سرویس‌دهنده خودش مدیریت میکند)
             _mtok = getattr(self, "max_output_tokens", None)
             try:
                 _mtok = int(_mtok) if _mtok else None
@@ -710,7 +693,6 @@ class _MangaTranslatorBody_80:
                 {"role": "user", "content": user_prompt},
             ],
         }
-        # 🧠 v1.14.302: تفکرِ عمیق در Responses API = reasoning.effort
         if getattr(self, "deep_thinking", True):
             payload["reasoning"] = {"effort": "high"}
         _mtok = getattr(self, "max_output_tokens", None)
@@ -803,7 +785,6 @@ class _MangaTranslatorBody_80:
         if structured:
             _gc["topP"] = _g_top_p
             _gc["responseMimeType"] = "application/json"
-            # 🧠 v1.14.302 (K3 v4.4): تفکرِ عمیق — thinkingLevel=high
             if getattr(self, "deep_thinking", True):
                 _gc["thinkingConfig"] = {"thinkingLevel": "high"}
         payload = {
@@ -811,7 +792,6 @@ class _MangaTranslatorBody_80:
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
             "generationConfig": _gc,
         }
-        # 🛡 v1.14.302 (K3 v4.4): فیلترهای ایمنی فقط با انتخابِ کاربر
         if structured and getattr(self, "safety_settings", False):
             payload["safetySettings"] = [
                 {"category": "HARM_CATEGORY_HARASSMENT",
@@ -1340,8 +1320,6 @@ class _MangaTranslatorBody_80:
                         or ("blocked" in err_str and "safety" in err_str)):
                     self._sbn_ok = False
 
-                # 🏁 v1.14.302 (K3 v4.4): سقفِ تلاشِ مجدد بر اساسِ دلیلِ
-                # پایانِ پاسخ — MAX_TOKENS فقط ۱ بار، فیلترِ محتوا ۲ بار.
                 _fr = str(getattr(self, "_last_finish_reason", "") or "").strip()
                 if _fr in ("MAX_TOKENS", "LENGTH"):
                     print("    [!] پاسخ ناتمام ماند — سقفِ توکنِ خروجی "

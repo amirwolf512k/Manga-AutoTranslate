@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import hashlib
@@ -9,7 +8,7 @@ import re as _re
 import sys as _sys
 import time as _time
 
-APP_VER = "1.14.302"
+APP_VER = "1.14.303"
 
 _HERE = _os.path.dirname(_os.path.abspath(__file__))
 _SECTIONS_DIR = _os.path.join(_HERE, "manga_sections")

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 
 UI_TEXTS = {
 
@@ -68,9 +67,13 @@ UI_TEXTS = {
     "app.order": "ترتیب خواندن حباب‌ها",
     "app.cleanup": "روش پاکسازی",
     "app.two_pass": "OCR دومرحله‌ای",
+    "app.two_pass_info": "پاسِ اول بلوکها را مییابد، پاسِ دوم متنِ داخلشان را دقیق بازمیخواند — پیش‌فرض روشن",
     "app.fake_test": "حالت تست",
+    "app.fake_test_info": "به‌جای API، متنِ الکی داخل حباب‌ها رندر میشود — چکِ استخراج/پاکسازی/رندر بدون کلید",
     "app.cleanup_mode": "حالت پاکسازی",
+    "app.cleanup_mode_info": "فقط پاکسازی متن (inpaint) بدون ترجمه — کلید API لازم نیست",
     "app.web_debug": "حالت دیباگ",
+    "app.web_debug_info": "مربعِ رنگی دور هر بلوک + خروجیِ دیباگ جدا (مثلاً PDF → *_debug.pdf)",
     "app.thinking": "حالت تفکر عمیق",
     "app.thinking_info": "سطح High — برای جمینای و OpenAI-سازگارها؛ پیش‌فرض روشن",
     "app.safety": "تنظیمات ایمنی",
