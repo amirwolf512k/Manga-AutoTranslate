@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.301"
+APP_VER = "1.14.302"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -995,7 +995,9 @@ def _cache_dir_for(output_path) -> str:
     return _p + ".cache"
 
 def _trans_sig_of(provider, model, api_base, prompt_mode,
-                  instruction, fake, temperature, top_p) -> str:
+                  instruction, fake, temperature, top_p,
+                  deep_thinking=True, safety_settings=False,
+                  max_tokens=None) -> str:
     import hashlib as _hl
 
     def _ms(v) -> str:
@@ -1022,6 +1024,10 @@ def _trans_sig_of(provider, model, api_base, prompt_mode,
         instr = str(instruction or "").strip()
         if instr and not is_custom_instruction(instr):
             instr = ""
+        try:
+            _mt = ("mt%d" % int(max_tokens)) if max_tokens else "mt-"
+        except Exception:
+            _mt = "mt-"
         parts = [
             "t1", prov, mdl, ab, pm,
             (_hl.sha256(instr.encode("utf-8", "ignore")).hexdigest()[:12]
@@ -1029,6 +1035,10 @@ def _trans_sig_of(provider, model, api_base, prompt_mode,
             "fake" if fake else "real",
             "%.2f" % float(temperature if temperature is not None else 0.7),
             "%.2f" % float(top_p if top_p is not None else 0.9),
+            # 🧠 v1.14.302: تفکر/ایمنی/سقفِ توکن هم در امضای کش
+            "think" if deep_thinking else "nothink",
+            "sbn" if safety_settings else "nosbn",
+            _mt,
         ]
         return _hl.sha256("|".join(parts).encode("utf-8", "ignore")).hexdigest()[:16]
     except Exception:
@@ -1388,6 +1398,19 @@ body, .gradio-container, footer, .gradio-container .prose {
   max-width: 100% !important;
 }
 #manga_cm_info code, .hint code { white-space: normal !important; }
+
+/* 🧩 v1.14.302: رادیویِ قالب — دوتا-دوتا پایین (PDF ZIP / HTML PSD) */
+#manga_out_fmt fieldset > div,
+#manga_out_fmt .wrap {
+  display: grid !important;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 6px 10px !important;
+  align-items: center;
+}
+#manga_out_fmt .wrap label {
+  margin: 0 !important; padding: 5px 4px !important;
+  min-height: 38px; justify-content: flex-start !important;
+}
 
 div.styler{background:transparent !important;border:none !important;
   box-shadow:none !important}
@@ -5698,8 +5721,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 _of0 = str(cfg.get("out_fmt", "PDF") or "PDF")
                 if _of0 not in ("PDF", "ZIP", "HTML", "PSD"):
                     _of0 = "PDF"
+                # 🧩 v1.14.302: قالب دوتا-دوتا پایین (PDF/ZIP بالا، HTML/PSD پایین)
                 out_fmt = gr.Radio(["PDF", "ZIP", "HTML", "PSD"],
-                                   value=_of0, label=TX("app.out_fmt", "قالب"))
+                                   value=_of0, label=TX("app.out_fmt", "قالب"),
+                                   elem_id="manga_out_fmt")
                 quality = gr.Slider(60, 100, value=int(cfg.get("quality", 92)),
                                     step=1, label=TX("app.quality", "کیفیت تصویر"))
 
@@ -5779,15 +5804,61 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                              ["opencv", "opencv"]],
                     value=_cm0,
                     label=TX("app.cleanup", "روش پاکسازی"))
+            # 🧩 v1.14.302 (K3 v4.4): چیدمانِ دوتایی —
+            #  OCR دومرحله‌ای | حالت تفکر عمیق
+            #  حالت تست | حالت پاکسازی
+            #  حالت دیباگ | تنظیمات ایمنی
             with gr.Row():
                 two_pass = gr.Checkbox(label=TX("app.two_pass", "OCR دومرحله‌ای"), value=True)
+                deep_thinking = gr.Checkbox(
+                    label=TX("app.thinking", "حالت تفکر عمیق"),
+                    value=bool(cfg.get("deep_thinking", True)),
+                    info=TX("app.thinking_info",
+                            "سطح High — برای جمینای و OpenAI-سازگارها؛ پیش‌فرض روشن"))
+            with gr.Row():
                 fake_test = gr.Checkbox(label=TX("app.fake_test", "حالت تست"),
                                         value=bool(cfg.get("fake_test", False)))
                 clean_only = gr.Checkbox(
                     label=TX("app.cleanup_mode", "حالت پاکسازی"),
                     value=bool(cfg.get("clean_only", False)))
+            with gr.Row():
                 web_debug = gr.Checkbox(label=TX("app.web_debug", "حالت دیباگ"),
                                         value=bool(cfg.get("web_debug", False)))
+                safety_settings = gr.Checkbox(
+                    label=TX("app.safety", "تنظیمات ایمنی"),
+                    value=bool(cfg.get("safety_settings", False)),
+                    info=TX("app.safety_info",
+                            "فیلترهای گوگل BLOCK_NONE میشوند (ضدِ سانسور) — پیش‌فرض خاموش"))
+            # 🔖 v1.14.302 (K3 v4.4): حداکثر توکنِ خروجی — حالتِ خودکار
+            with gr.Row():
+                _mt0 = str(cfg.get("max_tokens_mode", "auto") or "auto").strip().lower()
+                if _mt0 not in ("auto", "8192", "16384", "32768",
+                                "65536", "custom"):
+                    _mt0 = "auto"
+                max_tokens = gr.Dropdown(
+                    choices=[("خودکار (پیش‌فرض)", "auto"),
+                             ("۸۱۹۲", "8192"), ("۱۶۳۸۴", "16384"),
+                             ("۳۲۷۶۸", "32768"), ("۶۵۵۳۶", "65536"),
+                             ("دلخواه", "custom")],
+                    value=_mt0,
+                    label=TX("app.max_tokens", "حداکثر توکن خروجی (Max Tokens)"),
+                    scale=2,
+                    info=TX("app.max_tokens_info",
+                            "خودکار = سرویس‌دهنده خودش مدیریت میکند؛ چپترِ طولانیِ ناتمام؟ عدد را بالا ببرید"),
+                    elem_id="manga_max_tokens")
+                _mtc0 = int(cfg.get("max_tokens_custom", 4096) or 4096)
+                max_tokens_custom = gr.Number(
+                    value=_mtc0,
+                    label=TX("app.max_tokens_custom", "مقدار دلخواه (حداقل ۱۰۲۴)"),
+                    precision=0, minimum=1024, scale=1,
+                    visible=(_mt0 == "custom"),
+                    elem_id="manga_max_tokens_custom")
+                try:
+                    max_tokens.change(
+                        lambda v: gr.update(visible=(str(v) == "custom")),
+                        inputs=[max_tokens], outputs=[max_tokens_custom])
+                except Exception:
+                    pass
             prompt_mode = gr.Dropdown(
                 choices=["professional", "lite"],
                 value=PROMPT_MODE_DEFAULT,
@@ -6438,7 +6509,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         LS_KEY = "manga_autotranslate_form_v2"
         JOB_KEY = "manga_job_v1"
         save_form_js = f"""
-(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, twopass, fake, cleano) => {{
+(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, twopass, fake, cleano, think, safety, mtmode, mtcust) => {{
   try {{
     const realSid = (sid || sidBox || "").toString().trim();
     const clean = (v) => {{
@@ -6466,6 +6537,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       twopass: twopass === null || twopass === undefined ? true : !!twopass,
       fake_test: !!fake,
       clean_only: !!cleano,
+      deep_thinking: think === null || think === undefined ? true : !!think,
+      safety_settings: !!safety,
+      max_tokens: clean(mtmode) || "auto",
+      max_tokens_custom: (mtcust === null || mtcust === undefined) ? 4096 : Number(mtcust),
       ts: Date.now()
     }};
     localStorage.setItem("{LS_KEY}", JSON.stringify(data));
@@ -7008,6 +7083,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             clean_method_v, two_pass_v,
                             fake_test_v, clean_only_v, web_debug_v, prompt_mode_v, prompt_body_v,
                             api_base_v,
+                            thinking_v, safety_v, max_tokens_v, max_tokens_custom_v,
                             models_v,
                             *tone_args):
             _t_prep = time.time()
@@ -7202,12 +7278,29 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 _instr_sig = str(prompt_body_v or "").strip()
                 if _instr_sig and not is_custom_instruction(_instr_sig):
                     _instr_sig = ""
+                _mt_mode_q = str(max_tokens_v or "auto").strip().lower()
+                if _mt_mode_q not in ("auto", "8192", "16384", "32768",
+                                      "65536", "custom"):
+                    _mt_mode_q = "auto"
+                if _mt_mode_q == "custom":
+                    try:
+                        _mtc_q = int(max_tokens_custom_v or 4096)
+                    except Exception:
+                        _mtc_q = 4096
+                    _mt_eff_q = max(1024, _mtc_q)
+                elif _mt_mode_q == "auto":
+                    _mt_eff_q = None
+                else:
+                    _mt_eff_q = int(_mt_mode_q)
                 _sig_cur = _trans_sig_of(
                     prov_s, _model_str(model_v), str(api_base_v or ""),
                     sanitize_prompt_mode(prompt_mode_v), _instr_sig,
                     bool(fake_test_v),
                     (temp_v if temp_v not in (None, "") else 0.7),
-                    (top_p_v if top_p_v not in (None, "") else 0.9))
+                    (top_p_v if top_p_v not in (None, "") else 0.9),
+                    bool(thinking_v if thinking_v is not None else True),
+                    bool(safety_v),
+                    _mt_eff_q)
                 _cache_dir_q = _cache_dir_for(out_v)
                 _sig_prev = ""
                 _fake_prev = None
@@ -7308,6 +7401,23 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 cmd += ["--translate-retranslate"]
             if web_debug_v:
                 cmd += ["--debug"]
+            # 🧠 v1.14.302 (K3 v4.4): تفکرِ عمیق / ایمنی / حداکثر توکن
+            cmd += [("--deep-thinking"
+                     if (thinking_v is None or bool(thinking_v))
+                     else "--no-deep-thinking")]
+            if safety_v:
+                cmd += ["--safety-settings"]
+            _mt_mode_c = str(max_tokens_v or "auto").strip().lower()
+            if _mt_mode_c not in ("auto", "8192", "16384", "32768",
+                                  "65536", "custom"):
+                _mt_mode_c = "auto"
+            cmd += ["--max-tokens", _mt_mode_c]
+            if _mt_mode_c == "custom":
+                try:
+                    _mtc_c = int(max_tokens_custom_v or 4096)
+                except Exception:
+                    _mtc_c = 4096
+                cmd += ["--max-tokens-custom", str(max(1024, _mtc_c))]
             instr_text = str(prompt_body_v or "").strip()
             if is_custom_instruction(instr_text):
                 instr_path = os.path.join(user_out_dir, "instruction_user.txt")
@@ -7897,6 +8007,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ("fake_test", fake_test), ("clean_only", clean_only),
             ("web_debug", web_debug), ("prompt_mode", prompt_mode),
             ("prompt_body", prompt_preview_body),
+            ("deep_thinking", deep_thinking),
+            ("safety_settings", safety_settings),
+            ("max_tokens", max_tokens),
+            ("max_tokens_custom", max_tokens_custom),
         ]
 
         def _do_backup(*args):
@@ -8114,6 +8228,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     clean_method, two_pass,
                     fake_test, clean_only, web_debug, prompt_mode, prompt_preview_body,
                     api_base,
+                    deep_thinking, safety_settings, max_tokens, max_tokens_custom,
                     custom_models_state,
                 ] + tone_uploads + tone_enables,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
@@ -8195,6 +8310,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             session_id, sid_box, inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
             clean_method, two_pass, fake_test, clean_only,
+            deep_thinking, safety_settings, max_tokens, max_tokens_custom,
         ]
 
         try:
@@ -8225,7 +8341,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 except Exception:
                     pass
         for _comp in (quality, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
-                      clean_method, two_pass, fake_test, clean_only):
+                      clean_method, two_pass, fake_test, clean_only,
+                      deep_thinking, safety_settings, max_tokens, max_tokens_custom):
             try:
                 _comp.change(fn=None, inputs=_save_inputs, outputs=[], js=save_form_js)
             except Exception:
@@ -8246,7 +8363,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             else:
                 sid = ""
             if not sid:
-                return (gr.update(),) * 28
+                return (gr.update(),) * 32
             job = _get_job(sid)
             meta = _load_job_meta(sid) if sid else {}
             
@@ -8347,6 +8464,26 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     return gr.update(value="lama-big")
                 return gr.update(value="lama-manga")
 
+            _MT_OK = ("auto", "8192", "16384", "32768", "65536", "custom")
+
+            def u_max_tokens():
+                v = str(data.get("max_tokens") or "").strip().lower()
+                if v not in _MT_OK:
+                    v = "auto"
+                return gr.update(value=v)
+
+            def u_max_tokens_custom():
+                v = str(data.get("max_tokens") or "auto").strip().lower()
+                if v not in _MT_OK:
+                    v = "auto"
+                if "max_tokens_custom" not in data:
+                    return gr.update(visible=(v == "custom"))
+                try:
+                    n = int(float(data.get("max_tokens_custom") or 4096))
+                except Exception:
+                    n = 4096
+                return gr.update(value=n, visible=(v == "custom"))
+
             return (
                 sid,
                 gr.update(value=sid),
@@ -8376,6 +8513,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 u_bool("twopass"),
                 u_bool("fake_test"),
                 u_bool("clean_only"),
+                u_bool("deep_thinking"),
+                u_bool("safety_settings"),
+                u_max_tokens(),
+                u_max_tokens_custom(),
             )
 
         _restore_outputs = [
@@ -8383,6 +8524,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
             clean_method, two_pass, fake_test, clean_only,
+            deep_thinking, safety_settings, max_tokens, max_tokens_custom,
         ]
 
         hidden_restore_tb = gr.Textbox(visible=False, elem_id="manga_hidden_restore", container=False)

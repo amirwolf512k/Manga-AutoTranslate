@@ -195,12 +195,42 @@ class MangaTranslator:
         active_tones: Optional[List[str]] = None,
         instruction_text: Optional[str] = None,
         prompt_mode: Optional[str] = None,
+        deep_thinking: bool = True,
+        safety_settings: bool = False,
+        max_tokens_mode: str = "auto",
+        max_tokens_custom: int = 4096,
         clean_sfx: bool = False,
         repair_page_seams: bool = True,
     ):
         self.fake_translate = bool(fake_translate)
         self.clean_only = bool(clean_only)
         self.translate_retranslate = bool(translate_retranslate)
+        # 🧠 v1.14.302 (K3 v4.4): حالتِ تفکرِ عمیق — پیش‌فرض روشن، بدونِ
+        # محدودیتِ مدل (جمینای: thinkingLevel=high؛ OpenAI: reasoning_effort)
+        self.deep_thinking = bool(deep_thinking) and (
+            os.environ.get("MANGA_NO_THINKING", "").strip().lower()
+            not in ("1", "true", "yes"))
+        # 🛡 v1.14.302 (K3 v4.4): فیلترهای ایمنی فقط با انتخابِ کاربر —
+        # پیش‌فرض خاموش (درخواستِ سبک‌تر و سازگار با همهٔ سرورها)
+        self.safety_settings = bool(safety_settings)
+        self._last_finish_reason = ""
+        self._reasoning_unsupported = False
+        # 🔖 v1.14.302 (K3 v4.4): حداکثر توکنِ خروجی — auto = نمی‌فرستد
+        _mt_mode = str(max_tokens_mode or "auto").strip().lower()
+        if _mt_mode not in ("auto", "8192", "16384", "32768",
+                            "65536", "custom"):
+            _mt_mode = "auto"
+        self.max_tokens_mode = _mt_mode
+        if _mt_mode == "custom":
+            try:
+                _mtv = int(max_tokens_custom or 4096)
+            except Exception:
+                _mtv = 4096
+            self.max_output_tokens = (_mtv if _mtv >= 1024 else 4096)
+        elif _mt_mode == "auto":
+            self.max_output_tokens = None
+        else:
+            self.max_output_tokens = int(_mt_mode)
         self.clean_sfx = bool(clean_sfx) or (
             os.environ.get("MANGA_CLEAN_SFX", "0").strip() == "1")
         self.style_fonts = bool(style_fonts)

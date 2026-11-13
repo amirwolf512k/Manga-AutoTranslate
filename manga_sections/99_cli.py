@@ -135,6 +135,30 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--top-p", type=float, default=0.9)
     p.add_argument(
+        "--deep-thinking", dest="deep_thinking", action="store_true", default=True,
+        help="حالت تفکر عمیق (پیش‌فرض روشن — K3 v4.4): جمینای → thinkingLevel=high؛ "
+             "OpenAI-سازگار → reasoning_effort=high؛ بدونِ محدودیتِ مدل",
+    )
+    p.add_argument(
+        "--no-deep-thinking", dest="deep_thinking", action="store_false",
+        help="حالت تفکر عمیق خاموش شود",
+    )
+    p.add_argument(
+        "--safety-settings", action="store_true", default=False,
+        help="فیلترهای ایمنی گوگل را BLOCK_NONE کند (ضدِ سانسور) — "
+             "پیش‌فرض خاموش؛ env: MANGA_SAFETY=1",
+    )
+    p.add_argument(
+        "--max-tokens", default="auto",
+        choices=["auto", "8192", "16384", "32768", "65536", "custom"],
+        help="حداکثر توکنِ خروجی (K3 v4.4). auto = نمی‌فرستد و سرویس‌دهنده "
+             "خودش مدیریت میکند (پیش‌فرض)",
+    )
+    p.add_argument(
+        "--max-tokens-custom", type=int, default=4096,
+        help="مقدارِ دلخواهِ حداکثر توکنِ خروجی برای --max-tokens custom (≥۱۰۲۴)",
+    )
+    p.add_argument(
         "--debug",
         action="store_true",
         help="حالت دیباگ: مربع رنگی دور هر بلوک؛ خروجی دیباگ هم فرمت اصلی را می‌گیرد (مثلاً PDF → *_debug.pdf)",
@@ -280,6 +304,13 @@ def main():
             if getattr(args, "instruction", None) and os.path.isfile(args.instruction) else None
         ),
         prompt_mode=getattr(args, "prompt_mode", None),
+        deep_thinking=bool(getattr(args, "deep_thinking", True)) and (
+            os.environ.get("MANGA_NO_THINKING", "").strip().lower()
+            not in ("1", "true", "yes")),
+        safety_settings=bool(getattr(args, "safety_settings", False)) or (
+            os.environ.get("MANGA_SAFETY", "").strip() in ("1", "true", "yes")),
+        max_tokens_mode=str(getattr(args, "max_tokens", "auto") or "auto"),
+        max_tokens_custom=int(getattr(args, "max_tokens_custom", 4096) or 4096),
     )
     if getattr(args, "lama", False):
         translator.use_lama = True

@@ -88,7 +88,10 @@ class _MangaTranslatorBody_95:
     @staticmethod
     def _trans_sig_of(provider: str, model: str, api_base: str,
                       prompt_mode: str, instruction: str,
-                      fake: bool, temperature: float, top_p: float) -> str:
+                      fake: bool, temperature: float, top_p: float,
+                      deep_thinking: bool = True,
+                      safety_settings: bool = False,
+                      max_tokens=None) -> str:
         import hashlib as _hl
         try:
             prov = str(provider or "").strip().lower()
@@ -97,6 +100,10 @@ class _MangaTranslatorBody_95:
                   if prov == "custom" else "")
             pm = str(prompt_mode or "professional").strip().lower() or "professional"
             instr = str(instruction or "").strip()
+            try:
+                _mt = ("mt%d" % int(max_tokens)) if max_tokens else "mt-"
+            except Exception:
+                _mt = "mt-"
             parts = [
                 "t1", prov, mdl, ab, pm,
                 (_hl.sha256(instr.encode("utf-8", "ignore")).hexdigest()[:12]
@@ -104,6 +111,10 @@ class _MangaTranslatorBody_95:
                 "fake" if fake else "real",
                 "%.2f" % float(temperature if temperature is not None else 0.7),
                 "%.2f" % float(top_p if top_p is not None else 0.9),
+                # 🧠 v1.14.302: تفکر/ایمنی/سقفِ توکن هم بخشی از امضای کش
+                "think" if deep_thinking else "nothink",
+                "sbn" if safety_settings else "nosbn",
+                _mt,
             ]
             return _hl.sha256("|".join(parts).encode("utf-8", "ignore")).hexdigest()[:16]
         except Exception:
@@ -665,6 +676,9 @@ class _MangaTranslatorBody_95:
             fake=bool(getattr(self, "fake_translate", False)),
             temperature=float(getattr(self, "translation_temperature", 0.7) or 0.7),
             top_p=float(getattr(self, "translation_top_p", 0.9) or 0.9),
+            deep_thinking=bool(getattr(self, "deep_thinking", True)),
+            safety_settings=bool(getattr(self, "safety_settings", False)),
+            max_tokens=getattr(self, "max_output_tokens", None),
         )
         _state_path = os.path.join(cache_dir, "state.json")
         _sig_prev = ""

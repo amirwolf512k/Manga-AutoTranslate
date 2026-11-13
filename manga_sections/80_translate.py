@@ -39,8 +39,9 @@ class _MangaTranslatorBody_80:
             _jp = bool(self._ocr_lang_flags()[2])
         except Exception:
             _jp = False
-        _with_schema = getattr(self, "provider_type", "openai") != "gemini"
-        return mt_system_instruction(japanese=_jp, with_schema=_with_schema)
+        # v1.14.302: با سبکِ K3 v4.4 — مثالِ عینیِ خروجی همیشه داخلِ خودِ
+        # System Instruction است (بدونِ response_schema)
+        return mt_system_instruction(japanese=_jp)
 
     @staticmethod
     def _is_watermark_text(text: str) -> bool:
@@ -125,7 +126,8 @@ class _MangaTranslatorBody_80:
                 groups.append((fname, by_key[key][1]))
             by_key[key][1].append(r)
         pages = [{"filename": fname,
-                  "dialogues": [r.source_text or "" for r in rs]}
+                  "dialogues": [[_di + 1, (r.source_text or "")]
+                                 for _di, r in enumerate(rs)]}
                  for fname, rs in groups]
         region_page = {id(r): fname for fname, rs in groups for r in rs}
         return pages, region_page
@@ -212,8 +214,11 @@ class _MangaTranslatorBody_80:
                 page_regions = [r for r in regions if id(r) not in done]
             used_items: set = set()
             for i, it in enumerate(trans):
+                # 🪶 v1.14.302 (K3 v4.4): قالبِ فشردهٔ {id, fa} — مدل دیگر
+                # متنِ اصلی را بازتاب نمیدهد (کاهشِ ~۶۰٪ توکنِ خروجی).
+                # قالبِ کهنهٔ {en_text, fa_text} هم هنوز پذیرفته میشود.
                 en = str(it.get("en_text") or "")
-                fa = (it.get("fa_text") or "")
+                fa = (it.get("fa_text") or it.get("fa") or "")
                 if not isinstance(fa, str) or not fa.strip():
                     continue
                 if self._is_censored_translation(fa) \
@@ -233,6 +238,17 @@ class _MangaTranslatorBody_80:
                                         if id(r) not in done
                                         and self._mt_norm(r.source_text) == _ne),
                                        None)
+                # تطبیق با id (۱-مبنا) — ترتیبِ dialogues همان ترتیبِ
+                # ساختِ payload است؛ بدونِ region_page قابلِ اتکا نیست.
+                if reg is None and it.get("id") is not None and region_page:
+                    try:
+                        _idx = int(it.get("id")) - 1
+                    except Exception:
+                        _idx = -2
+                    if 0 <= _idx < len(page_regions):
+                        _cand = page_regions[_idx]
+                        if id(_cand) not in done:
+                            reg = _cand
                 if reg is not None:
                     reg.translated_text = self._cleanup_translation(fa)
                     done.add(id(reg))
@@ -241,7 +257,7 @@ class _MangaTranslatorBody_80:
             left_regs = [r for r in page_regions if id(r) not in done]
             left_items = [i for i in range(len(trans)) if i not in used_items]
             for r, i in zip(left_regs, left_items):
-                fa = trans[i].get("fa_text")
+                fa = trans[i].get("fa_text") or trans[i].get("fa")
                 if isinstance(fa, str) and fa.strip():
                     _src_hint = str(trans[i].get("en_text") or "") \
                         + (r.source_text or "")
@@ -363,10 +379,39 @@ class _MangaTranslatorBody_80:
             except TypeError:
                 ex.shutdown(wait=False)
 
+    @staticmethod
+    def _norm_finish_reason(fr) -> str:
+        s = str(fr or "")
+        if "." in s:
+            s = s.rsplit(".", 1)[-1]
+        return s.strip().upper()
+
+    def _note_gemini_finish(self, resp) -> None:
+        """🏁 v1.14.302: دلیلِ پایانِ پاسخ (finishReason/blockReason) را ثبت
+        میکند — مثلِ K3 v4.4 برای پیامِ خطای دقیق و سقفِ تلاشِ مجدد."""
+        try:
+            cands = getattr(resp, "candidates", None) or []
+            if cands:
+                fr = getattr(cands[0], "finish_reason", None)
+                _s = self._norm_finish_reason(fr)
+                if _s and "UNSPECIFIED" not in _s and _s != "NONE":
+                    self._last_finish_reason = _s
+        except Exception:
+            pass
+        try:
+            pf = getattr(resp, "prompt_feedback", None)
+            br = getattr(pf, "block_reason", None) if pf else None
+            _b = self._norm_finish_reason(br)
+            if _b and "UNSPECIFIED" not in _b:
+                self._last_finish_reason = _b
+        except Exception:
+            pass
+
     def _translate_with_gemini(self, user_prompt: str, system_instruction: str,
                                *, structured: bool = True,
                                timeout: float = None,
                                on_item=None) -> str:
+        self._last_finish_reason = ""
         _g_temp = self.translation_temperature if structured else 0.2
         _g_top_p = self.translation_top_p
         if (structured and "gemini-3.6-flash" in (self._thread_model() or "")
@@ -378,7 +423,10 @@ class _MangaTranslatorBody_80:
         )
         if structured:
             config_args["top_p"] = _g_top_p
-            if getattr(self, "_sbn_ok", True):
+            # 🛡 v1.14.302 (K3 v4.4): فیلترهای ایمنی فقط وقتی کاربر
+            # «تنظیمات ایمنی» را روشن کرده باشد فرستاده میشوند (BLOCK_NONE).
+            if getattr(self, "safety_settings", False) \
+                    and getattr(self, "_sbn_ok", True):
                 try:
                     _sbn = []
                     for _cat in ("HARM_CATEGORY_HARASSMENT",
@@ -393,7 +441,15 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
             config_args["response_mime_type"] = "application/json"
-            config_args["response_schema"] = json.loads(MT_RESPONSE_SCHEMA_TEXT)
+            # 🪶 v1.14.302: response_schema حذف شد (سبک‌سازی K3 v4.4) —
+            # مثالِ عینیِ خروجی در System Instruction نشسته است.
+            # 🧠 حالتِ تفکرِ عمیق (K3 v4.4): بدونِ محدودیتِ مدل، level=high
+            if getattr(self, "deep_thinking", True):
+                try:
+                    config_args["thinking_config"] = \
+                        genai_types.ThinkingConfig(thinking_level="high")
+                except Exception:
+                    pass
         else:
             config_args["max_output_tokens"] = 768
         config = genai_types.GenerateContentConfig(**config_args)
@@ -407,6 +463,7 @@ class _MangaTranslatorBody_80:
                 try:
                     for _chunk in client.models.generate_content_stream(
                             model=model, contents=user_prompt, config=config):
+                        self._note_gemini_finish(_chunk)
                         _t = None
                         try:
                             _t = _chunk.text
@@ -425,6 +482,7 @@ class _MangaTranslatorBody_80:
                         response = client.models.generate_content(
                             model=model, contents=user_prompt, config=config,
                         )
+                        self._note_gemini_finish(response)
                         _t = getattr(response, "text", None)
                         if _t:
                             _parts.append(_t)
@@ -433,8 +491,14 @@ class _MangaTranslatorBody_80:
                 response = client.models.generate_content(
                     model=model, contents=user_prompt, config=config,
                 )
+                self._note_gemini_finish(response)
                 text = response.text
             if not text or not text.strip():
+                _fr = str(getattr(self, "_last_finish_reason", "") or "")
+                if _fr:
+                    raise RuntimeError(
+                        "پاسخ خالی از Gemini دریافت شد "
+                        f"(دلیلِ پایان: {_fr}).")
                 raise RuntimeError("پاسخ خالی از Gemini دریافت شد.")
             return text
 
@@ -446,6 +510,7 @@ class _MangaTranslatorBody_80:
                                *, structured: bool = True,
                                timeout: float = None,
                                on_item=None) -> str:
+        self._last_finish_reason = ""
         model = self._thread_model()
         client = self._thread_openai()
         mlow = model.lower()
@@ -467,15 +532,69 @@ class _MangaTranslatorBody_80:
         )
         if structured:
             kwargs["top_p"] = self.translation_top_p
+            # 🧠 v1.14.302 (K3 v4.4): تفکرِ عمیق رویِ OpenAI-سازگارها
+            if getattr(self, "deep_thinking", True) \
+                    and not getattr(self, "_reasoning_unsupported", False):
+                kwargs["reasoning_effort"] = "high"
+            # 🔖 v1.14.302 (K3 v4.4): حداکثر توکنِ خروجی (حالتِ خودکار =
+            # نمی‌فرستد؛ سرویس‌دهنده خودش مدیریت میکند)
+            _mtok = getattr(self, "max_output_tokens", None)
+            try:
+                _mtok = int(_mtok) if _mtok else None
+            except Exception:
+                _mtok = None
+            if _mtok and _mtok >= 1024:
+                kwargs["max_tokens"] = _mtok
 
         if re.search(r"(?:^|/)(?:o[134](?:-|$)|gpt-5(?:-|$))", mlow):
             kwargs.pop("temperature", None)
             kwargs.pop("top_p", None)
+            if "max_tokens" in kwargs:
+                kwargs["max_completion_tokens"] = kwargs.pop("max_tokens")
+
+        def _strip_unsupported(kw, err_text):
+            _et = str(err_text or "").lower()
+            if "reasoning_effort" in _et or "reasoning effort" in _et:
+                self._reasoning_unsupported = True
+                kw = {k: v for k, v in kw.items() if k != "reasoning_effort"}
+                print("    [!] سرورِ reasoning_effort را نمی‌شناسد — "
+                      "بدونِ آن ادامه میدهم.")
+                return kw
+            if "max_completion_tokens" in _et and "max_tokens" in kw:
+                kw["max_completion_tokens"] = kw.pop("max_tokens")
+                return kw
+            if ("max_tokens" in _et) and "max_tokens" in kw:
+                kw.pop("max_tokens")
+                print("    [!] سرورِ max_tokens را قبول نکرد — بدونِ آن.")
+                return kw
+            return None
+
+        def _create(kw):
+            try:
+                return client.chat.completions.create(**kw)
+            except Exception as _e:
+                _k2 = _strip_unsupported(kw, str(_e))
+                if _k2 is not None:
+                    return client.chat.completions.create(**_k2)
+                raise
 
         def _do():
-            resp = client.chat.completions.create(**kwargs)
+            resp = _create(kwargs)
+            try:
+                _ch = (getattr(resp, "choices", None) or [None])[0]
+                _fr = self._norm_finish_reason(
+                    getattr(_ch, "finish_reason", None))
+                if _fr and _fr != "NONE":
+                    self._last_finish_reason = _fr
+            except Exception:
+                pass
             text = resp.choices[0].message.content
             if not text or not text.strip():
+                _fr = str(getattr(self, "_last_finish_reason", "") or "")
+                if _fr:
+                    raise RuntimeError(
+                        f"پاسخ خالی از {self.provider} دریافت شد "
+                        f"(دلیلِ پایان: {_fr}).")
                 raise RuntimeError(f"پاسخ خالی از {self.provider} دریافت شد.")
             return text
 
@@ -484,7 +603,7 @@ class _MangaTranslatorBody_80:
                 parts: list = []
                 skw = dict(kwargs)
                 skw["stream"] = True
-                stream = client.chat.completions.create(**skw)
+                stream = _create(skw)
                 for ev in stream:
                     piece = ""
                     try:
@@ -492,6 +611,10 @@ class _MangaTranslatorBody_80:
                         if ch is not None:
                             piece = getattr(getattr(ch, "delta", None),
                                             "content", None) or ""
+                            _fr = self._norm_finish_reason(
+                                getattr(ch, "finish_reason", None))
+                            if _fr and _fr != "NONE":
+                                self._last_finish_reason = _fr
                     except Exception:
                         piece = ""
                     if not piece:
@@ -504,6 +627,11 @@ class _MangaTranslatorBody_80:
                             pass
                 text = "".join(parts)
                 if not text.strip():
+                    _fr = str(getattr(self, "_last_finish_reason", "") or "")
+                    if _fr:
+                        raise RuntimeError(
+                            f"پاسخ خالی از {self.provider} دریافت شد "
+                            f"(دلیلِ پایان: {_fr}).")
                     raise RuntimeError(
                         f"پاسخ خالی از {self.provider} دریافت شد.")
                 return text
@@ -582,6 +710,16 @@ class _MangaTranslatorBody_80:
                 {"role": "user", "content": user_prompt},
             ],
         }
+        # 🧠 v1.14.302: تفکرِ عمیق در Responses API = reasoning.effort
+        if getattr(self, "deep_thinking", True):
+            payload["reasoning"] = {"effort": "high"}
+        _mtok = getattr(self, "max_output_tokens", None)
+        try:
+            _mtok = int(_mtok) if _mtok else None
+        except Exception:
+            _mtok = None
+        if _mtok and _mtok >= 1024:
+            payload["max_output_tokens"] = _mtok
         data = self._raw_api_post_text(url, {}, payload,
                                        label=f"{self.provider}-responses/{model}")
         text = ""
@@ -614,9 +752,14 @@ class _MangaTranslatorBody_80:
             base += "/v1"
         url = base + "/messages"
         key = self._current_api_key()
+        _mtok = getattr(self, "max_output_tokens", None)
+        try:
+            _mtok = int(_mtok) if _mtok else None
+        except Exception:
+            _mtok = None
         payload = {
             "model": model,
-            "max_tokens": 4096,
+            "max_tokens": (max(1024, _mtok) if _mtok else 4096),
             "system": system_instruction,
             "messages": [{"role": "user", "content": user_prompt}],
             "temperature": self.translation_temperature if structured else 0.2,
@@ -644,18 +787,42 @@ class _MangaTranslatorBody_80:
                                         system_instruction: str,
                                         *, structured: bool = True) -> str:
         import urllib.parse as _uparse
+        self._last_finish_reason = ""
         model = self._thread_model()
         base = (self.api_base or "").rstrip("/")
         url = f"{base}/models/{_uparse.quote(model)}:generateContent"
         key = self._current_api_key()
+        _g_temp = self.translation_temperature if structured else 0.2
+        _g_top_p = self.translation_top_p
+        if (structured and "gemini-3.6-flash" in (model or "")
+                and _g_temp == 0.7 and _g_top_p == 0.9):
+            _g_temp, _g_top_p = 0.4, 0.7
+        _gc = {
+            "temperature": _g_temp,
+        }
+        if structured:
+            _gc["topP"] = _g_top_p
+            _gc["responseMimeType"] = "application/json"
+            # 🧠 v1.14.302 (K3 v4.4): تفکرِ عمیق — thinkingLevel=high
+            if getattr(self, "deep_thinking", True):
+                _gc["thinkingConfig"] = {"thinkingLevel": "high"}
         payload = {
             "systemInstruction": {"parts": [{"text": system_instruction}]},
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
-            "generationConfig": {
-                "temperature": self.translation_temperature if structured else 0.2,
-                **({"topP": self.translation_top_p} if structured else {}),
-            },
+            "generationConfig": _gc,
         }
+        # 🛡 v1.14.302 (K3 v4.4): فیلترهای ایمنی فقط با انتخابِ کاربر
+        if structured and getattr(self, "safety_settings", False):
+            payload["safetySettings"] = [
+                {"category": "HARM_CATEGORY_HARASSMENT",
+                 "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_HATE_SPEECH",
+                 "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+                 "threshold": "BLOCK_NONE"},
+                {"category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+                 "threshold": "BLOCK_NONE"},
+            ]
         headers = {
             "x-goog-api-key": key,
             "Authorization": "Bearer " + key,
@@ -668,12 +835,27 @@ class _MangaTranslatorBody_80:
             for cand in (data.get("candidates") or []):
                 if not isinstance(cand, dict):
                     continue
+                _fr = self._norm_finish_reason(cand.get("finishReason"))
+                if _fr and "UNSPECIFIED" not in _fr and _fr != "NONE":
+                    self._last_finish_reason = _fr
                 cont = cand.get("content") or {}
                 for p in (cont.get("parts") or []):
                     if isinstance(p, dict) and p.get("text"):
                         parts.append(str(p["text"]))
             text = "".join(parts)
+            try:
+                _pf = data.get("promptFeedback") or {}
+                _b = self._norm_finish_reason(_pf.get("blockReason"))
+                if _b and "UNSPECIFIED" not in _b:
+                    self._last_finish_reason = _b
+            except Exception:
+                pass
         if not text or not text.strip():
+            _fr = str(getattr(self, "_last_finish_reason", "") or "")
+            if _fr:
+                raise RuntimeError(
+                    f"پاسخ خالی از {self.provider} (generateContent) دریافت "
+                    f"شد (دلیلِ پایان: {_fr}).")
             raise RuntimeError(f"پاسخ خالی از {self.provider} (generateContent) دریافت شد.")
         return text
 
@@ -1158,6 +1340,22 @@ class _MangaTranslatorBody_80:
                         or ("blocked" in err_str and "safety" in err_str)):
                     self._sbn_ok = False
 
+                # 🏁 v1.14.302 (K3 v4.4): سقفِ تلاشِ مجدد بر اساسِ دلیلِ
+                # پایانِ پاسخ — MAX_TOKENS فقط ۱ بار، فیلترِ محتوا ۲ بار.
+                _fr = str(getattr(self, "_last_finish_reason", "") or "").strip()
+                if _fr in ("MAX_TOKENS", "LENGTH"):
+                    print("    [!] پاسخ ناتمام ماند — سقفِ توکنِ خروجی "
+                          "(MAX_TOKENS). در تنظیمات، حداکثر توکنِ خروجی را "
+                          "بالا ببرید یا حبابِ در هر درخواست را کم کنید.")
+                    if attempt >= 1:
+                        break
+                elif _fr in ("SAFETY", "PROHIBITED_CONTENT", "RECITATION",
+                             "BLOCKLIST", "SPII", "CONTENT_FILTER"):
+                    print("    [!] توقفِ پاسخ توسطِ فیلترِ محتوا "
+                          f"({_fr}) — «تنظیمات ایمنی» را روشن کنید.")
+                    if attempt >= 2:
+                        break
+
                 is_timeout = (
                     isinstance(e, TimeoutError)
                     or isinstance(e, FuturesTimeout)
@@ -1566,7 +1764,8 @@ class _MangaTranslatorBody_80:
                         _jp = False
                     p2 = mt_user_prompt(
                         _rules,
-                        [{"filename": "rescue_%d.png" % r.id, "dialogues": [src]}],
+                        [{"filename": "rescue_%d.png" % r.id,
+                          "dialogues": [[1, src]]}],
                         _jp)
                     with self._api_lock:
                         if self.provider_type == "gemini":
