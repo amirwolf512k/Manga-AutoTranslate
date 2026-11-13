@@ -1249,9 +1249,9 @@ class LamaONNX:
 
 class LamaMangaONNX:
 
-    URL = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
+    URL = ("https://github.com/amirwolf5122/Manga-AutoTranslate/"
            "releases/download/models/lama-manga-dyn.onnx")
-    NOFFT_URL = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
+    NOFFT_URL = ("https://github.com/amirwolf5122/Manga-AutoTranslate/"
                  "releases/download/models/lama-manga-nofft.onnx")
     FALLBACK_URL = "https://huggingface.co/mayocream/lama-manga-onnx/resolve/main/lama-manga.onnx"
     SIZE = 512
@@ -2277,7 +2277,7 @@ class RTDetrV2ONNXDetector:
         cleaned = self._nms(all_boxes, max(0.42, self.iou_thresh))
         return MangaTranslator._drop_contained_boxes(cleaned, contain_thresh=0.68)
 
-_RAPIDOCR_MIRROR = ("https://github.com/amirwolf512k/Manga-AutoTranslate/"
+_RAPIDOCR_MIRROR = ("https://github.com/amirwolf5122/Manga-AutoTranslate/"
                     "releases/download/models/")
 _RAPIDOCR_MS = ("https://www.modelscope.cn/models/RapidAI/RapidOCR/"
                 "resolve/v3.9.2/onnx")

@@ -17,7 +17,7 @@ object OcrModelStore {
     private const val TAG = "OcrModelStore"
 
     private const val BASE =
-        "https://github.com/amirwolf512k/Manga-AutoTranslate/releases/download/models/"
+        "https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models/"
 
     private val FILES: Map<String, Pair<String, Long>> = mapOf(
         "models/det/inference.onnx" to ("PP-OCRv6_det_small.onnx" to 8_000_000L),

@@ -516,9 +516,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val UPD_MIRRORS = listOf(
-        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
-        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
-        "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/"
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",
+        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/"
     )
     private var updRow: LinearLayout? = null
     private var updState = "idle"
@@ -635,7 +635,7 @@ class MainActivity : AppCompatActivity() {
                 else -> apkUni.ifEmpty { apk64 }
             }
             val baseUrl = base.ifEmpty {
-                "https://github.com/amirwolf512k/Manga-AutoTranslate" +
+                "https://github.com/amirwolf5122/Manga-AutoTranslate" +
                         "/releases/download/apk/" +
                         (if (has64) "MangaTranslator-arm64.apk"
                          else "MangaTranslator-universal.apk")
@@ -1130,7 +1130,7 @@ class MainActivity : AppCompatActivity() {
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), 0, dp(4), 0) })
         row.addView(pill("سورس", R.drawable.ic_github,
-                "https://github.com/amirwolf512k/Manga-AutoTranslate"),
+                "https://github.com/amirwolf5122/Manga-AutoTranslate"),
             LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT).apply { setMargins(dp(4), 0, dp(4), 0) })
         row.addView(pill("ریست", android.R.drawable.ic_menu_revert, "").apply {

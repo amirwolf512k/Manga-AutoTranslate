@@ -10,13 +10,13 @@ import traceback
 LOGS = []
 
 _GITHUB_RAW = ("https://raw.githubusercontent.com/"
-               "amirwolf512k/Manga-AutoTranslate/main/")
+               "amirwolf5122/Manga-AutoTranslate/main/")
 _UPDATE_FILES = ("manga.py", "manga_app.py")
 
 _UPDATE_MIRRORS = (
-    "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
-    "https://cdn.jsdelivr.net/gh/amirwolf512k/Manga-AutoTranslate@main/",
-    "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
+    "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",
+    "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/",
+    "https://gh-proxy.com/raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",
 )
 
 def _fetch_bytes(url, timeout=20):

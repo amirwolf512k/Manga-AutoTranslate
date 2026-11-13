@@ -5,8 +5,8 @@
 
 ## اطلاعات کلیدی
 
-- **مالک:** امیر (`amirwolf512k`) — فارسی‌زبان، لحن ساده.
-- **ریپو:** `github.com/amirwolf512k/Manga-AutoTranslate` — شاخهٔ کاری `main`.
+- **مالک:** امیر (`amirwolf5122`) — فارسی‌زبان، لحن ساده.
+- **ریپو:** `github.com/amirwolf5122/Manga-AutoTranslate` — شاخهٔ کاری `main`.
 - **ساختار:**
   - `manga.py` = لودرِ پلاگینی؛ بدنهٔ موتور در `manga_sections/`
     (۱۳ فایل عددی بهترتیب بارگذاری، فهرست در `MANIFEST`).

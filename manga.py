@@ -9,7 +9,7 @@ import re as _re
 import sys as _sys
 import time as _time
 
-APP_VER = "1.14.297"
+APP_VER = "1.14.298"
 
 _HERE = _os.path.dirname(_os.path.abspath(__file__))
 _SECTIONS_DIR = _os.path.join(_HERE, "manga_sections")
@@ -20,11 +20,11 @@ _CACHE_MAGIC = b"MGLDR\x01"
 
 _UPDATE_MIRRORS = (
     "https://raw.githubusercontent.com/"
-    "amirwolf512k/Manga-AutoTranslate/main/",
+    "amirwolf5122/Manga-AutoTranslate/main/",
     "https://cdn.jsdelivr.net/gh/"
-    "amirwolf512k/Manga-AutoTranslate@main/",
+    "amirwolf5122/Manga-AutoTranslate@main/",
     "https://gh-proxy.com/raw.githubusercontent.com/"
-    "amirwolf512k/Manga-AutoTranslate/main/",
+    "amirwolf5122/Manga-AutoTranslate/main/",
 )
 _REFRESH_STAMP = _os.path.join(_HERE, ".manga_sections_refresh")
 _STALE_RETRY_S = 600.0
@@ -242,7 +242,7 @@ def _section_names():
                 "❌ پوشهٔ manga_sections/ کنارِ manga.py پیدا نشد —\n"
                 "   بدنهٔ موتور در همان پوشه است و فایلِ manga.py\n"
                 "   بهتنهایی کافی نیست. نسخهٔ کاملِ برنامه را بگیرید:\n"
-                "   https://github.com/amirwolf512k/Manga-AutoTranslate\n")
+                "   https://github.com/amirwolf5122/Manga-AutoTranslate\n")
             raise RuntimeError("manga_sections/ پیدا نشد — لودرِ manga.py محتوا ندارد")
     on_disk = [n for n in _os.listdir(_SECTIONS_DIR)
                if n.endswith(".py") and n[:1].isdigit()]

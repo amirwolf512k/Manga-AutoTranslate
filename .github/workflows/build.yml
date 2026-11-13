@@ -51,7 +51,7 @@ jobs:
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.bundle_ocr_models }}
         run: |
           base="https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2"
-          rel="https://github.com/amirwolf512k/Manga-AutoTranslate/releases/download/models"
+          rel="https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models"
           A=android/app/src/main/assets/models
           mkdir -p $A/det $A/cls $A/rec $A/rec_ko
           curl -fL --retry 3 --max-time 600 -o $A/det/inference.onnx \
