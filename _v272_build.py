@@ -1,8 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Build merged v272 mascot blocks (my v272 art/engine + v269 wall-hide/blackout/PC-sizing).
-Reads /tmp/v272_MASCOT_{CSS,HTML,JS}.txt (extracted from page.tsx) and writes
-/home/z/manga-repo/_v272_blocks/{css,svg,js,off}.txt
-"""
 import os
 
 CSS = open('/tmp/v272_MASCOT_CSS.txt', encoding='utf-8').read()
@@ -14,16 +10,14 @@ def sub(text, old, new, name, count=1):
         raise SystemExit('!! marker mismatch (%s): found %d x' % (name, text.count(old)))
     return text.replace(old, new)
 
-# ═══════════════ CSS ═══════════════
 CSS = sub(CSS,
     '/* —— هم‌خوانِ نکو-گِرل v272: دخترِ گربه‌گوشِ استیکری — سرِ گردِ توپُش + بدنِ خُرد — ۲۴ حالت —— */',
     '/* —— هم‌خوانِ نکو-گِرل v272: دخترِ گربه‌گوشِ استیکری — سرِ گردِ توپُش + بدنِ خُرد — ۲۴ حالت + قایم‌شدن پشتِ دیوار + خاموش‌کردنِ صفحه —— */',
     'css header')
-# PC: 94px پایین-راست (از v269 — دستورِ سازنده)؛ موبایل دست‌نخورده (۸۸px بالا-راست)
 CSS = sub(CSS,
     '.mcat{position:fixed;z-index:57;right:10px;top:58px;width:88px;',
     '.mcat{position:fixed;z-index:57;right:10px;top:58px;width:88px;',
-    'mcat base')  # no-op sanity
+    'mcat base')
 CSS = sub(CSS,
     '.mcat svg{display:block;width:100%;height:auto;pointer-events:none}',
     """.mcat svg{display:block;width:100%;height:auto;pointer-events:none}
@@ -32,17 +26,14 @@ CSS = sub(CSS,
 .mcat.hide-l .mcat-bub,.mcat.hide-l .mcat-say{right:auto;left:0}
 .mcat.hide-l .mcat-say:after{right:auto;left:14px}""",
     'pc media + hide-l')
-# حذف قواعد گوشه‌های قدیمی (corner-*) — جایگزین: دیوار
 _css_lines = CSS.split('\n')
 _css_kept = [ln for ln in _css_lines if '.mcat.corner-' not in ln]
 if len(_css_lines) - len(_css_kept) != 11:
     raise SystemExit('!! expected 11 corner-* CSS lines, got %d' % (len(_css_lines) - len(_css_kept)))
 CSS = '\n'.join(_css_kept)
 CSS = CSS.rstrip('\n') + """
-/* — v272 (از v269): قایم‌شدن پشتِ دیوارِ لبهٔ صفحه — دیوارِ کرم داخلِ SVG نیمهٔ پشتی را می‌پوشاند — */
 .cg-wall{display:none}
 .mcat.st-hide .cg-wall{display:block}
-/* — v272 (از v269): اذیتِ پیوسته (۱۰ بار) = خاموش‌کردنِ صفحه‌ی نمایش — */
 #mcatOff{position:fixed;inset:0;z-index:95;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;opacity:0;pointer-events:none;transition:opacity .5s ease;direction:rtl}
 #mcatOff.show{opacity:1;pointer-events:auto;cursor:pointer}
 #mcatOff .off-eyes{width:min(220px,46vw);height:auto;animation:offBlink 4.6s ease-in-out infinite}
@@ -52,7 +43,6 @@ CSS = CSS.rstrip('\n') + """
 @keyframes offBlink{0%,86%,100%{transform:scaleY(1)}90%,94%{transform:scaleY(.06)}}
 """
 
-# ═══════════════ SVG ═══════════════
 WALL = """<g class="cg-wall">
 <rect x="71" y="-2" width="49" height="144" fill="#b7aa92"/>
 <rect x="71" y="-2" width="49" height="7" rx="3.5" fill="#998b70"/>
@@ -73,7 +63,6 @@ OFF = """<div id="mcatOff" aria-hidden="true">
 <div class="off-t3">برای روشن‌کردن، صفحه را لمس کن</div>
 </div>"""
 
-# ═══════════════ JS ═══════════════
 JS = sub(JS,
     '  // ——— هم‌خوانِ نکو-گِرل v271 — موتورِ ۲۴ حالته ———',
     '  // ——— هم‌خوانِ نکو-گِرل v272 — موتورِ ۲۴ حالته + قایم‌شدن پشتِ دیوار + خاموش‌کردنِ صفحه ———',
@@ -91,7 +80,6 @@ JS = sub(JS,
     """  var MCAT_FOUND = ['اِ پیدام کردی؟! زرنگی!', 'وا! از کجا فهمیدی اینجام؟!', 'باشه باشه، باختم!'];
   var MCAT_OFF = ['بس بود! صفحه رو خاموش می‌کنم!', 'دیگه بسه! دکمهٔ خاموش کجاست…'];""",
     'off say')
-# mcatPlace: bottom:auto (PC media از bottom استفاده می‌کند — تداخل با top)
 JS = sub(JS,
     """    MCAT.style.left = (x - MCAT.offsetWidth / 2) + 'px';
     MCAT.style.top = (y - MCAT.offsetHeight / 2) + 'px';
@@ -103,12 +91,10 @@ JS = sub(JS,
     MCAT.style.bottom = 'auto';
   }""",
     'place bottom')
-# mcatRestore: hide-l هم پاک شود
 JS = sub(JS,
     "    MCAT.classList.remove('away', 'peek-r', 'corner-bl', 'corner-br', 'corner-tl', 'corner-tr');\n    if (mcatSaved)",
     "    MCAT.classList.remove('away', 'peek-r', 'hide-l');\n    if (mcatSaved)",
     'restore hide-l')
-# قلبِ ادغام: mcatGoCorner → mcatGoHide (دیوار، از v269)
 OLD_CORNER = """  /* — قایم‌شدنِ رندوم در یکی از ۴ گوشه — */
   function mcatGoCorner() {
     if (mcatState === 'st-hide') return;
@@ -154,7 +140,6 @@ NEW_HIDE = """  /* ——— قایم‌شدن پشتِ دیوار (از v269 �
     mcatSayNow(faR(MCAT_HIDE_SAY), 2800);
   }"""
 JS = sub(JS, OLD_CORNER, NEW_HIDE, 'GoCorner→GoHide')
-# ماشینِ خاموشی (از v269) — بعد از mcatStartPeek
 JS = sub(JS,
     "    mcatSayNow('…هنوز قهرم ها!', 2400);\n  }",
     """    mcatSayNow('…هنوز قهرم ها!', 2400);
@@ -185,7 +170,6 @@ JS = sub(JS,
     }, 1600);
   }""",
     'blackout machinery')
-# شمارشِ اذیت در mcatUp
 JS = sub(JS,
     "    if (fast >= 5) {",
     """    /* شمارشِ اذیت (از v269): ضربه در میانهٔ چج/اعصابی + خودِ اپیزودها؛
@@ -203,7 +187,6 @@ JS = sub(JS,
     "        mcatGoCorner();",
     "        mcatGoHide();",
     'tick random hide')
-# شنوندهٔ بیداری + hide-l در zone-land
 JS = sub(JS,
     "  MCAT.addEventListener('pointercancel', function () { mcatDrag = null; if (ZONES) { ZONES.classList.remove('show'); mcatZoneCur = ''; } });",
     """  MCAT.addEventListener('pointercancel', function () { mcatDrag = null; if (ZONES) { ZONES.classList.remove('show'); mcatZoneCur = ''; } });
@@ -214,13 +197,11 @@ JS = sub(JS,
     "    MCAT.classList.remove('away', 'corner-bl', 'corner-br', 'corner-tl', 'corner-tr');\n    if (z === 'top') {",
     "    MCAT.classList.remove('away', 'hide-l');\n    if (z === 'top') {",
     'zone land hide-l')
-# قلابِ تست: دیوار + خاموشی
 JS = sub(JS,
     "    if (st === 'st-hide') { mcatGoCorner(); mcatHideTill = Date.now() + 60000; return; }",
     "    if (st === 'st-hide') { mcatGoHide(); mcatHideTill = Date.now() + 60000; return; }\n    if (st === 'st-blackout') { mcatBlackout(); return; }",
     'force hooks')
 
-# sanity
 for marker, name in [
     ('mcatGoCorner', 'old corner gone'),
     ('function mcatGoHide', 'GoHide present'),

@@ -285,7 +285,6 @@ class Handler(BaseHTTPRequestHandler):
         fields = _save_upload(self, work) or {}
         sid = str(int(time.time() * 1000))
         src = fields.get("file") or fields.get("url") or ""
-# چند فایل → پوشهٔ دسته‌ای
         _flist = fields.get("_files") or []
         if len(_flist) > 1:
             try:

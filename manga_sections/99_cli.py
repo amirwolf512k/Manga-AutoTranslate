@@ -1,7 +1,4 @@
 # BUILD-STRIP-START
-# CLI — build_arg_parser و main
-# None
-# (این سربرگ فقط راهنمای همین فایل است؛ لودرِ manga.py و بیلد حذفش میکنند)
 # BUILD-STRIP-END
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
@@ -115,9 +112,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="با عوض‌شدنِ مدل/پرامپت: ترجمه‌ها از نو ساخته شوند "
                         "(پیش‌فرض: ادامه — حباب‌های ترجمه‌شده از کش می‌مانند؛ "
                         "استخراج/پاکسازی در هر دو حالت از کش می‌مانند)")
-# منسوخ (no-op): فلگِ قدیمیِ «بدونِ بریفِ داستان» — بریف حذف شده ولی
-# ورک‌فلویِ CI و اسکریپتهایِ قدیمی هنوز میفرستند؛ پذیرفته میشود و
-# هیچ کاری نمیکند تا خطایِ argparse رد نشود (فیکسِ CI Visual QA)
     p.add_argument("--no-brief", action="store_true",
                    help=argparse.SUPPRESS)
     p.add_argument("--clean-sfx", action="store_true",
@@ -138,8 +132,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
                         "(پیشفرض — حرفهای انگلیسی؛ مدلهای Lite خودکار سبکِ "
                         "lite میگیرند)، lite (سبک انگلیسی). مقدارِ کهنهٔ auto "
                         "= همان رفتارِ خودکارِ professional/lite")
-    p.add_argument("--temperature", type=float, default=0.7)  # دستور: ۰.۷ (عینِ مرجع)
-    p.add_argument("--top-p", type=float, default=0.9)  # مرجع تنظیمِ top_p
+    p.add_argument("--temperature", type=float, default=0.7)
+    p.add_argument("--top-p", type=float, default=0.9)
     p.add_argument(
         "--debug",
         action="store_true",
@@ -155,13 +149,9 @@ def main():
         pass
     args = build_arg_parser().parse_args()
 
-# «تستِ سرعت» (دکمهٔ واحدِ پنل): به‌جایِ ترجمه، همهٔ
-# حالتهایِ استخراج اندازهگیری و برنده در speed_test.json ذخیره
-# میشود. نیازی به کلیدِ API/فونت/موتورِ ترجمه ندارد؛ زودتر از همهٔ
-# اعتبارسنجیها میآید. (اپِ PC با MANGA_SPEED_TEST=1 میفرستد.)
     if str(os.environ.get("MANGA_SPEED_TEST", "") or "").strip() == "1":
         try:
-            speed_lab_env({})  # برندهٔ ذخیرهشدهٔ قبلی + خطِ لاگِ آن
+            speed_lab_env({})
         except Exception:
             pass
         speed_test_run(src=args.input,
@@ -271,13 +261,12 @@ def main():
         mag_ratio=args.mag_ratio,
         two_pass_ocr=not args.no_two_pass_ocr,
         translation_temperature=args.temperature,
-        translation_top_p=getattr(args, "top_p", 0.9),  # مرجع
+        translation_top_p=getattr(args, "top_p", 0.9),
         max_output_width=(args.max_width or None),
         stitch_max_height=(8000 if getattr(args, "stitch_max_height", None) is None
                            else int(args.stitch_max_height)),
         stitch_short_threshold=args.stitch_short_threshold,
         stitch_keep_first=not args.no_stitch_keep_first,
-# اگر کاربرِ CLI خودش فلگ را داده باشد، حالتِ مستقل رد می‌شود
         stitch_explicit=(getattr(args, "stitch_max_height", None) is not None),
         repair_page_seams=not bool(getattr(args, "no_seam_repair", False)),
         debug=bool(getattr(args, "debug", False)),
@@ -369,8 +358,6 @@ def main():
             clean_old=not args.keep_old,
         )
     finally:
-# خطا/لغو وسطِ کار هم نباید صفحه‌هایِ نمایشِ زنده را
-# برای همیشه در گیتِ ترتیب قفل نگه دارد.
         try:
             _live_seq_flush()
         except Exception:

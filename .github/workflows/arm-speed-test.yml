@@ -56,9 +56,6 @@ jobs:
             echo "" | tee -a /tmp/mt/speed.log
             echo "########## $label (workers=$workers ort_threads=$othreads) ##########" | tee -a /tmp/mt/speed.log
             local t0=$(date +%s.%N)
-            # v1.14.120 — paddlelite حذف شد؛ این تست حالا موتورِ ONNXِ
-            # هم-مقیاسِ موبایل (RapidOCR — همان زنجیرهٔ فال‌بکِ اندروید) را
-            # میسنجد؛ مدلِ lama و پاکسازی بدونِ تغییر.
             MANGA_OCR_WORKERS="$workers" \
             MANGA_ORT_THREADS="$othreads" \
             MANGA_LOW_MEM=1 \

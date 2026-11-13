@@ -62,10 +62,6 @@ jobs:
           cd "$GITHUB_WORKSPACE"
           mkdir -p /tmp/mt/clean /tmp/mt/full /tmp/mt/dumps
           : > /tmp/mt/manifest.tsv
-          # v1.14.225 — زبانِ OCRِ هر فایل (درخواستِ سازنده: «همه عکس هاشو
-          # خوب تست کن») — صفحههایِ ja/ko/zh با OCRِ انگلیسیِ پیشفرض
-          # استخراج نمیشدند (ناحیهها «نویز» رد میشدند) = تستِ بیاثر.
-          # نگاشتِ همان EXT_SETِ اندروید.
           lang_of() {
             case "$1" in
               lang_ja_bw|lang_ja_color) echo "ja en" ;;

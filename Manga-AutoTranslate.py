@@ -1,7 +1,3 @@
-# /// script
-# dependencies = ["marimo"]
-# requires-python = ">=3.13"
-# ///
 
 import marimo
 

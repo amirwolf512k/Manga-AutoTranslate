@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-"""Apply merged v272 blocks to the repo (reader.html + manga_app.py) + version bumps."""
 import ast, sys
 
 R = '/home/z/manga-repo/'
@@ -9,7 +8,6 @@ NEW_SVG = open(B + 'svg.txt', encoding='utf-8').read()
 NEW_OFF = open(B + 'off.txt', encoding='utf-8').read()
 JS_RAW = open(B + 'js.txt', encoding='utf-8').read()
 
-# — JS embedding transform: IIFE → tail-of-function (الگوی v268/v269) —
 HEAD = '  // ——— هم‌خوانِ نکو-گِرل v272 — موتورِ ۲۴ حالته + قایم‌شدن پشتِ دیوار + خاموش‌کردنِ صفحه ———\n  (function () {\n'
 if not JS_RAW.startswith(HEAD):
     sys.exit('!! js head mismatch')
@@ -56,7 +54,6 @@ SA_CSS_E = '            "@keyframes offBlink{0%,86%,100%{transform:scaleY(1)}90%
 MHTML_S = '# ——— هم‌خوانِ نکو-گِرل (نمایشگرِ مستقل): SVG دخترِ گربه‌ایِ انیمه‌ای ———'
 MHTML_E = "            '</div>\\n'\n        )"
 
-# ═══ 1) reader.html (اندروید — ES6 مجاز، ما ES5 می‌گذاریم) ═══
 p = R + 'android/app/src/main/assets/reader.html'
 src = open(p, encoding='utf-8').read()
 src = sub(src, CSS_S, CSS_E, NEW_CSS, 'reader CSS')
@@ -65,20 +62,15 @@ src = sub(src, OFF_S, OFF_E, NEW_OFF, 'reader mcatOff')
 src = sub(src, JS_AND_S, JS_E, NEW_JS, 'reader JS')
 open(p, 'w', encoding='utf-8').write(src)
 
-# ═══ 2) manga_app.py ═══
 p = R + 'manga_app.py'
 src = open(p, encoding='utf-8').read()
-# — وبِ زنده (ES5): CSS/SVG/mcatOff/JS —
 src = sub(src, CSS_S, CSS_E, NEW_CSS, 'live CSS')
 src = sub(src, SVG_S, SVG_E, NEW_SVG, 'live SVG')
 src = sub(src, OFF_S, OFF_E, NEW_OFF, 'live mcatOff')
 src = sub(src, JS_LIVE_S, JS_E, NEW_JS, 'live JS')
-# — مستقل: CSS (python-string) —
 SA_CSS = '\n'.join('            "' + ln + '"' for ln in NEW_CSS.split('\n'))
 src = sub(src, SA_CSS_S, SA_CSS_E, SA_CSS, 'standalone CSS')
-# — مستقل: JS —
 src = sub(src, JS_SA_S, JS_E, NEW_JS, 'standalone JS')
-# — مستقل: _MCAT_HTML (SVG + mcatOff به‌صورت python-string) —
 def pylit(s):
     return s.replace('\\', '\\\\').replace("'", "\\'")
 MCAT_PY = ('# ——— هم‌خوانِ نکو-گِرل v272 (نمایشگرِ مستقل): دخترِ گربه‌گوشِ استیکری ———\n'
@@ -91,7 +83,6 @@ open(p, 'w', encoding='utf-8').write(src)
 ast.parse(open(p, encoding='utf-8').read())
 ok.append('ast.parse manga_app.py')
 
-# ═══ 3) نسخه‌ها ═══
 for f, subs in {
     R + 'manga_sections/00_base.py': [('APP_VER = "1.14.269"', 'APP_VER = "1.14.272"')],
     R + 'manga.py': [('APP_VER = "1.14.269"', 'APP_VER = "1.14.272"')],

@@ -1,10 +1,9 @@
-  // ——— هم‌خوانِ نکو-گِرل v272 — موتورِ ۲۴ حالته + قایم‌شدن پشتِ دیوار + خاموش‌کردنِ صفحه ———
   (function () {
   var MCAT = document.getElementById('mcat');
   if (!MCAT) return;
   var mcatBub = MCAT.querySelector('.mcat-bub');
   var mcatSayEl = MCAT.querySelector('.mcat-say');
-  var MCAT_USE_S = false; // اندروید: اسکرولرِ داخلی s — وب: window
+  var MCAT_USE_S = false;
   var FAD = '۰۱۲۳۴۵۶۷۸۹';
   function faN(v) { return String(v).replace(/[0-9]/g, function (d) { return FAD[+d]; }); }
   function faR(a) { return a[Math.floor(Math.random() * a.length)]; }
@@ -17,7 +16,6 @@
     if (m < 0) m = 0;
     return { m: m, y: y, pct: Math.min(1, Math.max(0, y / Math.max(1, m))), atEnd: m > 320 && (m - y) < 5 };
   }
-  /* ——— حرف‌ها (کاملاً خودمونی) ——— */
   var MCAT_PAT = ['میییو~', 'آخ جووون، همینه!', 'بغلم کن دیگه!', 'ولی ول نکن ها~', 'دلم برات تنگ شده بود!'];
   var MCAT_READ = ['ورق بزن دیگه!', 'اوه، ادامه‌ش چیه؟!', 'این صحنه وای…', 'چایی میل دارید؟', 'اِ این یکی الان چی گفت؟!', 'ترجمه‌ش دست من بود، بهتر میشد!'];
   var MCAT_STUDY = ['ششش! دارم به قسمتِ خوبِ قصه میرسم…', 'یه لحظه وایسا، خودم می‌خونم!', 'هوم… هوم… این فصل چی میگه!', 'این کتاب مالِ منه ها، دست نزن!'];
@@ -60,7 +58,6 @@
     'st-edgesit': MCAT_SIT,
     'st-sidepeek': MCAT_SIDE
   };
-  /* ——— وضعیت ——— */
   var mcatState = 'st-read';
   var mcatLastTs = 0, mcatLastY = -1, mcatFastT = 0, mcatMoveT = Date.now();
   var mcatBotT = 0, mcatPatT = 0, mcatSayUntil = 0;
@@ -100,9 +97,6 @@
     if (say) mcatSayNow(say, 3000);
     mcatTick();
   }
-  /* ——— قایم‌شدن پشتِ دیوار (از v269 — دستورِ سازنده): به لبهٔ نزدیکِ صفحه
-     می‌رود، دیوارِ کرم داخلِ SVG نیمهٔ پشتیش را می‌پوشاند و از پشتِ دیوار
-     نگاه می‌کند (دستها روی لبهٔ دیوار + نوکِ دُم بیرون!) ——— */
   function mcatGoHide() {
     if (mcatState === 'st-hide') return;
     var r = MCAT.getBoundingClientRect();
@@ -112,7 +106,6 @@
     MCAT.classList.toggle('hide-l', !onRight);
     var hy = Math.min(Math.max(r.top + r.height / 2, window.innerHeight * 0.36),
       window.innerHeight - hh / 2 - 30);
-    /* چسبیده به لبه — دیوار با لبهٔ صفحه یکی می‌شود (بدون درز) */
     mcatGlide(function () {
       MCAT.style.left = (onRight ? window.innerWidth - hw + 1 : -1) + 'px';
       MCAT.style.top = (hy - hh / 2) + 'px';
@@ -146,9 +139,6 @@
     mcatPeekTill = Date.now() + 9000;
     mcatSayNow('…هنوز قهرم ها!', 2400);
   }
-  /* ——— اذیتِ پیوسته (۱۰ بار) = خاموش‌کردنِ صفحه‌ی نمایش! (از v269) ———
-     کلِ صفحه سیاه می‌شود، فقط دو چشمِ درخشانِ او در تاریکی می‌ماند؛
-     با لمس (یا بعد از ~۵ ثانیه) دوباره روشن می‌شود. ——— */
   var mcatOffEl = document.getElementById('mcatOff');
   var mcatOffTimer = null;
   function mcatWake() {
@@ -171,7 +161,6 @@
       mcatOffTimer = setTimeout(mcatWake, 5200);
     }, 1600);
   }
-  /* — دویدنِ بازیگوشانه دورِ صفحه — */
   function mcatStartRun() {
     if (mcatRunning) return;
     var r = MCAT.getBoundingClientRect();
@@ -208,7 +197,6 @@
     mcatSet('st-read');
     if (!interrupted) mcatSayNow('اوف اوف… خسته شدم!', 2600);
   }
-  /* — قلبِ تیک — */
   function mcatTick() {
     var now = Date.now();
     var inf = mcatInfo();
@@ -243,7 +231,6 @@
     if (mcatRunning) { mcatSet('st-run'); return; }
     if (mcatActT > now && mcatActSt) { mcatSet(mcatActSt); return; }
     if (mcatZoneBack > now) return;
-    /* حوصله‌سررفتگی: یکی از ۱۰ سرگرمی — یا یهو بره قایم شه! */
     if (inf.m > 320 && mcatMoveT < now - 8000 && mcatMoveT > now - 21000 && now > mcatActCd && mcatPatT < now && mcatShyT < now) {
       if (Math.random() < 0.09) {
         mcatActCd = now + 30000 + Math.random() * 15000;
@@ -287,14 +274,12 @@
     if (mcatActT) { mcatActT = 0; mcatActSt = ''; mcatNextAct = ''; }
     if (mcatForceTill) mcatForceTill = 0;
     if (mcatState === 'st-sleep') {
-      /* بیداری از خواب — بعضی وقتا خجالت میکشه! */
       if (Math.random() < 0.4) { mcatShyT = now + 2600; mcatSayNow(faR(MCAT_WAKE), 2800); }
       else mcatSet('st-read');
     }
     mcatUpdate();
     mcatTick();
   }
-  /* — درگ + نوازش/کتک — */
   var mcatDrag = null;
   MCAT.addEventListener('pointerdown', function (e) {
     mcatDrag = { x: e.clientX, y: e.clientY, moved: false };
@@ -365,8 +350,6 @@
     while (mcatTaps.length && mcatTaps[0] < now - 6000) mcatTaps.shift();
     var fast = 0, i;
     for (i = 0; i < mcatTaps.length; i++) if (mcatTaps[i] > now - 2200) fast++;
-    /* شمارشِ اذیت (از v269): ضربه در میانهٔ چج/اعصابی + خودِ اپیزودها؛
-       ده بار = خاموش‌کردنِ صفحه‌نمایش! */
     if (mcatAnnoyT > now || mcatAngryT > now) mcatTeaseN++;
     if (fast >= 5 || mcatTaps.length >= 5) mcatTeaseN++;
     if (mcatTeaseN >= 10) { mcatBlackout(); return; }
@@ -393,7 +376,6 @@
       mcatTick(); setTimeout(mcatTick, 1980);
       return;
     }
-    /* نوازش — بعد از ۴ بارِ پشت‌سرهم بعضی وقتا خجالت میکشه */
     mcatPatT = now + 1700;
     mcatMoveT = now;
     if (mcatTaps.length === 4 && Math.random() < 0.4) {
@@ -409,9 +391,7 @@
   }
   MCAT.addEventListener('pointerup', mcatUp);
   MCAT.addEventListener('pointercancel', function () { mcatDrag = null; if (ZONES) { ZONES.classList.remove('show'); mcatZoneCur = ''; } });
-  /* لمسِ صفحهٔ خاموش = روشن‌کردنِ دوباره */
   if (mcatOffEl) mcatOffEl.addEventListener('pointerdown', function () { mcatWake(); });
-  /* — نقاطِ رهاکردن: بکش و ول کن — */
   function mcatZoneOf(x, y) {
     var vw = window.innerWidth, vh = window.innerHeight;
     if (y < vh * 0.17) return 'top';
@@ -468,7 +448,6 @@
     mcatMoveT = now;
     mcatZoneBack = now + 7500;
   }
-  /* — چشم‌ها موس رو دنبال می‌کنن (پی‌سی / لینوکس) — */
   var mcatFine = false;
   try {
     mcatFine = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
@@ -499,7 +478,6 @@
       if (mcatPupL) { mcatPupL.style.transform = 'translate(0,0)'; mcatPupR.style.transform = 'translate(0,0)'; }
     });
   }
-  /* — قلابِ تست — */
   window.__mcatForce = function (st) {
     mcatForceSt = ''; mcatForceTill = 0;
     mcatPatT = 0; mcatAnnoyT = 0; mcatAngryT = 0; mcatShyT = 0;
@@ -545,7 +523,6 @@
     }
     mcatTick();
   };
-  /* — حلقهٔ اصلی — */
   var iv = setInterval(function () {
     mcatTick();
     mcatUpdate();
@@ -573,7 +550,6 @@
   var welcomeT = setTimeout(function () {
     if (mcatState === 'st-read') mcatSayNow('سلام! من نکو-گِرلم — بکشم ببر جاهای مختلف!', 3600);
   }, 900);
-  /* — شروع — */
   try {
     var sp = JSON.parse(localStorage.getItem('mangaCatPos') || 'null');
     if (sp && typeof sp.x === 'number') mcatPlace(sp.x, sp.y);

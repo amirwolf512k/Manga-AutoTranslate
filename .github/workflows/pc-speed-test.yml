@@ -6,7 +6,7 @@ on:
     branches: [main]
     paths: ['manga.py', 'manga_sections/**', 'scripts/bench_speed.py', '.github/workflows/pc-speed-test.yml']
   schedule:
-    - cron: '0 4 * * 1'   # هر دوشنبه ۰۴:۰۰ UTC — ردیابیِ رگرسیونِ سرعت
+    - cron: '0 4 * * 1'
 
 permissions:
   contents: read
@@ -42,13 +42,11 @@ jobs:
         run: |
           mkdir -p /tmp/mt/imgs /tmp/mt/out
           UA="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/131.0 Safari/537.36"
-          # از خودِ ریپو — همیشه در دسترس
           cp ci_imgs/IMG_20261018_140944_899.jpg /tmp/mt/imgs/ 2>/dev/null || true
           cp ci_imgs/img2.webp /tmp/mt/imgs/ 2>/dev/null || true
           cp ci_imgs/img4.jpg  /tmp/mt/imgs/ 2>/dev/null || true
           cp examples/01.jpg   /tmp/mt/imgs/ 2>/dev/null || true
           cp examples/IMG_20260929_025410_986.jpg /tmp/mt/imgs/ 2>/dev/null || true
-          # نمونههای کاربر از CDN — اگر CDN رانر را بلاک کرد رد میشویم
           dl() { curl -sL --max-time 90 -A "$UA" -o "/tmp/mt/imgs/$2" "$1" && \
                  python3 -c "import cv2,sys; sys.exit(0 if cv2.imread('/tmp/mt/imgs/$2') is not None else 1)" \
                  || { echo "[skip] $2"; rm -f "/tmp/mt/imgs/$2"; }; }

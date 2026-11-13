@@ -1,10 +1,4 @@
 # BUILD-STRIP-START
-# MangaTranslator (۴ از ۷) — ترجمهٔ AI: سیستماینستراکشن، پارسِ پاسخ، ارائهدهندهها
-# این فایل «قطعهای از بدنهٔ کلاس MangaTranslator» است و بهتنهایی
-# اجرا نمیشود — لودرِ manga.py این محتوا را بههمان ترتیبِ شمارهٔ
-# فایل، داخلِ کلاس میچسباند. کلاسِ پوششیِ زیر فقط برایِ معتبر
-# بودنِ سینتکسِ این فایلِ تکی است و موقعِ بارگذاری حذف میشود.
-# (ترکیب از: 160_translator_ai.py)
 class _MangaTranslatorBody_80:
 # BUILD-STRIP-END
     @staticmethod
@@ -41,14 +35,6 @@ class _MangaTranslatorBody_80:
     ]
 
     def _get_system_instruction(self) -> str:
-        """ — سبکِ مرجع:
-        - flash/lite: پروتکلِ سیستمیِ مرجع؛ در مسیرِ OpenAI-compatible بندِ ۷
-          (اسکیما) هم چسبیده می‌شود، در مسیرِ بومیِ Gemini نمی‌آید (اسکیما از
-          response_schema می‌رود) — عینِ APK.
-        متنِ سفارشیِ کاربر system را عوض نمی‌کند — در مرجع
-        پرامپتِ قابلِ ویرایش همان «قوانین» است (ویرایشگرِ قوانینِ مرجع) →
-        custom_instruction جایگزینِ قوانین در user prompt می‌شود (در
-        _translate_regions_batch)."""
         try:
             _jp = bool(self._ocr_lang_flags()[2])
         except Exception:
@@ -74,18 +60,12 @@ class _MangaTranslatorBody_80:
                 if parts[0] not in token_set and not (
                         len(parts[0]) >= 8 and parts[0] in compact):
                     continue
-# کلمهٔ تکیِ پلتفرم (webtoon/asura/tapas/…)
-# فقط در «متنِ کوتاه» (بنر/کریدیت/هندل) واترمارک است.
-# جملهٔ بلندِ دیالوگی که نامِ پلتفرم را «ذکر میکند» متنِ
-# اصلی است — باگِ GED 222: «"THE GREATEST ESTATE
-# DEVELOPER" THE WEBTOON IS A STORY …» promo میشد و
-# کلِ بلوک رد میشد (ترجمه/پاکسازی نمیشد).
                 if len(text or "") <= 32 or len(toks) <= 4:
                     return True
                 if "_" in (text or "") and parts[0] in compact:
-                    return True  # هندلِ اجتماعی: webtoon_tged_official
+                    return True
                 if re.search(r"(?i)(\.(?:com|net|org|io|gg)|www\.|@)", text):
-                    return True  # دامنه/ایمیل/منشن — واترمارکِ واقعی
+                    return True
             else:
                 if parts in grams:
                     return True
@@ -99,7 +79,6 @@ class _MangaTranslatorBody_80:
 
         t = t.replace("?", "؟")
 
-# مدل گاهی \n را به‌صورت کاراکترِ literal برمی‌گرداند → واقعی کن
         t = t.replace("\\n", "\n").replace("\\r", "").replace("\\t", " ")
 
         t = re.sub(r"(?i)([a-z])\1{1,}", "", t)
@@ -112,24 +91,17 @@ class _MangaTranslatorBody_80:
             r"\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]+",
             "", t,
         )
-# دو متنِ جدا با \n حفظ می‌شوند — فقط فاصله/تک‌تکراری جمع می‌شود
         t = re.sub(r"[^\S\n]{2,}", " ", t)
         t = re.sub(r" *\n *", "\n", t)
         t = re.sub(r"\s+([؟!.,،])", r"\1", t)
         return t.strip()
 
-# سبکِ مرجع: ساختِ ورودیِ «صفحه‌ها» و ماندنِ جوابها ──────
     @staticmethod
     def _mt_norm(text: str) -> str:
-        """عینِ نرمال‌سازِ مقایسهٔ متنِ مرجع در مرجع: lowercase + حذفِ [^\\w]."""
         return re.sub(r"[^\w]", "", (text or "").lower())
 
     @staticmethod
     def _mt_pages_payload(regions: List[TextRegion]):
-        """گروه‌بندیِ نواحی به صفحه (سبکِ مرجع): خروجی = (pages, region_page).
-        pages = [{"filename": str, "dialogues": [str, …]}, …] به ترتیبِ
-        صفحه؛ region_page = {id(ناحیه): filename}. نواحی بدونِ صفحه (مسیرِ
-        تک‌صفحه‌ای/قدیمی) در یک گروهِ «page_01.png» می‌افتند."""
         groups: List[Tuple[str, List[TextRegion]]] = []
         by_key: dict = {}
         for r in regions:
@@ -143,7 +115,6 @@ class _MangaTranslatorBody_80:
                 key = ("u",)
             if key not in by_key:
                 fname = pf or "page_01.png"
-# نامِ تکراری (دو فایلِ هم‌نام از پوشه‌هایِ مختلف) — پسوندِ شماره
                 _taken = {g[0] for g in groups}
                 _base, _ext = os.path.splitext(fname)
                 _n = 2
@@ -153,7 +124,6 @@ class _MangaTranslatorBody_80:
                 by_key[key] = (fname, [])
                 groups.append((fname, by_key[key][1]))
             by_key[key][1].append(r)
-# ترتیبِ ورودی (صفحه‌ها به ترتیبِ رسیدن) حفظ می‌شود — عینِ مرجع
         pages = [{"filename": fname,
                   "dialogues": [r.source_text or "" for r in rs]}
                  for fname, rs in groups]
@@ -168,9 +138,6 @@ class _MangaTranslatorBody_80:
         "متنسانسورشده", "حذفشد",
     }
 
-# یادداشتِ دورِ مجدد (v1.14.262): وقتی پاسخ‌های جای‌نگهدار رد شدند و
-# همان ناحیه‌ها دوباره پرسیده می‌شوند، این بند به انتهای پرامپت
-# می‌چسبد تا مدل بداند فیک/انکار ممنوع است و باید حدسِ معنایی بزند.
     _CENSOR_RETRY_NOTE = ("\r\n\r\nRETRY NOTE: A previous attempt returned "
                           "placeholders or refusals such as '[CENSORED]' for "
                           "some of these blocks. Those blocks are raw comic OCR "
@@ -179,9 +146,6 @@ class _MangaTranslatorBody_80:
                           "your best interpretation of the intended dialogue. "
                           "Placeholders and refusals are strictly forbidden.")
 
-# v1.14.295 — بندِ تقویتیِ ضدِکتابی: وقتی سدِ سبک ترجمههایِ کتابی
-# را بی‌اثر کرد و دورِ مجدد شروع شد، این بند به پرامپت میچسبد تا
-# مدل بداند پاسخِ قبلی رسمی/نوشتاری بوده و این بار باید گفتاری باشد.
     _STYLE_RETRY_NOTE = ("\r\n\r\nSTYLE RETRY NOTE: A previous attempt for "
                          "this chapter came back formal/bookish Persian "
                          "(\u0645\u06cc\u200c\u0628\u0627\u0634\u062f, "
@@ -195,15 +159,6 @@ class _MangaTranslatorBody_80:
 
     @classmethod
     def _is_censored_translation(cls, fa: str) -> bool:
-        """— پاسخِ «جای‌نگهدار/انکار» مترجم (دستورِ سازنده — v1.14.262):
-        وقتی مدل یا واسط بهجای ترجمه فیک مینویسد («[CENSORED]»،
-        «[REDACTED]»، «***»، «I can't translate»، «I'm sorry…»،
-        «نمی‌توانم ترجمه کنم» …) هرگز روی ناحیه نمینشیند — ناحیه
-        بیترجمه میماند و در دورِ بعد دوباره پرسیده میشود («وقتی ai
-        ترجمش برنمیگردونه تلاش کنه ترجمش کنه نه این ک فیک بزنه»).
-        تشخیص = «کلِ» متنِ پاسخ پس از حذفِ براکت/ستاره/نقطه‌خط/فاصله
-        با الگوهای شناخته‌شده یکی باشد؛ دیالوگِ واقعیِ بلند هیچ‌وقت
-        اینقدر کوتاه/کلیدواژه‌ای نیست."""
         if not fa:
             return False
         t = str(fa).strip()
@@ -214,7 +169,7 @@ class _MangaTranslatorBody_80:
             r"\-–—_.!?؟:;,،/\\|+#^%$@]+",
             "", t).lower()
         if not core:
-            return len(t) <= 12  # «***» / «---» / «...»
+            return len(t) <= 12
         if core in cls._CENSOR_CORES:
             return True
         if len(core) <= 48:
@@ -238,11 +193,6 @@ class _MangaTranslatorBody_80:
 
     def _apply_mt_pages(self, pages, regions: List[TextRegion],
                         region_page: Optional[dict] = None) -> int:
-        """نشاندنِ جوابِ قالبِ مرجع [{filename, translations:[{en_text, fa_text}]}]
-        روی نواحی — عینِ منطقِ تطبیقِ مرجع (پارسرِ جوابِ صفحه‌محورِ مرجع + Phase4):
-        ۱) متنِ دقیق، ۲) متنِ نرمال‌شده، ۳) جایِگاه (قانونِ ۱به۱) در همان صفحه.
-        پاسخِ جای‌نگهدار ([CENSORED] و امثالش) «رد میشود» (دستورِ
-        v1.14.262) — ناحیه بیترجمه میماند تا دوباره پرسیده شود."""
         if not pages or not regions:
             return 0
         applied = 0
@@ -254,8 +204,6 @@ class _MangaTranslatorBody_80:
             fname = str(pg.get("filename") or "")
             trans = [it for it in (pg.get("translations") or [])
                      if isinstance(it, dict)]
-# نواحیِ همین صفحه (با نامِ فایل)؛ اگر مدل filename را نگفت یا
-# منطبقی نبود، رویِ نواحیِ آزادِ هر صفحه‌ای تطبیق سراسری می‌کنیم
             page_regions = [r for r in regions
                             if id(r) not in done
                             and (not region_page
@@ -263,14 +211,11 @@ class _MangaTranslatorBody_80:
             if not page_regions and region_page:
                 page_regions = [r for r in regions if id(r) not in done]
             used_items: set = set()
-# ۱+۲) تطبیقِ متنِ دقیق و بعدِ نرمال‌شده
             for i, it in enumerate(trans):
                 en = str(it.get("en_text") or "")
                 fa = (it.get("fa_text") or "")
                 if not isinstance(fa, str) or not fa.strip():
                     continue
-# صافیِ فیک: [CENSORED]/انکار → هیچ‌وقت نمی‌نشیند؛ مگر اینکه خودِ
-# دیالوگِ مبدأ هم [CENSORED] داشته باشد (بلیپِ عمدیِ خودِ مانگا)
                 if self._is_censored_translation(fa) \
                         and "censor" not in en.lower():
                     _censored += 1
@@ -293,7 +238,6 @@ class _MangaTranslatorBody_80:
                     done.add(id(reg))
                     used_items.add(i)
                     applied += 1
-# ۳) پسماندِ صفحه به ترتیبِ ورودی (قانونِ STRICT 1-TO-1)
             left_regs = [r for r in page_regions if id(r) not in done]
             left_items = [i for i in range(len(trans)) if i not in used_items]
             for r, i in zip(left_regs, left_items):
@@ -320,9 +264,6 @@ class _MangaTranslatorBody_80:
 
     @classmethod
     def _salvage_stream_pages(cls, text: str, on_pages) -> None:
-        """پارسرِ افزایشیِ مرجع (عینِ حلقهٔ استریمِ صفحه‌محور در صفحهٔ اصلیِ مرجع): بلوکهایِ
-        «کاملِ» {filename, translations} را از جریانِ ناقص بیرون می‌کشد؛
-        نیمه‌کاره دست‌نخورده می‌ماند تا در پارسِ نهایی بنشیند."""
         if not text or on_pages is None:
             return
         blocks = cls._MT_PAGE_BLOCK_RE.findall(text)
@@ -365,9 +306,6 @@ class _MangaTranslatorBody_80:
         if not isinstance(results, list):
             raise ValueError("پاسخ مدل آرایه نیست.")
 
-# قالبِ مرجع: [{filename, translations: [{en_text, fa_text}]}]
-# (پارسرِ جوابِ صفحه‌محورِ مرجع در APK). اگر جوابِ این قالب بود، عینِ مرجع روی
-# نواحی مینشیند — تنها قالبِ پاسخ .
         _mt_pages = [it for it in results
                      if isinstance(it, dict)
                      and isinstance(it.get("translations"), list)
@@ -429,10 +367,6 @@ class _MangaTranslatorBody_80:
                                *, structured: bool = True,
                                timeout: float = None,
                                on_item=None) -> str:
-# temperature/topP از تنظیماتِ کاربر (مرجع: دما و
-# top_pِ ذخیرهشده). استثنایِ gemini-3.6-flash (۰.۴/۰.۷) عینِ مرجع فقط وقتی
-# کاربر پیشفرضها را دستنخورده گذاشته فعال میماند — اگر مقدارِ دلخواه
-# گذاشته باشد «همان دقیق» فرستاده میشود (دستور: دقیق بزار).
         _g_temp = self.translation_temperature if structured else 0.2
         _g_top_p = self.translation_top_p
         if (structured and "gemini-3.6-flash" in (self._thread_model() or "")
@@ -443,10 +377,7 @@ class _MangaTranslatorBody_80:
             temperature=_g_temp,
         )
         if structured:
-            config_args["top_p"] = _g_top_p  # کپچر: topP 0.9 (حالا از تنظیمات)
-# سبکِ مرجع: هر ۴ دستهٔ HARM = BLOCK_NONE تا یک حبابِ
-# حساس کلِ جواب را نسوزاند (تلاشهایِ تکراری و وقت هدر نمیرود)
-# مدلی که نپذیرد در مسیرِ خطا فلگ میشود و بدونِ آن ادامه میدهد.
+            config_args["top_p"] = _g_top_p
             if getattr(self, "_sbn_ok", True):
                 try:
                     _sbn = []
@@ -462,8 +393,6 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
             config_args["response_mime_type"] = "application/json"
-# اسکیمای مرجع: [{filename, translations:[{en_text, fa_text}]}]
-# (عینِ سازندهٔ درخواستِ متنیِ بومیِ Gemini در مرجع — دیگر id/translation/tone نیست)
             config_args["response_schema"] = json.loads(MT_RESPONSE_SCHEMA_TEXT)
         else:
             config_args["max_output_tokens"] = 768
@@ -473,10 +402,6 @@ class _MangaTranslatorBody_80:
         self._pace_before_gemini_call()
 
         def _do():
-# سبکِ مرجع (همیشه استریم + پارسرِ افزایشیِ صفحه‌ای):
-# هر بلوکِ کاملِ {filename, translations} که در جریان میرسد همان
-# لحظه رویِ نواحی می‌نشیند (پیشنمایشِ زنده)؛ اگر استریم ممکن
-# نشد، مسیرِ عادی.
             if on_item is not None:
                 _parts: list = []
                 try:
@@ -521,18 +446,9 @@ class _MangaTranslatorBody_80:
                                *, structured: bool = True,
                                timeout: float = None,
                                on_item=None) -> str:
-        """ — عینِ مسیرِ استریمِ ترجمه در مرجع/سازندهٔ درخواستِ متنیِ OpenAI در مرجع
-        در مرجع: payload = {model, stream:true, temperature, top_p, messages:[system,user]}
-        و همیشه استریم؛ فقط اگر نقطهٔ پایانی stream را نپذیرفت، مسیرِ عادی
-        (بدونِ تغییرِ سبکِ پرامپت). پارامترهایِ o1/gpt-5 که temperature
-        نمی‌پذیرند حذف میشوند (خطایِ سختِ API)."""
         model = self._thread_model()
         client = self._thread_openai()
         mlow = model.lower()
-# درخواستِ کلِ فصل سقفِ زمانیِ متناسب میگیرد (سبکِ مرجع):
-# هم در کلاینتِ HTTP هم در منتظرِ آینده — قبلاً سقفِ کوچکِ
-# api_timeout (۱۰–۴۵ثانیه) هرگز برایِ فصلِ پر متن کفایت نمیکرد و
-# همان پیامِ «تایم‌اوت» تا بی نهایت تکرار میشد.
         _eff_t = float(timeout) if timeout and float(timeout) > 0 else 0.0
         try:
             _eff_t = max(_eff_t,
@@ -550,7 +466,7 @@ class _MangaTranslatorBody_80:
                      else float(getattr(self, "api_timeout", 10.0) or 10.0)),
         )
         if structured:
-            kwargs["top_p"] = self.translation_top_p  # کپچر: topP 0.9 (: از تنظیمات — مرجع تنظیمِ top_p)
+            kwargs["top_p"] = self.translation_top_p
 
         if re.search(r"(?:^|/)(?:o[134](?:-|$)|gpt-5(?:-|$))", mlow):
             kwargs.pop("temperature", None)
@@ -563,10 +479,6 @@ class _MangaTranslatorBody_80:
                 raise RuntimeError(f"پاسخ خالی از {self.provider} دریافت شد.")
             return text
 
-# مرجع همیشه stream:true می‌فرستد؛ اینجا هم مسیرِ اول
-# استریم است (قطعهها که میرسند سقفِ «مرگِ بی‌صدا» وجود ندارد و هر
-# بلوکِ کاملِ صفحه همان لحظه رویِ نواحی می‌نشیند). اگر نقطهٔ پایانی
-# stream را قبول نکرد، خودکار به مسیرِ عادی برمی‌گردیم.
         if structured:
             def _do_stream():
                 parts: list = []
@@ -607,8 +519,6 @@ class _MangaTranslatorBody_80:
                                          or "unrecognized" in _ss
                                          or "not allowed" in _ss)
                 ) or "does not support" in _ss or "not supported" in _ss
-# فقط وقتی «استریم اصلاً پذیرفته نشد» بلافاصله فالبک
-# تایم‌اوت/خطایِ وسطِ جریان باید طبقِ AutoRetry بالا برود
                 if not _stream_broken:
                     raise
                 print(f"    [!] استریم روی {model} ممکن نشد — مسیرِ عادی.")
@@ -618,10 +528,8 @@ class _MangaTranslatorBody_80:
             timeout=(_eff_t if _eff_t > 0 else None)
         )
 
-# کلید کاستوم: فرمت‌های دیگر API ────────────────────────────────
     def _raw_api_post_text(self, url: str, headers: dict, payload: dict,
                            label: str) -> str:
-        """POST با urllib و استخراج متن — بدون وابستگی SDK اضافه."""
         import urllib.request as _ureq
         import urllib.error as _uerr
 
@@ -631,7 +539,6 @@ class _MangaTranslatorBody_80:
             "User-Agent": "Mozilla/5.0",
         }
         hdrs.update(headers or {})
-# برخی پراکسی‌ها فقط Bearer می‌فهمند؛ هر دو را می‌فرستیم
         if key and "Authorization" not in hdrs:
             hdrs["Authorization"] = "Bearer " + key
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -653,7 +560,6 @@ class _MangaTranslatorBody_80:
                     raise RuntimeError(
                         msg + (f" — {' '.join(body.split())[:150]}"
                                if body and "HTTP" in msg else "")) from e
-# کلید سالم است ولی سرویس/مدل مشکل دارد — پیام واضح بده
                 raise RuntimeError(msg) from e
             try:
                 return json.loads(raw)
@@ -667,7 +573,6 @@ class _MangaTranslatorBody_80:
     def _translate_with_openai_responses(self, user_prompt: str,
                                          system_instruction: str,
                                          *, structured: bool = True) -> str:
-        """OpenAI Responses API — POST {base}/responses"""
         model = self._thread_model()
         url = (self.api_base or "").rstrip("/") + "/responses"
         payload = {
@@ -703,7 +608,6 @@ class _MangaTranslatorBody_80:
     def _translate_with_anthropic(self, user_prompt: str,
                                   system_instruction: str,
                                   *, structured: bool = True) -> str:
-        """Anthropic Compatible — POST {base}/v1/messages"""
         model = self._thread_model()
         base = (self.api_base or "").rstrip("/")
         if not base.endswith("/v1"):
@@ -716,7 +620,7 @@ class _MangaTranslatorBody_80:
             "system": system_instruction,
             "messages": [{"role": "user", "content": user_prompt}],
             "temperature": self.translation_temperature if structured else 0.2,
-            **({"top_p": self.translation_top_p} if structured else {}),  # : از تنظیمات
+            **({"top_p": self.translation_top_p} if structured else {}),
         }
         headers = {
             "x-api-key": key,
@@ -739,7 +643,6 @@ class _MangaTranslatorBody_80:
     def _translate_with_google_endpoint(self, user_prompt: str,
                                         system_instruction: str,
                                         *, structured: bool = True) -> str:
-        """Google Generative AI — POST {base}/models/{model}:generateContent"""
         import urllib.parse as _uparse
         model = self._thread_model()
         base = (self.api_base or "").rstrip("/")
@@ -750,7 +653,7 @@ class _MangaTranslatorBody_80:
             "contents": [{"role": "user", "parts": [{"text": user_prompt}]}],
             "generationConfig": {
                 "temperature": self.translation_temperature if structured else 0.2,
-                **({"topP": self.translation_top_p} if structured else {}),  # : از تنظیمات
+                **({"topP": self.translation_top_p} if structured else {}),
             },
         }
         headers = {
@@ -779,7 +682,6 @@ class _MangaTranslatorBody_80:
                                 *, structured: bool = True,
                                 timeout: float = None,
                                 on_item=None) -> str:
-        """روتر واحد — هر provider_type به موتور درست خودش می‌رود."""
         if self.provider_type == "gemini":
             return self._translate_with_gemini(
                 user_prompt, system_instruction, structured=structured,
@@ -804,9 +706,6 @@ class _MangaTranslatorBody_80:
             return text
         t = text
 
-# \n (جداکنندهٔ دو متنِ جدا در یک ناحیه) حفظ می‌شود
-# فقط فاصله/تبِ افقی فشرده می‌شود. مترجم دو متنِ جدا را با \n
-# جدا ترجمه می‌کند و رندر هر \n را در خطِ خودش می‌گذارد.
         t = re.sub(r"[ \t\f\v]+", " ", t).strip()
         t = re.sub(r"\s*\n\s*", "\n", t)
 
@@ -852,9 +751,6 @@ class _MangaTranslatorBody_80:
         return t.strip()
 
     def _style_ref_samples(self):
-        """لنگرِ سبک — تا ۱۰ جفتِ (مبدأ، ترجمه) از ترجمه‌هایِ همین فصل.
-        فقط برای درخواست‌هایِ بعدی (دورهایِ مجدد/پسگیری)؛ درخواستِ اول
-        که هنوز چیزی ترجمه نشده خالی است و پرامپت عینِ مرجع میماند."""
         try:
             store = getattr(self, "_chapter_style_samples", None) or []
             out = []
@@ -864,7 +760,7 @@ class _MangaTranslatorBody_80:
                 if not src or not fa or fa == src:
                     continue
                 if fa.startswith("[") and fa.endswith("]"):
-                    continue  # [CENSORED] و امثالش
+                    continue
                 out.append((src, fa))
                 if len(out) >= 10:
                     break
@@ -873,13 +769,6 @@ class _MangaTranslatorBody_80:
             return []
 
     def _note_style_samples(self, regions) -> None:
-        """برداشتِ نمونه‌هایِ سبک از ترجمه‌هایِ تازهٔ همین فصل (سقفِ ۲۴).
-        بعد از هر دورِ ترجمه صدا میشود؛ ذخیره رویِ self میماند تا
-        پسگیریها/دورهایِ بعدی و ادامهٔ کار بعد از توقف هم لنگر داشته باشند.
-        v1.14.295 — نمونهٔ «کتابی» هرگز لنگر نمیشود: اگر پاسخِ اولِ
-        مدل کتابی باشد و بی‌فیلتر داخلِ لنگر بنشیند، دورهایِ بعدی
-        هم عیناً کتابی تقلید میکنند (ریشهٔ «یهو کلِ فصل کتابی میشه»)؛
-        فقط نمونهٔ محاوره‌ای/خنثی میماند."""
         try:
             store = getattr(self, "_chapter_style_samples", None)
             if store is None:
@@ -911,11 +800,6 @@ class _MangaTranslatorBody_80:
 
     @staticmethod
     def _fa_style_verdict(text: str) -> str:
-        """حکمِ سبکِ یک متنِ فارسی: ok (محاوره‌ای/خنثی) یا bookish
-        (v1.14.295). از همان نشانه‌های سنجشِ زندهٔ مدل
-        (40_api_text) استفاده میکند — نیم‌فاصله نرمال میشود تا
-        «می‌خواهم» و «میخواهم» هر دو گرفته شوند. خنثیِ بی‌نشانه
-        اوکی است (تقصیرِ مدل نیست)."""
         try:
             verdict, _bk, _cs = _gemini_probe_score(str(text or ""))
             return verdict
@@ -933,12 +817,6 @@ class _MangaTranslatorBody_80:
                 return "ok"
 
     def _style_retry_bookish(self, regions) -> bool:
-        """سدِ سبکِ دورِ ترجمه (v1.14.295 — «بعضی وقتا یهو کتابی
-        میشه»): ترجمه‌هایِ تازه سنجیده میشوند؛ اگر بهاندازهٔ مشکل
-        واقعی (دو یا بیشتر، یا بیش از ۲۵٪) کتابی بودند همانها
-        بی‌اثر میشوند تا دورِ بعدی/نجات با لنگرِ سالم + بندِ
-        تقویتی دوباره پرسیده شوند. فقط یکبار در هر فصل. True =
-        چیزی پاک شد و باید دوباره پرسیده شود."""
         if getattr(self, "_style_retried", False):
             return False
         done = [r for r in (regions or [])
@@ -975,10 +853,6 @@ class _MangaTranslatorBody_80:
             print("    [*] Clean-only mode — no API request.")
             return
 
-# قفلِ دو-فازی: اگر در فازِ استخراجِ بچ کسی مترجم را
-# صدا زده باشد یعنی رگرسیونِ «ترجمهٔ وسطِ استخراج» برگشته — لاگِ
-# بلند برای ردیابی (رفتار عوض نمیشود؛ سدِ اصلی در run است و این
-# فقط زنگِ خطر است تا در لاگِ سازنده دیده شود).
         if not getattr(self, "_extraction_done", True) \
                 and not getattr(self, "fake_translate", False):
             print("[!!] رگرسیونِ دو-فازی: مترجم در وسطِ فازِ استخراج صدا "
@@ -993,13 +867,6 @@ class _MangaTranslatorBody_80:
         if not regions:
             return
 
-# «اگ متنی عدد یا شکل بود کلا نره ترجمه»: ناحیه‌ای که
-# متنش هیچ حرفی ندارد ('123124'، './….'، ' ,./???!?~') به مترجم
-# نمی‌رود — الکی وقتِ AI نمیگیرد؛ «hi…» حرف دارد → میرود.
-# این نواحی دیگر پاک هم نمیشوند (no_touch در
-# extract_regions_phase نشانهگذاری میشود و _clean_image_page
-        #.
-# کنارشان میگذارد) —
         _keep = [r for r in regions if source_has_letters(r.source_text)]
         _drop = len(regions) - len(_keep)
         if _drop:
@@ -1055,9 +922,6 @@ class _MangaTranslatorBody_80:
 
         def _make_batches(items: List[TextRegion]):
 
-# عینِ مرجع (دیکدِ APK): همهٔ متنها در «یک» درخواست —
-# هیچ بچ/سقفی (۴۰تایی/۱۰هزار نویسه) وجود ندارد؛ فصلِ هر اندازه
-# یک درخواست است. کپسولهایِ قبلی (/199/213) حذف شدند.
             if getattr(self, "chapter_one_request", False):
                 return [list(items)]
 
@@ -1078,9 +942,6 @@ class _MangaTranslatorBody_80:
                 batches.append(cur)
             return batches
 
-# ادامهٔ کار (توقف/ادامهٔ با کش): ترجمه‌هایِ ازقبلِ این فصل را
-# همین اول بردار تا «نخستین» درخواستِ ادامه هم لنگرِ سبک داشته
-# باشد (مدل/توکنِ دیگر → همان لحنِ فصل)
         self._note_style_samples(regions)
         pending = list(regions)
         import concurrent.futures as _cf
@@ -1092,8 +953,6 @@ class _MangaTranslatorBody_80:
                 print(
                     f"    [*] دور {round_i}: {len(pending)} دیالوگ → {len(batches)} بسته"
                 )
-# در حالتِ درخواستِ واحد، بستهها «پشتسرهم» میروند (نه موازی)
-# تا ترتیبِ روایی و ترتیبِ نشستنِ ترجمهها رویِ صفحهها حفظ شود.
             workers = max(1, min(
                 int(getattr(self, "batch_workers", 3) or 1), len(batches)))
             if getattr(self, "chapter_one_request", False):
@@ -1121,15 +980,7 @@ class _MangaTranslatorBody_80:
                         time.sleep(1.0)
 
             pending = [r for r in regions if not (r.translated_text or "").strip()]
-# لنگرِ سبک: ترجمه‌هایِ همین دور را بردار تا دورهایِ بعدی و
-# پسگیریها (با مدل/توکنِ دیگر) همان لحن را نگه دارند — «یوهو
-# کتابی میشه» دیگر نه؛ حتی وقتی همه در دورِ اول تمام شد
             self._note_style_samples(regions)
-# v1.14.295 — سدِ سبک در خودِ دورِ ترجمه: اگر پاسخِ مدل
-# «کتابی» درآمد (می‌باشد/آیا/بنابراین…) همان ترجمهها را
-# بی‌اثر میکند تا دورِ بعدی با لنگرِ سالم + بندِ تقویتیِ
-# ضدِکتابی دوباره پرسیده شوند (ریشهٔ «یهو کتابی میشه»: پاسخِ
-# اولِ مدلِ فال‌بک). فقط یکبار در هر فصل — حلقه بی‌نهایت نیست.
             try:
                 if self._style_retry_bookish(regions):
                     pending = [r for r in regions
@@ -1151,11 +1002,6 @@ class _MangaTranslatorBody_80:
                 if self._model_cascade and len(self._model_cascade) > 1:
                     self._switch_to_next_model(reason=f"دور {round_i + 1}")
 
-# آخرین سدِ دفاع در خودِ translate_regions: خروجهای
-# زودهنگامِ _translate_regions_batch (مثل 403/دسترسیِ ردشده که با
-# return برمیگردند) نجاتِ 189 را از دست میدهند و ناحیهها بیترجمه
-# میمانند → بعداً حبابِ پاکشدهٔ خالی رویِ عکس میافتد.
-# اینجا تضمینِ نهایی: هر ناحیهٔ بامتن حداقل متنِ مبدأ را میگیرد.
         if any(not (r.translated_text or "").strip() for r in regions):
             try:
                 if self._force_translate_missing(regions):
@@ -1178,8 +1024,6 @@ class _MangaTranslatorBody_80:
         if not work_regions:
             return
 
-# بافتِ درخواست (سبکِ مرجع): نگاشتِ ناحیه→فایل‌نیم برای
-# نشاندنِ جوابها (قالبِ [{filename, translations:[…]}])
         _pctx: dict = {}
         _attempt_cell = [0]
 
@@ -1189,9 +1033,6 @@ class _MangaTranslatorBody_80:
                 getattr(self, "provider", "gemini"),
                 getattr(self, "model_name", ""),
             )
-# سبکِ مرجع (professional/lite) — عینِ سازندهٔ درخواستِ متنیِ OpenAI در مرجع:
-# قوانین = preset (یا متنِ سفارشیِ کاربر — هم‌ارزِ ویرایشگرِ قوانینِ مرجع)
-# هیچ واژه‌نامه/بریف/آیتمِ id-دار اضافه نمیشود.
             rules = (getattr(self, "custom_instruction", "") or "").strip() \
                 or PROMPT_PRESETS[_pm]
             pages, _rpage = self._mt_pages_payload(work_regions)
@@ -1200,17 +1041,10 @@ class _MangaTranslatorBody_80:
                 _jp = bool(self._ocr_lang_flags()[2])
             except Exception:
                 _jp = False
-# لنگرِ سبک: در درخواستهایِ بعدیِ همین فصل (تلاشِ مجدد/پسگیری/
-# resume با توکن یا مدلِ دیگر) ترجمه‌هایِ موجودِ فصل به‌عنوانِ مرجعِ
-# لحن می‌آیند تا خروجی «کتابی» نشود — درخواستِ اول خالی است (عینِ مرجع)
             _sref = self._style_ref_samples()
             _out = mt_user_prompt(rules, pages, _jp, style_ref=_sref)
-# دورِ مجدد (پس از ردِ [CENSORED] یا بی‌پاسخی): بندِ ضدِ فیک —
-# «متن خامِ OCR است، رد نکن، حدسِ معنایی بزن"
             if _attempt_cell[0] > 1:
                 _out += self._CENSOR_RETRY_NOTE
-# دورِ مجددِ سبکی (v1.14.295): پاسخِ قبلی کتابی بود — این بار
-# گفتاری/محاوره‌ای بخواه
             if getattr(self, "_style_retry_mode", False):
                 _out += self._STYLE_RETRY_NOTE
             return _out
@@ -1222,7 +1056,7 @@ class _MangaTranslatorBody_80:
 
                 if self.provider_type == "gemini" and self._is_bad_translate_model(self.model_name):
                     print(f"    [!] رد مدل نامناسب ترجمه: {self.model_name}")
-                    if self._note_model_fail():  # ۳ بار بد؟
+                    if self._note_model_fail():
                         self._reset_model_cascade(reason="۳ بار مدل نامناسب")
                         self._recreate_api_client()
                         time.sleep(0.3)
@@ -1234,11 +1068,6 @@ class _MangaTranslatorBody_80:
                     print("    [!] مدل مناسب در cascade نماند.")
                     break
 
-# سبکِ مرجع: همیشه استریم (هر دو مسیرِ gemini و
-# openai) + پارسرِ افزایشیِ صفحه‌ای — هر بلوکِ کاملِ {filename,
-# translations} که در جریان میرسد همان لحظه رویِ نواحی
-# می‌نشیند (پیشنمایشِ زنده)؛ مسیرهایِ غیرِ استریم فقط
-# درخواستِ نهایی را با همان پرامپت می‌گیرند.
                 _on_item = None
                 _applied_pages: set = set()
                 _want_stream = self.provider_type in ("gemini", "openai")
@@ -1252,10 +1081,6 @@ class _MangaTranslatorBody_80:
                             _applied_pages.add(str(p.get("filename")))
                         self._apply_mt_pages(
                             _new, work_regions, _pctx.get("region_page"))
-# لنگرِ سبکِ زنده (فیکسِ v1.14.288): همان لحظه که استریم
-# ترجمهها را مینشاند، نمونههایِ سبک هم تازه میشوند — تا اگر
-# همین وسط استریم شکست و AutoRetry/تلاشِ نهایی آمد، پرامپتِ
-# مجدد لحنِ همین فصل را همراه داشته باشد و «کتابی» نشود.
                         try:
                             self._note_style_samples(work_regions)
                         except Exception:
@@ -1266,10 +1091,6 @@ class _MangaTranslatorBody_80:
                               f"دیالوگ…", flush=True)
                     _on_item = _on_pages
 
-# درخواستِ کلِ فصل جوابِ بلند میدهد — سقفِ زمانی با
-# «تعدادِ دیالوگ + حجمِ واقعیِ متن» بزرگ میشود (مرجع:
-# AutoRetry صبور؛ سقفِ مردهٔ کوچکِ قبلی ۳۰+۱.۵×تعداد بود
-# و برایِ ۱۰۰+ دیالوگِ پرحرف نمیکشید) — سقفِ ۳۰ دقیقه.
                 _chars = sum(len(r.source_text or "") for r in work_regions)
                 _tout = min(
                     1800.0,
@@ -1291,15 +1112,11 @@ class _MangaTranslatorBody_80:
 
                 self._parse_translation_response(
                     text, work_regions, _pctx.get("region_page"))
-# لنگرِ سبک (فیکسِ v1.14.288): بعد از هر پاسخِ موفق/نیمهکاره،
-# نمونهها تازه میشوند تا «تلاشِ مجددِ حبابهایِ جامانده» و
-# دورهایِ بعدی لحنِ فصل را نگه دارند (ریشهٔ «اول خوب، بعد
-# کتابی» همینجا بود: نجاتِ جاماندهها بدونِ لنگر می‌رفت).
                 try:
                     self._note_style_samples(regions)
                 except Exception:
                     pass
-                self._note_model_ok()  # مدل جواب داد → اثباتشده
+                self._note_model_ok()
 
                 for r in work_regions:
                     if not (getattr(r, "bubble_style", None) or "").strip():
@@ -1325,7 +1142,6 @@ class _MangaTranslatorBody_80:
                         st = (getattr(r, "bubble_style", None) or "").strip()
                         extra = f" ({st})" if st else ""
                         print(f"    ← بالن[{r.id}]{extra}: {r.translated_text}")
-# مشکل۳: هرگز حبابِ خالی تحویل نمیشود
                 try:
                     self._force_translate_missing(regions)
                 except Exception as _e:
@@ -1337,7 +1153,6 @@ class _MangaTranslatorBody_80:
             except Exception as e:
                 last_err = e
                 err_str = str(e).lower()
-# مدلی BLOCK_NONE را نمیپذیرد؟ دفعهٔ بعد بدونِ آن
                 _es = str(e)
                 if ("BLOCK_NONE" in _es or "safety_settings" in _es.lower()
                         or ("blocked" in err_str and "safety" in err_str)):
@@ -1365,12 +1180,6 @@ class _MangaTranslatorBody_80:
                     print(f"    [!] {tag} روی {self.provider}/{self.model_name}")
                     self._recreate_api_client()
 
-# AutoRetry به سبکِ مرجع: مدلِ «کند ولی سالم»
-# قربانیِ cascade نمیشود. همان مدل تا
-# چند بار با انتظارِ واقعی (نمایی ۲/۴/۸/… ثانیه) دوباره
-# پرسیده میشود؛ مرجع تا ۱۰ بار با انتظارِ قابلِ تنظیم.
-# آیتمهایی که از جریانِ قبلی نشستهاند از پرامپتِ بعدی
-# حذف میشوند تا هر تلاش سبکتر شود.
                     _still = [r for r in work_regions
                               if not (r.translated_text or "").strip()]
                     if _still and len(_still) < len(work_regions):
@@ -1519,8 +1328,6 @@ class _MangaTranslatorBody_80:
                         is_core_flash = any(
                             core == x or core.startswith(x)
                             for x in (
-# مدل‌هایِ مردهٔ 2.x/1.5 حذف شدند
-# رویِ مدلِ مرده چرخِ کلید بیهوده است → حذفِ مدل
                                 "gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.1-flash",
                                 "gemini-flash-latest", "gemini-flash-lite-latest",
                                 "gemini-3.5-flash-lite", "gemini-3.1-flash-lite",
@@ -1530,7 +1337,7 @@ class _MangaTranslatorBody_80:
                         if suggested:
                             print(f"    [!] مدل «{self.model_name}» دیگر در دسترس نیست → "
                                   f"پیشنهاد API: {suggested}")
-                            self._note_model_fail()  # شمارشِ ۳-مردن
+                            self._note_model_fail()
 
                             dead = self.model_name
                             cascade = [x for x in (self._model_cascade or []) if x != dead]
@@ -1561,7 +1368,7 @@ class _MangaTranslatorBody_80:
                                 self._recreate_api_client()
                                 continue
                         else:
-                            if self._note_model_fail():  # ۳ بار نبود؟
+                            if self._note_model_fail():
                                 self._reset_model_cascade(reason="۳ بار ناموجودِ مدل")
                                 self._recreate_api_client()
                                 time.sleep(0.3)
@@ -1575,7 +1382,7 @@ class _MangaTranslatorBody_80:
                                 continue
 
                     if self._is_model_unavailable_error(e):
-                        if self._note_model_fail():  # ۳ بار نبود؟
+                        if self._note_model_fail():
                             self._reset_model_cascade(reason="۳ بار UNAVAILABLE")
                             self._recreate_api_client()
                             time.sleep(0.3)
@@ -1660,9 +1467,6 @@ class _MangaTranslatorBody_80:
             work_regions = [r for r in work_regions if not (r.translated_text or "").strip()]
             if not work_regions:
                 return
-# لنگرِ سبک برایِ تلاشِ نهایی (فیکسِ v1.14.288): ترجمههایِ
-# نشستهٔ استریمهایِ قبلی همان لحظه یادداشت میشوند تا نجاتِ
-# نهایی (۲۷۳ بالنِ v287) با همان لحنِ فصل بیاید نه کتابیِ خام.
             try:
                 self._note_style_samples(regions)
             except Exception:
@@ -1692,22 +1496,13 @@ class _MangaTranslatorBody_80:
         except Exception as e:
             print(f"    [!] تلاش نهایی هم شکست: {e}")
         print(f"    [!] ترجمه‌ی این بخش بعد از {self.max_retries}+1 تلاش ناموفق موند.")
-# مشکل۳: آخرین خطِ دفاع — هیچ حبابِ خالی تحویل نمیشود
         try:
             if self._force_translate_missing(regions):
                 print("    [✓] حبابهای خالی نجات یافتند (189).")
         except Exception as _e:
             print(f"    [!] نجاتِ نهایی: {str(_e)[:80]}")
 
-# مشکل۳: «هرجور شده ترجمه کن» — هیچ حبابِ خالی نمیماند ──
     def _force_translate_missing(self, regions: List[TextRegion]) -> int:
-        """برای هر حبابِ بدونِ ترجمه: اول درخواستِ تکآیتمیِ کوتاه (متنیِ ساده —
-        مدلهایی که JSONشان خراب است متنی جواب میدهند)، بعد همان آیتم در حالتِ
-        JSON ساختاریافته. — دیگر متنِ مبدأ جایگزین نمیشود («عکسِ
-        انگلیسیش نشون نده تا وقتی همشو ترجمه کنه»): ناحیهٔ بیجواب بیترجمه
-        میماند تا دورِ بعدی (دورهای translate_regions یا سدِ نهاییِ
-        finish_page_phase) دوباره بپرسد؛ رندرِ آخرِ صفحه فقط «تصویریِ»
-        متنِ مبدأ را میگذارد (سدِ 192)، داده دستنخورده میماند."""
         missing = [r for r in regions
                    if not str(getattr(r, "translated_text", "") or "").strip()
                    and str(getattr(r, "source_text", "") or "").strip()]
@@ -1715,9 +1510,6 @@ class _MangaTranslatorBody_80:
             return 0
         print(f"    {len(missing)} حبابِ بدونِ ترجمه — نجاتِ تکآیتمی…")
         sys_inst = self._get_system_instruction()
-# لنگرِ سبکِ نجاتِ تکآیتمی: پرامپتِ کوتاهِ قبلی هیچ قانونِ سبکی
-# نداشت → جوابها کتابی برمیگشتند؛ حالا ۳ نمونهٔ ترجمهٔ خودِ فصل
-# + دستورِ تطبیقِ لحن میآیند
         _sref = self._style_ref_samples()[:3]
         _anchor = ""
         if _sref:
@@ -1731,8 +1523,6 @@ class _MangaTranslatorBody_80:
         for r in missing:
             src = (r.source_text or "").strip()
             val = ""
-# گام A: متنیِ ساده، بدونِ JSON — + بندِ ضدِ فیک (v1.14.262):
-# متنِ خامِ OCR است؛ رد/جای‌نگهدار ممنوع — بهترین حدسِ معنایی
             p1 = ("Translate this one manga dialogue into natural spoken Persian. "
                   "It is raw OCR output from a comic page, so it may contain "
                   "errors or look garbled — never refuse it and never write "
@@ -1752,7 +1542,6 @@ class _MangaTranslatorBody_80:
                     val = (val or "").strip()
                     val = re.sub(r"^```(?:json)?\s*|\s*```$", "", val).strip()
                     val = val.strip('"').strip().strip('"').strip()
-# پاسخِ فیک ([CENSORED]/انکار) = بی‌پاسخ — دوباره پرسیده میشود (v1.14.262)
                     if val and self._is_censored_translation(val) \
                             and "censor" not in src.lower():
                         print(f"    [!] نجاتِ تک‌آیتمیِ بالن[{r.id}]: پاسخِ "
@@ -1764,7 +1553,6 @@ class _MangaTranslatorBody_80:
                 except Exception as e:
                     print(f"    [!] نجاتِ تکآیتمیِ بالن[{r.id}]: {str(e)[:80]}")
                     time.sleep(0.4)
-# گام B: همان آیتم در قالبِ مرجع — یک صفحه، یک دیالوگ
             if not val:
                 try:
                     _rules = (getattr(self, "custom_instruction", "") or "").strip() \
@@ -1790,10 +1578,6 @@ class _MangaTranslatorBody_80:
                 except Exception as e:
                     print(f"    [!] نجاتِ JSONِ بالن[{r.id}]: {str(e)[:80]}")
             if not val:
-# فال‌بکِ «val = src» حذف شد؛ همان چیزی بود که
-# انگلیسی را رویِ عکسِ نهایی مینشاند (ناحیه «ترجمهشده» حساب
-# میشد و صفحه زودتر از موعد تمام میشد). ناحیه بیترجمه میماند
-# تا سدِ نهاییِ finish_page_phase دوباره بپرسد.
                 print(f"    [!] بالن[{r.id}] مدل جواب نداد — بیترجمه میماند تا دورِ بعد دوباره پرسیده شود.")
                 continue
             fixed += 1

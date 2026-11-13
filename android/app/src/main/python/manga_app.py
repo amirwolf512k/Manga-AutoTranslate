@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.289"
+APP_VER = "1.14.297"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -30,15 +30,8 @@ KEY_ENV_ORDER = ("GEMINI_API_KEYS", "GEMINI_API_KEY", "GOOGLE_API_KEY",
                  "OPENAI_API_KEY", "DEEPSEEK_API_KEY", "GROQ_API_KEY",
                  "XAI_API_KEY", "TOGETHER_API_KEY", "OPENROUTER_API_KEY", "API_KEY")
 PROVIDER_ALIASES = {"chatgpt": "openai", "grok": "xai"}
-# فهرستِ ارائه‌دهندگانِ رابط فقط همین دو
-# میماند؛ موتور (manga.py) همچنان همه را میشناسد (CLI/سازگاریِ configهای
-# قدیمی) و مدلهایِ دلخواه با «custom» اجرا میشوند.
 PROVIDERS = ["gemini", "custom"]
 
-# ═══ v1.14.274 — فایلِ واحدِ متن‌ها: همهٔ اسمِ دکمه‌ها/متن‌ها/حرف‌های
-# کاراکتر از «manga_sections/05_ui_texts.py» میآید (پی‌سی/اندروید/لینوکس).
-# فایل نبود/خراب بود = همان متن‌های پیش‌فرضِ داخلِ همین کد (هیچ چیزی
-# نمی‌شکند — فقط یک اخطار در لاگ). TX() فقط یک dict.get است. ═══
 def _load_ui_texts():
     try:
         import importlib.util
@@ -59,7 +52,6 @@ def _load_ui_texts():
 UI_TEXTS = _load_ui_texts()
 
 def TX(k, d=None):
-    """متنِ کلیدِ k از فایلِ واحدِ متن‌ها — با پیش‌فرضِ d."""
     try:
         v = UI_TEXTS.get(k, d)
         return d if v is None else v
@@ -67,7 +59,6 @@ def TX(k, d=None):
         return d
 
 def _ui_t_script():
-    """<script> تزریقیِ window.UI_T برای ریدرهای HTML (وب + اندروید)."""
     try:
         _j = json.dumps(UI_TEXTS, ensure_ascii=False, separators=(",", ":"))
         return "<script>window.UI_T=" + _j + ";</script>"
@@ -81,10 +72,6 @@ def _ui_t_json_file():
         return ""
 
 
-# helperِ JSِ مشترکِ هر سه نمایشگر — ES5 (ریدرِ زنده) هم اجرا میشود.
-# UT() متنِ کلید را از window.UI_T میگیرد؛ نبودش = همان پیش‌فرضِ خودِ
-# صفحه. پچِ آغازین متن‌های ایستا (دکمه‌ها/برچسب‌ها) را پس از DOM
-# بازنویسی میکند — همهٔ سلکتورها null-safe هستند.
 _UT_JS_HELPER = (
     "<script>function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}"
     "}catch(e){return d}}"
@@ -120,10 +107,6 @@ _UT_JS_HELPER = (
     "if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',p)}else{p()}})();</script>")
 
 def _ui_t_head():
-    """تزریقِ زندهٔ متن‌ها در <head> ریدرها — خالی = هیچ تزریقی.
-    تعریفِ UT() «همیشه» میآید (حتی بدونِ داده) — ریدرها هرگز به
-    ReferenceError نمی‌افتند (فیکسِ v275: نمایشگرِ وب با نبودِ
-    05_ui_texts.py وسطِ کار نمی‌مُرد — «انگار گیر کرده»)."""
     _j = _ui_t_json_file()
     out = ""
     if _j and _j != "{}":
@@ -132,14 +115,8 @@ def _ui_t_head():
     return out
 
 
-DEFAULT_GEMINI_KEYS = []#",".join(["123:])
+DEFAULT_GEMINI_KEYS = []
 
-# نوارِ پیشرفتِ زیرِ لاگ در وب:
-# همان نشانگرهایی که اعلانِ اندروید میسازند (bridge.py) اینجا
-# از دنبالهٔ لاگِ وب خوانده میشوند: فاز از آخرین خطِ شناخته‌شده و شمارهٔ
-# صفحه از آخرین «N آماده شد»؛ درصد = صفحهٔ در حال کار ÷ کل (total.txt
-# پوشهٔ live را موتور همان اول می‌نویسد). ترتیب مهم است (اولین تطبیقِ
-# هر خط برنده میشود) — عینِ لیستِ اندروید.
 _WEB_PROG_PHASES = (
     ("بارگذاری موتور", "بارگذاری مدلها"),
     ("لود نشد", "خطا"),
@@ -163,9 +140,6 @@ _WEB_PROG_PHASES = (
     ("پدلِ اندروید", "استخراج متن"),
 )
 
-# شمارنده‌های صریحِ موتور (manga.py — پایپ‌لاینِ مرجع):
-# «استخراج متن: n/N صفحه»، «پاکسازی متن: n/N صفحه»، «ترجمه: n/N ناحیه».
-# n/N از خودِ خط خوانده میشود (کلِ همراه، مستقل از total.txt).
 _WEB_PROG_COUNT_RES = (
     (re.compile(r"استخراج متن[:：]\s*(\d{1,4})\s*/\s*(\d{1,4})\s*صفحه"),
      "استخراج متن", "صفحه"),
@@ -173,25 +147,12 @@ _WEB_PROG_COUNT_RES = (
      "پاکسازی", "صفحه"),
     (re.compile(r"ترجمه[:：]\s*(\d{1,4})\s*/\s*(\d{1,4})\s*ناحیه"),
      "ترجمه", "ناحیه"),
-# استریمِ زندهٔ مرجع: در درخواستِ واحد، پیشرفتِ لحظهای از
-# خطوطِ «← استریم: X/Y دیالوگ…» خوانده میشود (همان پیشنمایشِ
-# صفحهبهصفحهٔ مرجع)
     (re.compile(r"استریم[:：]\s*(\d{1,4})\s*/\s*(\d{1,4})\s*دیالوگ"),
      "ترجمه", "ناحیه"),
 )
 
 def _web_prog_parse(log: str):
-    """(فاز، مقدارِ فعلی، کلِ همراهِ خط، واحد) از انتهای لاگ — آخرین رخداد ملاک است.
-
-     — موتور (manga.py) حالا در سبکِ مرجع بعد از «هر» صفحهٔ
-    استخراج‌شده «استخراج متن: n/N صفحه»، بعد از هر صفحهٔ پاک‌شده
-    «پاکسازی متن: n/N صفحه» و بعد از هر بستهٔ ترجمه «ترجمه: n/N ناحیه»
-    چاپ میکند (قبلاً تا پایانِ کلِ استخراج هیچ «N آماده شد»ای نبود و
-    درصدِ نوار روی 0٪ گیر میکرد — (رندرِ نهایی) و نشانگرهایِ پایان/خطا با هم
-    مقایسه میشوند؛ برنده = آخرین رخداد. tot=0 یعنی کل از total.txt
-    پوشهٔ live خوانده شود."""
     tail = (log or "").splitlines()[-400:]
-# ۱) شمارنده‌های صریح — آخرین خطِ هر فاز
     marks = {}
     for idx, ln in enumerate(tail):
         for rx, kind, unit in _WEB_PROG_COUNT_RES:
@@ -210,12 +171,9 @@ def _web_prog_parse(log: str):
         for _k, _v in _WEB_PROG_PHASES:
             if _k in ln and _v in ("تمام شد", "خطا", "لغو شد"):
                 _term_idx, _term_phase = idx, _v
-# صفحهٔ آمادهٔ آخر (برای حالتِ خطا)
     _page_legacy = _ready_page
-# ۲) رویدادها: (idx، فاز، cur، tot، unit) — آخرینِشان برنده
     events = []
     for kind, (idx, cur, tot, unit) in marks.items():
-# شمارندهٔ استخراج بعد از «صفحه کامل شد» بازنشسته میشود
         if (kind == "استخراج متن" and _ext_done_idx is not None
                 and idx < _ext_done_idx):
             continue
@@ -228,7 +186,6 @@ def _web_prog_parse(log: str):
         events.sort(key=lambda e: e[0])
         _, ph, cur, tot, unit = events[-1]
         return ph, cur, tot, unit
-# ۳) فازِ قدیمیِ بدونِ شمارنده (اولین تطبیقِ آخرین خطِ شناختهشده)
     phase = ""
     for ln in reversed(tail):
         for _k, _v in _WEB_PROG_PHASES:
@@ -241,7 +198,6 @@ def _web_prog_parse(log: str):
 
 def _web_prog_html(phase: str, cur: int, total: int, running: bool,
                    done: bool, unit: str = "") -> str:
-    """HTML نوار پیشرفت: میله + «فاز — n از N (p٪)» مثل گوشی."""
     cls = ""
     if done:
         cls = " done"
@@ -280,8 +236,6 @@ def _web_prog_html(phase: str, cur: int, total: int, running: bool,
     )
 
 FONT_BUNDLES = [
-# اول «آینهٔ jsDelivr»: raw.githubusercontent.com در ایران
-# اغلب بسته/کند است و فونت‌ها دانلود نمی‌شدند (درخواستِ کاربر).
     ("normal",       "Vazirmatn-Bold.ttf", "کودک — متن عادی حباب", [
         "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@master/fonts/ttf/Vazirmatn-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Bold.ttf",
@@ -312,14 +266,6 @@ FONT_BUNDLES = [
         "https://cdn.jsdelivr.net/gh/rastikerdar/samim-font@master/dist/Samim-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/samim-font/master/dist/Samim-Bold.ttf",
     ]),
-    #. فونتِ مقصر
-# Vazir-Code.ttf بود: فونتِ کدنویسی است و «هیچ‌کدام» از شش گلیفِ
-# لیگاتورِ لام-الف (ﻻ/ﻼ/ﻵ/… U+FEF5..FEFC) را ندارد → «حملات» به‌جایِ
-# رندر، «لا» کلاً غیب میشد و «حم ت» میماند (حتی نسخهٔ رسمیِ
-# upstream هم ندارد — تست شد). جایگزین: Sahel-Bold (همهٔ گلیفها
-# حسِ پنجرهٔ سیستم، و از قبل در fallback همین باندل بود). گاردِ
-# پوششِ ۲۲۹ در manga.py هم فونتِ خرابِ باقی‌مانده در نصبهای قدیمی را
-# خودکار به فونتِ سالم فالبک میکند.
     ("system",       "Sahel-Bold.ttf", "پنجرهٔ سیستم/UI (دیجیتال)", [
         "https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@master/dist/Sahel-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Bold.ttf",
@@ -337,9 +283,6 @@ FONT_BUNDLES = [
 ]
 
 def _norm_instr(text: str) -> str:
-    # v1.14.276 — \nِ لفظیِ پرامپتهایِ نسخههایِ قدیمی هم هنگامِ مقایسه
-    # به خطِ نو تبدیل میشود تا بکاپ/کانفیگِ قدیمی باز هم «پیشفرض»
-    # شناخته شود و کادرِ پرامپتِ تمیزِ نو را نشان بدهد.
     t = (text or "").replace("\\n", "\n")
     return re.sub(r"\s+", " ", t.strip())
 
@@ -353,9 +296,8 @@ def is_custom_instruction(text: str) -> bool:
     return True
 
 def _known_default_instruction_texts() -> list:
-    """متنهایی که «پیشفرض» حساب میشوند و سفارشی نیستند (فقط مرجع)."""
     try:
-        from manga import PROMPT_PRESETS  # ایمپورتِ سنگین — فقط همین‌جا
+        from manga import PROMPT_PRESETS
         return [v for v in PROMPT_PRESETS.values() if isinstance(v, str)]
     except Exception:
         return []
@@ -387,16 +329,13 @@ def _cli_ask(prompt: str) -> str:
         print()
         return ""
 
-PROMPT_MODE_DEFAULT = "professional"  # پیشفرضِ مشترکِ وب و فرمِ گوشی (auto حذف شد — دستورِ سازنده)
+PROMPT_MODE_DEFAULT = "professional"
 
 PROMPT_MODE_LABELS = {
     "professional": "حرفه‌ای — مخصوص Gemini Flash و Pro",
     "lite": "سبک — مخصوص Flash Lite و سرویس‌های غیر Gemini",
 }
 
-# برچسبهایِ نمایشیِ نسخههایِ قبلیِ وباپ (رادیو) — برایِ سازگاریِ کانفیگِ قدیمی
-# «auto»یِ قدیمی → مسیرِ خودکار = مدلهایِ Lite خودشان lite میگیرند؛
-# در سمتِ UI دیگر گزینه نیست ولی مقدارِ ذخیرهشده معتبر میماند
 _PROMPT_MODE_LEGACY_LABELS = {
     "auto": "professional",
     "خودکار (بر اساس سرویس و مدل)": "professional",
@@ -405,9 +344,6 @@ _PROMPT_MODE_LEGACY_LABELS = {
 }
 
 def sanitize_prompt_mode(v) -> str:
-    """هر ورودیِ (مقدار یا برچسبِ قدیمی) به یکی از professional/lite —
-    مقدارِ کهنهٔ auto خودکار → professional (سبکِ خودکار حذف شد؛
-    مدلهایِ Lite در موتور خودشان lite میگیرند)."""
     s = str(v or "").strip()
     if s in ("professional", "lite"):
         return s
@@ -419,8 +355,6 @@ def sanitize_prompt_mode(v) -> str:
     return "professional"
 
 def resolve_prompt_preview(mode_v, provider_v, model_v, instr_v):
-    """متنِ کاملِ پرامپتِ مؤثر — : تیترِ «پرامپت فعلی: …» حذف شد
-    (خواستهٔ کاربر)؛ فقط خودِ متنِ پرامپت برمی‌گردد."""
     t = (instr_v or "").strip()
     if t and is_custom_instruction(t):
         return t
@@ -467,24 +401,14 @@ def save_config(cfg: dict) -> None:
     except Exception:
         pass
 
-# مدیرِ مدلهایِ سفارشی ─────────────────────────────
-# +
-# «تو گوشی پی سی لینوکس مدل هاشو تو حافظه سیو کنه بجز وب ولی وب اجرا
-# کنن» + «یک گزینه import و backup اخر صفحه اضافه کن چیزای ک وارد کردن
-# بکاپ بگیره از مدل بگیرع تا تنظیماتشون».
 CUSTOM_MODELS_PATH = os.path.join(WORK_DIR, "manga_models.json")
 
 def _web_host() -> bool:
-    """ — وبِ عمومی (GitHub Actions/سرور): ذخیرهٔ فایلی نمیکینیم
-    مدلها فقط در مرورگرِ خودِ کاربر (localStorage) و حافظهٔ نشست میمانند
-    ولی کاملاً اجرا میشوند. PC/لینوکس/گوشی → فایل روی دیسک (ماندگار)."""
     return (os.environ.get("GITHUB_ACTIONS", "").strip() not in ("", "false")
             or os.environ.get("MANGA_WEB", "").strip() == "1"
             or os.environ.get("RAILWAY_STATIC_URL", "").strip() != "")
 
 def load_custom_models() -> list:
-    """مدلهایِ سفارشی از فایلِ دیسک (اجرایِ محلی) — در وب فایل نیست.
-    ساختار: [{"name","api_base","api_key","model"}, …] به‌ترتیبِ کاربر."""
     try:
         with open(CUSTOM_MODELS_PATH, encoding="utf-8") as f:
             data = json.load(f)
@@ -508,8 +432,6 @@ def load_custom_models() -> list:
     return []
 
 def save_custom_models(models: list) -> bool:
-    """ذخیره روی دیسک — فقط در اجرایِ محلی (گوشی/PC/لینوکس). در وب رد
-    میشود (حافظهٔ نشست + localStorage مرورگر خودش نگه میدارد)."""
     if _web_host():
         return False
     try:
@@ -520,7 +442,6 @@ def save_custom_models(models: list) -> bool:
         return False
 
 def _cm_names(models: list) -> list:
-    """فقطِ نامهایِ معتبرِ لیستِ مدلها (بدونِ تکرار/خالی)."""
     out = []
     for m in (models or []):
         nm = str(m.get("name") or "").strip()
@@ -529,7 +450,6 @@ def _cm_names(models: list) -> list:
     return out
 
 def _cm_mask_key(k) -> str:
-    """کلیدِ ماسکشده برایِ نمایشِ امن (sk-123456…wxyz)."""
     k = str(k or "").strip()
     if not k:
         return ""
@@ -538,10 +458,6 @@ def _cm_mask_key(k) -> str:
     return k[:6] + "…" + k[-4:]
 
 def _cm_info_html(models: list, name: str) -> str:
-    """ — وقتی مدلِ ذخیرهشدهٔ کاربر در منو انتخاب میشود، مشخصاتِ
-    ذخیرهشدهٔ خودش (لینک + مدلِ هوش + کلیدِ ماسکشده) بهصورتِ فقطخواندنی
-    زیرِ منو نشان داده میشود — فیلدها پر نمیشوند (دستورِ قبلی: انتخابِ
-    مدل خودش را در فیلدها بارگذاری نکند)."""
     nm = str(name or "").strip()
     m = next((x for x in (models or [])
               if str(x.get("name") or "").strip() == nm), None)
@@ -561,12 +477,7 @@ def _cm_info_html(models: list, name: str) -> str:
         parts.append(f"کلید: <code>{esc(key)}</code>")
     return "<div class='hint'>" + " — ".join(parts) + "</div>"
 
-# منویِ انتخابِ AI با گزینهٔ auto ──────────────────
 def _ai_choices(models: list) -> list:
-    """گزینههایِ منویِ انتخابِ AI به ترتیبِ دوم «gemini»، بعد مدلهایِ اضافهشدهٔ کاربر به ترتیبِ
-    افزودن، و آخری «custom».
-     — → «auto» فقط وقتی در لیست حداقل یک
-    مدلِ ذخیرهشده باشد در منو میآید؛ بدونِ مدل: gemini | custom."""
     names = [n for n in _cm_names(models)
              if n not in ("auto", "gemini", "custom")]
     out = (["auto"] if names else []) + ["gemini"]
@@ -575,12 +486,6 @@ def _ai_choices(models: list) -> list:
     return out
 
 def _model_str(v) -> str:
-    """مقدارِ فیلدِ مدل (دراپ‌داونِ چند-انتخابیِ جدید یا رشتهٔ قدیمی)
-    به رشتهٔ تمیزِ «کاما-جدا» تبدیل میشود — همهٔ مصرفکنندهها
-    (CLI/امضا/نمایش/بکاپ) همین را میبینند. مثال:
-      ['gemini-3.8-flash', 'gemini-3.5-flash-lite'] → 'gemini-3.8-flash,gemini-3.5-flash-lite'
-      'gpt-4o-mini, deepseek-chat'              → 'gpt-4o-mini,deepseek-chat'
-      [] / '' / None                             → ''"""
     if v is None:
         return ""
     if isinstance(v, (list, tuple, set)):
@@ -608,11 +513,6 @@ def _model_str(v) -> str:
     return ",".join(out)
 
 def _gemini_offline_models() -> list:
-    """ — لیستِ آفلاینِ مدلهایِ Gemini — از manga.py میآید
-    (GEMINI_FLASH_MODELS_OFFLINE؛ فهرستِ ۸تاییِ سازنده v1.14.291
-    — با gemini-4-hydrogen). اگر import نشد (مثلاً وبِ هاست با
-    بک‌اندِ سبک) همین نسخهٔ داخلی استفاده میشود تا فیلد هرگز
-    خالی نباشد."""
     try:
         from manga import gemini_offline_models as _g
         _lst = _g()
@@ -632,16 +532,9 @@ def _gemini_offline_models() -> list:
     ]
 
 def _gemini_default_models_str() -> str:
-    """رشتهٔ کاما-جدایِ فهرستِ پیش‌فرضِ Gemini (۸ مدل v1.14.291 —
-    با hydrogen) — برایِ پرکردنِ فیلدِ مدل از همان ابتدا (دستورِ
-    سازنده v1.14.288:
-    «پیشفرض هم همچنین وارد شده باشه خالی نشون نده؛ طرف بفهمه
-    چجور وارد شده»)."""
     return ",".join(_gemini_offline_models())
 
 def _models_join(models) -> str:
-    """هر فهرستِ مدل (زنده/آفلاین) به رشتهٔ کاما-جدا برایِ
-    نوشتن داخلِ فیلدِ مدل (دکمهٔ ↻: «همهٔ مالها رو وارد کنه»)."""
     try:
         from manga import join_model_list as _j
         return _j(list(models or []))
@@ -651,10 +544,6 @@ def _models_join(models) -> str:
 
 def resolve_ai_named(models: list, pick: str, api_keys: str = "",
                      model_id: str = ""):
-    """ — resolveِ «مدلِ مشخصِ کاربر» از منویِ AI به provider واقعی
-    برای manga.py (manga.py دستنخورده میماند). اگر کاربر مدلِ مشخصی
-    (مدلِ خودش یا gemini) انتخاب کرده باشد فقط و فقط همان استفاده میشود.
-    خروجی: (provider, api_base, api_key, model) — نامِ ناشناخته: None."""
     pick = str(pick or "").strip()
     if not pick or pick in ("auto", "gemini", "custom"):
         return None
@@ -669,12 +558,6 @@ def resolve_ai_named(models: list, pick: str, api_keys: str = "",
 
 def resolve_ai_auto(models: list, api_keys: str = "", model_id: str = "",
                     probe=None):
-    """ — رفتارِ «auto»: خودش بینِ همهٔ مدلهایِ موجود (gemini +
-    مدلهایِ کاربر به ترتیبِ افزودن) انتخاب میکند؛ اگر یکی خطا داد یا در
-    دسترس نبود سراغِ بعدی میرود. سنجشِ دسترسی = درخواستِ سبکِ همان موتور
-    (manga.test_api_keys) — manga.py هیچ تغییری نمیکند.
-    خروجی: (provider, api_base, api_key, model, [خطوطِ لاگ]) —
-    هیچ‌کدام در دسترس نبود: ("", "", "", "", [خطوط])."""
     models = [m for m in (models or [])
               if isinstance(m, dict) and str(m.get("name") or "").strip()]
     cands = [("gemini", "Gemini", "", str(api_keys or ""),
@@ -760,9 +643,7 @@ def download_fonts(log=print) -> int:
 
 GITHUB_RAW_BASE = ("https://raw.githubusercontent.com/"
                    "amirwolf512k/Manga-AutoTranslate/main/")
-# لانچرها هم آپدیت می‌شوند (Manga.bat / manga.sh)
 UPDATE_FILES = ("manga.py", "manga_app.py", "Manga.bat", "manga.sh")
-# چکِ آپدیت حالا ارزان است (فایل VERSION چندبایتی) → هر ۳۰ دقیقه
 UPDATE_INTERVAL_S = 30 * 60
 UPD_DIR = os.path.join(WORK_DIR, "updates")
 
@@ -795,9 +676,6 @@ def _http_get(url: str, timeout: float = 30.0) -> bytes:
         return r.read()
 
 def _remote_app_ver(log=print) -> str:
-    """: نسخهٔ_remote را از فایل VERSION (چند بایت) می‌خواند —
-    قبلاً برای چکِ نسخه، خودِ manga.py (~نیم مگابایت) دانلود می‌شد که روی
-    اینترنتِ کند عملاً «آپدیت گیر کردن» بود."""
     try:
         txt = _http_get(GITHUB_RAW_BASE + "VERSION?cb="
                         + str(int(time.time() // 300)), timeout=12).decode("utf-8", "ignore")
@@ -809,7 +687,6 @@ def _remote_app_ver(log=print) -> str:
     return ""
 
 def _local_app_ver() -> str:
-    """نسخهٔ محلی: اول فایل VERSION کنار برنامه، بعد APP_VER در manga_app.py."""
     try:
         vp = os.path.join(HERE, "VERSION")
         if os.path.isfile(vp):
@@ -822,9 +699,6 @@ def _local_app_ver() -> str:
     return _local_file_ver("manga_app.py")
 
 def _remote_section_names(log=print):
-    """ — فهرستِ بخشهایِ پلاگینیِ موتور از MANIFEST ریپو.
-    (موتور از manga_sections/ خوانده میشود؛ آپدیتِ manga.py باید
-    بخشها را هم همراه بیاورد وگرنه لودر چیزی برای اجرا ندارد.)"""
     try:
         txt = _http_get(GITHUB_RAW_BASE + "manga_sections/MANIFEST?cb="
                         + str(int(time.time() // 300)),
@@ -837,14 +711,12 @@ def _remote_section_names(log=print):
         return None
 
 def _stage_update_file(name: str, log=print) -> dict:
-    """یک فایل آپدیت را می‌گیرد و کنار بقیه stage می‌کند (برای apply)."""
     info = {"local": "", "remote": "", "newer": False}
     try:
         src = _http_get(GITHUB_RAW_BASE + name + "?cb="
                         + str(int(time.time() // 300)), timeout=60).decode("utf-8", "ignore")
         info["remote"] = _read_ver_from_src(src[:8192])
         info["local"] = _local_file_ver(name)
-# نام میتواند تو در تو باشد (manga_sections/00_base.py)
         staged = os.path.join(UPD_DIR, name + ".staged")
         os.makedirs(os.path.dirname(staged) or UPD_DIR, exist_ok=True)
         with open(staged, "w", encoding="utf-8") as f:
@@ -869,10 +741,6 @@ def check_updates(force: bool = False, log=print) -> dict:
     newer_global = bool(remote_ver and _cmp_ver(remote_ver, local_ver) > 0)
 
     if newer_global:
-# فقط وقتی نسخهٔ جدید واقعاً هست، فایل‌ها دانلود می‌شوند —
-# و به‌صورت موازی (۴ فایل همزمان) تا آپدیت خیلی سریع‌تر بیاید.
-# بخشهایِ پلاگینیِ موتور (manga_sections/) هم همراهِ
-# آپدیتِ manga.py دانلود و نصب میشوند — بدونِ آنها لودر اجرا نمیشود.
         files = list(UPDATE_FILES)
         sections = _remote_section_names(log=log)
         if sections:
@@ -920,7 +788,6 @@ def apply_updates(report: Optional[dict] = None, log=print) -> list:
             continue
         try:
             dst = os.path.join(HERE, name)
-# نام میتواند تو در تو باشد (manga_sections/00_base.py)
             os.makedirs(os.path.dirname(dst) or HERE, exist_ok=True)
             bak = dst + ".bak"
             if os.path.isfile(dst):
@@ -932,8 +799,6 @@ def apply_updates(report: Optional[dict] = None, log=print) -> list:
         except Exception as e:
             log(f"✖ نصب {name} ناموفق: {e}")
 
-# بخشهایِ زامبیِ آپدیتِ قبلی را پاک کن (مثلاً وقتی فایلی در
-# MANIFEST جدید حذف شده باشد). فقط وقتی این آپدیت خودش بخشها آورده.
     sec_dir = os.path.join(HERE, "manga_sections")
     keep = {os.path.basename(n) for n in (rep.get("files") or {})
             if n.startswith("manga_sections/")}
@@ -1026,7 +891,6 @@ def smart_output_base(input_path: str) -> str:
     if not raw:
         return "chapter_fa"
     
-# چند لینک (با اینتر/کاما/تب): برای نامِ خروجی فقط اولی ملاک است
     raw = re.split(r"[,\n\r\t]+", raw)[0].strip()
     is_url = raw.lower().startswith(("http://", "https://"))
     if is_url:
@@ -1092,14 +956,9 @@ def smart_output_base(input_path: str) -> str:
         base = base + "_fa"
     return base
 
-# پاسخِ کاربر به پرسشِ «ادامه یا از اول» (کلید = شناسهٔ جلسه)
 _ASK_ANSWER = {}
 
 def _cache_dir_for(output_path) -> str:
-    """مسیرِ کشِ مشترک — مستقل از فرمتِ خروجی: «…/ch5.pdf» و
-    «…/ch5.html» به یک کش می‌رسند (خواستهٔ سازنده: تعویضِ فرمت
-    فقط بسته‌بندی را از نو بسازد، نه کلِ کار را). باید همانِ
-    همتایِ MangaTranslator._cache_dir_for در موتور باشد."""
     _p = str(output_path or "")
     root, ext = os.path.splitext(_p)
     if ext.lower() in (".pdf", ".zip", ".html", ".psd",
@@ -1109,11 +968,6 @@ def _cache_dir_for(output_path) -> str:
 
 def _trans_sig_of(provider, model, api_base, prompt_mode,
                   instruction, fake, temperature, top_p) -> str:
-    """امضای تنظیماتِ ترجمه — آینهٔ دقیقِ
-    MangaTranslator._trans_sig_of موتور (باید برایِ ورودیِ یکسان،
-    خروجیِ یکسان بدهند — تستِ scripts آن را چک می‌کند).
-    نرمال‌سازیِ مدل: خودتنها (بدون وابستگیِ بیرونی) تا اجرایِ
-    مستقلِ تست هم عینِ اپ رفتار کند — لیست → کاما-جدا."""
     import hashlib as _hl
 
     def _ms(v) -> str:
@@ -1195,18 +1049,12 @@ def run_cli_interactive():
         print(f"❌ مسیر پیدا نشد: {src}")
         return
 
-# فرمتِ «پوشهٔ تصاویر» حذف شد (v1.14.279 — خواستهٔ سازنده:
-# «ذخیره سازی پوشه ای اصلا کار نمیکنه و بنظرم کلا حذف کن نیاز
-# نمیشه») — فقط PDF/ZIP/HTML/PSD میماند؛ انتخابِ قدیمیِ 4/5 به
-# PDF/PSD میرسد تا انگشتِ خاطرهٔ کاربر خطا ندهد.
     print("\nقالب خروجی:  1) PDF   2) ZIP   3) HTML   4) PSD")
     f = input("انتخاب [1-4] (پیش‌فرض 1): ").strip() or "1"
     ext = {"1": ".pdf", "2": ".zip", "3": ".html", "4": ".psd",
            "5": ".psd"}.get(f, ".pdf")
 
     print("\nارائه‌دهندهٔ AI را انتخاب کنید:")
-    #)
-# فقط Gemini و custom (
     prov_menu = [
         ("gemini", "Google Gemini - رایگان با سهمیه"),
         ("custom", "سرویس دلخواه — ۴ فرمت: OpenAI / Responses / Anthropic / Google (دامنه + توکن + مدل)"),
@@ -1273,8 +1121,8 @@ def run_cli_interactive():
            "--batch-workers", str(int(cfg.get("batch_workers", 3))),
            "--max-retries", str(int(cfg.get("max_retries", 8))),
            "--request-delay", str(float(cfg.get("request_delay", 0))),
-           "--temperature", str(float(cfg.get("temperature", 0.7))),  # دستور: ۰.۷ (عینِ مرجع)
-           "--top-p", str(float(cfg.get("top_p", 0.9))),  # تنظیمِ top_p
+           "--temperature", str(float(cfg.get("temperature", 0.7))),
+           "--top-p", str(float(cfg.get("top_p", 0.9))),
            "--reading-order", str(cfg.get("reading_order", "rtl"))]
     cmd += font_args()
     klist = [k.strip() for k in (keys or "").replace(";", ",").split(",") if k.strip()]
@@ -1317,9 +1165,8 @@ def run_cli(argv):
         mod.main()
 
 def _ensure_webview() -> bool:
-    """pywebview را در صورت نبود نصب می‌کند (فقط بار اول، چند MB)."""
     try:
-        import webview  # noqa: F401
+        import webview
         return True
     except Exception:
         pass
@@ -1327,26 +1174,18 @@ def _ensure_webview() -> bool:
         print("[*] نصب pywebview برای پنجرهٔ دسکتاپ (فقط بار اول)...")
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-q",
                                "pywebview"], timeout=600)
-        import webview  # noqa: F401
+        import webview
         return True
     except Exception as e:
         print(f"[!] pywebview نصب نشد ({e}) → مرورگر")
         return False
 
 def run_desktop():
-    """: پنجرهٔ دسکتاپ = دقیقاً همان رابط وب.
-
-    رابط قدیمی tkinter حذف شد؛ حالا سرور وب همان UI محبوبِ گوشی/وب را سرو
-    می‌کند و پنجرهٔ نیتیو (pywebview / WebView2) همان صفحه را نشان می‌دهد —
-    شکلِ پنجرهٔ ویندوز دقیقاً مثل وب. اگر webview نبود → همان آدرس در مرورگر.
-    """
     import socket
     import time as _t
     import webbrowser
 
     port = int(os.environ.get("MANGA_APP_PORT", "7860") or 7860)
-# ?desktop=1 → صفحه می‌فهمد داخل پنجرهٔ دسکتاپ است؛ تنظیمات و
-# کلیدهای API برای همیشه ذخیره می‌شوند (مثل اندروید)، نه ۳۰ دقیقه‌ایِ وب.
     url = f"http://127.0.0.1:{port}/?desktop=1"
 
     def _up() -> bool:
@@ -1360,7 +1199,7 @@ def run_desktop():
     if not _up():
         print("[*] راه‌اندازی سرور رابط وب ...")
         proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--web"])
-        for _ in range(300):  # حداکثر ~۶۰ ثانیه
+        for _ in range(300):
             if _up():
                 break
             _t.sleep(0.2)
@@ -1382,8 +1221,6 @@ def run_desktop():
     else:
         try:
             import webview
-# private_mode=False → localStorage مثل اندروید دائمی می‌ماند
-# (کلیدهای API بعد از بستن برنامه هم پاک نمی‌شوند).
             _store = os.path.join(WORK_DIR, "webview_profile")
             try:
                 os.makedirs(_store, exist_ok=True)
@@ -1404,7 +1241,6 @@ def run_desktop():
             opened_browser = True
 
     if opened_browser:
-# تا مرورگر باز است، سرور باید بماند
         try:
             if proc is not None:
                 proc.wait()
@@ -1422,9 +1258,6 @@ def run_desktop():
     sys.exit(0)
 
 WEB_CSS = """
-/* فونت از سرورِ خودِ برنامه می‌آید (@font-face محلی) — دیگر هیچ
-   درخواستی به fonts.googleapis.com نمی‌رود. در ایران آن دامنه کند/مسدود است و
-   پنجرهٔ PC ده‌ها ثانیه معطلش می‌ماند («اپ کند میاد بالا»). */
 @font-face{font-family:'Vazirmatn';font-style:normal;font-weight:400;
   src:url('__FONTPFX__/Vazirmatn-Regular.ttf') format('truetype');
   font-display:swap}
@@ -1521,11 +1354,6 @@ body, .gradio-container, footer, .gradio-container .prose {
   box-shadow: 0 4px 12px rgba(224,53,42,.35), inset 0 0 0 1.5px rgba(255,255,255,.2);
 }
 .hint { color: var(--ink-dim) !important; font-size: .83rem; margin-top: 8px; }
-/* لینکِ
-   بلند (https://api.cloudflare.com/client/v4/accounts/…/chat/completions)
-   و اسمِ بلندِ مدل در خطِ مشخصاتِ زیرِ منو شکسته میشوند و دیگر صفحه را
-   پهن/بزرگ نمیکند — overflow-wrap:anywhere به همهٔ فرزندان میرسد و
-   min-content را هم کوچک میکند تا ستون بتواند جمع شود */
 .hint, .hint *, #manga_cm_info, #manga_cm_info * {
   overflow-wrap: anywhere !important;
   word-break: break-word !important;
@@ -1533,16 +1361,6 @@ body, .gradio-container, footer, .gradio-container .prose {
 }
 #manga_cm_info code, .hint code { white-space: normal !important; }
 
-/* ضربدرِ ✖ِ حذف، چسبیده به خودِ منویِ انتخابِ AI: مدلِ
-   خودت را در منو انتخاب کن، ✖ِ کنارِ منو میآید و با یک کلیک از لیست و
-   منو پاک میشود.
-   ✖ دیگر دکمهٔ درشتِ ۴۴px نیست؛ دقیقاً هماندازهٔ خودِ کنترلِ منو (۳۰px)
-   و همترازِ آن ساخته میشود.
-   ریشه پیدا شد: خودِ ✖ ۳۰×۳۰ است ولی gradio دورِ هر ردیف
-   یک قابِ .styler با پسزمینهٔ خاکستریِ آبی (var(--block-border-color))
-   میکشد؛ فاصلهٔ خالیِ کنارِ منو همان پسزمینه میشود و شبیهِ اینکه ✖ به
-   بالا کشیده شده. قاب شفاف میشود تا فقط خودِ دکمهٔ ✖ دیده شود (وبِ
-   PC/لینوکس/گوشی همه همین مرورگر است). */
 div.styler{background:transparent !important;border:none !important;
   box-shadow:none !important}
 #manga_cm_del_btn{max-width:30px !important;min-width:30px !important;
@@ -1555,10 +1373,6 @@ div.styler{background:transparent !important;border:none !important;
   transition:all .15s ease}
 #manga_cm_del_btn:hover{background:rgba(255,70,70,.18) !important;color:#ff4d4d !important}
 #manga_cm_del_btn:active{transform:scale(.94)}
-/* ↗ «دریافت توکن» (دستورِ v1.14.292: «فقط فلش بزاری کافیه و کوچک
-   کن کنار مدل ai بیاد نه پایینش»): دکمهٔ فقط-فلشِ ۳۰×۳۰ — همان ژستِ
-   ✖، همترازِ خودِ منو؛ ردیفِ منو هرگز نمی‌شکند تا در موبایل فلش
-   زیرِ منو نیفتد. متنِ راهنما در tooltip (aria-label) میآید. */
 #manga_provider_row{flex-wrap:nowrap !important}
 #manga_provider_row > *{min-width:0 !important}
 #manga_token_btn{max-width:30px !important;min-width:30px !important;
@@ -1571,8 +1385,6 @@ div.styler{background:transparent !important;border:none !important;
   transition:all .15s ease}
 #manga_token_btn:hover{background:rgba(255,210,138,.14) !important;color:#ffd28a !important}
 #manga_token_btn:active{transform:scale(.94)}
-/* فیلدِ کلید از سمتِ سرور type="password"
-   است (پیشفرضِ مخفی) و دکمهٔ 👁 داخلِ فیلد آن را نشان/مخفی میکند */
 #manga_api_keys .wrap, #manga_api_keys .input-container{position:relative !important}
 #manga_api_keys input{padding-inline-start:44px !important}
 .manga-eye{position:absolute !important;top:50% !important;
@@ -1586,11 +1398,6 @@ div.styler{background:transparent !important;border:none !important;
   box-shadow:none !important;margin:0 !important;flex:none !important}
 .manga-eye.on{color:#ffd28a !important;border-color:rgba(255,210,138,.45) !important}
 .manga-eye:active{transform:translateY(-50%) scale(.93)}
-/* کانالهایِ پنهانِ مرورگر↔سرور: gradio 6 کامپوننتهایِ
-   visible=False را اصلاً در DOM نمیگذارد و همهٔ JSهایی که با setVal
-   به سرور خبر میدهند (افزودنِ مدل، ضربدرِ ✖، بازیابیِ localStorage،
-   sid) کور میشوند؛ پس این کانالها visible=True ولی با CSS مخفی
-   میشوند تا در DOM بمانند — اندروید/PC/لینوکس/وب همه همان مرورگرند */
 .manga-hide-channel{display:none !important;visibility:hidden !important;
   height:0 !important;min-height:0 !important;margin:0 !important;
   padding:0 !important;border:0 !important;overflow:hidden !important}
@@ -1760,7 +1567,6 @@ footer { display: none !important; }
   .nav, .stepcard { animation: none; }
 }
 
-/* ---- دکمهٔ سیاه «تست کلیدها / لینک» — یک دکمه، هر سه پلتفرم ---- */
 #manga_test_key {
   background: linear-gradient(160deg, #16161a, #050506) !important;
   color: #fff !important;
@@ -1777,7 +1583,6 @@ footer { display: none !important; }
 #manga_test_key:active { transform: translateY(0); filter: brightness(.9); }
 #manga_test_key span, #manga_test_key div { color: #fff !important; }
 
-/* ---- جعبهٔ نتیجهٔ تست هر کلید ---- */
 #manga_test_key_out textarea {
   background: #08080a !important;
   color: #d9d9e0 !important;
@@ -1788,7 +1593,6 @@ footer { display: none !important; }
   direction: rtl !important;
 }
 
-/* ---- چیپ وضعیت زندهٔ ترجمه (فاز/زمان/صفحه) ---- */
 #manga_status_chip {
   display: none; align-items: center; gap: 9px; flex-wrap: wrap;
   margin: 2px 0 10px; padding: 9px 16px;
@@ -1811,7 +1615,6 @@ footer { display: none !important; }
 .chip-dot.idle { background: var(--ink-dim); }
 @keyframes chipPulse { 50% { opacity: .3; } }
 
-/* ---- نوار پیشرفت زیر لاگ (مثل اپ اندروید: فاز + صفحه + درصد) ---- */
 #manga_prog_row .mprog {
   display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
   margin: 10px 0 2px; padding: 11px 16px;
@@ -1837,7 +1640,6 @@ footer { display: none !important; }
   font-variant-numeric: tabular-nums;
 }
 
-/* ---- دکمه‌های ابزار لاگ (کپی/پاک‌کردن) ---- */
 .log-tools { display: flex; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
 .log-tool-btn {
   background: #121216; color: var(--ink-dim);
@@ -1849,7 +1651,6 @@ footer { display: none !important; }
 .log-tool-btn:hover { color: var(--ink-red); border-color: var(--ink-red); transform: translateY(-1px); }
 .log-tool-btn:active { transform: translateY(0); }
 
-/* ---- موبایل: لمس راحت‌تر و چیدمان فشرده‌تر ---- */
 @media (max-width: 620px) {
   .gradio-container { max-width: 100% !important; }
   .stepcard { padding: 14px 12px 12px !important; border-radius: 14px !important; }
@@ -1914,7 +1715,6 @@ def _dark_js_src() -> str:
     return """() => {
   document.body.classList.add('dark');
   document.documentElement.classList.add('dark');
-  // ---- Wake Lock (ماندن روشن بودن صفحه هنگام استخراج/پاکسازی/ترجمه) ----
   try {
     if (window.__mangaWakeLockInstalled) return [];
     window.__mangaWakeLockInstalled = true;
@@ -1943,7 +1743,6 @@ def _dark_js_src() -> str:
       if (document.visibilityState === 'visible' && isRunning()) req();
     });
   } catch (e) {}
-  // ---- چیپ وضعیت زنده (فاز + زمان + صفحه‌ها) ----
   window.__mangaUpdateChip = (logText, btnLabel) => {
     try {
       const el = document.getElementById('manga_status_chip');
@@ -1982,7 +1781,6 @@ def _dark_js_src() -> str:
     } catch (e) {}
   };
   try { window.__mangaUpdateChip('', ''); } catch (e) {}
-  // ---- دکمه‌های کپی/پاک‌کردن لاگ ----
   try {
     const copyBtn = document.getElementById('manga_copy_log');
     if (copyBtn && !copyBtn._bound) {
@@ -2021,9 +1819,6 @@ def _dark_js_src() -> str:
       });
     }
   } catch (e) {}
-  // ---- دکمهٔ دانلودِ لاگِ کامل ----
-  // نمایشِ زنده فقط ۱۲۰ خطِ آخر را نشان میدهد؛ این دکمه فایلِ کاملِ لاگِ
-  // رویِ دیسک را میدهد — از اولِ کار تا همین لحظه، بی هیچ برش (برایِ گزارشِ باگ).
   try {
     const dlLogBtn = document.getElementById('manga_dl_log');
     if (dlLogBtn && !dlLogBtn._bound) {
@@ -2094,7 +1889,6 @@ def run_web():
                 for t in re.split(r"(\d+)", s)]
 
     def _dl_label(path: str) -> str:
-        """برچسب دکمهٔ دانلود با حجم فایل."""
         try:
             if path and os.path.isfile(path):
                 return f"⬇ دانلود ({human_size(os.path.getsize(path))})"
@@ -2102,7 +1896,6 @@ def run_web():
             pass
         return "⬇ دانلود"
 
-# صفحهٔ خواندن زندهٔ وب — داخل پوشهٔ live نوشته می‌شود و صفحه‌های جدید خودکار به آن اضافه می‌شوند
     _LIVE_READER_TMPL = r"""<!DOCTYPE html><html lang="fa" dir="rtl"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>نمایش</title>
@@ -2160,7 +1953,6 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .cmp-lab.b{right:12px}
 .cmp-lab.a{left:12px}
 .cmp-tchip{position:absolute;top:12px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.62);color:#fff;border-radius:9px;padding:4px 12px;font-size:.8rem;z-index:4;pointer-events:none;direction:rtl;white-space:nowrap}
-/* —— هم‌خوانِ نکو-گِرل v272: دخترِ گربه‌گوشِ استیکری — سرِ گردِ توپُش + بدنِ خُرد — ۲۴ حالت + قایم‌شدن پشتِ دیوار + خاموش‌کردنِ صفحه —— */
 .mcat{position:fixed;z-index:57;right:10px;top:58px;width:70px;touch-action:none;-webkit-tap-highlight-color:transparent;user-select:none;filter:drop-shadow(0 3px 8px rgba(0,0,0,.45));cursor:pointer;transition:opacity .3s}
 .mcat svg{display:block;width:100%;height:auto;pointer-events:none}
 @media (min-width:768px){.mcat{width:76px;right:18px;top:auto;bottom:112px;filter:drop-shadow(0 6px 14px rgba(0,0,0,.55))}}
@@ -2172,13 +1964,9 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .mcat-say{position:absolute;top:calc(100% + 22px);right:-2px;white-space:nowrap;background:#fff;color:#1d1d21;border-radius:12px;padding:4px 10px;font-size:.72rem;pointer-events:none;opacity:0;transform:translateY(4px) scale(.9);transition:opacity .18s ease,transform .18s ease;z-index:2}
 .mcat-say.show{opacity:1;transform:translateY(0) scale(1)}
 .mcat-say:after{content:'';position:absolute;top:-4px;right:14px;width:9px;height:9px;background:#fff;transform:rotate(45deg)}
-/* — گروههای پنهان — */
 .cg-eyes,.cg-mv,.cg-zzz,.cg-sweat,.cg-tears,.cg-heart,.cg-spark,.cg-anger,.cg-steam,.cg-ball,.cg-music,.cg-glass,.cg-shyhands,.cg-shyblush,.cg-hand-chin,.cg-arms-up,.cg-arms-stretch,.cg-snack,.cg-crumbs,.cg-rumble,.cg-think,.cg-speed{display:none}
-/* — چشم‌ها بر اساس حالت — */
 .mcat.st-read .cg-eyes-open,.mcat.st-study .cg-eyes-open,.mcat.st-hide .cg-eyes-open,.mcat.st-peek .cg-eyes-open,.mcat.st-exc .cg-eyes-happy,.mcat.st-pat .cg-eyes-happy,.mcat.st-spin .cg-eyes-happy,.mcat.st-music .cg-eyes-happy,.mcat.st-dance .cg-eyes-happy,.mcat.st-run .cg-eyes-happy,.mcat.st-sleep .cg-eyes-sleep,.mcat.st-yawn .cg-eyes-sleep,.mcat.st-think .cg-eyes-think,.mcat.st-stress .cg-eyes-worry,.mcat.st-sad .cg-eyes-sad,.mcat.st-shy .cg-eyes-down,.mcat.st-hungry .cg-eyes-down,.mcat.st-eat .cg-eyes-shifty,.mcat.st-annoy .cg-eyes-annoy,.mcat.st-angry .cg-eyes-angry,.mcat.st-ball .cg-eyes-up,.mcat.st-hang .cg-eyes-happy,.mcat.st-edgesit .cg-eyes-happy,.mcat.st-sidepeek .cg-eyes-open{display:block}
-/* — دهان‌ها بر اساس حالت — */
 .mcat.st-read .cg-mv-smile,.mcat.st-exc .cg-mv-smile,.mcat.st-sleep .cg-mv-smile,.mcat.st-stress .cg-mv-smile,.mcat.st-sad .cg-mv-smile,.mcat.st-pat .cg-mv-smile,.mcat.st-spin .cg-mv-smile,.mcat.st-peek .cg-mv-smile,.mcat.st-hide .cg-mv-smile,.mcat.st-dance .cg-mv-smile,.mcat.st-run .cg-mv-smile,.mcat.st-hang .cg-mv-smile,.mcat.st-edgesit .cg-mv-smile,.mcat.st-sidepeek .cg-mv-smile,.mcat.st-study .cg-mv-focus,.mcat.st-think .cg-mv-focus,.mcat.st-shy .cg-mv-tee,.mcat.st-hungry .cg-mv-tee,.mcat.st-annoy .cg-mv-pout,.mcat.st-angry .cg-mv-shout,.mcat.st-ball .cg-mv-o,.mcat.st-music .cg-mv-song,.mcat.st-yawn .cg-mv-yawn,.mcat.st-eat .cg-mv-munch{display:block}
-/* — افکت‌های هر حالت — */
 .mcat.st-sleep .cg-zzz{display:block}
 .mcat.st-stress .cg-sweat{display:block}
 .mcat.st-sad .cg-tears{display:block}
@@ -2199,11 +1987,9 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .mcat.st-run .cg-speed{display:block}
 .mcat.st-eat .cg-snack{display:block}
 .mcat.st-eat .cg-crumbs{display:block}
-/* — بازوها و کتاب در حالتهای ویژه — */
 .mcat.st-dance .cg-hug,.mcat.st-dance .cg-book,.mcat.st-yawn .cg-hug,.mcat.st-yawn .cg-book,.mcat.st-eat .cg-hug,.mcat.st-hang .cg-hug,.mcat.st-hang .cg-book{display:none}
 .mcat.st-dance .cg-arms-up{display:block}
 .mcat.st-yawn .cg-arms-stretch,.mcat.st-hang .cg-arms-stretch{display:block}
-/* — کی‌فریم‌ها — */
 @keyframes mcBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-2.5px)}}
 @keyframes mcBounce{0%,100%{transform:translateY(0) scale(1)}30%{transform:translateY(-7px) scale(1.05)}60%{transform:translateY(0) scale(.97)}}
 @keyframes mcBreath{0%,100%{transform:scale(1)}50%{transform:scale(1.035)}}
@@ -2235,7 +2021,6 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 @keyframes mcHang{0%,100%{transform:translateY(0) rotate(0)}50%{transform:translateY(4px) rotate(2deg)}}
 @keyframes mcCrumbs{0%{opacity:0;transform:translateY(0)}30%{opacity:1}100%{opacity:0;transform:translateY(9px)}}
 @keyframes mcSpeedFlick{0%,100%{opacity:.15}50%{opacity:1}}
-/* — انیمیشنِ بدنه — */
 .mcat .cg-all{transform-origin:60px 108px;animation:mcBob 3.4s ease-in-out infinite}
 .mcat.st-exc .cg-all{animation:mcBounce .55s ease-in-out infinite}
 .mcat.st-sleep .cg-all{animation:mcBreath 2.8s ease-in-out infinite}
@@ -2255,7 +2040,6 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .mcat.st-shy .cg-all{animation:mcShyWig 2.2s ease-in-out infinite}
 .mcat.st-hide .cg-all{animation:mcPeekBob 3s ease-in-out infinite}
 .mcat.st-peek .cg-all{animation:mcPeekBob 2.4s ease-in-out infinite}
-/* — سر و گوش و دُم — */
 .mcat .cg-head{transform-origin:60px 82px}
 .mcat.st-annoy .cg-head{transform:translateX(-7px) rotate(-10deg)}
 .mcat.st-annoy .cg-blush{display:none}
@@ -2271,7 +2055,6 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .mcat .cg-ear-r{transform-origin:80px 28px;animation:mcEarT 6s ease-in-out .8s infinite}
 .mcat.st-sleep .cg-ear-l,.mcat.st-sleep .cg-ear-r,.mcat.st-pat .cg-ear-l,.mcat.st-pat .cg-ear-r{animation:none}
 .mcat.st-eat .cg-ear-l,.mcat.st-eat .cg-ear-r{animation:mcEarT 2.2s ease-in-out infinite}
-/* — جزئیاتِ متحرک — */
 .mcat .cg-eyes-open{transform-origin:60px 56px;animation:mcBlink 5.6s infinite}
 .mcat .cg-heart{animation:mcPop 1.6s ease-out}
 .mcat .cg-zzz text{animation:mcPop 2.4s ease-in-out infinite}
@@ -2301,7 +2084,6 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .mcat.st-dance .cg-arms-up .arm-l{transform-origin:38px 94px;animation:mcWave 1.1s ease-in-out infinite}
 .mcat.st-dance .cg-arms-up .arm-r{transform-origin:82px 94px;animation:mcWave 1.1s ease-in-out .55s infinite}
 .mcat.st-think .cg-hand-chin{transform-origin:72px 97px;animation:mcBob 2.6s ease-in-out infinite}
-/* — قایم‌شدن در گوشه‌ها (رندوم از ۴ گوشه) — */
 .mcat.st-hide .mcat-bub,.mcat.st-peek .mcat-bub,.mcat.st-hang .mcat-bub,.mcat.st-edgesit .mcat-bub,.mcat.st-sidepeek .mcat-bub{display:none}
 .mcat.st-hide .mcat-say{top:auto;bottom:calc(100% + 10px)}
 .mcat.st-hide .mcat-say:after{top:auto;bottom:-4px}
@@ -2311,9 +2093,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .mcat.peek-r .mcat-say:after{left:auto;right:18px}
 .mcat.away{opacity:0;pointer-events:none;transition:opacity .35s .7s}
 .mcat.glide{transition:left .75s cubic-bezier(.35,.8,.35,1),top .75s cubic-bezier(.35,.8,.35,1),opacity .3s}
-/* — v271: چشم‌های دنبال‌کنندهٔ موس (پی‌سی/لینوکس) — */
 .cg-eyes-open .cg-pupil{transition:transform .18s ease-out}
-/* — v271: حالتهای رهاکردنِ کاراکتر در نقاط صفحه — */
 .mcat.st-hang svg{transform:scaleY(-1)}
 .mcat.st-hang .cg-all{animation:mcHangSway 2.6s ease-in-out infinite;transform-origin:60px 26px}
 .mcat.st-hang .cg-tail{animation:none}
@@ -2331,7 +2111,6 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 @keyframes mcSitBob{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-2px) rotate(2deg)}}
 @keyframes mcLean{0%,100%{transform:translateX(0)}50%{transform:translateX(5px)}}
 @keyframes mcBite{0%,40%,100%{transform:translate(0,0)}55%,70%{transform:translate(-5px,-6px)}}
-/* — v271: راهنمای نقاطِ رهاکردن هنگام درگ — */
 #mcatzones{position:fixed;left:0;top:0;right:0;bottom:0;z-index:56;pointer-events:none;display:none}
 #mcatzones.show{display:block}
 .mz{position:absolute;border:2.5px dashed rgba(217,89,112,.5);border-radius:16px;background:rgba(217,89,112,.05);display:flex;align-items:center;justify-content:center;color:#d95970;font-size:12px;font-weight:800;opacity:.8;transition:opacity .15s,background .15s,transform .15s}
@@ -2341,10 +2120,8 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .mz-left{left:8px;top:24%;bottom:24%;width:13%}
 .mz-right{right:8px;top:24%;bottom:24%;width:13%}
 .mz-center{left:17%;right:17%;top:24%;bottom:24%;border-radius:26px}
-/* — v272 (از v269): قایم‌شدن پشتِ دیوارِ لبهٔ صفحه — دیوارِ کرم داخلِ SVG نیمهٔ پشتی را می‌پوشاند — */
 .cg-wall{display:none}
 .mcat.st-hide .cg-wall{display:block}
-/* — v272 (از v269): اذیتِ پیوسته (۱۰ بار) = خاموش‌کردنِ صفحه‌ی نمایش — */
 #mcatOff{position:fixed;inset:0;z-index:95;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;opacity:0;pointer-events:none;transition:opacity .5s ease;direction:rtl}
 #mcatOff.show{opacity:1;pointer-events:auto;cursor:pointer}
 #mcatOff .off-eyes{width:min(220px,46vw);height:auto;animation:offBlink 4.6s ease-in-out infinite}
@@ -2501,10 +2278,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   function imgSrc(i, dbg){ return P + (dbg ? DBG : D) + 'live_' + pad(i + 1)
                            + (dbg ? '_base.jpg' : '.jpg'); }
   function bakedSrc(i){ return P + D + 'live_' + pad(i + 1) + '.jpg'; }
-  // ——— برشِ وبِ ۲۰۰۰px (فقط رابطِ وب) ——— نوارهایِ بلندِ پوشهٔ live
-  // به برشهایِ ۲۰۰۰px («w_NNNN_k.jpg») بریده میشوند؛ مارکرِ
-  // «w_NNNN.json» بعد از کاملشدنِ برشها مینشیند (بودنش = سالمند).
-  // فایلهایِ اصلیِ live_NNNN.jpg دستِ موتور میمانند — اندروید/PC بی‌خبر.
   function sliceMark(i){ return P + D + 'w_' + pad(i + 1) + '.json'; }
   function sliceUrl(i, k){ return P + D + 'w_' + pad(i + 1) + '_' + k + '.jpg'; }
   var sliceMem = {};
@@ -2516,8 +2289,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     return fetch(sliceMark(i) + '?r=' + now, { cache: 'no-store' })
       .then(function(r){ if (!r.ok) throw 0; return r.json(); })
       .then(function(j){
-// توجه: parseInt — «|0» مقدار را به ۳۲بیت میبُرد و میلیثانیههایِ
-// epoch (۱۳ رقم) را خراب میکرد (سنجشِ تازگی همیشه شکست میخورد).
         m = { n: (parseInt(j && j.n, 10) || 0),
               src: (parseInt(j && j.src, 10) || 0),
               t: Date.now(), ok: true };
@@ -2790,7 +2561,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         .then(function(u){ im.src = u; if (im.complete && im.naturalWidth > 0) place(1); })
         .catch(function(){ im.src = imgSrc(i, true); });
     } else {
-      // ——— برشِ وبِ ۲۰۰۰px: اول مارکر (~۴۰ بایت)؛ نبود/صفر = عکسِ کامل ———
       slicesFor(i).then(function(sl){
         if (placed) return;
         if (sl && sl.n > 0) {
@@ -2960,9 +2730,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   }
   fab.addEventListener('pointerup', fabUp);
   fab.addEventListener('pointercancel', function(){ fdrag = null; });
-  // کمانِ منو: جهتش به سمتِ مرکزِ صفحه است (فضایِ باز) و چیدمانِ
-  // نهایی با «هلِ متقابلِ ضدِبرخورد» گشوده میشود — نزدیکِ لبه‌ها
-  // هیچ‌وقت دکمه‌ها روی هم نمی‌افتند (باگِ فنِ پنج‌تاییِ چسبیده).
   function fanPositions(){
     var fr = fab.getBoundingClientRect();
     var cx = fr.left + fr.width / 2, cy = fr.top + fr.height / 2;
@@ -2977,7 +2744,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       var a = bis - half + i0 * step;
       pts.push({ x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R });
     }
-    // خودِ دکمهٔ منو هم مانع است — دکمه‌های فن هرگز روی آن نمی‌نشینند
     var fabPt = { x: cx, y: cy };
     var sep = function(pa, pb, w){
       var dx = pb.x - pa.x, dy = pb.y - pa.y;
@@ -2999,7 +2765,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       for (var i1 = 0; i1 < n; i1++) for (var j1 = i1 + 1; j1 < n; j1++)
         if (sep(pts[i1], pts[j1], 0.3)) moved = true;
       for (var i2 = 0; i2 < n; i2++) {
-        // هل با فاب: فاب ثابت است، فقط دکمهٔ فن جابه‌جا می‌شود
         var fdx = pts[i2].x - fabPt.x, fdy = pts[i2].y - fabPt.y;
         var fox = 74 - Math.abs(fdx), foy = 74 - Math.abs(fdy);
         if (fox > 0 && foy > 0) {
@@ -3019,7 +2784,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   function updateFan(){
     var pts = fanPositions();
     var show = fanState >= 1 && haveDbg;
-    // برچسبِ خودِ دکمه: بسته = «منو»، باز = «✕» (بستن)
     fab.textContent = show ? UT('rdr.close', '✕') : UT('rdr.menu', 'منو');
     fab.classList.toggle('open', show);
     for (var i = 0; i < fans.length; i++) {
@@ -3037,7 +2801,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       fb.title = isCmp ? UT('rdr.fan_cmp_title', 'مقایسهٔ قبل/بعد') :
         (def.key === 'prev' || def.key === 'next') ? UT('rdr.fan_pp_title', 'صفحهٔ قبل/بعد در مقایسه') :
         (({ det: 'detector.onnx', pdet: 'paddle det', rec: 'paddle rec' })[def.key] || '');
-      // «قبلی/بعدی» فقط وقتیِ مقایسهٔ باز — کنترلها داخلِ خودِ منو
       fb.classList.toggle('show', show && (!def.cmpOnly || cmpOn));
     }
   }
@@ -3082,10 +2845,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     var top = ch.getBoundingClientRect().top + window.scrollY - 54;
     window.scrollTo(0, Math.max(0, top));
   }
-  // ——— «قبل/بعد»: مقایسهٔ همان صفحه — قبل = عکسِ اصلیِ بی‌ترجمه
-  // (پایهٔ بی‌روکشِ دیباگ)، بعد = خروجیِ ترجمه‌شده. خطِ عمودیِ وسط با
-  // کشیدن (لمس هم همینطور) جابه‌جا میشود و برشِ قبل/بعد زنده عوض
-  // میشود؛ ‹ › صفحهٔ قبل/بعد را داخلِ همان مقایسه عوض میکند. ———
   var cmpEl = document.getElementById('cmp'),
       cmpStage = document.getElementById('cmpStage'),
       cmpBWrap = document.getElementById('cmpBWrap'),
@@ -3123,14 +2882,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     cmpEl.classList.add('show');
     cmpLoad(curPageIdx());
     cmpSet(cmpFracV);
-    // کنترلهایِ قبل/بعد حالا داخلِ منو هستند — منو باز می‌ماند
     fanState = 1;
     updateFan();
   }
   function cmpClose(){
     cmpOn = false;
     try { cmpEl.classList.remove('show'); } catch (e) {}
-    // فن باز می‌ماند تا گزینهٔ بعدی سریع انتخاب شود؛ بستنِ فن با ✕ خودش
     updateFan();
   }
   var cdrag = false;
@@ -3191,10 +2948,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         setTimeout(probe, 60);
       }
     };
-// نظرسنجیِ رسیدنِ صفحهٔ بعد — سبکِ قدیم کلِ عکس را دانلود میکرد فقط
-// برای فهمیدنِ «رسید؟» (نوارِ بلند = مگابایت در هر پول!). حالا:
-// دیباگ = HEADِ بی‌بدنه؛ نهایی = مارکرِ برش (~۴۰ بایت). فال‌بکِ
-// سلامت: ۵ نبودِ پیاپی = HEADِ خودِ عکس؛ ۱۲ ناکامی = GETِ قدیم.
     if (mode) {
       fetch(bakedSrc(a), { method: 'HEAD', cache: 'no-store' })
         .then(function(r){ done(r.ok); })
@@ -3264,7 +3017,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       try { el.src = url; } catch (e2) {}
     }
   }
-  // ——— جابهجایی/بازسازیِ اسلات با برشهایِ وب (بهروزرسانیِ زنده) ———
   function swapFullSlot(el2, slot){
     var u = P + D + 'live_' + pad(slot) + '.jpg';
     if (el2.tagName === 'IMG') {
@@ -3320,11 +3072,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         if (!t) return;
         var firstPass = !mm.__init;
         var lines = t.split('\n');
-// ——— فیکسِ حلقهٔ رفرشِ بی‌نهایت ——— mtimes.txt پیوسته رشد میکند
-// (هر بهروزرسانیِ اسلات یک خطِ تازه میچسباند)؛ مقایسهٔ خط‌به‌خط
-// مقدارِ کهنه/جدیدِ همان اسلات را هر بار عوض میکند و همان تصویر
-// را بی‌پایان دوباره میکشد («هی رفرش میشود، از اول لود میخورد»).
-// ملاک فقط «آخرین» خطِ هر اسلات است.
         var last = {};
         for (var k = 0; k < lines.length; k++) {
           var m = lines[k].trim().split(/\s+/);
@@ -3341,9 +3088,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
           mm[slot] = mt;
           if (firstPass) continue;
           if (isDbg) {
-// فیکسِ همزمان: بستنِ هر اسلات در IIFEیِ خودش — قبلاً varِ مشترکِ
-// el/im توسطِ آخرین تکرارِ حلقه بازنویسی میشد و بهروزرسانیِ چند
-// اسلات همگی رویِ «آخرین» اسلات اعمال میشد (عکسِ ناجور).
             (function(slot){
               var el = cD.children[slot - 1];
               var im = el && el.querySelector ? el.querySelector('img') : null;
@@ -3369,7 +3113,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 if (sl2 && sl2.n > 0 && sl2.src >= engMt - 400) {
                   if (el2.classList && el2.classList.contains('slotw')
                       && el2.__n === sl2.n) {
-// همان شمارِ برش: فقط srcها تازه شوند — بی‌لرزش، مثلِ قبل
                     for (var k2 = 1; k2 <= sl2.n; k2++) {
                       (function(kk){
                         var im3 = el2.children[kk - 1];
@@ -3386,8 +3129,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     rebuildSlotSlices(el2, slot, sl2.n);
                   }
                 } else if (sl2 && sl2.n > 0) {
-// برشِ تازه هنوز ننشسته (برشکار ~۰٫۲۵ثانیه پشتِ موتور است) —
-// یک تأخیرِ کوتاه و دوباره؛ نبود = عکسِ کامل
                   setTimeout(function(){
                     slicesFor(slot - 1, true).then(function(sl3){
                       if (sl3 && sl3.n > 0 && sl3.src >= engMt - 400)
@@ -3464,7 +3205,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     var m = document.documentElement.scrollHeight - window.innerHeight;
     var pc = m > 0 ? Math.min(100, Math.max(0, window.scrollY / m * 100)) : 0;
     pf.style.width = pc + '%';
-    // پیشرفتِ خواندن روی خودِ نوارِ پایین — جایِ نشانِ زیرِ گربه
     var pl = document.getElementById('plab');
     if (pl) {
       var fa = function(v){ return String(v).replace(/[0-9]/g, function(d){ return '۰۱۲۳۴۵۶۷۸۹'.charAt(+d); }); };
@@ -3484,14 +3224,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     updateProgress();
     updateFan();
   });
-  // ——— هم‌خوانِ نکو-گِرل v272 (دخترِ گربه‌گوشِ استیکری — سرِ گردِ توپُش) ———
-  // موتورِ ۲۴ حالته + قایم‌شدن پشتِ دیوارِ لبهٔ صفحه + خاموش‌کردنِ صفحه بعد از
-  // ۱۰ اذیتِ پیوسته + نقاطِ رهاکردن (بکش و ول کن) + چشمهای دنبال‌کنندهٔ موس.
   var MCAT = document.getElementById('mcat');
   if (MCAT) {
   var mcatBub = MCAT.querySelector('.mcat-bub');
   var mcatSayEl = MCAT.querySelector('.mcat-say');
-  var MCAT_USE_S = true; // اندروید: اسکرولرِ داخلی s — وب: window
+  var MCAT_USE_S = true;
   var FAD = '۰۱۲۳۴۵۶۷۸۹';
   function faN(v) { return String(v).replace(/[0-9]/g, function (d) { return FAD[+d]; }); }
   function faR(a) { return a[Math.floor(Math.random() * a.length)]; }
@@ -3504,7 +3241,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (m < 0) m = 0;
     return { m: m, y: y, pct: Math.min(1, Math.max(0, y / Math.max(1, m))), atEnd: m > 320 && (m - y) < 5 };
   }
-  /* ——— حرف‌ها (کاملاً خودمونی) ——— */
   var MCAT_PAT = UT('say.pat', ['میییو~', 'آخ جووون، همینه!', 'بغلم کن دیگه!', 'ولی ول نکن ها~', 'دلم برات تنگ شده بود!']);
   var MCAT_READ = UT('say.read', ['ورق بزن دیگه!', 'اوه، ادامه‌ش چیه؟!', 'این صحنه وای…', 'چایی میل دارید؟', 'اِ این یکی الان چی گفت؟!', 'ترجمه‌ش دست من بود، بهتر میشد!']);
   var MCAT_STUDY = UT('say.study', ['ششش! دارم به قسمتِ خوبِ قصه میرسم…', 'یه لحظه وایسا، خودم می‌خونم!', 'هوم… هوم… این فصل چی میگه!', 'این کتاب مالِ منه ها، دست نزن!']);
@@ -3547,7 +3283,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     'st-edgesit': MCAT_SIT,
     'st-sidepeek': MCAT_SIDE
   };
-  /* ——— وضعیت ——— */
   var mcatState = 'st-read';
   var mcatLastTs = 0, mcatLastY = -1, mcatFastT = 0, mcatMoveT = Date.now();
   var mcatBotT = 0, mcatPatT = 0, mcatSayUntil = 0;
@@ -3587,9 +3322,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (say) mcatSayNow(say, 3000);
     mcatTick();
   }
-  /* ——— قایم‌شدن پشتِ دیوار (از v269 — دستورِ سازنده): به لبهٔ نزدیکِ صفحه
-     می‌رود، دیوارِ کرم داخلِ SVG نیمهٔ پشتیش را می‌پوشاند و از پشتِ دیوار
-     نگاه می‌کند (دستها روی لبهٔ دیوار + نوکِ دُم بیرون!) ——— */
   function mcatGoHide() {
     if (mcatState === 'st-hide') return;
     var r = MCAT.getBoundingClientRect();
@@ -3599,7 +3331,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     MCAT.classList.toggle('hide-l', !onRight);
     var hy = Math.min(Math.max(r.top + r.height / 2, window.innerHeight * 0.36),
       window.innerHeight - hh / 2 - 30);
-    /* چسبیده به لبه — دیوار با لبهٔ صفحه یکی می‌شود (بدون درز) */
     mcatGlide(function () {
       MCAT.style.left = (onRight ? window.innerWidth - hw + 1 : -1) + 'px';
       MCAT.style.top = (hy - hh / 2) + 'px';
@@ -3633,9 +3364,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     mcatPeekTill = Date.now() + 9000;
     mcatSayNow(UT('say.still_angry', '…هنوز قهرم ها!'), 2400);
   }
-  /* ——— اذیتِ پیوسته (۱۰ بار) = خاموش‌کردنِ صفحه‌ی نمایش! (از v269) ———
-     کلِ صفحه سیاه می‌شود، فقط دو چشمِ درخشانِ او در تاریکی می‌ماند؛
-     با لمس (یا بعد از ~۵ ثانیه) دوباره روشن می‌شود. ——— */
   var mcatOffEl = document.getElementById('mcatOff');
   var mcatOffTimer = null;
   function mcatWake() {
@@ -3658,7 +3386,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       mcatOffTimer = setTimeout(mcatWake, 5200);
     }, 1600);
   }
-  /* — دویدنِ بازیگوشانه دورِ صفحه — */
   function mcatStartRun() {
     if (mcatRunning) return;
     var r = MCAT.getBoundingClientRect();
@@ -3695,7 +3422,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     mcatSet('st-read');
     if (!interrupted) mcatSayNow(UT('say.tired', 'اوف اوف… خسته شدم!'), 2600);
   }
-  /* — قلبِ تیک — */
   function mcatTick() {
     var now = Date.now();
     var inf = mcatInfo();
@@ -3730,7 +3456,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (mcatRunning) { mcatSet('st-run'); return; }
     if (mcatActT > now && mcatActSt) { mcatSet(mcatActSt); return; }
     if (mcatZoneBack > now) return;
-    /* حوصله‌سررفتگی: یکی از ۱۰ سرگرمی — یا یهو بره قایم شه! */
     if (inf.m > 320 && mcatMoveT < now - 8000 && mcatMoveT > now - 21000 && now > mcatActCd && mcatPatT < now && mcatShyT < now) {
       if (Math.random() < 0.09) {
         mcatActCd = now + 30000 + Math.random() * 15000;
@@ -3774,14 +3499,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (mcatActT) { mcatActT = 0; mcatActSt = ''; mcatNextAct = ''; }
     if (mcatForceTill) mcatForceTill = 0;
     if (mcatState === 'st-sleep') {
-      /* بیداری از خواب — بعضی وقتا خجالت میکشه! */
       if (Math.random() < 0.4) { mcatShyT = now + 2600; mcatSayNow(faR(MCAT_WAKE), 2800); }
       else mcatSet('st-read');
     }
     mcatUpdate();
     mcatTick();
   }
-  /* — درگ + نوازش/کتک — */
   var mcatDrag = null;
   MCAT.addEventListener('pointerdown', function (e) {
     mcatDrag = { x: e.clientX, y: e.clientY, moved: false };
@@ -3852,8 +3575,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     while (mcatTaps.length && mcatTaps[0] < now - 6000) mcatTaps.shift();
     var fast = 0, i;
     for (i = 0; i < mcatTaps.length; i++) if (mcatTaps[i] > now - 2200) fast++;
-    /* شمارشِ اذیت (از v269): ضربه در میانهٔ چج/اعصابی + خودِ اپیزودها؛
-       ده بار = خاموش‌کردنِ صفحه‌نمایش! */
     if (mcatAnnoyT > now || mcatAngryT > now) mcatTeaseN++;
     if (fast >= 5 || mcatTaps.length >= 5) mcatTeaseN++;
     if (mcatTeaseN >= 10) { mcatBlackout(); return; }
@@ -3880,7 +3601,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       mcatTick(); setTimeout(mcatTick, 1980);
       return;
     }
-    /* نوازش — بعد از ۴ بارِ پشت‌سرهم بعضی وقتا خجالت میکشه */
     mcatPatT = now + 1700;
     mcatMoveT = now;
     if (mcatTaps.length === 4 && Math.random() < 0.4) {
@@ -3896,9 +3616,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   }
   MCAT.addEventListener('pointerup', mcatUp);
   MCAT.addEventListener('pointercancel', function () { mcatDrag = null; if (ZONES) { ZONES.classList.remove('show'); mcatZoneCur = ''; } });
-  /* لمسِ صفحهٔ خاموش = روشن‌کردنِ دوباره */
   if (mcatOffEl) mcatOffEl.addEventListener('pointerdown', function () { mcatWake(); });
-  /* — نقاطِ رهاکردن: بکش و ول کن — */
   function mcatZoneOf(x, y) {
     var vw = window.innerWidth, vh = window.innerHeight;
     if (y < vh * 0.17) return 'top';
@@ -3955,7 +3673,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     mcatMoveT = now;
     mcatZoneBack = now + 7500;
   }
-  /* — چشم‌ها موس رو دنبال می‌کنن (پی‌سی / لینوکس) — */
   var mcatFine = false;
   try {
     mcatFine = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
@@ -3986,7 +3703,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       if (mcatPupL) { mcatPupL.style.transform = 'translate(0,0)'; mcatPupR.style.transform = 'translate(0,0)'; }
     });
   }
-  /* — قلابِ تست — */
   window.__mcatForce = function (st) {
     mcatForceSt = ''; mcatForceTill = 0;
     mcatPatT = 0; mcatAnnoyT = 0; mcatAngryT = 0; mcatShyT = 0;
@@ -4032,7 +3748,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     }
     mcatTick();
   };
-  /* — حلقهٔ اصلی — */
   var iv = setInterval(function () {
     mcatTick();
     mcatUpdate();
@@ -4060,7 +3775,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   var welcomeT = setTimeout(function () {
     if (mcatState === 'st-read') mcatSayNow('سلام! من نکو-گِرلم — بکشم ببر جاهای مختلف!', 3600);
   }, 900);
-  /* — شروع — */
   try {
     var sp = JSON.parse(localStorage.getItem('mangaCatPos') || 'null');
     if (sp && typeof sp.x === 'number') mcatPlace(sp.x, sp.y);
@@ -4107,22 +3821,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 "<meta name='viewport' content='width=device-width,initial-scale=1'>"
                 f"<title>{TX('app.read_title', 'خواندن')}</title></head><body style='background:#000;color:#999'>{body}</body></html>"
             )
-# ——— پچِ فشرده‌سازی v272 + برشِ وبِ ۲۰۰۰px ——— برایِ هر عکسِ
-# محلی (به‌جزِ GIF) یک نسخهٔ JPEGِ ۱۱۰۰px (فقط کوچک‌کردن — هرگز
-# بزرگ‌کردن نیست، LANCZOS) با کیفیتِ ۸۰ و progressive در پوشهٔ
-# <img_dir>_webprev ساخته میشود و ریدرِ وب همان را میکشد: دانلودِ
-# مرورگر ~۲۰-۲۵٪ سبک‌تر میشود ولی فایلهایِ نهایی رویِ دیسک
-# دست‌نخورده میمانند. ساختن idempotent است (وجود + mtime) و خطایِ
-# هر فایل = برگشت به همان URLِ اصلی.
-# ——— برشِ وبِ ۲۰۰۰px (خواستهٔ سازنده: «کوتاه برش بزنه، طولش دو
-# هزار بگذار، برشِ امن نمیخواهد، سریع، فقط برایِ وب») ——— عکسهایِ
-# بلندتر از ۲۰۰۰px بعد از کوچک‌کردنِ پهنا به برشهایِ ۲۰۰۰px
-# («…_v2_k.jpg») بریده میشوند و هر برش یک <img> جدا میگیرد: لودِ
-# تدریجیِ واقعی (اولین برش ~۶× زودتر دیده میشود) و رمِ مرورگرِ
-# کمتر. برشِ خام است — بدونِ جستجویِ خطِ امن. فقط رابطِ وب؛ فایلهایِ
-# خروجی رویِ دیسک (PC/لینوکس/اندروید) دست‌نخورده میمانند. نامِ
-# «_v2» عمداً با کشِ قدیمیِ «_w» فرق دارد تا نسخههایِ پیشین دوباره
-# ساخته شوند.
         try:
             import zlib as _zlib
             from PIL import Image as _PILImage
@@ -4144,7 +3842,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     _pvk = os.path.join(_pvd, _crc + "_" + _stem + "_v2_%d.jpg")
                     _pvdn = os.path.join(_pvd, _crc + "_" + _stem + "_v2.done")
                     _mt = os.path.getmtime(_ps)
-# کشِ معتبر: تک‌عکسِ تازه (کوتاه) یا مارکرِ پایانِ برشها (بلند)
                     _done_short = (os.path.isfile(_pv1)
                                    and os.path.getmtime(_pv1) >= _mt)
                     _done_tall = (os.path.isfile(_pvdn)
@@ -4171,7 +3868,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                     _us.append(prefix
                                                + _fp.replace(os.sep, "/"))
                                 _prev[_ps] = _us
-# مارکرِ «برشها کاملند» — آخر از همه مینشیند
                                 with open(_pvdn, "wb") as _f:
                                     _f.write(b"1")
                             else:
@@ -4179,7 +3875,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                          optimize=True, progressive=True)
                                 _prev[_ps] = prefix + _pv1.replace(os.sep, "/")
                     elif _done_tall:
-# کشِ برش — شمارش از رویِ دیسک
                         _us = []
                         _k = 1
                         while (_k < 99 and os.path.isfile(_pvk % _k)):
@@ -4203,9 +3898,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 urls = _urls2
         except Exception:
             pass
-# عکسها با data-src تزریق میشوند (نه src مستقیم) — لودِ تدریجی +
-# کشِ «بارِ اول» (IndexedDB): هر صفحه فقط یک بار از شبکه میآید و
-# بازکردنِ دوبارهٔ همان فصل بی‌نت لود میشود (گوشی/PC/لینوکس/وب).
         imgs = "".join(
             f'<img data-src="{u}" alt="" draggable="false">'
             for u in urls
@@ -4215,12 +3907,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             str(title).replace("&", "&amp;").replace("<", "&lt;")
             .replace(">", "&gt;").replace('"', "&quot;")
         )
-# نوار بالا sticky است — با اسکرولِ پایین هم بالای صفحه
-# می‌چسبد (خواستهٔ کاربر: روی PC/لینوکس بدون برگشتن به بالا، دکمه‌ها
-# همیشه دسترس باشند — مثل اپ اندروید). اسکرول همچنان طبیعیِ سند است
-# و نوار پیشرفتِ پایین هم ثابت می‌ماند.
         css = (
-# پچِ v272 — دکمهٔ شناورِ «تلاش دوباره» برایِ عکسهایِ جا‌مانده رویِ نتِ ضعیف
             "#rtryChip{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(24px);"
             "z-index:70;display:flex;align-items:center;gap:8px;background:rgba(18,18,22,.96);"
             "color:#fff;border:1px solid #2f2f36;border-radius:999px;padding:10px 18px;"
@@ -4491,8 +4178,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             "@keyframes offBlink{0%,86%,100%{transform:scaleY(1)}90%,94%{transform:scaleY(.06)}}"
             ""
         )
-# جاوااسکریپت روی اسکرولِ خودِ سند (window) — کشِ IndexedDB +
-# منویِ گردِ «منو» (چهار دکمه دورش) + خطِ صفحهها (قبل/بعد).
         js = r"""
 (function(){
   const root = document.getElementById('manga_rdr');
@@ -4522,9 +4207,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   };
   const setZoom = (nz) => applyZoom(nz);
   const zoomBy = (f, cx, cy) => applyZoom(z * f, cx, cy);
-  // ——— کشِ «بارِ اول» ——— هر عکس فقط یک بار از شبکه میآید؛
-  // blob در IndexedDB میماند (گوشی/PC/لینوکس/وب) و بازگشتهای بعدی
-  // — حتی بعد از بستنِ صفحه — بی‌شبکه از کش میآیند.
   const idbOK = (() => { try { return !!window.indexedDB; } catch (err) { return false; } })();
   let _db = null;
   const idb = () => {
@@ -4613,9 +4295,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         .catch((err) => { blobFail.set(u, Date.now()); throw err; });
     });
   };
-  // ——— لودِ تدریجی از کش ——— عکسهایِ تزریقی data-src دارند؛
-  // نوارِ اطرافِ دید از کش/شبکه پر میشود و صفحاتِ دور به
-  // placeholderِ ۱px برمیگردند (رمِ کمتر) — بازگشت = از کش، بی‌نت.
   const mgIO = ('IntersectionObserver' in window) ? new IntersectionObserver((es) => {
     for (const en of es) {
       const im = en.target;
@@ -4651,13 +4330,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       }
     });
   } catch (err) {}
-  // ——— تلاشِ مجددِ خودکار v272 ——— رویِ نتِ ضعیف، قطعِ اتصالِ وسطِ
-  // فصل دیگر رفرشِ دستی نمیخواهد: هر عکسِ خراب نردبانِ تأخیر
-  // (۰٫۸/۲/۴/۸/۱۵ ثانیه با لرزشِ ±۲۵٪) را خودکار طی میکند؛ بعد ازِ
-  // آخرین پله دکمهٔ شناورِ «تلاش دوباره» ظاهر میشود (کلیک = شروعِ
-  // دوبارهٔ نردبان برایِ همهٔ خرابها) و رویدادِ online همه را فوری
-  // بیدار میکند. IntersectionObserver و لودِ تدریجی دست‌نخورده
-  // میمانند — پرچمهایِ __ok/__rl/__infl/__pend جلویِ دوبارلود را می‌گیرند.
   const rtryChip = document.createElement('button');
   rtryChip.type = 'button';
   rtryChip.id = 'rtryChip';
@@ -4695,8 +4367,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     setTimeout(() => {
       im.__rl = 0;
       if (im.__ok) { rtrySync(); return; }
-      // کشِ خرابی پاک + کلیدِ تازه (?_mr=) تا fetchِ مرورگر هم دور
-      // زده شود؛ موفقیت = پاک‌کردنِ blobFail برایِ همین src
       const key = (rung === 0) ? src
         : src + (src.indexOf('?') >= 0 ? '&' : '?') + '_mr=' + Date.now();
       im.__key = key;
@@ -4836,7 +4506,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     const m = document.documentElement.scrollHeight - window.innerHeight;
     const pc = m > 0 ? Math.min(100, Math.max(0, window.scrollY / m * 100)) : 0;
     prog.style.width = pc + '%';
-    // \u067e\u06cc\u0634\u0631\u0641\u062a\u0650 \u062e\u0648\u0627\u0646\u062f\u0646 \u0631\u0648\u06cc \u062e\u0648\u062f\u0650 \u0646\u0648\u0627\u0631\u0650 \u067e\u0627\u06cc\u06cc\u0646
     const pl = document.getElementById('progLab');
     if (pl) {
       const fa = (v) => String(v).replace(/[0-9]/g, (d) => '\u06f0\u06f1\u06f2\u06f3\u06f4\u06f5\u06f6\u06f7\u06f8\u06f9'[+d]);
@@ -4865,11 +4534,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       if (btn) btn.click();
     }
   });
-  // ——— دکمهٔ گردِ «منو»: قابلِ جابه‌جایی؛ با زدن، پنج دکمه دورش
-  // میآیند (نزدیک/دور/پهنا/تمام/صفحه‌ها)؛ خودِ دکمه در حالتِ باز
-  // «✕» می‌شود و با زدنش منو بسته می‌شود (دستورِ سازنده). ———
   const fab = document.getElementById('fab');
-  let fanState = 0;   // ۰=بسته | ۱=فنِ باز | ۲=فن+خطِ صفحهها
+  let fanState = 0;
   const fanDefs = [
     { key: 'zin', ic: '+', lb: UT('rdr.zin', 'نزدیک') },
     { key: 'zout', ic: '\u2212', lb: UT('rdr.zout', 'دور') },
@@ -4952,9 +4618,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   };
   fab.addEventListener('pointerup', fabUp);
   fab.addEventListener('pointercancel', () => { fdrag = null; });
-  // کمانِ منو: جهتش به سمتِ مرکزِ صفحه است (فضایِ باز) و چیدمانِ
-  // نهایی با «هلِ متقابلِ ضدِبرخورد» گشوده میشود — نزدیکِ لبه‌ها
-  // هیچ‌وقت دکمه‌ها روی هم نمی‌افتند (باگِ فنِ پنج‌تاییِ چسبیده).
   const fanPositions = () => {
     const fr = fab.getBoundingClientRect();
     const cx = fr.left + fr.width / 2, cy = fr.top + fr.height / 2;
@@ -4969,7 +4632,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       const a = bis - half + i * step;
       pts.push({ x: cx + Math.cos(a) * R, y: cy + Math.sin(a) * R });
     }
-    // خودِ دکمهٔ منو هم مانع است — دکمه‌های فن هرگز روی آن نمی‌نشینند
     const fabPt = { x: cx, y: cy };
     const sep = (pa, pb, w) => {
       const dx = pb.x - pa.x, dy = pb.y - pa.y;
@@ -4991,7 +4653,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++)
         if (sep(pts[i], pts[j], 0.3)) moved = true;
       for (let i = 0; i < n; i++) {
-        // هل با فاب: فاب ثابت است، فقط دکمهٔ فن جابه‌جا می‌شود
         const dx = pts[i].x - fabPt.x, dy = pts[i].y - fabPt.y;
         const ox = 74 - Math.abs(dx), oy = 74 - Math.abs(dy);
         if (ox > 0 && oy > 0) {
@@ -5011,7 +4672,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   function updateFan() {
     const pts = fanPositions();
     const show = fanState >= 1;
-    // برچسبِ خودِ دکمه: بسته = «منو»، باز = «✕» (بستن)
     fab.textContent = show ? UT('rdr.close', '\u2715') : UT('rdr.menu', 'منو');
     fab.classList.toggle('open', show);
     for (let i = 0; i < fans.length; i++) {
@@ -5023,7 +4683,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       fb.classList.toggle('show', show);
     }
   }
-  // ——— خطِ صفحهها: درگِ چپ/راست = قبل/بعد ———
   const seek = document.getElementById('seek'),
         sth = document.getElementById('sth'),
         sfill = document.getElementById('sfill'),
@@ -5109,14 +4768,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { fanState = 0; updateFan(); updateSeekVis(); }
   });
-  // ——— هم‌خوانِ نکو-گِرل v272 (دخترِ گربه‌گوشِ استیکری — سرِ گردِ توپُش) ———
-  // موتورِ ۲۴ حالته + قایم‌شدن پشتِ دیوارِ لبهٔ صفحه + خاموش‌کردنِ صفحه بعد از
-  // ۱۰ اذیتِ پیوسته + نقاطِ رهاکردن (بکش و ول کن) + چشمهای دنبال‌کنندهٔ موس.
   var MCAT = document.getElementById('mcat');
   if (MCAT) {
   var mcatBub = MCAT.querySelector('.mcat-bub');
   var mcatSayEl = MCAT.querySelector('.mcat-say');
-  var MCAT_USE_S = true; // اندروید: اسکرولرِ داخلی s — وب: window
+  var MCAT_USE_S = true;
   var FAD = '۰۱۲۳۴۵۶۷۸۹';
   function faN(v) { return String(v).replace(/[0-9]/g, function (d) { return FAD[+d]; }); }
   function faR(a) { return a[Math.floor(Math.random() * a.length)]; }
@@ -5129,7 +4785,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (m < 0) m = 0;
     return { m: m, y: y, pct: Math.min(1, Math.max(0, y / Math.max(1, m))), atEnd: m > 320 && (m - y) < 5 };
   }
-  /* ——— حرف‌ها (کاملاً خودمونی) ——— */
   var MCAT_PAT = UT('say.pat', ['میییو~', 'آخ جووون، همینه!', 'بغلم کن دیگه!', 'ولی ول نکن ها~', 'دلم برات تنگ شده بود!']);
   var MCAT_READ = UT('say.read', ['ورق بزن دیگه!', 'اوه، ادامه‌ش چیه؟!', 'این صحنه وای…', 'چایی میل دارید؟', 'اِ این یکی الان چی گفت؟!', 'ترجمه‌ش دست من بود، بهتر میشد!']);
   var MCAT_STUDY = UT('say.study', ['ششش! دارم به قسمتِ خوبِ قصه میرسم…', 'یه لحظه وایسا، خودم می‌خونم!', 'هوم… هوم… این فصل چی میگه!', 'این کتاب مالِ منه ها، دست نزن!']);
@@ -5172,7 +4827,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     'st-edgesit': MCAT_SIT,
     'st-sidepeek': MCAT_SIDE
   };
-  /* ——— وضعیت ——— */
   var mcatState = 'st-read';
   var mcatLastTs = 0, mcatLastY = -1, mcatFastT = 0, mcatMoveT = Date.now();
   var mcatBotT = 0, mcatPatT = 0, mcatSayUntil = 0;
@@ -5212,9 +4866,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (say) mcatSayNow(say, 3000);
     mcatTick();
   }
-  /* ——— قایم‌شدن پشتِ دیوار (از v269 — دستورِ سازنده): به لبهٔ نزدیکِ صفحه
-     می‌رود، دیوارِ کرم داخلِ SVG نیمهٔ پشتیش را می‌پوشاند و از پشتِ دیوار
-     نگاه می‌کند (دستها روی لبهٔ دیوار + نوکِ دُم بیرون!) ——— */
   function mcatGoHide() {
     if (mcatState === 'st-hide') return;
     var r = MCAT.getBoundingClientRect();
@@ -5224,7 +4875,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     MCAT.classList.toggle('hide-l', !onRight);
     var hy = Math.min(Math.max(r.top + r.height / 2, window.innerHeight * 0.36),
       window.innerHeight - hh / 2 - 30);
-    /* چسبیده به لبه — دیوار با لبهٔ صفحه یکی می‌شود (بدون درز) */
     mcatGlide(function () {
       MCAT.style.left = (onRight ? window.innerWidth - hw + 1 : -1) + 'px';
       MCAT.style.top = (hy - hh / 2) + 'px';
@@ -5258,9 +4908,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     mcatPeekTill = Date.now() + 9000;
     mcatSayNow(UT('say.still_angry', '…هنوز قهرم ها!'), 2400);
   }
-  /* ——— اذیتِ پیوسته (۱۰ بار) = خاموش‌کردنِ صفحه‌ی نمایش! (از v269) ———
-     کلِ صفحه سیاه می‌شود، فقط دو چشمِ درخشانِ او در تاریکی می‌ماند؛
-     با لمس (یا بعد از ~۵ ثانیه) دوباره روشن می‌شود. ——— */
   var mcatOffEl = document.getElementById('mcatOff');
   var mcatOffTimer = null;
   function mcatWake() {
@@ -5283,7 +4930,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       mcatOffTimer = setTimeout(mcatWake, 5200);
     }, 1600);
   }
-  /* — دویدنِ بازیگوشانه دورِ صفحه — */
   function mcatStartRun() {
     if (mcatRunning) return;
     var r = MCAT.getBoundingClientRect();
@@ -5320,7 +4966,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     mcatSet('st-read');
     if (!interrupted) mcatSayNow(UT('say.tired', 'اوف اوف… خسته شدم!'), 2600);
   }
-  /* — قلبِ تیک — */
   function mcatTick() {
     var now = Date.now();
     var inf = mcatInfo();
@@ -5355,7 +5000,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (mcatRunning) { mcatSet('st-run'); return; }
     if (mcatActT > now && mcatActSt) { mcatSet(mcatActSt); return; }
     if (mcatZoneBack > now) return;
-    /* حوصله‌سررفتگی: یکی از ۱۰ سرگرمی — یا یهو بره قایم شه! */
     if (inf.m > 320 && mcatMoveT < now - 8000 && mcatMoveT > now - 21000 && now > mcatActCd && mcatPatT < now && mcatShyT < now) {
       if (Math.random() < 0.09) {
         mcatActCd = now + 30000 + Math.random() * 15000;
@@ -5399,14 +5043,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (mcatActT) { mcatActT = 0; mcatActSt = ''; mcatNextAct = ''; }
     if (mcatForceTill) mcatForceTill = 0;
     if (mcatState === 'st-sleep') {
-      /* بیداری از خواب — بعضی وقتا خجالت میکشه! */
       if (Math.random() < 0.4) { mcatShyT = now + 2600; mcatSayNow(faR(MCAT_WAKE), 2800); }
       else mcatSet('st-read');
     }
     mcatUpdate();
     mcatTick();
   }
-  /* — درگ + نوازش/کتک — */
   var mcatDrag = null;
   MCAT.addEventListener('pointerdown', function (e) {
     mcatDrag = { x: e.clientX, y: e.clientY, moved: false };
@@ -5477,8 +5119,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     while (mcatTaps.length && mcatTaps[0] < now - 6000) mcatTaps.shift();
     var fast = 0, i;
     for (i = 0; i < mcatTaps.length; i++) if (mcatTaps[i] > now - 2200) fast++;
-    /* شمارشِ اذیت (از v269): ضربه در میانهٔ چج/اعصابی + خودِ اپیزودها؛
-       ده بار = خاموش‌کردنِ صفحه‌نمایش! */
     if (mcatAnnoyT > now || mcatAngryT > now) mcatTeaseN++;
     if (fast >= 5 || mcatTaps.length >= 5) mcatTeaseN++;
     if (mcatTeaseN >= 10) { mcatBlackout(); return; }
@@ -5505,7 +5145,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       mcatTick(); setTimeout(mcatTick, 1980);
       return;
     }
-    /* نوازش — بعد از ۴ بارِ پشت‌سرهم بعضی وقتا خجالت میکشه */
     mcatPatT = now + 1700;
     mcatMoveT = now;
     if (mcatTaps.length === 4 && Math.random() < 0.4) {
@@ -5521,9 +5160,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   }
   MCAT.addEventListener('pointerup', mcatUp);
   MCAT.addEventListener('pointercancel', function () { mcatDrag = null; if (ZONES) { ZONES.classList.remove('show'); mcatZoneCur = ''; } });
-  /* لمسِ صفحهٔ خاموش = روشن‌کردنِ دوباره */
   if (mcatOffEl) mcatOffEl.addEventListener('pointerdown', function () { mcatWake(); });
-  /* — نقاطِ رهاکردن: بکش و ول کن — */
   function mcatZoneOf(x, y) {
     var vw = window.innerWidth, vh = window.innerHeight;
     if (y < vh * 0.17) return 'top';
@@ -5580,7 +5217,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     mcatMoveT = now;
     mcatZoneBack = now + 7500;
   }
-  /* — چشم‌ها موس رو دنبال می‌کنن (پی‌سی / لینوکس) — */
   var mcatFine = false;
   try {
     mcatFine = !!(window.matchMedia && window.matchMedia('(hover: hover) and (pointer: fine)').matches);
@@ -5611,7 +5247,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       if (mcatPupL) { mcatPupL.style.transform = 'translate(0,0)'; mcatPupR.style.transform = 'translate(0,0)'; }
     });
   }
-  /* — قلابِ تست — */
   window.__mcatForce = function (st) {
     mcatForceSt = ''; mcatForceTill = 0;
     mcatPatT = 0; mcatAnnoyT = 0; mcatAngryT = 0; mcatShyT = 0;
@@ -5657,7 +5292,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     }
     mcatTick();
   };
-  /* — حلقهٔ اصلی — */
   var iv = setInterval(function () {
     mcatTick();
     mcatUpdate();
@@ -5685,7 +5319,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   var welcomeT = setTimeout(function () {
     if (mcatState === 'st-read') mcatSayNow('سلام! من نکو-گِرلم — بکشم ببر جاهای مختلف!', 3600);
   }, 900);
-  /* — شروع — */
   try {
     var sp = JSON.parse(localStorage.getItem('mangaCatPos') || 'null');
     if (sp && typeof sp.x === 'number') mcatPlace(sp.x, sp.y);
@@ -5712,7 +5345,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 })();
 """
 
-# ——— هم‌خوانِ نکو-گِرل v272 (نمایشگرِ مستقل): دخترِ گربه‌گوشِ استیکری ———
         _MCAT_HTML = (
             '<div class="mcat st-read" id="mcat" title="هم‌خوانِ نکو-گِرل — ۲۴ حالت! بکش و رها کن: بالا/پایین/بغل/وسط، ضربه = نوازش (زیادش نکن!)">\n'
             '<svg viewBox="0 0 120 140" aria-hidden="true">\n'
@@ -5842,8 +5474,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             "</head>\n"
             "<body>\n"
             '<div class="rdr" id="manga_rdr" data-zoom="1">\n'
-# نوار بالا sticky (position:sticky;top:0) — با اسکرولِ پایین
-# هم بالای صفحه می‌ماند. نوار پیشرفت پایین همچنان همیشه دیده می‌شود.
             '  <div class="rdrS">\n'
             '    <div class="rdr-bar">\n'
             '      <button type="button" class="rdr-btn" data-act="close" title="بستن">✕</button>\n'
@@ -5877,8 +5507,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         return page
 
     g6 = _gradio_major() >= 6
-# فونتِ Vazirmatn از پوشهٔ fonts خود برنامه سرو می‌شود (بدون
-# fonts.googleapis.com — در ایران کند/مسدود است و PC را خیلی دیر بالا می‌آورد).
     try:
         import gradio as _gr_css
         _gmaj = int(str(getattr(_gr_css, "__version__", "4")).split(".")[0] or 4)
@@ -5923,17 +5551,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
         with gr.Group(elem_classes=["stepcard"]):
             gr.HTML('<div class="steptitle"><span class="stepnum">۲</span> مترجم هوش مصنوعی</div>')
-# ترتیب خواستهٔ کاربر: ارائه‌دهنده → لینک (custom) → کلید → مدل → تست
-# منویِ انتخابِ AI: auto | gemini | مدلهایِ من | custom
             _init_models = list(load_custom_models())
-# «auto» فقط وقتی در لیست مدلها مدلی باشد در منو
-            #)؛ بدونِ مدل: gemini | custom.
-# میآید (
             _init_ch = _ai_choices(_init_models)
             _init_prov = "auto" if "auto" in _init_ch else "gemini"
-# ضربدرِ ِ حذف، چسبیده به خودِ منو (نه لیستی پایینِ
-# صفحه): فقط وقتی مدلِ کاربر در منو انتخاب شده باشد دیده میشود
-# و همان مدلِ انتخابی را از لیست و منو پاک میکند.
             with gr.Row(elem_id="manga_provider_row"):
                 provider = gr.Dropdown(
                     _init_ch, value=_init_prov,
@@ -5947,25 +5567,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     TX("app.del_model", "✖"), variant="secondary", scale=0,
                     elem_id="manga_cm_del_btn",
                     visible=(_init_prov in _cm_names(_init_models)))
-# ↗ «دریافت توکن» (دستورِ v1.14.291: «کنار انتخاب ai یک دکمه فلش بزار
-# وقتی زدن بهش وارد سایت توکن گرفتن بشن هم مدل gemini هم مدل دستی ست
-# شده اونای ک دستی ست شده سیو شده فقط سایتشون بیاره بالا؛ جمنای بره
-# سایت اصلیش» + v1.14.292: «فقط فلش بزاری کافیه و کوچک کن کنار مدل ai
-# بیاد نه پایینش»): دکمهٔ فقط-فلشِ ۳۰×۳۰ چسبیده به خودِ منو (CSS)؛
-# کلیک = همان ژستِ کاربر → سایتِ توکنِ همان انتخاب در تبِ جدید باز
-# میشود (Gemini → aistudio.google.com/docs/api-key؛ custom/مدلِ
-# ذخیره‌شده → سایتِ خودش = مبدأِ دامنهٔ ذخیرهشده).
                 token_btn = gr.Button(
                     TX("app.get_token", "↗"), variant="secondary",
                     scale=0, elem_id="manga_token_btn")
-# مشخصاتِ مدلِ ذخیرهشدهٔ انتخابشده (لینک/مدلِ هوش/
-# کلیدِ ماسکشده) — فقط وقتی مدلِ کاربر در منو انتخاب شده باشد
             cm_info_md = gr.Markdown("", visible=False,
                                      elem_id="manga_cm_info")
-# بانکِ حافظهٔ فیلدها مالِ هر provider: وقتی از
-# Gemini به Custom (یا برعکس) میروی، هر کدام مقادیرِ خودشان را
-# دارند و مقادیرِ کاستوم زیرِ Gemini نشون داده نمیشود.
-# (baseیِ configِ دیسک برایِ custom بذر میشود — PC/لینوکس)
             fields_bank = gr.State({
                 "_last": _init_prov,
                 "custom": {"base": str(cfg.get("api_base", "") or ""),
@@ -5979,8 +5585,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                   elem_id="manga_api_base",
                                   visible=False,
                                   scale=3)
-# رویِ «auto» ردیفِ ورود از همان ابتدا پنهان است (حالتِ
-# PC/دیسک که منو با «auto» بالا میآید)
             with gr.Row(visible=(_init_prov != "auto")) as api_row:
                 api_keys = gr.Textbox(label=TX("app.api_keys", "کلیدهای API شما (با کاما = چرخش خودکار)"),
                                       value="",
@@ -5988,13 +5592,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                       elem_id="manga_api_keys",
                                       info=TX("app.api_keys_info", "کلید فقط در localStorage مرورگر شما می‌ماند — نه روی سرور و نه در config دسکتاپ."))
 
-# فیلدِ متنیِ چند-مدلی (عینِ custom — دستورِ سازنده v1.14.288:
-# «مدلا انتخابیه … اون قسمتِ مدلِ نوشتن همهٔ مالها رو وارد
-# کنه و پیشفرض هم همچنین وارد شده باشه خالی نشون نده؛
-# طرف بفهمه چجور وارد شده») — پیش‌فرضِ Gemini از همان اول
-# داخلِ فیلد نوشته شده (کاما-جدا؛ ۷ مدل)؛ ↻ همهٔ مدلهایِ
-# رایگانِ زنده را داخلِ فیلد میریزد؛ در custom هم همین
-# فیلدِ متنی است. چند مدل با کاما = فال‌بکِ خودکار.
                 model = gr.Textbox(
                     value=(_gemini_default_models_str()
                            if _init_prov == "gemini" else ""),
@@ -6008,19 +5605,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     TX("app.refresh_models", "↻ مدل‌ها"), variant="secondary", scale=1,
                     elem_id="manga_model_ref",
                     visible=(_init_prov == "gemini"))
-# /218/220 — مدیرِ مدلهایِ سفارشی: بدونِ فیلدِ «نام مدل
-# جدید» — دکمهٔ «+ افزودن به لیست مدل‌ها» مدلِ فعلیِ همین صفحه
-# (نام + دامنه + کلید + شناسهٔ مدل) را در لیست ثبت میکند.
-# حذفِ مدل فقط با ِ کنارِ خودِ منو ──
-            # → دکمهٔ «+ افزودن» و راهنما فقط رویِ custom دیده میشوند
-# (شروعِ صفحه همیشه auto/gemini است → هر دو از ابتدا پنهان)
             add_model_btn = gr.Button(
                 TX("app.add_model", "+ افزودن به لیست مدل‌ها"), variant="secondary", scale=1,
                 elem_id="manga_cm_add", visible=False)
-            # →
-# « ویرایش» فقط رویِ مدلِ ذخیرهشدهٔ خودِ کاربر میآید؛ با زدنش
-# مقادیرِ ذخیرهشده (لینک/کلید/مدل) در فیلدها میآید و «افزودن» جای
-# خودش را به « ذخیرهٔ ویرایش» میدهد (بجایِ گزینهٔ افزودن، ذخیره).
             cm_edit_btn = gr.Button(
                 TX("app.edit_model", "✎ ویرایش این مدل"), variant="secondary", scale=1,
                 elem_id="manga_cm_edit", visible=False)
@@ -6050,15 +5637,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             custom_models_state = gr.State(_init_models)
             cm_json_box = gr.Textbox(
                 value=json.dumps(custom_models_state.value, ensure_ascii=False),
-                visible=False, elem_id="manga_cm_json", container=False)
-# کانالهایِ مرورگر↔سرور باید در DOM بمانند (gradio 6
-# کامپوننتِ visible=False را از DOM حذف میکند) → visible=True +
-# کلاسِ مخفیِ CSS؛ در وب هم اندروید هم PC همین مرورگر است.
+                visible=True, elem_id="manga_cm_json", container=False,
+                elem_classes=["manga-hide-channel"])
             cm_restore_box = gr.Textbox(
                 value="", visible=True, elem_id="manga_cm_restore",
                 elem_classes=["manga-hide-channel"], container=False)
-# کانالِ افزودنِ مدل از سمتِ مرورگر
-# (دکمهٔ «+ افزودن به لیست مدل‌ها»)
             cm_add_box = gr.Textbox(
                 value="", visible=True, elem_id="manga_cm_add_box",
                 elem_classes=["manga-hide-channel"], container=False)
@@ -6078,8 +5661,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         with gr.Group(elem_classes=["stepcard"]):
             gr.HTML('<div class="steptitle"><span class="stepnum">۳</span> خروجی</div>')
             with gr.Row():
-# «پوشهٔ تصاویر» حذف شد (v1.14.279 — خواستهٔ سازنده). مقدارِ
-# ذخیره‌شدهٔ قدیمی (بکاپ/فرمِ مرورگر) خودکار → PDF.
                 _of0 = str(cfg.get("out_fmt", "PDF") or "PDF")
                 if _of0 not in ("PDF", "ZIP", "HTML", "PSD"):
                     _of0 = "PDF"
@@ -6145,11 +5726,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                               step=1, label=TX("app.max_retry", "حداکثر تلاش ترجمه"))
                 reqdelay = _safe(gr.Slider, 0, 5, value=float(cfg.get("request_delay", 0)),
                                  step=0.5, label=TX("app.delay", "تأخیر بین درخواست‌ها (ثانیه)"))
-            # → همان
-# gr.Sliderِ هموارِ شش اسلایدرِ بالای همین صفحه (ورکر/حباب/
-# بسته/تایم‌اوت/…). دکمههایِ کم/زیاد و کادرِ عددی حذف شدند.
-# اندروید: extract_ui همین Slider را به اسلایدرِ نیتیو (گامِ
-# ۰.۰۵ — عینِ تأخیرِ ۰.۵) تبدیل میکند؛ وب: اسلایدرِ گرادیو.
             with gr.Row():
                 temp = _safe(gr.Slider, 0.0, 1.5,
                              value=float(cfg.get("temperature", 0.7)),
@@ -6178,16 +5754,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     value=bool(cfg.get("clean_only", False)))
                 web_debug = gr.Checkbox(label=TX("app.web_debug", "حالت دیباگ"),
                                         value=bool(cfg.get("web_debug", False)))
-# گزینهها جمع شد در یک دروپ‌داون (کلیک → گزینهها میآید)
-# مقادیرِ انگلیسیِ خالص — دقیقاً همان که manga.py میپذیرد (فیکسِ invalid choice).
-# auto حذف شد (دستورِ سازنده: «دکمه auto حذف کن بزار رو pro») —
-# فقط professional (پیشفرض) / lite؛ مقدارِ کهنهٔ auto = professional
             prompt_mode = gr.Dropdown(
                 choices=["professional", "lite"],
                 value=PROMPT_MODE_DEFAULT,
                 label=TX("app.prompt_style", "سبک پرامپت مترجم"), scale=1)
-# پرامپتِ دستیِ جدا حذف شد — خودِ پرامپتِ اصلی قابلِ ویرایش است.
-# تیترِ «پرامپت فعلی: …» هم حذف شد — فقط دروپ‌داون + کادرِ متن.
             _pp_body0 = resolve_prompt_preview(
                 PROMPT_MODE_DEFAULT, cfg.get("provider"), cfg.get("model"),
                 str(cfg.get("instruction_text") or ""))
@@ -6196,15 +5766,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 lines=10, max_lines=25, interactive=True,
                 placeholder=TX("app.prompt_ph", "خالی = پرامپتِ خودکارِ بر اساسِ سبک و مدل…"),
                 value=_pp_body0)
-# چکباکسِ «بریف داستان» حذف شد: دیکدِ مرجع نشان داد
-            #) — همهٔ متنها در همان یک درخواستِ ترجمه میروند.
-# پاسِ خلاصهٔ داستان وجود ندارد (
 
-# /218 — بکاپ و بازیابی: «گرفتنِ بکاپ» فایلِ JSONِ همهٔ
-# چیزها را میدهد؛ «Import» همان فایل را کامل برمیگرداند ──
-        # → آکاردئونِ بسته؛ و «بکاپ زدم خودکار دانلود کنه نه این ک
-# مجدد برم دکمه دانلود بزنم» → با یک کلیک، فایل خودکار دانلود میشود
-# (JS رویِ changeِ فایلِ خروجی — URLِ سرو شده + orig_name).
         with gr.Accordion("💾 بکاپ و بازیابی — مدلها + تنظیمات", open=False,
                           elem_classes=["stepcard"]):
             gr.Markdown("<div class='hint'>دکمهٔ «⬇️ گرفتن بکاپ» = با یکِ کلیک، "
@@ -6218,9 +5780,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 backup_btn = gr.Button(TX("app.backup_btn", "⬇️ گرفتن بکاپ (دانلود JSON)"),
                                        variant="primary", scale=1,
                                        elem_id="manga_backup_btn")
-                # → بهجایِ باکسِ بزرگِ drag&drop
-# UploadButtonِ هم‌اندازهٔ دکمهٔ بکاپ: کلیک = پنجرهٔ انتخابِ
-# فایل (اندروید/PC/لینوکس/وب همه همان مرورگرند)
                 import_file = gr.UploadButton(
                     "⬆️ Import — بازیابی از بکاپ",
                     file_count="single", type="filepath",
@@ -6232,12 +5791,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 label="", show_label=False, interactive=False, visible=False,
                 elem_id="manga_backup_status")
 
-# 180 — «آزمایشگاهِ سرعتِ استخراج» و دکمهٔ «تستِ سرعت».
-        # → دکمه کامل
-# حذف شد؛ برندهٔ ذخیرهشدهٔ تستِ ۱۷۹ (mlkit) و پاکسازیِ مدلهایِ
-# بازنده را خودِ پایتون (speed_lab_env) انجام میدهد.
-# سیوِ فرم در «مرورگر وب» ۳۰ دقیقه می‌ماند (خواستهٔ کاربر).
-# در پنجرهٔ دسکتاپ (?desktop=1) و اپ اندروید (UA مخصوص) ذخیره دائمی است.
         SESSION_TTL = 30 * 60
         JOB_TTL = 12 * 3600
         _perm_js = (
@@ -6363,10 +5916,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 return {}
 
         def _append_job_logfile(sid: str, text: str) -> None:
-            # برایِ گزارشِ باگ). بافرِ زندهٔ UI برایِ سبکماندن فقط
-# لاگِ کاملِ رویِ دیسک (
-# ۱۲۰ خطِ آخر را نشان میدهد؛ این فایلِ کامل هرگز بریده نمیشود و
-# دکمهٔ «دانلود لاگ» همین را کامل میدهد — از اولِ کار تا آخر.
             if not sid or not text:
                 return
             try:
@@ -6469,7 +6018,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             if exclude_debug and ("debug" in f.lower() or "debug" in root.lower()):
                                 continue
                             if "_base." in f.lower():
-                                continue  # پایهٔ روکش — فقط برای کلیدهای نمایشگر
+                                continue
                             p = os.path.join(root, f)
                             if p not in seen:
                                 seen.add(p)
@@ -6511,11 +6060,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             search_dirs = [
                 out_v if os.path.isdir(out_v) else None,
             ]
-# v1.14.277 — نشانگرِ «خروجیِ همین ران» از موتور (last_out.json):
-# نمایشگر فقط همین پوشه را نشان میدهد تا خروجیِ فقط-پاکسازی با
-# ترجمهٔ قبلی و سبکهایِ پاکسازیِ قدیمی قاطی نشود (خواستهٔ سازنده:
-# «اگ حالت پاکسازی گذاشتم فقط پاکسازیش نشون بده نه دیتای قبلی»).
-# نبودِ نشانگر (کشِ قدیمی) = رفتارِ قبلی.
             _last_out_dir = ""
             try:
                 _cache_root_v = _cache_dir_for(out_v)
@@ -6534,11 +6078,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             if _last_out_dir and os.path.isdir(_last_out_dir):
                 search_dirs.append(_last_out_dir)
             else:
-# فالبکِ بدونِ نشانگر (کشِ قدیمی): قبلاً «همهٔ» زیرپوشههایِ
-# out* جمع میشدند → سبکهایِ پاکسازیِ قدیمی و جدید (opencv +
-# lama) با هم نمایش داده میشدند (باگِ سازنده: «اول opencv پاکیدم
-# دوم بار lama پاکیدم هر دوشو نمایش میده»). حالا فقط
-# «جدیدترین» پوشهٔ out* (بر اساسِ mtime) جمع میشود.
                 _cache_root_fb = _cache_dir_for(out_v)
                 _newest_out = ""
                 _newest_mt = -1.0
@@ -6661,10 +6200,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 buf = list(job.get("buf") or [])
                 n = 0
                 partial = b""
-# فایلِ کاملِ لاگِ این نشست: هر خطِ stdoutِ پروسه
-# همین‌جا رویِ دیسک مینشیند. نمایشِ زنده عمداً ۱۲۰ خطِ آخر را
-# نشان میدهد (سبک برایِ مرورگر) ولی «دانلود لاگ» باید کامل
-# باشد نه ناقص — پس جریان کامل، خطبهخط، مینشیند.
                 log_fh = None
                 try:
                     os.makedirs(SESS_DIR, exist_ok=True)
@@ -6803,9 +6338,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
         run_btn = gr.Button(TX("app.run", "🚀  شروع ترجمه"), variant="primary", elem_id="runbtn")
 
-# پنجرهٔ پرسشِ «ادامه یا از اول» — فقط وقتی مدل/پرامپتِ ترجمه با
-# کشِ همان ورودی فرق دارد ظاهر می‌شود (خواستهٔ سازنده: «استارت
-# زدم بپرسه ادامه ترجمش بره یا از اول ترجمه کنه»).
         with gr.Group(visible=False, elem_id="askmode") as ask_group:
             gr.HTML(
                 "<div style='text-align:right;font-weight:700;"
@@ -6829,10 +6361,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     TX("app.ask_cancel", "بی‌خیال"))
 
         with gr.Accordion("📡 لاگ زنده", open=True):
-# «دانلود لاگ» کنارِ «کپی لاگ» (خواستهٔ سازنده برایِ PC/لینوکس):
-# کپی، همان ۱۲۰ خطِ نمایشِ زنده را میدهد؛ دانلود، فایلِ کاملِ لاگِ
-# رویِ دیسک را (از اولِ کار تا همین لحظه) — برایِ گزارشِ باگ. مسیرِ
-# پوشهٔ نشستها در data-sessdir میآید تا JS همان را از روتِ /file بخواهد.
             gr.HTML(
                 f"""
 <div id="manga_status_chip"></div>
@@ -6846,18 +6374,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             show_label=False, interactive=True,
                             elem_id="manga_live_log",
                             value=TX("app.log_ph", "— لاگ بعد از شروع ترجمه اینجا می‌آید —"))
-# نوارِ پیشرفتِ زیرِ لاگ: فاز + «صفحهٔ n از N» +
-# درصد — مثلِ اعلانِ اپ اندروید؛ هر ۱ ثانیه از همان لاگ
-# بهروزرسانی میشود (تایمرِ _poll_job_status).
             prog_html = _safe(gr.HTML, elem_id="manga_prog_row",
                               visible=False, value="")
 
         html_state = gr.State("")
         html_debug_state = gr.State("")
-# فقط «یک» نمایش — دکمه‌های «نمایش اصلی» و «صفحه دیباگ» حذف شدند.
-# دیباگ با همان دکمهٔ داخل خود نمایش عوض می‌شود (خواستهٔ کاربر).
-# کامپوننت‌های قدیمی فقط به‌عنوان hidden-stub می‌مانند تا امضای خروجی‌ها نشکند
-# همه‌جا visible=False اجباری می‌شود.
         with gr.Group(elem_classes=["stepcard"], visible=False) as result_group:
             gr.HTML('<div class="steptitle"><span class="stepnum">📖</span> '
                     'نمایش</div>')
@@ -7195,8 +6716,20 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
               if (k) setVal(k, d.keys);
             }}
             if (d.model) {{
-              const m = byId("manga_model");
-              if (m) setVal(m, d.model);
+              // v1.14.295 — بازیابیِ مدل از localStorage: زبالهٔ سریالایز
+              // (بک‌اسلش/دکمه/براکتِ چسبیده به اسمِ مدل — باگِ قدیمیِ repr)
+              // همینجا پاک میشود تا فیلدِ مدل همیشه تمیز دیده شود و به
+              // درخواستها هم نرود.
+              const mRaw = String(d.model || "");
+              const mClean = mRaw.replace(/[\\'"\[\]{{}}()<>]+/g, "")
+                                 .replace(/\s+/g, " ").trim();
+              if (mClean) {{
+                const m = byId("manga_model");
+                if (m) setVal(m, mClean);
+                if (mClean !== mRaw) {{
+                  try {{ d.model = mClean; localStorage.setItem(KEY, JSON.stringify(d)); }} catch (e) {{}}
+                }}
+              }}
             }}
           }}
         }}
@@ -7401,7 +6934,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 return gr.update(value=f"خطا در تست: {e}", visible=True)
             prov = str(provider_v or "").strip()
             if prov == "auto":
-# تستِ همهٔ مدلها (gemini + مدلهایِ کاربر)
                 lines = []
                 _cands = [("Gemini", "gemini", "", str(api_keys_v or ""),
                            _model_str(model_v))]
@@ -7418,7 +6950,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     except Exception as _e:
                         lines.append(f"—— {_lb} ——\nخطا: {_e}")
                 return gr.update(value="\n\n".join(lines), visible=True)
-# مدلِ مشخصِ کاربر از منویِ AI → resolve به فیلدهایش
             _nm = resolve_ai_named(models_v, prov,
                                    str(api_keys_v or ""), _model_str(model_v))
             if _nm is not None:
@@ -7441,7 +6972,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             api_base_v,
                             models_v,
                             *tone_args):
-            _t_prep = time.time()  # زمانِ آماده‌سازیِ اپ
+            _t_prep = time.time()
             sid = (sid or sid_box_v or "").strip()
             sid = _find_active_sid(sid) or sid
             if not sid:
@@ -7455,8 +6986,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             def _pack(btn, log, dl=None, view=None, group=None, viewer=None, html="",
                       dl_dbg=None, view_dbg=None, dbg_row=None, html_dbg="",
                       modal=None):
-# «نمایش اصلی» و «نمایش دیباگ» برای همیشه مخفی —
-# فقط یک نمایش (دکمهٔ ) وجود دارد.
                 return (
                     sid,
                     gr.update(value=sid),
@@ -7471,7 +7000,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     gr.update(visible=False),
                     gr.update(visible=False),
                     gr.update(),
-# پنجرهٔ پرسشِ «ادامه یا از اول» — پیش‌فرض پنهان
                     modal if modal is not None else gr.update(visible=False),
                 )
 
@@ -7487,13 +7015,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             up_files = [u for u in up_files if u and os.path.isfile(u)]
             src = (inp_path_v or "").strip()
             multi_base = ""
-            _batch_no_stitch = False  # بچِ چند-فایلی: هر فایل عینِ حالتِ تکی
+            _batch_no_stitch = False
             if up_files:
                 if len(up_files) == 1:
-# تک‌فایلِ آپلودی هم مثلِ بچ در جایِ ثابت (input_batch/single)
-# کپی می‌شود تا «همان فایل که دوباره آپلود/استارت شد» همان src
-# را بدهد و کشِ ادامه سرِ جایش بماند (تشخیصِ واقعیِ تغییرِ
-# محتوا با اثرانگشتِ موتور است — نام + حجم + هش).
                     try:
                         _sdir1 = os.path.join(OUT_DIR, sid[:12],
                                               "input_batch", "single")
@@ -7505,8 +7029,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     except Exception:
                         src = up_files[0]
                 else:
-# چند فایل انتخاب شده — همه در یک پوشهٔ دسته‌ای قرار می‌گیرند
-# و همان پوشه به‌عنوان ورودی به موتور داده می‌شود.
                     batch_dir = os.path.join(OUT_DIR, sid[:12], "input_batch")
                     shutil.rmtree(batch_dir, ignore_errors=True)
                     os.makedirs(batch_dir, exist_ok=True)
@@ -7518,14 +7040,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                         except Exception:
                             shutil.copyfile(bf, os.path.join(
                                 batch_dir, f"file_{bi:03d}" + ext_b.replace(".", "_")))
-# ریشهٔ «تکی اوکیه، دستِ جمعی خراب»: پوشهٔ بچ مسیرِ
-# چسباندن/برشِ ۸۰۰۰px میرفت (نرمالِ عرضِ گروهی + استیچ +
-# برش از وسطِ محتوا) — یعنی مسیری کاملاً متفاوت از حالتِ تکی.
-# حالا فایلها «کاما-جدا» به موتور داده میشوند (=
-# صفحاتِ مستقل، عینِ حالتِ تکی) و --stitch-max-height 0
-# چسباندن/برش را خاموش میکند؛ فقط متنِ ردشده از مرزِ دو فایل
-# (برشِ خوردهٔ کاربر) با ترمیمِ مرز وصل میشود، هیچ برشی از وسطِ
-# متن زده نمیشود.
                     _bf_sorted = sorted(os.listdir(batch_dir))
                     src = ",".join(
                         os.path.join(batch_dir, _bn) for _bn in _bf_sorted)
@@ -7538,8 +7052,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 return _pack("🚀  شروع ترجمه",
                              "❌ ورودی خالی است — فایل آپلود کنید یا URL بدهید.")
 
-# اگر فونت‌هایِ لحن از استارتِ اپ جامانده‌اند (اینترنتِ
-# موقعِ استارت قطع بوده)، همین‌جا دوباره تلاش کن — نه فقط استارت.
             try:
                 if any(not os.path.isfile(os.path.join(FONT_DIR, _fb[1]))
                        for _fb in FONT_BUNDLES):
@@ -7553,9 +7065,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                              "❌ فونت فارسی روی سرور نیست — یک .ttf آپلود کنید.")
 
             prov_s = str(provider_v or "").strip()
-# resolveِ منویِ AI در manga_app.py (manga.py
-# دستنخورده): «auto» = اولینِ در دسترس از [gemini + مدلهایِ کاربر]
-# مدلِ مشخصِ کاربر = فقط و فقط همان؛ gemini/custom = قبلی ──
             _models_now = [m for m in (models_v or [])
                            if isinstance(m, dict)
                            and str(m.get("name") or "").strip()]
@@ -7581,7 +7090,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 prov_s, api_base_v, api_keys_v, model_v = _ap, _ab, _ak, _am
                 provider_v = prov_s
             elif prov_s and prov_s not in ("gemini", "custom"):
-# نامی که دیگر در لیست نیست (مثلاً حذفشده) → gemini
                 prov_s, provider_v = "gemini", "gemini"
             if prov_s == "custom":
                 _ab = normalize_api_base(str(api_base_v or ""))
@@ -7595,8 +7103,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                  "❌ provider «custom» به نام مدل نیاز دارد (مثال: gpt-4o-mini).")
                 api_base_v = _ab
 
-# «پوشهٔ تصاویر» حذف شد — مقدارِ کهنه (بکاپ/فرمِ ذخیرهشدهٔ مرورگر)
-# اینجا هم پالایش میشود تا KeyError ندهد: هرچه شناخته نشد → PDF.
             out_fmt_v = str(out_fmt_v or "PDF")
             if out_fmt_v not in ("PDF", "ZIP", "HTML", "PSD"):
                 out_fmt_v = "PDF"
@@ -7608,28 +7114,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             _prev_src = ""
             with job["lock"]:
                 _prev_src = str(job.get("src") or "")
-# ریشهٔ «کلا نمیپاکه رد میشه»: بچِ دوباره در همان جلسه
-# srcِ یکسانی داشت (input_batch) → پوشهٔ خروجی پاک نمیشد →
-# کشِ resume سرِ جایه ماند → همهٔ صفحه‌ها «از کش» رد میشدند و
-# خروجیِ قدیمی (باگ‌دار) برمیگشت. حالا هر اجرایِ آپلودی
-# پوشهٔ خروجی را از نو پاک میکند = هر تست واقعاً از صفر
-# اجرا میشود.
-# فیکسِ «فایلِ محلیِ عکس میدم ارور میده» (No
-# connection adapters): این پاک‌سازی «همهٔ» زیرپوشه‌های
-# user_out_dir را برمیداشت — از جمله input_batch که فایلهایِ
-# ورودیِ «همین» اجرا چند خط بالاتر در آن کپی شده بودند!
-# موتور بعداً مسیرها را «نبود» میدید → C:\… به requests
-# سپرده میشد → «No connection adapters were found for
-# 'C:\…\file_001.jpg'» → «هیچ تصویری دانلود نشد».
-# input_batch از پاک‌سازی مستثنی شد — در هر اجرا فقط وقتی
-# آپلودِ چندفایلی باشد از نو ساخته میشود، پس محتوایش همیشه
-# تازه است و کشِ کهنه در آن معنا ندارد؛ بقیهٔ زیرپوشه‌ها
-# (کشِ resume/خروجی/…) مثل قبل کامل پاک میشوند =
-# سرِ جایش میماند.
-# توقف/ادامه: آپلودِ دوبارهٔ «همان» فایل دیگر کش را نمیپاکد —
-# موتور با اثرانگشتِ محتوا (نام+حجم+هاش) تشخیص میدهد که ورودی
-# عوض شده (→ از اول) یا نه (→ ادامه از همان‌جا). فقط عوض‌شدنِ
-# src (لینکِ دیگر) پاک‌سازی میآورد.
             if _prev_src and _prev_src != str(src):
                 try:
                     for _n in os.listdir(user_out_dir):
@@ -7647,11 +7131,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     pass
             out_v = os.path.join(user_out_dir, base + ext)
 
-# جارویِ کشِ جلسههایِ دیگر (v1.14.284) — خواستهٔ سازنده: «اگ عکس
-# جدید واسه استخراج دادن اونا پاک شه بره نگه نداره فقط خروجیش —
-# pdf psd zip html لاگ (فقط اندروید) اینا بمونه». کشِ *.cacheِ
-# جلسههایِ قبلی (کنارِ خروجیهایِ خودشان) پاک میشود؛ خودِ فایلهایِ
-# خروجی و کشِ همین جلسه (توقف/ادامه) دستنخورده میمانند.
             try:
                 for _sn in os.listdir(OUT_DIR):
                     _sd = os.path.join(OUT_DIR, _sn)
@@ -7664,11 +7143,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             except Exception:
                 pass
 
-# ——— پرسشِ «ادامه یا از اول» وقتی مدل/پرامپتِ ترجمه عوض شده ———
-# خواستهٔ سازنده: «اگ ترجمش عوض کردم پرامپتش یا مدل ai شو استارت
-# زدم بپرسه ادامه ترجمش بره یا از اول ترجمه کنه». فقط وقتی
-# می‌پرسد که همان ورودی قبلاً کارِ انجام‌شده داشته باشد؛ حالتِ
-# تست که عوض شود خودکار «از نو» است (بدونِ پرسش).
             _retranslate = False
             if not clean_only_v:
                 _instr_sig = str(prompt_body_v or "").strip()
@@ -7710,8 +7184,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                         and _sig_prev != _sig_cur):
                     if (_fake_prev is not None
                             and bool(_fake_prev) != bool(fake_test_v)):
-# حالتِ تست عوض شد → خودکار از نو (خواستهٔ سازنده: «اگ حالت تست
-# اف کردم از ai ترجمش بگیر بزاره»)
                         _retranslate = True
                     elif _ask_mode == "fresh":
                         _retranslate = True
@@ -7734,8 +7206,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                    "--batch-workers", str(int(batchw_v)),
                    "--max-retries", str(int(maxre_v)),
                    "--request-delay", str(float(reqdelay_v)),
-                   "--temperature", str(float(temp_v if temp_v not in (None, "") else 0.7)),  # گاردِ کادرِ خالی
-                   "--top-p", str(float(top_p_v if top_p_v not in (None, "") else 0.9)),  # تنظیمِ top_p
+                   "--temperature", str(float(temp_v if temp_v not in (None, "") else 0.7)),
+                   "--top-p", str(float(top_p_v if top_p_v not in (None, "") else 0.9)),
                    "--reading-order", str(readord_v)]
             if prov_s == "custom" and str(api_base_v or "").strip():
                 cmd += ["--api-base", str(api_base_v).strip()]
@@ -7771,8 +7243,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 _cm_v = "lama-manga"
             cmd += ["--clean-method", _cm_v]
             if _batch_no_stitch:
-# بچِ آپلودی: چسباندن/برشِ ۸۰۰۰px خاموش — هر فایل
-# مثلِ حالتِ تکی پردازش میشود
                 cmd += ["--stitch-max-height", "0"]
             if not two_pass_v:
                 cmd += ["--no-two-pass-ocr"]
@@ -7780,7 +7250,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 cmd += ["--fake-translate"]
             if clean_only_v:
                 cmd += ["--clean-only"]
-# «از اول ترجمه کن» (پاسخِ پنجرهٔ پرسش یا عوض‌شدنِ حالتِ تست)
             if _retranslate:
                 cmd += ["--translate-retranslate"]
             if web_debug_v:
@@ -7816,8 +7285,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 job["log"] = ("\n".join(_auto_log_lines) + "\n"
                               if _auto_log_lines else "") + "▶ در حال شروع…"
                 job["ts"] = time.time()
-# سطرِ اولِ لاگِ کامل: نسخه + زمانِ شروع — برایِ
-# گزارشِ باگِ سازنده لازم است (فایلِ کامل از همینجا بسته میشود).
             _append_job_logfile(
                 sid, f"═══ Manga-AutoTranslate v{APP_VER} — شروعِ کارِ جدید — "
                      f"{time.strftime('%Y-%m-%d %H:%M:%S')} ═══")
@@ -7827,10 +7294,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             live_dir = os.path.join(user_out_dir, "live")
             shutil.rmtree(live_dir, ignore_errors=True)
             os.makedirs(live_dir, exist_ok=True)
-# فیکسِ «دکمهٔ دیباگ فعال نیست ولی می‌آید»: پوشهٔ
-# live_debug فقط وقتی ساخته/پاس داده میشود که کاربر «حالت دیباگ»
-# را روشن کرده باشد؛ قبلاً همیشه ساخته میشد → دکمهٔ دیباگِ
-# خوانندهٔ زنده همیشه میآمد ولی هیچ‌وقت چیزی نشان نمیداد.
             _dbg_on = bool(web_debug_v)
             live_dbg_dir = ""
             if _dbg_on:
@@ -7850,7 +7313,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 job["live_run"] = _live_run_tok
                 _old_slicer = job.get("live_slicer")
             if _old_slicer:
-# کارِ نو = برشکارِ کهنه را نگرفتن (پوشه تازهسازی شد)
                 try:
                     _old_slicer["stop"] = True
                 except Exception:
@@ -7863,8 +7325,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             _env = os.environ.copy()
             _env["PYTHONUNBUFFERED"] = "1"
             _env["PYTHONIOENCODING"] = "utf-8"
-# دکمهٔ «تستِ سرعت» حذف شد؛ کلیدِ محیطیِ کهنهٔ
-# نشستهایِ قبلی هم پاک میشود تا مسیرِ آزمایشگاه بیدار نشود.
             _env.pop("MANGA_SPEED_TEST", None)
             _env["MANGA_LIVE_DIR"] = live_dir
             if _dbg_on:
@@ -7905,55 +7365,29 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             )
 
         def _on_provider_change(p, models, bank, cur_base, cur_key, cur_model):
-            """ — رفتارِ منو:
-            (۱) →
-            دکمهٔ «+ افزودن» و راهنما فقط رویِ custom دیده میشوند.
-            (۲) رویِ «auto» هیچ فیلدی نمیماند («وقتی رو auto بزارن اونجا نشه
-            مدلی چیزی وارد کرد») و رویِ مدلِ نامی هم فیلدها پنهاناند —
-            مشخصاتش (لینک/کلید/مدل) فقطخواندنی زیرِ منو میآید («لینکش هم
-            باید نشون بده»).
-            (۳) بانکِ حافظه: هر provider (gemini/custom) مقادیرِ فیلدهایِ
-            خودش را دارد — رفتن به Gemini دیگر مقادیرِ کاستوم را نشان
-            نمیدهد («میرم Gemini مال کاستوم ک سیو زدم نشون میده»)؛ مقادیرِ
-            providerِ جدید همیشه از بانک میآید (بانکِ خالی = فیلدهایِ خالی).
-             — « ویرایش» فقط رویِ مدلِ ذخیرهشدهٔ خودِ کاربر میآید
-            و هر تغییرِ منو حالتِ ویرایش را لغو میکند (« ذخیرهٔ ویرایش»
-            پنهان میشود)."""
             bank = dict(bank or {})
             v = str(p or "").strip()
             on_auto = (v == "auto")
             is_custom = (v == "custom")
             mine = v in _cm_names(models)
             last = str(bank.get("_last") or "").strip()
-# ذخیرهٔ مقادیرِ فعلی مالِ providerِ قبلی (فقط gemini/custom —
-# رویِ auto/مدلِ نامی فیلدها پنهاناند و چیزی برایِ ذخیره نیست)
             if last in ("gemini", "custom") and last != v:
                 bank[last] = {"base": str(cur_base or ""),
                               "key": str(cur_key or ""),
                               "model": _model_str(cur_model)}
             bank["_last"] = v
-# مقادیرِ providerِ جدید همیشه از بانک میآید (بانکِ
-# خالی = فیلدهای خالی) — هرگز مقادیرِ providerِ قبلی زیرِ منویِ
-# جدید نمیماند («میرم Gemini مال کاستوم ک سیو زدم نشون میده»)
             saved = bank.get(v) if v in ("gemini", "custom") else {}
             saved = saved if isinstance(saved, dict) else {}
             nb = str(saved.get("base") or "")
             nk = str(saved.get("key") or "")
             nm = _model_str(saved.get("model"))
             if not is_custom:
-                nb = ""   # دامنهٔ API فقط مالِ custom است
+                nb = ""
             if on_auto or mine:
-                nk, nm = "", ""   # رویِ auto/مدلِ نامی فیلدی برایِ ورود نیست
+                nk, nm = "", ""
             info = _cm_info_html(models, v) if mine else ""
             row_vis = not on_auto and not mine
-# فیلدِ مدل در همهٔ providerها یک Textboxِ متنیِ کاما-جدا است
-# (دستورِ سازنده v1.14.288 — «مثلِ کاستوم»). رویِ Gemini از همان
-# لحظهٔ ورود، پیش‌فرضِ ۷مدلی داخلِ فیلد نوشته شده (خالی shown
-# نمیشود تا طرف بفهمد چجور وارد میشود)؛ ↻ هم فقط رویِ gemini
-# دیده میشود و همهٔ مدلهایِ رایگانِ زنده را داخلِ فیلد مینویسد.
             if v == "gemini":
-# پیش‌فرضِ ۷مدلی از همان اول داخلِ فیلد نوشته میشود (خالی
-# نشان داده نمیشود) مگر اینکه کاربر مدلِ ذخیرهشده داشته باشد
                 mdl_label = ("مدل (ها) — چند مدل با کاما = فال‌بکِ خودکار | "
                              "↻ همهٔ مدلهایِ رایگان را داخلِ فیلد می‌نویسد | "
                              "خالی = پیش‌فرض")
@@ -7974,15 +7408,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     gr.update(visible=mine, value=info),
                     gr.update(visible=mine),
                     bank,
-                    gr.update(visible=mine),    # cm_edit_btn
-                    gr.update(visible=False),   # cm_save_btn — خروج از ویرایش
-                    gr.update(visible=(v == "gemini")))  # ↻ فقط Gemini (231)
+                    gr.update(visible=mine),
+                    gr.update(visible=False),
+                    gr.update(visible=(v == "gemini")))
 
-# ویرایشِ مدلِ ذخیرهشده ─────────────────────
         def _cm_edit_start(prov, models):
-            """با « ویرایش»
-            مقادیرِ ذخیرهشدهٔ مدلِ انتخابشده (لینک/کلید/مدل) در فیلدها
-            بارگذاری میشود، «افزودن» پنهان و « ذخیرهٔ ویرایش» میآید."""
             nm = str(prov or "").strip()
             m = next((x for x in (models or [])
                       if str(x.get("name") or "").strip() == nm), None)
@@ -7995,24 +7425,19 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                               value=str(m.get("api_key") or "")),
                     gr.update(visible=True,
                               value=str(m.get("model") or ""),
-                              label="مدل — شناسهٔ مدل را دستی بنویس | خالی = پیش‌فرض"),  # ویرایشِ مدلِ نامی هم دستی (فیلدِ متنی)
-                    gr.update(visible=False),   # «+ افزودن» پنهان
-                    gr.update(visible=False),   # « ویرایش» پنهان
-                    gr.update(visible=True),    # « ذخیرهٔ ویرایش»
-                    gr.update(visible=False),   # راهنما
-                    gr.update(visible=False))   # ↻ مدل — دستی
+                              label="مدل — شناسهٔ مدل را دستی بنویس | خالی = پیش‌فرض"),
+                    gr.update(visible=False),
+                    gr.update(visible=False),
+                    gr.update(visible=True),
+                    gr.update(visible=False),
+                    gr.update(visible=False))
 
         def _cm_save_edits(prov, models, base, key, mdl):
-            """« ذخیرهٔ ویرایش»: همان مدلِ انتخابشده با مقادیرِ جدیدِ
-            فیلدها بهروزرسانی میشود (نام عوض نمیشود)؛ بعد برگشت به حالتِ
-            نمایش (فیلدها پاک/پنهان، مشخصاتِ زیرِ منو تازه میشود)."""
             nm = str(prov or "").strip()
             new_models = [dict(x) for x in (models or [])]
             idx = next((i for i, x in enumerate(new_models)
                         if str(x.get("name") or "").strip() == nm), -1)
             if idx < 0 or not nm:
-# فیکسِ همان رده: فهرستِ خروجیها ۱۵ مؤلفه
-# دارد (پایین: cm_save_btn.click) ولی این شاخه ۱۴ برمیگرداند.
                 return (gr.update(),) * 15
             entry = {"name": nm,
                      "api_base": str(base or "").strip(),
@@ -8027,16 +7452,16 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             return (*_cm_pack(new_models, nm),
                     gr.update(visible=True,
                               value=_cm_info_html(new_models, nm)),
-                    gr.update(visible=False),            # ذخیرهٔ ویرایش
-                    gr.update(visible=True),             # ویرایش
-                    gr.update(visible=False, value=""),  # دامنهٔ API
-                    gr.update(visible=False),            # ردیفِ کلید/مدل
-                    gr.update(visible=False, value=""),  # کلید
-                    gr.update(visible=False, value=""),  # مدل
-                    gr.update(visible=False),            # افزودن
-                    gr.update(visible=False),            # راهنما
+                    gr.update(visible=False),
+                    gr.update(visible=True),
+                    gr.update(visible=False, value=""),
+                    gr.update(visible=False),
+                    gr.update(visible=False, value=""),
+                    gr.update(visible=False, value=""),
+                    gr.update(visible=False),
+                    gr.update(visible=False),
                     gr.update(value=msg, visible=True),
-                    gr.update(visible=False))            # ↻ مدل
+                    gr.update(visible=False))
 
         try:
             provider.change(
@@ -8051,13 +7476,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             )
         except Exception:
             pass
-# گاردِ سمتِ مرورگر برایِ دکمهٔ «↻ مدل‌ها»: در gradio 6
-# گاهی updateِ visibleِ دکمهٔ داخلِ ردیفِ کلید/مدل اعمال نمیشود
-# (سرور visible=False میفرستد ولی DOM دکمه را نشان میدهد — باتِ
-# «انتخاب مدل فقط تو Gemini») — این رویدادِ JSِ محضِ بعدِ همان
-# provider.change، نمایشِ دکمه را مستقیم در DOM تنظیم میکند:
-# فقط رویِ gemini دیده شود؛ رویِ custom فقط تایپِ دستی؛ رویِ
-# auto/مدلِ نامی هم ردیفِ کلید/مدل پنهان است.
         try:
             provider.change(
                 fn=None,
@@ -8073,34 +7491,46 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
 
-# ↗ «دریافت توکن» — کال‌بکِ خالصِ JS (بدونِ رفت‌وبرگشتِ سرور تا
-# window.open در همین ژستِ کلیکِ کاربر اجرا شود و مسدود نشود).
-# ورودیها: provider (متنِ منو) + custom_models_state (لیستِ
-# مدلهایِ ذخیرهشده: name/api_base/…) + api_base (فیلدِ custom).
-# منطق: gemini/auto/خالی → سایتِ رسمیِ توکنِ Gemini؛ custom → مبدأِ
-# دامنهٔ فیلد (سایتِ همان سرویس)؛ مدلِ نامی → مبدأِ دامنهٔ
-# ذخیرهشدهٔ همان مدل («فقط سایتشون بیاره بالا»)؛ بدونِ دامنه →
-# سایتِ Gemini (پیش‌فرضِ امن).
         try:
             token_btn.click(
                 fn=None,
-                inputs=[provider, custom_models_state, api_base],
+                inputs=[provider],
                 outputs=None,
-                js="""(p, models, base) => {
+                js="""(p) => {
   try {
     const GEM = 'https://aistudio.google.com/docs/api-key';
+    const gv = (id) => {
+      try {
+        const root = document.getElementById(id);
+        if (!root) return "";
+        const el = root.querySelector("input, textarea") || root;
+        return String((el.value || "")).trim();
+      } catch (e) { return ""; }
+    };
     const norm = (u) => { try { return new URL(u); } catch (e) {
       try { return new URL('https://' + u); } catch (e2) { return null; } } };
-    p = String(p || '').trim();
+    const provInp = (typeof p === 'string' && p.trim())
+      ? p.trim() : gv("manga_provider_row");
+    let models = [];
+    try {
+      models = JSON.parse(gv("manga_cm_json") || "[]") || [];
+    } catch (e) { models = []; }
+    if (!Array.isArray(models) || !models.length) {
+      try {
+        models = JSON.parse(
+          localStorage.getItem("manga_custom_models") || "[]") || [];
+      } catch (e) { models = []; }
+    }
+    if (!Array.isArray(models)) models = [];
     let url = '';
-    if (p === 'gemini' || p === 'auto' || p === '') {
+    if (provInp === 'gemini' || provInp === 'auto' || provInp === '') {
       url = GEM;
-    } else if (p === 'custom') {
-      const u = norm(String(base || '').trim());
+    } else if (provInp === 'custom') {
+      const u = norm(gv("manga_api_base"));
       url = u ? u.origin : GEM;
     } else {
-      const m = (Array.isArray(models) ? models : []).find(
-        (x) => x && String(x.name || '').trim() === p);
+      const m = models.find(
+        (x) => x && String(x.name || '').trim() === provInp);
       const b = m ? String(m.api_base || '').trim() : '';
       const u = b ? norm(b) : null;
       url = u ? u.origin : GEM;
@@ -8112,7 +7542,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
 
-# ↻ فهرستِ مدل‌ها از خودِ سرویس ──
         def _refresh_model_list(provider_v, api_keys_v, api_base_v, model_v):
             try:
                 from manga import list_provider_models
@@ -8121,7 +7550,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             prov = str(provider_v or "").strip()
             if prov in ("", "auto"):
                 raise gr.Error("روی «auto» مدلی وارد نمیشود — یک سرویس انتخاب کنید.")
-# مدلِ نامی (مدلهایِ من) → مشخصاتِ ذخیرهشدهٔ خودش
             _nm = None
             try:
                 _nm = resolve_ai_named(custom_models_state.value, prov,
@@ -8134,14 +7562,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 prov, api_base_v, api_keys_v = _p, _b, _k
             models, err = list_provider_models(
                 prov, str(api_keys_v or ""), str(api_base_v or ""))
-# دستورِ سازنده (v1.14.288): «رفرش زدم اون قسمتِ مدلِ نوشتن
-# همهٔ مالها رو وارد کنه» — ↻ همهٔ مدلهایِ (سالمِ) یافتشده را
-# کاما-جدا داخلِ فیلدِ متنیِ مدل مینویسد تا طرف ببیند چجور
-# وارد شده؛ کاربر بعد خودش کم/زیاد میکند (چند مدل = فال‌بک).
             if not models:
-# اگر اتصال/کلید برقرار نشد به‌جای خطا، فهرستِ آفلاینِ داخلِ
-# کد کاما-جدا داخلِ فیلد نوشته میشود (کاربر بی‌درنگ گزینه
-# دارد) و دلیلِ قطعی در لیبل میآید.
                 if prov == "gemini":
                     offline = _gemini_offline_models()
                     _why = f" — {str(err or '')[:60]}" if err else ""
@@ -8152,13 +7573,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                f"داخلِ فیلد نوشته شد"))
                 raise gr.Error(err or "مدلی پیدا نشد — کلید/لینک را با «تست کلیدها / لینک» چک کنید.")
 
-# v1.14.290 — سنجشِ زندهٔ سبک (دستورِ سازنده: «چیزی نداره بتونع
-# بفهمه کدوم مدل کتابی میده بیرون؟ فقط اونای ک اوکی خروجی میده
-# نگه داره»): به هر مدلِ زندهٔ یافتشده یک درخواستِ واقعیِ کوچک
-# (۴ خطِ دیالوگِ محاوره‌ای) فرستاده میشود؛ هر مدلی که خودش جواب
-# نداد (پولی/سهمیه/قطعی — رایگان بودن هم همینجا خودکار معلوم
-# میشود؛ هیچ نامی در کد نیست) یا جوابش کتابی بود کنار گذاشته
-# میشود و فقط مدلهایِ «اوکی» داخلِ فیلد نوشته میشوند.
             _probe_note = ""
             if prov == "gemini":
                 _pm = None
@@ -8188,13 +7602,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                      if (r or {}).get("verdict") == "error")
                         _n_run = len(_res)
                         if _n_err >= _n_run and _n_run:
-# همهٔ سنجشها خطا (شبکه/سهمیه در همین لحظه) — فهرستِ خامِ زنده
-# نگه داشته میشود تا کاربر بی‌درنگ گزینه داشته باشد.
                             _probe_note = (" — سنجشِ زندهٔ سبک در همین لحظه "
                                            "جواب نداد (شبکه/سهمیه)؛ فهرستِ خام")
                         else:
-# سنجشها اجرا شد ولی هیچ جوابِ سالمی نبود (همه کتابی/خاموش) —
-# فهرستِ آفلاینِ ثابتِ برنامه داخلِ فیلد نوشته میشود.
                             offline = _gemini_offline_models()
                             return gr.update(
                                 value=_models_join(offline),
@@ -8215,13 +7625,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
 
-# /218/219 — رویدادهایِ مدیرِ مدلهایِ سفارشی ──
-# دراپ‌داونِ «انتخاب مدل» و دکمههایِ // حذف شدند
-# _cm_pack دیگر خروجیِ cm_pick ندارد (۴تایی است).
         def _cm_pack(models, prov_cur=None):
-            """ — (مدلها، JSONِ مرورگر، منویِ AI، ِ کنارِ منو).
-            مقدارِ نهاییِ منو = انتخابِ فعلی اگر هنوز معتبر است؛ وگرنه
-            «auto» اگر مدلی داریم وگرنه «gemini»."""
             models = list(models or [])
             save_custom_models(models)
             _ch = _ai_choices(models)
@@ -8234,10 +7638,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     gr.update(visible=_val in _cm_names(models)))
 
         def _cm_add_box(raw, models, prov_cur):
-            """ — دکمهٔ «+ افزودن به لیست مدل‌ها»: مرورگر مدلِ فعلی
-            (نامِ دلخواه + دامنه + کلید + شناسهٔ مدل) را میفرستد؛ نامِ تکراری
-            = بهروزرسانیِ همان مدل. مدل کنارِ Gemini در لیست می‌ماند (دیسک در
-            اجرایِ محلی، localStorage مرورگر در وب) و در منویِ AI هم می‌آید."""
             try:
                 it = json.loads(raw) if raw else {}
             except Exception:
@@ -8253,7 +7653,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             models = [m for m in (models or [])
                       if str(m.get("name") or "") != name]
             models.append(entry)
-            # پیامِ ذخیره لینکِ مدل را هم نشان میدهد
             _link = entry["api_base"] or "Gemini رسمی (بدونِ دامنهٔ سفارشی)"
             _mdl = f" — مدلِ هوش: {entry['model']}" if entry["model"] else ""
             return (*_cm_pack(models, prov_cur),
@@ -8264,9 +7663,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                               visible=True))
 
         def _cm_del_selected(prov, models):
-            """ — ضربدرِ ِ کنارِ منویِ انتخابِ AI: مدلِ «انتخابشده»
-            را از لیست و منو پاک میکند (localStorage مرورگر با changeِ
-            cm_json_box همگام میماند)."""
             nm = str(prov or "").strip()
             models = [m for m in (models or [])
                       if str(m.get("name") or "") != nm] if nm \
@@ -8274,8 +7670,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             return _cm_pack(models, None)
 
         def _cm_restore(raw, models, prov_cur):
-            """ — بازگردانیِ مدلها از localStorage مرورگر (وب) —
-            فقط وقتی چیزِ بیشتری از دیسک دارد ادغام میشود."""
             try:
                 data = json.loads(raw) if raw else []
             except Exception:
@@ -8296,12 +7690,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                "model": _model_str(it.get("model"))})
             return _cm_pack(merged, prov_cur)
 
-# جاوااسکریپتِ دکمهٔ «+ افزودن به لیست مدل‌ها»: نام را با
-# پنجرهٔ prompt میپرسد (خالی = نامِ خودِ مدل)، در localStorage مینویسد
-# و از کانالِ manga_cm_add_box به سرور میدهد تا لیست + منویِ AI شود.
-# دکمه مستقل از custom شد: provider از ورودیِ رویداد
-# میآید؛ «دامنهٔ API» فقط وقتی provider=custom است در مدل ثبت
-# میشود (چون در بقیهٔ حالتها فیلدش از DOM پنهان است).
         _cm_add_js = """
 (prov) => {
   try {
@@ -8375,7 +7763,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 api_name="cm_del_sel")
         except Exception:
             pass
-# ویرایشِ مدلِ ذخیرهشده ──
         try:
             cm_edit_btn.click(
                 _cm_edit_start,
@@ -8400,11 +7787,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
         try:
-# مرورگرِ وب: هر تغییرِ فهرست → localStorage
-# بعدِ حذف/افزودن، اگر متنِ نمایشیِ منویِ AI مدلی
-# باشد که دیگر در فهرست نیست (باگِ نمایشیِ gradio 6 — مقدارِ
-# سرور درست است ولی برچسبِ منو کهنه میماند)، همان لحظه به
-# فالبکِ درست (auto با مدل، وگرنه gemini) برمیگردد
             cm_json_box.change(
                 fn=None, inputs=[cm_json_box], outputs=[],
                 js="""(js) => {
@@ -8440,7 +7822,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   } catch (e) {}
   return [];
 }""")
-# بارگذاریِ صفحه: مدلهایِ مرورگر → پایتون (ادغام با دیسک)
             cm_restore_box.change(
                 _cm_restore,
                 inputs=[cm_restore_box, custom_models_state, provider],
@@ -8450,9 +7831,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
 
-# /218 — پشتیبان‌گیری/بازیابی: «چیزای ک وارد کردن بکاپ
-# بگیره از مدل بگیرع تا تنظیماتشون» — دکمهٔ «گرفتن بکاپ» جدا از
-# Import؛ داخلِ بکاپ همه‌چیز است (لیستِ مدلها + تمامِ تنظیمات) ──
         _BACKUP_FIELDS = [
             ("provider", provider), ("api_base", api_base),
             ("api_keys", api_keys), ("model", model),
@@ -8474,8 +7852,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 settings = {k: (v if isinstance(v, (int, float, bool))
                                 else str(v or ""))
                             for (k, _), v in zip(_BACKUP_FIELDS, args[:n])}
-# مدل چند-انتخابی (لیست) → رشتهٔ کاما-جدا در بکاپ (سازگار با
-# بازیابیِ قدیمی هم هست — _model_str هر دو قالب را میفهمد)
                 if "model" in settings:
                     settings["model"] = _model_str(settings.get("model"))
                 models = list(args[n] or [])
@@ -8490,8 +7866,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 path = os.path.join(WORK_DIR, f"manga_backup_{ts}.json")
                 with open(path, "w", encoding="utf-8") as f:
                     json.dump(payload, f, ensure_ascii=False, indent=2)
-# دانلودِ خودکار: فایلِ خروجی در backup_out ست
-# میشود و JSِ رویِ changeِ آن بلافاصله دانلودش میکند
                 return (gr.update(value=path, visible=True),
                         gr.update(value=f"✅ پشتیبان ساخته شد و دانلودِ خودکارش "
                                         f"شروع شد: {len(models)} مدل + "
@@ -8511,7 +7885,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             try:
                 path = (file_info or "").strip() if isinstance(file_info, str) \
                     else (file_info.get("name") if isinstance(file_info, dict) else "")
-# gr.File با type=filepath مسیرِ موقت را میدهد
                 if isinstance(file_info, str):
                     path = file_info
                 elif isinstance(file_info, dict):
@@ -8533,8 +7906,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 for i, (k, _comp) in enumerate(_BACKUP_FIELDS):
                     if k in st and st[k] is not None:
                         ups[i] = gr.update(value=st[k])
-# بازیابیِ کامل: لیستِ مدلهایِ فایلِ بکاپ جایگزین
-# میشود (Import = برگشتنِ دقیقِ همه‌چیز به حالتِ بکاپ)
                 merged = []
                 for it in (payload.get("custom_models") or []):
                     if isinstance(it, dict) and str(it.get("name") or "").strip():
@@ -8551,8 +7922,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 _newv = _imp if _imp in _ch else (
                     _old if _old in _ch
                     else ("auto" if "auto" in _ch else "gemini"))
-# بانکِ فیلدها هم از بکاپ بازسازی میشود تا
-# provider.changeِ بعدی مقادیرِ تازه را جابهجا نکند
                 try:
                     _bank = dict(bank_cur or {}) if isinstance(bank_cur, dict) else {}
                 except Exception:
@@ -8581,9 +7950,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             backup_btn.click(
                 _do_backup, inputs=_backup_inputs,
                 outputs=[backup_out, backup_status], api_name="backup_settings")
-            # به محضِ آمادهشدنِ فایل (changeِ
-# backup_out) مرورگر همان را با a[download] دانلود میکند؛ رویِ
-# اندروید/PC/لینوکس/وب یکجاست (همه مرورگرِ webview/کروم):
             backup_out.change(
                 fn=None, inputs=[backup_out], outputs=[],
                 js="""(v) => {
@@ -8607,8 +7973,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   return [];
 }""",
             )
-# UploadButton رویدادِ upload دارد (بعد از انتخابِ
-# فایل) — همان هندلرِ قبلیِ _do_import
             import_file.upload(
                 _do_import,
                 inputs=[import_file, custom_models_state, provider,
@@ -8621,7 +7985,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             pass
 
         def _prompt_preview_update(mode_v, prov_v, mdl_v):
-# بدونِ تیتر — فقط متنِ کادرِ پرامپت رفرش میشود
             try:
                 return gr.update(value=resolve_prompt_preview(mode_v, prov_v, mdl_v, None))
             except Exception as e:
@@ -8650,7 +8013,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 ] + tone_uploads + tone_enables,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
                      dl_btn_debug, btn_view_debug, debug_row, html_debug_state,
-# پنجرهٔ پرسشِ «ادامه یا از اول» — خروجیِ چهاردهم
                      ask_group],
             concurrency_limit=8,
         )
@@ -8671,7 +8033,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                         custom_models_state],
                 outputs=[test_key_out],
             )
-# پنهان‌سازی بعد از ۶۰ ثانیه — جدا از رویداد اصلی تا ورودی‌ها خراب نشوند
             try:
                 _test_evt.then(fn=None, inputs=None, outputs=None, js=_hide_test_js)
             except Exception:
@@ -8690,14 +8051,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                   **_click_kw)
                 except TypeError:
                     run_btn.click(run_translation, **_click_kw)
-# کلیدِ یک‌بارمصرفِ «تستِ سرعت»  با خودِ
-# دکمه حذف شد؛ کارهایِ بعدی همیشه ترجمهٔ عادیاند.
         except Exception:
             pass
 
-# ——— دکمه‌های پنجرهٔ «ادامه یا از اول» ———
-# پاسخ با همان فرمِ شروع فرستاده می‌شود (run_translation جواب را
-# از _ASK_ANSWER برمی‌دارد و دیگر نمی‌پرسد).
         def _ask_wrap(_mode):
             def _w(*_a):
                 try:
@@ -8785,11 +8141,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             else:
                 sid = ""
             if not sid:
-# فیکسِ ارورِ «needed: 28, returned: 27»:
-# _restore_outputs از بیست‌وهشت مؤلفه دارد
-# (session_id, sid_box, run_btn, log_box, dl_btn, btn_view,
-# result_group, viewer_html, html_state + ۱۹ فیلدِ فرم)
-# ولی این شاخهٔ خالی هنوز ۲۷تایی بود.
                 return (gr.update(),) * 28
             job = _get_job(sid)
             meta = _load_job_meta(sid) if sid else {}
@@ -8850,12 +8201,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 v = data.get(key)
                 if v is None:
                     return gr.update()
-# مدل چند-انتخابی: مقدارِ ذخیرهشده (رشته یا لیست) به قالبِ
-# دراپ‌داونِ چند-انتخابی تبدیل میشود
                 if key == "model":
                     _ms = _model_str(v)
-                    return gr.update(value=[m for m in _ms.split(",")
-                                             if m.strip()]) if _ms else gr.update()
+                    return gr.update(value=_ms) if _ms else gr.update()
                 s = str(v).strip()
                 if s.lower() in ("null", "undefined"):
                     return gr.update()
@@ -8932,8 +8280,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             clean_method, two_pass, fake_test, clean_only,
         ]
 
-# فرم از localStorage: جاوااسکریپت مقدار hidden ترباکس را روی load پر می‌کند
-# بعد change همان ترباکس، فن سرورِ ری‌استور را با JSON کامل صدا می‌زند.
         hidden_restore_tb = gr.Textbox(visible=False, elem_id="manga_hidden_restore", container=False)
         try:
             demo.load(
@@ -9014,7 +8360,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     gr.update(visible=vis),
                     gr.update(visible=False),
                     html if vis else gr.update(),
-# دکمهٔ «دانلود دیباگ» بعد از پایان کار دیده می‌شود
                     gr.update(value=dl_dbg,
                               label=str(TX("app.download_debug", "⬇ دانلود دیباگ")) + _dbg_sz,
                               visible=bool(show_dbg and dl_dbg and vis)),
@@ -9044,8 +8389,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 mem_log = job.get("log") or ""
                 meta_log = meta.get("log") or ""
                 running = _job_running(job)
-# لاگ متادیتا فقط وقتی کار واقعاً در جریان است برمی‌گردد —
-# وگرنه نتیجهٔ تازهٔ کاربر هر ثانیه با لاگ قدیمی جلسهٔ قبل بازنویسی می‌شد!
                 if running and meta_log and (
                         len(meta_log) > len(mem_log) or not mem_log
                         or mem_log.startswith("—")):
@@ -9063,8 +8406,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 
                 running = _job_running(job)
                 log = job.get("log") or ""
-# لاگ فقط وقتی از نظر سرور تغییر کرده به مرورگر فرستاده می‌شود —
-# وگرنه هر ثانیه لاگ قدیمی روی تعامل تازهٔ کاربر بازنویسی می‌شد.
                 _last_pushed = job.get("_last_poll_log")
                 log_changed = bool(log) and log != _last_pushed
                 if log_changed:
@@ -9083,10 +8424,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 dl_dbg = job.get("download_debug")
                 has_dbg = bool(dl_dbg or job.get("reader_debug_path") or meta.get("has_debug"))
                 want_dbg = bool(job.get("want_debug") or meta.get("want_debug") or has_dbg)
-# وقتی هیچ کاری در جریان نیست و لاگ همان جای‌نگهدارِ اولیه است
-# هیچ‌کدام از ۱۴ خروجی را هر ثانیه بازنویسی نکن (هم روان‌تر است
-# هم جلوی پر شدن صفحه با حالت‌های قدیمی را می‌گیرد).
-# ولی اگر کار تمام/خطا شده، وضعیت دکمه و لاگ تازه باید برسد.
             default_log = "— لاگ بعد از شروع ترجمه اینجا می‌آید —"
             if not running and not vis and (not log or log.strip() == default_log):
                 return empty
@@ -9098,8 +8435,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     _dbg_sz = f" ({human_size(os.path.getsize(dl_dbg))})"
             except Exception:
                 pass
-# نوارِ پیشرفتِ زیرِ لاگ (مثلِ اپ اندروید): فاز +
-# «صفحهٔ n از N» + درصد؛ از همان لاگ و total.txt پوشهٔ live.
             _prog_upd = gr.update()
             try:
                 if (running or vis) and log:
@@ -9108,13 +8443,31 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     _tot = _ltot or (_live_total_of(_ld) if _ld else 0)
                     _done = (not running) and ("✅" in log or "تمام شد" in log)
                     if _done or _ph or running:
-                        _prog_upd = gr.update(
-                            value=_web_prog_html(_ph, _cur, _tot, running,
-                                                 _done, _unit),
-                            visible=True)
+                        if not _done and not _ph:
+                            _last = job.get("_last_prog_state") or ()
+                            if len(_last) == 4:
+                                _ph, _cur, _unit = _last[0], _last[1], _last[3]
+                                _tot = _tot or _last[2]
+                            else:
+                                _ph, _cur, _unit = job.get(
+                                    "_last_prog_phase", ""), 0, ""
+                        else:
+                            try:
+                                job["_last_prog_phase"] = _ph
+                                job["_last_prog_state"] = (_ph, _cur, _tot, _unit)
+                            except Exception:
+                                pass
+                        _html_p = _web_prog_html(_ph, _cur, _tot, running,
+                                                 _done, _unit)
+                        _prev_p = job.get("_last_prog_html")
+                        if _html_p != _prev_p:
+                            job["_last_prog_html"] = _html_p
+                            _prog_upd = gr.update(
+                                value=_html_p, visible=True)
+                        else:
+                            _prog_upd = gr.update(visible=True)
             except Exception:
                 _prog_upd = gr.update()
-# نمایش اصلی/دیباگ حذف — همه‌جا مخفی؛ فقط «نمایش» (دکمهٔ ) می‌ماند
             return (
                 sid,
                 gr.update(value=sid),
@@ -9126,7 +8479,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 gr.update(visible=show_card),
                 gr.update(),
                 gr.update(),
-# «دانلود دیباگ» — بعد از پایان کار در دسترس است
                 gr.update(value=dl_dbg,
                           label=str(TX("app.download_debug", "⬇ دانلود دیباگ")) + _dbg_sz,
                           visible=bool(dl_dbg and vis)),
@@ -9141,7 +8493,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
         def _scan_live_dir(live_dir):
             try:
-# _base.jpgهایِ خواهرِ روکشِ دیباگ صفحه حساب نمیشوند
                 fs = [f for f in os.listdir(live_dir)
                       if f.lower().endswith(".jpg") and f.startswith("live_")
                       and not f.lower().endswith("_base.jpg")]
@@ -9151,7 +8502,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             return [os.path.join(live_dir, f) for f in fs]
 
         def _dbg_sibling(live_dir: str) -> str:
-            """پوشهٔ live_debug کنار پوشهٔ live — اگر باشد، خوانندهٔ زنده دکمهٔ دیباگ می‌گیرد."""
             try:
                 base = os.path.dirname(os.path.abspath(live_dir))
                 cand = os.path.join(base, "live_debug")
@@ -9170,10 +8520,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
         def _write_live_reader(live_dir: str, dbg_dir: str = "",
                                run: str = "") -> str:
-            """خوانندهٔ زندهٔ وب را داخل پوشهٔ live می‌نویسد — اسلات لودینگ برای
-            صفحه‌های نرسیده + سوئیچ دیباگ (اگر پوشهٔ live_debug باشد).
-            run = توکنِ این اجرا؛ کلیدهای کشِ مرورگر با آن پیشوند میگیرند
-            تا اجرای جدید هرگز تصویرِ کششدهٔ اجرای قبل را نشان ندهد."""
             import gradio as _gr
             gv = getattr(_gr, "__version__", "4")
             try:
@@ -9203,19 +8549,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             return path
 
         def _start_live_slicer(live_dir: str, job: dict) -> None:
-            """برشکارِ وبِ ۲۰۰۰px — فقط رابطِ وب (خواستهٔ سازنده).
-
-            عکسهایِ بلندِ پوشهٔ live (بیش از ۲۰۰۰px ارتفاع) به برشهایِ
-            ۲۰۰۰px («w_NNNN_k.jpg») بریده میشوند تا خواندنِ وبِ تدریجی
-            و سبک باشد؛ مارکرِ «w_NNNN.json» ({n,src}) بعد از کاملشدنِ
-            برشها مینشیند (بودنش = برشها سالمند؛ src = میلیثانیهٔ
-            خودِ عکسِ منبع برایِ سنجشِ تازگی در نمایشگر). برشِ خام و
-            سریع است — بدونِ جستجویِ خطِ امن (خواستهٔ سازنده). فایلهایِ
-            اصلیِ live_NNNN.jpg / mtimes.txt دستِ موتور میمانند و
-            نامِ برشها با «live_» شروع نمیشود تا شمارشِ صفحهها
-            (اسکنهایِ _scan_live_dir و live_cnt) آنها را نبینند —
-            PC/لینوکس/اندروید کاملاً بی‌خبرند.
-            """
             try:
                 from PIL import Image as _PILImage
             except Exception:
@@ -9230,7 +8563,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                         with open(mark, encoding="utf-8") as f:
                             old = json.load(f) or {}
                         if int(old.get("src") or 0) == st_mtime_ms:
-                            return  # همین نسخه قبلاً بریده شده
+                            return
                     except Exception:
                         pass
                     with _PILImage.open(path) as im:
@@ -9248,15 +8581,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                                 chk.save(tmp, format="JPEG", quality=82,
                                          optimize=True, progressive=True)
                                 os.replace(tmp, fp)
-# سخت‌سازیِ نوشتنِ همزمان: اگر موتور وسطِ نوشتنِ همین فایل
-# بود (imreadِ پارهشده / نسخهٔ کهنه)، mtime بعد از برش عوض
-# شده — مارکر ننویس؛ چرخهٔ بعدی نسخهٔ تازه را میبرد.
                     try:
                         if int(os.path.getmtime(path) * 1000) != st_mtime_ms:
                             return
                     except OSError:
                         return
-# مارکر آخر مینشیند — بودنش یعنی برشها کاملند
                     tmpm = mark + ".tmp"
                     with open(tmpm, "w", encoding="utf-8") as f:
                         json.dump({"n": n, "src": st_mtime_ms}, f)
@@ -9288,7 +8617,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             _slice_one(p, int(mt * 1000))
                     except Exception:
                         pass
-# بی‌کاریِ طولانی = نظرسنجیِ آرام (صفحهٔ دیررسِ ذخیرهٔ نهایی)
                     idle = (0.0 if changed else idle + 0.25)
                     time.sleep(0.25 if idle < 300 else 2.0)
 
@@ -9312,7 +8640,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 running = bool(job.get("running")) and (
                     job.get("proc") is None or job["proc"].poll() is None)
             if files == prev and dbg_files == prev_dbg:
-# هیچ تغییر — ولی وضعیتِ در حال اجرا/پایان باید دیده شود
                 was_running = bool(job.get("_live_was_running"))
                 if running == was_running:
                     return gr.update(), gr.update(), gr.update()
@@ -9322,8 +8649,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 job["_live_was_running"] = running
                 job["ts"] = time.time()
             if not running:
-# بعد از پایان هم همان «نمایش» می‌ماند (پوشهٔ live همهٔ
-# صفحه‌های نهایی را دارد) — دیگر پنهان نمی‌شود.
                 tot_end = _live_total_of(live_dir) if live_dir else 0
                 n_end = len(files)
                 if n_end > 0 or tot_end > 0:
@@ -9443,9 +8768,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         def _sid_box_sync(sid_v, sid_box_v):
             preferred = (sid_v or sid_box_v or "").strip()
             if not preferred:
-# فیکسِ ارورِ «needed: 15, returned: 14»:
-# _poll_outputs از پانزده مؤلفه دارد (با
-# prog_html) ولی این شاخهٔ خالی هنوز ۱۴تایی بود.
                 return (gr.update(),) * 15
             return _poll_job_status(preferred, preferred)
 
@@ -9534,8 +8856,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         def _hydrate_after_js(sid, holder):
             preferred = (sid or holder or "").strip()
             if not preferred:
-# همان فیکسِ ۱۵-خروجی (ارورِ گوشی روی
-# بارگذاریِ صفحهٔ وب — needed: 15, returned: 14).
                 return (gr.update(),) * 15
             return _poll_job_status(preferred, preferred)
 
@@ -9548,8 +8868,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
 
-# نمایش دیباگ جدا حذف شد — دیباگ داخل خود «نمایش» است
-# ورودی web_debug فقط علامت می‌زند که موتور دیباگ بسازد.
         threading.Thread(target=_cleanup_old_jobs, daemon=True).start()
 
         def _reader_file_url(path: str) -> str:
@@ -9574,8 +8892,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (!isDesk) { alert("هنوز صفحه‌ای آماده نشده — چند لحظه بعد دوباره بزن."); }
     return [];
   }
-  // در پنجرهٔ دسکتاپ (pywebview) هرگز window.open نزن —
-  // پنجرهٔ مرورگرِ سیستم باز می‌شد (خواستهٔ کاربر: نمایش داخل خود برنامه).
   if (isDesk) { window.location.href = u; return []; }
   let w = window.__mangaPopup;
   if (w && !w.closed) {
@@ -9599,7 +8915,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     rt = job.get("live_run") or ""
                     _sl = job.get("live_slicer")
                 if d and os.path.isdir(d):
-# شروعِ تنبلِ برشکار — اگر به هر دلیلی (اپِ تازه‌بالا) نبود
                     if not _sl:
                         try:
                             _start_live_slicer(d, job)
@@ -9641,10 +8956,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             except Exception:
                 pass
 
-# گارد پاپ‌آپ: با کلیک روی دکمه‌های نمایش، یک پنجرهٔ خالی «همزمان با
-# کلیک» باز می‌شود تا مرورگر آن را مسدود نکند (رفعِ «هیچی نشون نداد»)
-# در پنجرهٔ دسکتاپ اجرا نشود — window.open خالی همان‌جا
-# مرورگرِ سیستم را باز می‌کرد (بازشدن خودکار مرورگر روی PC).
         _popup_guard_js = """
 () => {
   try {
