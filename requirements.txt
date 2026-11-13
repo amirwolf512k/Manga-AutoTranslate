@@ -1,8 +1,4 @@
-# Manga-AutoTranslate — وابستگی‌های PC
-# نکتهٔ سرعت (v1.14.112): «rapidocr» جدید (PP-OCRv6) حدود ۲۵٪ سریع‌تر از
-# rapidocr-onnxruntime (PP-OCRv3) است و مدل‌هایش از ریلیزِ «models» همین
-# ریپو دانلود می‌شود. اگر فقط rapidocr-onnxruntime نصب باشد، موتور به
-# PP-OCRv3 فال‌بک می‌کند (کندتر + recallِ کمتر).
+
 opencv-python-headless>=4.8
 onnxruntime>=1.16
 rapidocr>=3.9.2
