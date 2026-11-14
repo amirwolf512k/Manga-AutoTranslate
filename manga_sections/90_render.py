@@ -291,6 +291,11 @@ class _MangaTranslatorBody_90:
         for region in regions:
             if not region.translated_text:
                 continue
+            if self._is_json_garbage_text(region.translated_text):
+                print(f"  [!] رندرِ ناحیه {region.id} رد شد — پاسخِ JSONِ "
+                      f"پخش‌نشده (برای پسگیری خالی شد)")
+                region.translated_text = ""
+                continue
 
             try:
                 self._render_one_region(pil_img, draw, image, original_image, region)

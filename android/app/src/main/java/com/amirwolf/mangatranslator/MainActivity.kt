@@ -179,8 +179,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     private val modeGridIds = listOf(
-        "manga_cb_twopass", "manga_cb_thinking", "manga_cb_faketest",
-        "manga_cb_cleanup", "manga_cb_debug", "manga_cb_safety")
+        "manga_cb_twopass", "manga_cb_thinking", "manga_cb_safety",
+        "manga_cb_faketest", "manga_cb_cleanup", "manga_cb_debug")
 
     private val modeTips = mapOf(
         "manga_cb_twopass" to "پاسِ اول بلوکها را مییابد، پاسِ دوم متنِ داخلشان را دقیق بازمیخواند — پیش‌فرض روشن",
@@ -272,7 +272,18 @@ class MainActivity : AppCompatActivity() {
         }
         val sw = SwitchCompat(this).apply {
             setPadding(0, 0, 0, 0)
-            val svB = savedOr(id, dflt)
+            val aliases = when (id) {
+                "manga_cb_twopass" -> listOf(id, "two_pass", "manga_two_pass")
+                "manga_cb_thinking" -> listOf(id, "thinking", "deep_thinking", "manga_deep_thinking")
+                "manga_cb_safety" -> listOf(id, "safety", "safety_settings", "manga_safety_settings")
+                "manga_cb_faketest" -> listOf(id, "fake_test", "manga_fake_test")
+                "manga_cb_cleanup" -> listOf(id, "clean_only", "manga_clean_only")
+                "manga_cb_debug" -> listOf(id, "web_debug", "manga_web_debug")
+                else -> listOf(id)
+            }
+            val svB = aliases.firstNotNullOfOrNull { a ->
+                prefs.getString(a, null)?.takeIf { it.isNotBlank() }
+            } ?: savedOr(id, dflt)
             isChecked = when (svB) {
                 is Boolean -> svB
                 is String -> svB.equals("true", true)
@@ -2882,11 +2893,11 @@ class MainActivity : AppCompatActivity() {
             ?: prefs.getString("ocr_engine", null) ?: "")
         map.put("fmt", firstNonEmpty(o, "out_fmt", "fmt") ?: "PDF")
         map.put("quality", optInt(o, "quality", 92))
-        map.put("debug", optBool(o, "web_debug", "debug"))
-        map.put("fake", optBool(o, "fake_test", "fake"))
-        map.put("clean_only", optBool(o, "clean_only"))
+        map.put("debug", optBool(o, "manga_cb_debug", "web_debug", "debug"))
+        map.put("fake", optBool(o, "manga_cb_faketest", "fake_test", "fake"))
+        map.put("clean_only", optBool(o, "manga_cb_cleanup", "clean_only"))
         map.put("clean_method", firstNonEmpty(o, "clean_method") ?: "lama-manga")
-        map.put("two_pass", optBoolD(o, true, "two_pass"))
+        map.put("two_pass", optBoolD(o, true, "manga_cb_twopass", "two_pass"))
         map.put("thinking", optBoolD(o, true, "manga_cb_thinking", "thinking", "deep_thinking"))
         map.put("safety", optBool(o, "manga_cb_safety", "safety", "safety_settings"))
         map.put("max_tokens", firstNonEmpty(o, "manga_max_tokens", "max_tokens") ?: "auto")

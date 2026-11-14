@@ -41,6 +41,63 @@ class _MangaTranslatorBody_80:
             _jp = False
         return mt_system_instruction(japanese=_jp)
 
+    def _get_plain_system_instruction(self) -> str:
+        try:
+            _jp = bool(self._ocr_lang_flags()[2])
+        except Exception:
+            _jp = False
+        return mt_plain_system_instruction(japanese=_jp)
+
+    @staticmethod
+    def _extract_plain_from_jsonish(val: str) -> str:
+        v = (val or "").strip()
+        if not v:
+            return ""
+        if v.startswith("```"):
+            v = re.sub(r"^```(?:json)?\s*", "", v)
+            v = re.sub(r"\s*```$", "", v).strip()
+        if not (v[:1] in "[{" or '"fa"' in v or '"fa_text"' in v
+                or '"filename"' in v or '"translations"' in v):
+            return v
+        fas = []
+
+        def _walk(o):
+            if isinstance(o, dict):
+                _fa = o.get("fa") or o.get("fa_text")
+                if isinstance(_fa, str) and _fa.strip():
+                    fas.append(_fa)
+                for _x in o.values():
+                    _walk(_x)
+            elif isinstance(o, list):
+                for _x in o:
+                    _walk(_x)
+        try:
+            _walk(json.loads(v))
+        except Exception:
+            pass
+        if not fas:
+            for _m in re.finditer(
+                    r'"(?:fa|fa_text)"\s*:\s*"((?:[^"\\]|\\.)*)"', v):
+                try:
+                    fas.append(json.loads('"' + _m.group(1) + '"'))
+                except Exception:
+                    fas.append(_m.group(1))
+        if not fas:
+            return ""
+        return "\n".join(_f.strip() for _f in fas if _f.strip())
+
+    @staticmethod
+    def _is_json_garbage_text(t: str) -> bool:
+        v = str(t or "").strip()
+        if not v:
+            return False
+        _snip = v[:400]
+        if '"filename"' in _snip and '"translations"' in _snip:
+            return True
+        if '"fa"' in _snip and v[:1] in "[{":
+            return True
+        return False
+
     @staticmethod
     def _is_watermark_text(text: str) -> bool:
 
@@ -437,7 +494,7 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
         else:
-            config_args["max_output_tokens"] = 768
+            config_args["max_output_tokens"] = 2048
         config = genai_types.GenerateContentConfig(**config_args)
         client = self._thread_client()
         model = self._thread_model()
@@ -1684,8 +1741,46 @@ class _MangaTranslatorBody_80:
                    and str(getattr(r, "source_text", "") or "").strip()]
         if not missing:
             return 0
-        print(f"    {len(missing)} حبابِ بدونِ ترجمه — نجاتِ تکآیتمی…")
+        _total_missing = len(missing)
         sys_inst = self._get_system_instruction()
+        try:
+            _rules0 = (getattr(self, "custom_instruction", "") or "").strip() \
+                or PROMPT_PRESETS[resolve_prompt_mode(
+                    getattr(self, "prompt_mode", "professional"),
+                    getattr(self, "provider", "gemini"),
+                    getattr(self, "model_name", ""))]
+        except Exception:
+            _rules0 = ""
+        try:
+            _jp0 = bool(self._ocr_lang_flags()[2])
+        except Exception:
+            _jp0 = False
+        try:
+            pages, region_page = self._mt_pages_payload(missing)
+            _sref0 = self._style_ref_samples()[:10]
+            p_batch = mt_user_prompt(_rules0, pages, _jp0, style_ref=_sref0)
+            print(f"    {_total_missing} حبابِ بدونِ ترجمه — نجاتِ دسته‌ای "
+                  f"در یک درخواست…")
+            with self._api_lock:
+                if self.provider_type == "gemini":
+                    t_batch = self._translate_with_gemini(p_batch, sys_inst)
+                else:
+                    t_batch = self._translate_via_provider(p_batch, sys_inst)
+            try:
+                self._parse_translation_response(t_batch, missing, region_page)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"    [!] نجاتِ دسته‌ای ناموفق: {str(e)[:90]}")
+        missing = [r for r in missing
+                   if not str(getattr(r, "translated_text", "") or "").strip()]
+        fixed = _total_missing - len(missing)
+        if fixed:
+            print(f"    [✓] نجاتِ دسته‌ای: {fixed} حباب پر شد.")
+        if not missing:
+            return fixed
+        print(f"    {len(missing)} حبابِ مانده — نجاتِ تکآیتمی…")
+        sys_plain = self._get_plain_system_instruction()
         _sref = self._style_ref_samples()[:3]
         _anchor = ""
         if _sref:
@@ -1695,7 +1790,6 @@ class _MangaTranslatorBody_80:
             _anchor = ("\nStyle of this chapter (match its tone, register and "
                        "phrasing exactly — do NOT sound formal or bookish):\n"
                        + _ex + "\n")
-        fixed = 0
         for r in missing:
             src = (r.source_text or "").strip()
             val = ""
@@ -1704,20 +1798,22 @@ class _MangaTranslatorBody_80:
                   "errors or look garbled — never refuse it and never write "
                   "placeholders such as [CENSORED]; translate the most likely "
                   "intended dialogue instead. "
-                  "Answer with ONLY the Persian translation — no notes, no quotes."
+                  "Answer with ONLY the Persian translation — plain text only, "
+                  "no JSON, no brackets, no quotes, no notes."
                   "\n" + _anchor + "\n" + src)
-            for _t in range(2):
+            for _t in range(3):
                 try:
                     with self._api_lock:
                         if self.provider_type == "gemini":
                             val = self._translate_with_gemini(
-                                p1, sys_inst, structured=False) or ""
+                                p1, sys_plain, structured=False) or ""
                         else:
                             val = self._translate_via_provider(
-                                p1, sys_inst, structured=False) or ""
+                                p1, sys_plain, structured=False) or ""
                     val = (val or "").strip()
                     val = re.sub(r"^```(?:json)?\s*|\s*```$", "", val).strip()
                     val = val.strip('"').strip().strip('"').strip()
+                    val = self._extract_plain_from_jsonish(val)
                     if val and self._is_censored_translation(val) \
                             and "censor" not in src.lower():
                         print(f"    [!] نجاتِ تک‌آیتمیِ بالن[{r.id}]: پاسخِ "
@@ -1728,7 +1824,16 @@ class _MangaTranslatorBody_80:
                     time.sleep(0.4)
                 except Exception as e:
                     print(f"    [!] نجاتِ تکآیتمیِ بالن[{r.id}]: {str(e)[:80]}")
-                    time.sleep(0.4)
+                    if self._is_rate_or_model_quota_error(e):
+                        if self._api_keys and len(self._api_keys) > 1:
+                            try:
+                                self._pick_random_api_key(
+                                    reason="نجاتِ ۴۲۹/503")
+                            except Exception:
+                                pass
+                        time.sleep(min(2.5 * (_t + 1), 7.0))
+                    else:
+                        time.sleep(0.4)
             if not val:
                 try:
                     _rules = (getattr(self, "custom_instruction", "") or "").strip() \
@@ -1740,9 +1845,11 @@ class _MangaTranslatorBody_80:
                         _jp = bool(self._ocr_lang_flags()[2])
                     except Exception:
                         _jp = False
+                    _rfname = (getattr(r, "page_file", "") or "").strip() \
+                        or ("bubble_%d.png" % r.id)
                     p2 = mt_user_prompt(
                         _rules,
-                        [{"filename": "rescue_%d.png" % r.id,
+                        [{"filename": _rfname,
                           "dialogues": [[1, src]]}],
                         _jp)
                     with self._api_lock:
@@ -1752,6 +1859,8 @@ class _MangaTranslatorBody_80:
                             t2 = self._translate_via_provider(p2, sys_inst)
                     self._parse_translation_response(t2, [r])
                     val = (r.translated_text or "").strip()
+                    if not val:
+                        val = self._extract_plain_from_jsonish(t2 or "")
                 except Exception as e:
                     print(f"    [!] نجاتِ JSONِ بالن[{r.id}]: {str(e)[:80]}")
             if not val:
@@ -1759,7 +1868,7 @@ class _MangaTranslatorBody_80:
                 continue
             fixed += 1
             print(f"    ← نجاتِ 189[{r.id}]: {val[:60]}")
-            r.translated_text = val
+            r.translated_text = self._cleanup_translation(val)
         return fixed
 
     @staticmethod

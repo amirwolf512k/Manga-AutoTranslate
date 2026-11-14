@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.310"
+APP_VER = "1.14.311"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -633,6 +633,33 @@ def _server_has_gpu() -> bool:
             ok = False
     globals()["_SERVER_GPU_CACHE"] = ok
     return ok
+
+def _server_gpu_label() -> str:
+    _cache = globals().get("_SERVER_GPU_NAME_CACHE")
+    if _cache is not None:
+        return _cache
+    name = ""
+    try:
+        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True,
+                           timeout=8)
+        if r.returncode == 0:
+            _lines = [ln.strip() for ln in
+                      (r.stdout or b"").decode("utf-8", "ignore").splitlines()
+                      if ln.strip()]
+            if _lines:
+                _m = re.search(r"GPU\s*\d+\s*:\s*(.+?)\s*\(UUID", _lines[0])
+                name = (_m.group(1).strip() if _m else _lines[0][:48])
+    except Exception:
+        name = ""
+    if not name and sys.platform == "win32":
+        try:
+            import onnxruntime as _ort
+            if "DmlExecutionProvider" in _ort.get_available_providers():
+                name = "DirectML"
+        except Exception:
+            pass
+    globals()["_SERVER_GPU_NAME_CACHE"] = name
+    return name
 
 def find_font() -> str:
     cands = []
@@ -5881,16 +5908,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                              ["opencv", "opencv"]],
                     value=_cm0,
                     label=TX("app.cleanup", "روش پاکسازی"))
-                _dv0 = str(cfg.get("device") or "auto").strip().lower()
-                if _dv0 not in ("auto", "cpu", "gpu"):
-                    _dv0 = "auto"
-                device = gr.Radio(
-                    choices=[["auto (خودکار)", "auto"],
-                             ["cpu (سه‌تایی CPU)", "cpu"],
-                             ["gpu (سه‌تایی GPU)", "gpu"]],
-                    value=_dv0,
-                    visible=_server_has_gpu(),
-                    label=TX("app.device", "دستگاه پردازش (استخراج + پاکسازی)"))
             with gr.Row(elem_id="manga_mode_grid"):
                 two_pass = gr.Checkbox(
                     label=TX("app.two_pass", "OCR دومرحله‌ای"), value=True,
@@ -5899,6 +5916,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     label=TX("app.thinking", "حالت تفکر عمیق"),
                     value=bool(cfg.get("deep_thinking", True)),
                     elem_id="manga_cb_thinking")
+                safety_settings = gr.Checkbox(
+                    label=TX("app.safety", "تنظیمات ایمنی"),
+                    value=bool(cfg.get("safety_settings", False)),
+                    elem_id="manga_cb_safety")
                 fake_test = gr.Checkbox(
                     label=TX("app.fake_test", "حالت تست"),
                     value=bool(cfg.get("fake_test", False)),
@@ -5911,10 +5932,21 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     label=TX("app.web_debug", "حالت دیباگ"),
                     value=bool(cfg.get("web_debug", False)),
                     elem_id="manga_cb_debug")
-                safety_settings = gr.Checkbox(
-                    label=TX("app.safety", "تنظیمات ایمنی"),
-                    value=bool(cfg.get("safety_settings", False)),
-                    elem_id="manga_cb_safety")
+            with gr.Row():
+                _dv0 = str(cfg.get("device") or "auto").strip().lower()
+                if _dv0 not in ("auto", "cpu", "gpu"):
+                    _dv0 = "auto"
+                _gpu_nm = _server_gpu_label()
+                _gpu_lbl = (f"gpu (سه‌تایی GPU — CUDA: {_gpu_nm})"
+                            if _gpu_nm else "gpu (سه‌تایی GPU)")
+                device = gr.Dropdown(
+                    choices=[("auto (خودکار)", "auto"),
+                             ("cpu (سه‌تایی CPU)", "cpu"),
+                             (_gpu_lbl, "gpu")],
+                    value=_dv0,
+                    visible=_server_has_gpu(),
+                    scale=2,
+                    label=TX("app.device", "دستگاه پردازش (استخراج + پاکسازی)"))
             with gr.Row():
                 _mt0 = str(cfg.get("max_tokens_mode", "auto") or "auto").strip().lower()
                 if _mt0 not in ("auto", "8192", "16384", "32768",
@@ -6934,8 +6966,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             }}
             if (d.model) {{
               const mRaw = String(d.model || "");
-              const mClean = mRaw.replace(/[\\'"\[\]{{}}()<>]+/g, "")
-                                 .replace(/\s+/g, " ").trim();
+              const mClean = mRaw.replace(/[\\'\\"\\[\\]{{}}()<>]+/g, "")
+                                 .replace(/\\s+/g, " ").trim();
               if (mClean) {{
                 const m = byId("manga_model");
                 if (m) setVal(m, mClean);

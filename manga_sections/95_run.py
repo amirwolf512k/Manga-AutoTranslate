@@ -1807,7 +1807,9 @@ class _MangaTranslatorBody_95:
                         continue
                     if not source_has_letters(_r.source_text):
                         continue
-                    if (_r.translated_text or "").strip():
+                    if (_r.translated_text or "").strip() \
+                            and not self._is_json_garbage_text(
+                                _r.translated_text):
                         continue
                     _out.append(_r)
             return _out
@@ -1852,6 +1854,16 @@ class _MangaTranslatorBody_95:
 
         if (not getattr(self, "clean_only", False)
                 and not getattr(self, "fake_translate", False)):
+            for _p in sorted(extracted_map.keys()):
+                _entry = extracted_map.get(_p)
+                if _entry is None:
+                    continue
+                for _r in (_entry[3] or []):
+                    if (_r.translated_text or "").strip() \
+                            and self._is_json_garbage_text(_r.translated_text):
+                        print(f"    [!] پاسخِ JSONِ ناحیهٔ {getattr(_r, 'id', '?')} "
+                              f"دور ریخته شد (برای پسگیریِ دوباره)")
+                        _r.translated_text = ""
             _empty_ids_before: Dict[int, int] = {}
             for _r in _collect_empty_dialogues():
                 _pg = page_of_region.get(getattr(_r, "id", -1), -1)
