@@ -6029,6 +6029,34 @@ class _MangaTranslatorBody_85:
 
     def _compose_region_strips(self, image: np.ndarray,
                                region: "TextRegion") -> Optional[np.ndarray]:
+        _rc_key = None
+        try:
+            _rc_key = (id(region),
+                       image.__array_interface__["data"][0],
+                       image.shape)
+        except Exception:
+            _rc_key = None
+        if _rc_key is not None:
+            _rcd = getattr(self, "_rstrips_cache", None)
+            if isinstance(_rcd, dict):
+                _rc = _rcd.get(_rc_key)
+                if _rc is not None:
+                    return _rc[0], _rc[1]
+        res = self._compose_region_strips_uncached(image, region)
+        if _rc_key is not None:
+            try:
+                _rcd = getattr(self, "_rstrips_cache", None)
+                if not isinstance(_rcd, dict):
+                    _rcd = {}
+                    self._rstrips_cache = _rcd
+                _rcd[_rc_key] = (res[0] if res else None,
+                                 res[1] if res else None)
+            except Exception:
+                pass
+        return res
+
+    def _compose_region_strips_uncached(self, image: np.ndarray,
+                                        region: "TextRegion") -> Optional[np.ndarray]:
         try:
             polys = []
             for p in (getattr(region, "ocr_polys", None) or []):
@@ -7204,7 +7232,6 @@ class _MangaTranslatorBody_85:
                 import traceback as _tb
                 print("  [!]texture-refill error:")
                 _tb.print_exc()
-
     def _fill_harmony_qc(self, donor: np.ndarray, original: np.ndarray,
                          zone: np.ndarray, verbose: bool = True) -> int:
         try:
@@ -7217,24 +7244,63 @@ class _MangaTranslatorBody_85:
             zm = zone > 0
             if not zm.any():
                 return 0
-            _diff = cv2.absdiff(donor, original).max(axis=2)
+            _zs = np.where(zm.any(axis=1))[0]
+            _zs2 = np.where(zm.any(axis=0))[0]
+            try:
+                _zy0 = max(0, int(_zs[0]) - 24)
+                _zy1 = int(_zs[-1]) + 25
+                _zx0 = max(0, int(_zs2[0]) - 24)
+                _zx1 = int(_zs2[-1]) + 25
+            except Exception:
+                _zy0, _zy1, _zx0, _zx1 = 0, zm.shape[0], 0, zm.shape[1]
+            _zy1 = min(zm.shape[0], _zy1)
+            _zx1 = min(zm.shape[1], _zx1)
+            if (_zy1 - _zy0) * (_zx1 - _zx0) < 0.55 * zm.size:
+                donor_w = donor[_zy0:_zy1, _zx0:_zx1]
+                original_w = original[_zy0:_zy1, _zx0:_zx1]
+                zone_w = zone[_zy0:_zy1, _zx0:_zx1]
+                off = (_zy0, _zx0)
+            else:
+                donor_w, original_w, zone_w = donor, original, zone
+                off = None
+            _diff = cv2.absdiff(donor_w, original_w).max(axis=2)
+            zm = zone_w > 0
             ch = (_diff > 12) & zm
             try:
-                _spd = (donor.max(axis=2).astype(np.int16)
-                        - donor.min(axis=2).astype(np.int16))
-                _spo = (original.max(axis=2).astype(np.int16)
-                        - original.min(axis=2).astype(np.int16))
+                _spd = (donor_w.max(axis=2).astype(np.int16)
+                        - donor_w.min(axis=2).astype(np.int16))
+                _spo = (original_w.max(axis=2).astype(np.int16)
+                        - original_w.min(axis=2).astype(np.int16))
                 ch |= ((_spd >= 5) & (_spo <= 3) & zm)
             except Exception:
                 pass
             if not ch.any():
                 return 0
-            _g = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
-            _gb = cv2.GaussianBlur(_g, (0, 0), 4.0)
-            _ed = cv2.Canny(_gb, 40, 120)
-            _ed = (cv2.dilate(
-                _ed, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (7, 7))) > 0)
+            _ck = None
+            try:
+                _ck = (original.__array_interface__["data"][0],
+                       original.shape)
+            except Exception:
+                _ck = None
+            _cc = getattr(self, "_hqc_cache", None)
+            if _ck is not None and _cc is not None and _cc[0] == _ck:
+                _ed_full = _cc[1]
+            else:
+                _ed_full = None
+            if _ed_full is None:
+                _g = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+                _gb = cv2.GaussianBlur(_g, (0, 0), 4.0)
+                _ed_full = cv2.Canny(_gb, 40, 120)
+                _ed_full = (cv2.dilate(
+                    _ed_full, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (7, 7))) > 0)
+                if _ck is not None:
+                    try:
+                        self._hqc_cache = (_ck, _ed_full)
+                    except Exception:
+                        pass
+            _ed = _ed_full[_zy0:_zy1, _zx0:_zx1] if off else _ed_full
+            _ed_full = None
             zm_c = zm & (~_ed)
             if not zm_c.any():
                 return 0
@@ -7270,7 +7336,7 @@ class _MangaTranslatorBody_85:
                     _pcp[y0 - by0:y1 - by0 + 1,
                          x0 - bx0:x1 - bx0 + 1] = \
                         pcc.astype(np.uint8)
-                    _oc = original[by0:by1, bx0:bx1]
+                    _oc = original_w[by0:by1, bx0:bx1]
                     _ocf = _oc.astype(np.float32)
                     _lum_map = (_ocf[:, :, 0] * 0.114
                                 + _ocf[:, :, 1] * 0.587
@@ -7330,7 +7396,7 @@ class _MangaTranslatorBody_85:
                         - np.percentile(rpx, 10, axis=0)))
                     _rl = float(rmed[0] * 0.114 + rmed[1] * 0.587
                                 + rmed[2] * 0.299)
-                    fpx = donor[by0:by1, bx0:bx1][pch_p].astype(
+                    fpx = donor_w[by0:by1, bx0:bx1][pch_p].astype(
                         np.float32)
                     if fpx.shape[0] < 25:
                         continue
@@ -7408,7 +7474,7 @@ class _MangaTranslatorBody_85:
                                       f"پربافت fstd={fstd:.0f} رد",
                                       flush=True)
                             continue
-                    repl = donor[by0:by1, bx0:bx1].copy()
+                    repl = donor_w[by0:by1, bx0:bx1].copy()
                     if _field:
                         try:
                             _pp2 = 24
@@ -7416,9 +7482,9 @@ class _MangaTranslatorBody_85:
                             _fx0 = max(0, bx0 - _pp2)
                             _fy1 = min(H, by1 + _pp2)
                             _fx1 = min(W, bx1 + _pp2)
-                            _oc2 = original[_fy0:_fy1, _fx0:_fx1] \
+                            _oc2 = original_w[_fy0:_fy1, _fx0:_fx1] \
                                 .astype(np.float32)
-                            _dc2 = donor[_fy0:_fy1, _fx0:_fx1] \
+                            _dc2 = donor_w[_fy0:_fy1, _fx0:_fx1] \
                                 .astype(np.float32)
                             _ring2 = np.zeros(_oc2.shape[:2], np.float32)
                             _ring2[(by0 - _fy0):(by1 - _fy0),
@@ -7459,9 +7525,9 @@ class _MangaTranslatorBody_85:
                                 _wmf = np.minimum(_wmf * 1.6, 1.0)
                                 _wmf *= zm[_fy0:_fy1,
                                            _fx0:_fx1].astype(np.float32)
-                                _subf = donor[_fy0:_fy1,
+                                _subf = donor_w[_fy0:_fy1,
                                               _fx0:_fx1].astype(np.float32)
-                                donor[_fy0:_fy1, _fx0:_fx1] = np.clip(
+                                donor_w[_fy0:_fy1, _fx0:_fx1] = np.clip(
                                     _subf * (1.0 - _wmf[..., None])
                                     + _newv.astype(np.float32)
                                     * _wmf[..., None],
@@ -7487,8 +7553,8 @@ class _MangaTranslatorBody_85:
                     _wm = cv2.GaussianBlur(_wm, (0, 0), 2.0)
                     _wm = np.minimum(_wm * 1.6, 1.0)
                     _wm *= zm[by0:by1, bx0:bx1].astype(np.float32)
-                    _sub = donor[by0:by1, bx0:bx1].astype(np.float32)
-                    donor[by0:by1, bx0:bx1] = np.clip(
+                    _sub = donor_w[by0:by1, bx0:bx1].astype(np.float32)
+                    donor_w[by0:by1, bx0:bx1] = np.clip(
                         _sub * (1.0 - _wm[..., None])
                         + repl.astype(np.float32) * _wm[..., None],
                         0, 255).astype(np.uint8)
@@ -7505,7 +7571,6 @@ class _MangaTranslatorBody_85:
             return n_fix
         except Exception:
             return 0
-
     def _compose_two_image(self, donor: np.ndarray, original: np.ndarray,
 
                            mask: np.ndarray,
@@ -8163,6 +8228,10 @@ class _MangaTranslatorBody_85:
             self._page_bubble_boxes = []
         self._page_regions = list(regions or [])
         self._sweep_fix_mask = None
+        self._hqc_cache = None
+        self._rstrips_cache = {}
+        self._spm_aux_cache = None
+        self._spm_aux_done = False
         _nt = [r for r in (regions or [])
                   if getattr(r, "no_touch", False)]
         if _nt:
@@ -8206,7 +8275,6 @@ class _MangaTranslatorBody_85:
                 image, regions, min_len=16, near_px=13)
         except Exception:
             self._page_wall_band = None
-        self._spm_cache = None
 
         try:
             _t = time.time()
@@ -10296,10 +10364,17 @@ class _MangaTranslatorBody_85:
             except Exception:
                 pass
         if os.environ.get("MANGA_NO_LEFTOVER", "0") != "1":
-            try:
-                self._leftover_text_sweep(cleaned, image, _cmp2, regions)
-            except Exception:
-                pass
+            if os.environ.get("MANGA_LEFTOVER_CROP", "1") != "0":
+                try:
+                    self._leftover_text_sweep_cropped(cleaned, image,
+                                                      _cmp2, regions)
+                except Exception:
+                    pass
+            else:
+                try:
+                    self._leftover_text_sweep(cleaned, image, _cmp2, regions)
+                except Exception:
+                    pass
         if os.environ.get("MANGA_DOT_SWEEP", "1") != "1":
             pass
         else:
@@ -10475,6 +10550,139 @@ class _MangaTranslatorBody_85:
             if verbose and n_fix:
                 try:
                     print(f"  [✓گلیف] جارویِ خرده‌گلیف: {n_fix} قطعه / "
+                          f"{n_px}px در {len(regions or [])} ناحیه")
+                except Exception:
+                    pass
+            return n_fix
+        except Exception:
+            return 0
+
+    def _leftover_text_sweep_cropped(self, cleaned: np.ndarray,
+                                     original: np.ndarray,
+                                     zone: Optional[np.ndarray],
+                                     regions: List[TextRegion],
+                                     verbose: bool = True) -> int:
+        n_fix = 0
+        n_px = 0
+        try:
+            if cleaned is None or original is None:
+                return 0
+            if cleaned.shape[:2] != original.shape[:2]:
+                return 0
+            if self.ocr is None:
+                return 0
+            h, w = cleaned.shape[:2]
+            ok = np.zeros((h, w), bool)
+            if zone is not None and zone.shape == (h, w):
+                ok |= (zone > 0)
+            boxes = []
+            for r in (regions or []):
+                try:
+                    rx, ry, rw, rh = [int(v) for v in r.rect]
+                except Exception:
+                    continue
+                _x0 = max(0, rx - 8)
+                _y0 = max(0, ry - 8)
+                _x1 = min(w, rx + rw + 9)
+                _y1 = min(h, ry + rh + 9)
+                if _x1 > _x0 and _y1 > _y0:
+                    ok[_y0:_y1, _x0:_x1] = True
+                    boxes.append((_x0, _y0, _x1, _y1))
+            if not ok.any() or not boxes:
+                return 0
+            _merged = []
+            for b in sorted(boxes):
+                _hit = None
+                for o in _merged:
+                    if (b[0] < o[2] + 16 and b[2] > o[0] - 16
+                            and b[1] < o[3] + 16 and b[3] > o[1] - 16):
+                        _hit = o
+                        break
+                if _hit is None:
+                    _merged.append(list(b))
+                else:
+                    _hit[0] = min(_hit[0], b[0])
+                    _hit[1] = min(_hit[1], b[1])
+                    _hit[2] = max(_hit[2], b[2])
+                    _hit[3] = max(_hit[3], b[3])
+            _lines = []
+            for (_bx0, _by0, _bx1, _by1) in _merged:
+                _cw = _bx1 - _bx0
+                _ch = _by1 - _by0
+                if _cw < 24 or _ch < 24:
+                    continue
+                try:
+                    _res = self.ocr.ocr(
+                        cleaned[_by0:_by1, _bx0:_bx1])
+                except Exception:
+                    continue
+                if not _res or not _res[0]:
+                    continue
+                for _ln in (_res[0] or []):
+                    try:
+                        box = np.asarray(_ln[0], np.float32).reshape(-1, 2)
+                        _lines.append((box, _ln[1], _bx0, _by0))
+                    except Exception:
+                        continue
+            go = cv2.cvtColor(original, cv2.COLOR_BGR2GRAY)
+            gc = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
+            same = (np.abs(gc.astype(np.int16)
+                           - go.astype(np.int16)) <= 20)
+            _ker3 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+            _k5 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+            for _box, _tv, _ox, _oy in _lines:
+                try:
+                    _bx = _box + np.array([_ox, _oy], np.float32)
+                except Exception:
+                    continue
+                try:
+                    if isinstance(_tv, (tuple, list)):
+                        txt = str(_tv[0]) if len(_tv) > 0 else ""
+                        sc = float(_tv[1]) if len(_tv) > 1 else 0.0
+                    else:
+                        txt = str(_tv)
+                        sc = 0.0
+                except Exception:
+                    continue
+                t = txt.strip()
+                if len(t) < 3 or sc < 0.72:
+                    continue
+                if not re.search(r"[A-Za-z]{3,}", t):
+                    continue
+                bx0 = int(max(0, np.floor(_bx[:, 0].min())) - 2)
+                by0 = int(max(0, np.floor(_bx[:, 1].min())) - 2)
+                bx1 = int(min(w, np.ceil(_bx[:, 0].max())) + 3)
+                by1 = int(min(h, np.ceil(_bx[:, 1].max())) + 3)
+                if bx1 - bx0 < 12 or by1 - by0 < 10:
+                    continue
+                sub_ok = ok[by0:by1, bx0:bx1]
+                if float(sub_ok.mean()) < 0.40:
+                    continue
+                sub_go = go[by0:by1, bx0:bx1]
+                sub_same = same[by0:by1, bx0:bx1]
+                _med = float(np.median(sub_go))
+                _inko = ((sub_go < _med - 45.0)
+                         | (sub_go > min(232.0, _med + 45.0)))
+                if float(_inko.mean()) < 0.04:
+                    continue
+                resid = (_inko & sub_same & sub_ok)
+                resid = cv2.morphologyEx(
+                    resid.astype(np.uint8), cv2.MORPH_OPEN, _ker3) > 0
+                resid = cv2.dilate(resid.astype(np.uint8), _k5) > 0
+                resid &= sub_ok
+                _np = int(resid.sum())
+                if _np < 40:
+                    continue
+                _m = np.zeros((h, w), np.uint8)
+                _m[by0:by1, bx0:bx1] = resid.astype(np.uint8) * 255
+                _patch = cv2.inpaint(cleaned, _m, 4, cv2.INPAINT_TELEA)
+                cleaned[resid] = _patch[resid]
+                self._sweep_fix_record(resid)
+                n_fix += 1
+                n_px += _np
+            if n_fix and verbose:
+                try:
+                    print(f"  [*] جارویِ جاماندهٔ ناحیه‌محور: {n_fix} خط، "
                           f"{n_px}px در {len(regions or [])} ناحیه")
                 except Exception:
                     pass
@@ -11489,7 +11697,8 @@ class _MangaTranslatorBody_85:
                 return None
             _spc = None
             _key = None
-            if _android_gate("MANGA_PROT_CACHE"):
+            _aux_hit = False
+            if os.environ.get("MANGA_PROT_CACHE", "1") != "0":
                 try:
                     _key = (
                         image.__array_interface__["data"][0],
@@ -11499,6 +11708,16 @@ class _MangaTranslatorBody_85:
                 except Exception:
                     _key = None
                 _spc = getattr(self, "_spm_cache", None)
+                _aux = getattr(self, "_spm_aux_cache", None)
+                _aux_hit = bool(
+                    _key is not None and isinstance(_aux, tuple)
+                    and _aux[0] == _key and len(_aux) == 6)
+                if _aux_hit:
+                    self._page_colored_protect = _aux[1]
+                    self._page_annotation_overlay = _aux[2]
+                    self._page_annotation_flat = _aux[3]
+                    self._page_annotation_fill = _aux[4]
+                    self._spm_aux_done = True
             _ln = _vl = _hl = None
             _hit = bool(_spc is not None and _key is not None
                            and _spc[0] == _key
@@ -11647,6 +11866,63 @@ class _MangaTranslatorBody_85:
                 if _thick > 14.0:
                     continue
                 out[by:by + bh_, bx:bx + bw_][comp] = 255
+            if _aux_hit:
+                _auxr = getattr(self, "_spm_aux_cache", None)
+                _out_d = None
+                try:
+                    _lnn = _spc[3].copy()
+                    _near_wb = cv2.dilate(_raw_mask,
+                                          np.ones((13, 13), np.uint8))
+                    _dark_wb = cv2.bitwise_and(_spc[1], _near_wb)
+                    _nw, _lw, _sw, _ = cv2.connectedComponentsWithStats(
+                        _dark_wb, 8)
+                    for _iw in range(1, _nw):
+                        _aw = int(_sw[_iw, cv2.CC_STAT_AREA])
+                        if _aw < 48:
+                            continue
+                        _bxw = int(_sw[_iw, cv2.CC_STAT_LEFT])
+                        _byw = int(_sw[_iw, cv2.CC_STAT_TOP])
+                        _bww = int(_sw[_iw, cv2.CC_STAT_WIDTH])
+                        _bhw = int(_sw[_iw, cv2.CC_STAT_HEIGHT])
+                        if not (_bww >= int(min_len)
+                                or _bhw >= int(min_len)):
+                            continue
+                        _cpw = (_lw[_byw:_byw + _bhw,
+                                    _bxw:_bxw + _bww] == _iw)
+                        _onpw = float(np.count_nonzero(
+                            _cpw & (poly_all[_byw:_byw + _bhw,
+                                          _bxw:_bxw + _bww] > 0)))
+                        if _onpw > 0.30 * float(_aw):
+                            continue
+                        try:
+                            _dtw = cv2.distanceTransform(
+                                _cpw.astype(np.uint8),
+                                cv2.DIST_L2, 3)
+                            if float(_dtw.max()) * 2.0 > 14.0:
+                                continue
+                        except Exception:
+                            continue
+                        _lnn[_byw:_byw + _bhw,
+                             _bxw:_bxw + _bww][_cpw] = 255
+                    if not np.any(_lnn):
+                        return None
+                    _out_d = cv2.dilate(_lnn, np.ones((3, 3),
+                                                      np.uint8))
+                except Exception:
+                    _out_d = None
+                if _out_d is not None:
+                    for _pbP in (getattr(self, "_promo_rect_boxes",
+                                         None) or []):
+                        try:
+                            _qx0 = max(0, int(_pbP[0]))
+                            _qy0 = max(0, int(_pbP[1]))
+                            _qx1 = min(w, int(_pbP[2]))
+                            _qy1 = min(h, int(_pbP[3]))
+                            if _qx1 > _qx0 and _qy1 > _qy0:
+                                _out_d[_qy0:_qy1, _qx0:_qx1] = 0
+                        except Exception:
+                            pass
+                    return _out_d
             _out_colj = np.zeros((h, w), dtype=np.uint8)
             try:
                 _hsvj = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
@@ -11935,6 +12211,19 @@ class _MangaTranslatorBody_85:
                     if int(np.count_nonzero(_anl)) else None
                 self._page_annotation_fill = _fill \
                     if int(np.count_nonzero(_anl)) else None
+                if _key is not None and not getattr(self, "_spm_aux_done",
+                                                    False):
+                    try:
+                        self._spm_aux_cache = (
+                            _key,
+                            self._page_colored_protect,
+                            self._page_annotation_overlay,
+                            self._page_annotation_flat,
+                            self._page_annotation_fill,
+                            True)
+                        self._spm_aux_done = True
+                    except Exception:
+                        pass
                 try:
                     _dp2 = os.environ.get("MANGA_DUMP", "")
                     if _dp2:
