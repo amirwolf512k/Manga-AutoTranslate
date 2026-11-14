@@ -219,7 +219,9 @@ def _build_provider_options(providers):
         _opts = [{} for _ in providers]
         for _i, _p in enumerate(providers):
             if _p == "CUDAExecutionProvider":
-                _opts[_i] = {"cudnn_conv_use_max_workspace": "1"}
+                _opts[_i] = {"cudnn_conv_use_max_workspace": "1",
+                             "do_copy_in_default_stream": "1",
+                             "arena_extend_strategy": "kNextPowerOfTwo"}
                 _algo_h4 = _cudnn_algo_search()
                 if _algo_h4:
                     _opts[_i]["cudnn_conv_algo_search"] = _algo_h4

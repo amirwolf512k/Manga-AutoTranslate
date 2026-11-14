@@ -192,7 +192,8 @@ class _MangaTranslatorBody_85:
             ):
                 return "junk"
 
-        if getattr(MangaTranslator, "_title_skip_enabled", False):
+        if getattr(MangaTranslator, "_title_skip_enabled", False) \
+                or getattr(MangaTranslator._title_tls, "on", False):
             title_pats = getattr(MangaTranslator, "_title_skip_patterns", None) or []
             for pat in title_pats:
                 if not pat or len(pat) < 6:

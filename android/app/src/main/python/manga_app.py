@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.306"
+APP_VER = "1.14.307"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -5825,7 +5825,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         with gr.Accordion("⚙️ تنظیمات پیشرفته", open=False):
             with gr.Row():
                 workers = _safe(gr.Slider, 1, 8, value=int(cfg.get("workers", 2)),
-                                step=1, label=TX("app.ocr_workers", "ورکر موازی OCR"))
+                                step=1, label=TX("app.ocr_workers", "ورکر OCR (فقط حالت تک‌عکس)"))
                 bubbles = _safe(gr.Slider, 1, 12, value=int(cfg.get("bubbles", 6)),
                                 step=1, label=TX("app.bubbles", "حباب در هر درخواست ترجمه"))
                 batchw = _safe(gr.Slider, 1, 8, value=int(cfg.get("batch_workers", 3)),

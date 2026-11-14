@@ -2472,10 +2472,12 @@ class _MangaTranslatorBody_70:
                     image, [_t[2], _t[3], _t[4], _t[5]],
                     block_rects=_blk, page_cache=page_cache)
 
-            n_workers = max(1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
+            _img_par = bool(getattr(self, "_ocr_img_parallel", False))
+            n_workers = 1 if _img_par else max(
+                1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
             _ocr_ts = isinstance(self.ocr, RapidOCRBackend)
             _helper_eng = getattr(self, "_ocr_helper", None)
-            _dual_split = (_ocr_ts
+            _dual_split = (not _img_par and _ocr_ts
                            and isinstance(_helper_eng, RapidOCRBackend)
                            and len(cand) >= 2 and _dual_device_enabled()
                            and not _on_android())

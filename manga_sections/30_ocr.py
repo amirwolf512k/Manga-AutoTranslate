@@ -824,6 +824,8 @@ class RapidOCRBackend:
                         _algo_h3 = _cudnn_algo_search()
                         if _algo_h3:
                             _gpu_flags["EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_algo_search"] = _algo_h3
+                        _gpu_flags["EngineConfig.onnxruntime.cuda_ep_cfg.do_copy_in_default_stream"] = "1"
+                        _gpu_flags["EngineConfig.onnxruntime.cuda_ep_cfg.arena_extend_strategy"] = "kNextPowerOfTwo"
                     else:
                         print(f"[!] CUDA در عمل لود نشد ({_ep_active or 'بدونِ جزئیات'}) "
                               f"→ OCR روی CPU. راه‌حل: pip install "
@@ -1136,27 +1138,36 @@ class RapidOCRBackend:
     def _gpu_warmup(self):
         if not getattr(self, "_gpu_locked", False):
             return
-        try:
-            _img = np.full((110, 520, 3), 255, np.uint8)
+        _fails = 0
+        _attempts = (
+            (110, 520),
+            (320, 900),
+        )
+        for _hh, _ww in _attempts:
             try:
-                cv2.rectangle(_img, (10, 10), (510, 100), (0, 0, 0), 2)
-                cv2.putText(_img, "MANGA 12345", (22, 72),
-                            cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 0), 4)
+                _img = np.full((_hh, _ww, 3), 255, np.uint8)
+                try:
+                    cv2.rectangle(_img, (10, 10), (_ww - 10, _hh - 10),
+                                  (0, 0, 0), 2)
+                    cv2.putText(_img, "MANGA 12345", (22, _hh // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 0), 3)
+                except Exception:
+                    pass
+                try:
+                    self._engine_run(_img)
+                except Exception as _we:
+                    _wm = str(_we).lower()
+                    if ("detection result is empty" in _wm
+                            or "text detection result is empty" in _wm):
+                        continue
+                    raise
             except Exception:
-                pass
+                _fails += 1
+        if _fails >= len(_attempts):
+            print("[*] GPU در گرم‌کردنِ OCR جواب نداد → همان موتور روی "
+                  "CPU بازساخته میشود.")
             try:
-                self._engine_run(_img)
-            except Exception as _we:
-                _wm = str(_we).lower()
-                if ("detection result is empty" in _wm
-                        or "text detection result is empty" in _wm):
-                    return
-                raise
-        except Exception as _we2:
-            print(f"[!] GPU در اولین اجرایِ OCR خطا داد ({str(_we2)[:130]}) "
-                  f"→ موتور روی CPU بازساخته شد")
-            try:
-                self._gpu_recover(_we2, force=True)
+                self._gpu_recover(Exception("warmup failed"), force=True)
             except Exception:
                 pass
 

@@ -813,7 +813,10 @@ class _MangaTranslatorBody_95:
             _t_ext = time.time()
             image = None
             if page_i == 0:
-                MangaTranslator._title_skip_enabled = True
+                if getattr(self, "_ocr_img_parallel", False):
+                    MangaTranslator._title_tls.on = True
+                else:
+                    MangaTranslator._title_skip_enabled = True
             _ex_cache = os.path.join(extract_dir, f"page_{page_i:04d}.json")
             _ex_size = -1
             try:
@@ -920,6 +923,7 @@ class _MangaTranslatorBody_95:
                 return page_i, out_file, None, None, None
             finally:
                 if page_i == 0:
+                    MangaTranslator._title_tls.on = False
                     MangaTranslator._title_skip_enabled = False
 
         def _finish_one(page_i, out_file, image, regions, dbg):
@@ -1085,6 +1089,8 @@ class _MangaTranslatorBody_95:
         page_of_region: Dict[int, int] = {}
         finished_pages: set = set()
         results_by_i: Dict[int, tuple] = {}
+        _fin_lock = threading.Lock()
+        _prev_busy = threading.Lock()
 
         def _account_chunk(chunk: List[TextRegion]) -> None:
             for r in chunk:
@@ -1099,8 +1105,10 @@ class _MangaTranslatorBody_95:
 
         def _finish_page_now(page_i: int) -> None:
             _raise_if_stop()
-            if page_i in finished_pages:
-                return
+            with _fin_lock:
+                if page_i in finished_pages:
+                    return
+                finished_pages.add(page_i)
             try:
                 _wait_clean(page_i)
             except Exception:
@@ -1170,7 +1178,7 @@ class _MangaTranslatorBody_95:
         def _finish_ready_pages() -> None:
             with _qd_lock:
                 _inflight = set(_qd_inflight)
-            for page_i in sorted(extracted_map.keys()):
+            for page_i in sorted(list(extracted_map.keys())):
                 if page_i in finished_pages:
                     continue
                 if page_i in _inflight:
@@ -1194,7 +1202,15 @@ class _MangaTranslatorBody_95:
                 if not force and time.time() - _prev_state["t"] < 2.0:
                     return
                 _prev_state["t"] = time.time()
-            for page_i in sorted(extracted_map.keys()):
+            if not _prev_busy.acquire(blocking=False):
+                return
+            try:
+                _preview_ready_pages_run()
+            finally:
+                _prev_busy.release()
+
+        def _preview_ready_pages_run() -> None:
+            for page_i in sorted(list(extracted_map.keys())):
                 if page_i in finished_pages:
                     continue
                 entry = extracted_map.get(page_i)
@@ -1273,11 +1289,12 @@ class _MangaTranslatorBody_95:
             min_batch = 15
         else:
             print(
-                f"[*] سبکِ مرجع: استخراجِ هر صفحه دوطرفه (موتورِ قوی از بالا، "
-                f"موتورِ دوم از پایین — دیدار در وسطِ همان صفحه) + پاکسازیِ "
-                f"همان صفحه با همین سبک به ترتیبِ بالا→پایین؛ بعد از اتمامِ "
-                f"کاملِ استخراج: ترجمهٔ همه در «یک» درخواست (هیچ متنی زودتر "
-                f"از اتمامِ استخراج به مترجم نمیرود)."
+                f"[*] سبکِ پردازش: عکس‌های ۱و۲ روی GPU و ۳و۴ روی CPU "
+                f"همزمان استخراج میشوند (تک‌عکس: GPU از بالا، CPU از پایین) "
+                f"و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ پاکسازی هم "
+                f"هم‌زمان تک‌تک از عکسِ اول تا آخر (LaMa از بالا + LaMa دوم "
+                f"از پایینِ همان صفحه)؛ بعد از اتمامِ کاملِ استخراج: "
+                f"ترجمهٔ همه در «یک» درخواست."
             )
 
         quota_flag = {"dead": False}
@@ -1547,14 +1564,14 @@ class _MangaTranslatorBody_95:
                 _ext_next["i"] += 1
                 return it
 
-        def _ext_worker() -> None:
-            while True:
+        def _ext_worker(first_item, engine) -> None:
+            if engine is not None:
+                self._ocr_tls.engine = engine
+            item = first_item
+            while item is not None:
                 if stop_requested():
                     return
                 if quota_flag["dead"] or _ext_quota["v"]:
-                    return
-                item = _claim_ext()
-                if item is None:
                     return
                 try:
                     page_i, out_file, image, regions, dbg = _extract_one(item)
@@ -1569,6 +1586,7 @@ class _MangaTranslatorBody_95:
                     print(f"    [!] خطای کارگرِ استخراج: {e}",
                           file=sys.stderr)
                     _ext_prog_tick()
+                    item = _claim_ext()
                     continue
                 _ext_prog_tick()
                 with _qd_lock:
@@ -1597,28 +1615,93 @@ class _MangaTranslatorBody_95:
                 except Exception:
                     pass
                 _map_spill_page(page_i)
+                item = _claim_ext()
 
         _ocr_helper = None
         try:
             _ocr_helper = self._ocr_dual_setup()
         except Exception:
             _ocr_helper = None
-        if _ocr_helper is not None:
-            try:
-                _mn = str(getattr(self.ocr, "_ocr_ep_active", "") or "GPU")
-                _hn = str(getattr(_ocr_helper, "_ocr_ep_active", "")
-                          or "CPU")
-                print(f"[*] استخراج دو-دستگاهه: در «همان» صفحه {_mn} "
-                      f"از بالا و {_hn} از پایین همزمان استخراج میزنند "
-                      f"و وسطِ صفحه همدیگر را می‌بینند.")
-            except Exception:
-                pass
+        _n_pend = len(pending)
+        _main_eng = self.__dict__.get("_ocr_main")
+        _dual_ocr = _ocr_helper is not None and _n_pend >= 2
+        if _dual_ocr:
+            self._ocr_img_parallel = True
+            if _n_pend == 2:
+                _dev_spec = ["g", "c"]
+            elif _n_pend == 3:
+                _dev_spec = ["g", "g", "c"]
+            else:
+                _dev_spec = ["g", "g", "c", "c"]
+        elif _n_pend >= 2:
+            self._ocr_img_parallel = True
+            _dev_spec = ["c", "c"]
         else:
-            print(f"[*] استخراج: {len(pending)} صفحه به ترتیبِ بالا→پایین.")
-        _t_ext = threading.Thread(target=_ext_worker,
-                                  daemon=True, name="extract")
-        _t_ext.start()
-        _t_ext.join()
+            self._ocr_img_parallel = False
+            _dev_spec = []
+        _g_pool = [_main_eng]
+        _c_pool = [_ocr_helper if _dual_ocr else _main_eng]
+        if _dual_ocr and _n_pend >= 3:
+            try:
+                _g2 = self._ensure_ocr_gpu2()
+            except Exception:
+                _g2 = None
+            if _g2 is not None:
+                _g_pool.append(_g2)
+        if _n_pend >= (4 if _dual_ocr else 2):
+            try:
+                _c2 = self._ensure_ocr_cpu2()
+            except Exception:
+                _c2 = None
+            if _c2 is not None:
+                _c_pool.append(_c2)
+        _specs: list = []
+        if _n_pend == 1:
+            _specs = [None]
+        else:
+            _gi = _ci = 0
+            for _d in _dev_spec:
+                if _d == "g":
+                    _specs.append(_g_pool[min(_gi, len(_g_pool) - 1)])
+                    _gi += 1
+                else:
+                    _specs.append(_c_pool[min(_ci, len(_c_pool) - 1)])
+                    _ci += 1
+        try:
+            if _n_pend <= 0:
+                pass
+            elif _ocr_helper is not None and _n_pend == 1:
+                print(f"[*] استخراج: ۱ عکس — GPU از بالا و CPU از "
+                      f"پایینِ همان عکس همزمان.")
+            elif _dual_ocr:
+                if _n_pend == 2:
+                    print(f"[*] استخراج: ۲ عکس — عکسِ ۱ روی GPU و عکسِ ۲ "
+                          f"روی CPU همزمان.")
+                elif _n_pend == 3:
+                    print(f"[*] استخراج: ۳ عکس — عکس‌های ۱و۲ روی GPU و "
+                          f"عکسِ ۳ روی CPU همزمان.")
+                else:
+                    print(f"[*] استخراج چهارکارگه: {_n_pend} عکس — عکس‌های "
+                          f"۱و۲ با GPU و ۳و۴ با CPU شروع میشوند؛ هر کارگر "
+                          f"که زودتر تمام شود عکسِ بعدی را برمی‌دارد.")
+            elif _n_pend >= 2:
+                print(f"[*] استخراج دوکارگهٔ CPU: {_n_pend} عکس — عکس‌های ۱و۲ "
+                      f"همزمان؛ هر کارگر که زودتر تمام شود عکسِ بعدی را "
+                      f"برمی‌دارد.")
+            else:
+                print(f"[*] استخراج: ۱ عکس.")
+        except Exception:
+            pass
+        _ext_next["i"] = len(_specs)
+        _ext_threads = []
+        for _wi, (_it, _eng) in enumerate(zip(pending, _specs)):
+            _t = threading.Thread(target=_ext_worker, args=(_it, _eng),
+                                  daemon=True, name=f"extract-{_wi}")
+            _ext_threads.append(_t)
+        for _t in _ext_threads:
+            _t.start()
+        for _t in _ext_threads:
+            _t.join()
 
         extraction_done["v"] = True
         with _clean_cond:
@@ -1633,8 +1716,8 @@ class _MangaTranslatorBody_95:
             _backlog = sorted(pending_clean)
         if _backlog:
             print(f"[*] پاکسازیِ باقی‌مانده: {len(_backlog)} صفحه به ترتیبِ "
-                  f"بالا→پایین (در هر صفحه LaMa اصلی از بالا و LaMa دوم "
-                  f"از پایین همزمان)…")
+                  f"بالا→پایین — در هر صفحه LaMa اصلی از بالا و LaMa دوم "
+                  f"از پایینِ همان صفحه همزمان…")
 
         if stop_requested():
             trans_pool.shutdown(wait=False)
@@ -1788,7 +1871,7 @@ class _MangaTranslatorBody_95:
                 _rerender_page_after_empty(int(_p))
 
         _finish_ready_pages()
-        for page_i in sorted(extracted_map.keys()):
+        for page_i in sorted(list(extracted_map.keys())):
             _finish_page_now(page_i)
         try:
             trans_pool.shutdown(wait=True)

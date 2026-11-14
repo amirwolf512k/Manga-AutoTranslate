@@ -30,3 +30,6 @@ android/app/src/main/python/manga_app.py
 android/app/src/main/python/manga_sections/
 android/app/src/main/python/.manga_sections_refresh
 .gradio/
+android/.gradle/
+android/app/build/
+dist/
