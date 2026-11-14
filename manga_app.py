@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.303"
+APP_VER = "1.14.304"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1406,20 +1406,62 @@ body, .gradio-container, footer, .gradio-container .prose {
 #manga_mode_grid {
   display: grid !important;
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  gap: 2px 8px !important;
-  align-items: center;
+  gap: 8px 6px !important;
+  align-items: stretch;
   margin: 2px 0 10px 0;
 }
 #manga_mode_grid > .form {
   grid-column: 1 / -1;
   display: grid !important;
   grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
-  gap: 2px 8px !important;
-  align-items: center;
+  gap: 8px 6px !important;
+  align-items: stretch;
 }
 #manga_mode_grid > * { min-width: 0 !important; }
 #manga_mode_grid > .form > * { min-width: 0 !important; }
-#manga_mode_grid label { overflow-wrap: anywhere !important; }
+#manga_mode_grid .block { padding: 3px 5px !important; margin: 0 !important; }
+#manga_mode_grid label {
+  display: flex !important;
+  align-items: center !important;
+  gap: 6px !important;
+  padding: 4px 1px !important;
+  margin: 0 !important;
+  min-width: 0 !important;
+}
+#manga_mode_grid label > span,
+#manga_mode_grid .label-text {
+  flex: 1 1 auto !important;
+  min-width: 0 !important;
+  overflow-wrap: break-word !important;
+  white-space: normal !important;
+  line-height: 1.6 !important;
+}
+#manga_mode_grid label > button.k3q {
+  margin: 0 !important;
+  width: 15px !important;
+  height: 15px !important;
+  font-size: 9px !important;
+}
+@media (max-width: 640px) {
+  #manga_mode_grid label {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center !important;
+    column-gap: 5px !important;
+    row-gap: 4px !important;
+    padding: 6px 2px 5px !important;
+  }
+  #manga_mode_grid label > input[type="checkbox"] { grid-column: 1; grid-row: 1; }
+  #manga_mode_grid label > button.k3q { grid-column: 2; grid-row: 1; justify-self: end; }
+  #manga_mode_grid label > span,
+  #manga_mode_grid .label-text {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    flex: none !important;
+    font-size: .78rem !important;
+    text-align: right;
+  }
+}
 button.k3q {
   display: inline-flex; align-items: center; justify-content: center;
   width: 17px; height: 17px; border-radius: 50%;
