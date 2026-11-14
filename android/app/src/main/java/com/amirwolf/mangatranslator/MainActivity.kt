@@ -23,6 +23,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.GridLayout
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -175,6 +176,133 @@ class MainActivity : AppCompatActivity() {
 
     private fun label(t: String): TextView = TextView(this).apply {
         text = t; setTextColor(MUT); textSize = 13f; setPadding(0, dp(8), 0, dp(4))
+    }
+
+    private val modeGridIds = listOf(
+        "manga_cb_twopass", "manga_cb_thinking", "manga_cb_faketest",
+        "manga_cb_cleanup", "manga_cb_debug", "manga_cb_safety")
+
+    private val modeTips = mapOf(
+        "manga_cb_twopass" to "پاسِ اول بلوکها را مییابد، پاسِ دوم متنِ داخلشان را دقیق بازمیخواند — پیش‌فرض روشن",
+        "manga_cb_thinking" to "سطح High — برای جمینای و OpenAI-سازگارها؛ پیش‌فرض روشن",
+        "manga_cb_faketest" to "به‌جای API، متنِ الکی داخل حباب‌ها رندر میشود — چکِ استخراج/پاکسازی/رندر بدون کلید",
+        "manga_cb_cleanup" to "فقط پاکسازی متن (inpaint) بدون ترجمه — کلید API لازم نیست",
+        "manga_cb_debug" to "مربعِ رنگی دور هر بلوک + خروجیِ دیباگ جدا (مثلاً PDF → *_debug.pdf)",
+        "manga_cb_safety" to "فیلترهای گوگل BLOCK_NONE میشوند (ضدِ سانسور) — پیش‌فرض خاموش",
+        "manga_max_tokens" to "خودکار = سرویس‌دهنده خودش مدیریت میکند؛ چپترِ طولانیِ ناتمام؟ عدد را بالا ببرید")
+
+    private var activeTip: TextView? = null
+    private var activeTipRun: Runnable? = null
+
+    private fun hideTip() {
+        activeTipRun?.let { ui.removeCallbacks(it) }
+        activeTipRun = null
+        activeTip?.let { t -> (t.parent as? ViewGroup)?.removeView(t) }
+        activeTip = null
+    }
+
+    private fun showTip(anchor: View, text: String) {
+        hideTip()
+        val root = findViewById<ViewGroup>(android.R.id.content) ?: return
+        val tv = TextView(this).apply {
+            this.text = text
+            setTextColor(TXT); textSize = 12.5f
+            background = rounded(Color.parseColor("#15151b"), 12, 1)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val lp = FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+        root.addView(tv, lp)
+        tv.measure(View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED),
+            View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED))
+        val ar = IntArray(2)
+        anchor.getLocationInWindow(ar)
+        val sw = resources.displayMetrics.widthPixels
+        val sh = resources.displayMetrics.heightPixels
+        var x = ar[0] + anchor.width / 2 - tv.measuredWidth / 2
+        x = Math.max(dp(8), Math.min(x, sw - tv.measuredWidth - dp(8)))
+        var y = ar[1] + anchor.height + dp(10)
+        if (y + tv.measuredHeight > sh - dp(24))
+            y = Math.max(dp(8), ar[1] - tv.measuredHeight - dp(10))
+        lp.leftMargin = x
+        lp.topMargin = y
+        tv.layoutParams = lp
+        activeTip = tv
+        val r = Runnable { hideTip() }
+        activeTipRun = r
+        ui.postDelayed(r, 10000)
+    }
+
+    private fun tipButton(text: String): Button = Button(this).apply {
+        this.text = "؟"
+        setTextColor(MUT); textSize = 10f
+        background = rounded(Color.parseColor("#15151b"), 9, 1)
+        setPadding(0, 0, 0, 0)
+        stateListAnimator = null
+        minWidth = 0; minimumWidth = 0
+        minHeight = 0; minimumHeight = 0
+        setOnClickListener { v -> showTip(v, text) }
+    }
+
+    private fun addModeCell(grid: LinearLayout, f: JSONObject, idx: Int) {
+        val id = f.optString("id")
+        val lbl = f.optString("label", "")
+        val tip = modeTips[id] ?: ""
+        val dfltRaw = f.opt("default")
+        val dflt: Any? = if (dfltRaw is JSONObject) dfltRaw.opt("default") else dfltRaw
+        if (idx % 3 == 0) {
+            grid.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                layoutDirection = View.LAYOUT_DIRECTION_RTL
+            }, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(6) })
+        }
+        val row = grid.getChildAt(grid.childCount - 1) as LinearLayout
+        val cell = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(CARD2, 10, 1)
+            setPadding(dp(6), dp(6), dp(6), dp(7))
+        }
+        val topRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            layoutDirection = View.LAYOUT_DIRECTION_RTL
+        }
+        val sw = SwitchCompat(this).apply {
+            setPadding(0, 0, 0, 0)
+            val svB = savedOr(id, dflt)
+            isChecked = when (svB) {
+                is Boolean -> svB
+                is String -> svB.equals("true", true)
+                else -> (dflt == true)
+            }
+            thumbTintList = android.content.res.ColorStateList.valueOf(ACC)
+            trackTintList = android.content.res.ColorStateList(
+                arrayOf(intArrayOf(android.R.attr.state_checked), intArrayOf()),
+                intArrayOf(ACC, LINE))
+            setOnCheckedChangeListener { _, c -> saveVal(id, c) }
+        }
+        topRow.addView(sw, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
+        topRow.addView(View(this), LinearLayout.LayoutParams(0, 1, 1f))
+        if (tip.isNotEmpty()) {
+            topRow.addView(tipButton(tip), LinearLayout.LayoutParams(
+                dp(17), dp(17)).apply { marginStart = dp(4) })
+        }
+        cell.addView(topRow)
+        cell.addView(TextView(this).apply {
+            text = lbl; setTextColor(TXT); textSize = 11.5f
+            gravity = Gravity.CENTER
+            setPadding(0, dp(4), 0, 0)
+        })
+        row.addView(cell, LinearLayout.LayoutParams(0,
+            ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+            marginStart = dp(5)
+        })
+        fieldViews[id] = sw
     }
 
     private fun saveVal(id: String, v: Any?) {
@@ -1218,7 +1346,28 @@ class MainActivity : AppCompatActivity() {
                 if (title.contains("بکاپ") || title.contains("پشتیبان")) {
                     addBackupSection(contentBox)
                 } else {
-                    for (i in 0 until fields.length()) addField(contentBox, fields.getJSONObject(i))
+                    var modeGrid: LinearLayout? = null
+                    var modeCells = 0
+                    for (i in 0 until fields.length()) {
+                        val f = fields.getJSONObject(i)
+                        if (modeGridIds.contains(f.optString("id"))) {
+                            if (modeGrid == null) {
+                                modeGrid = LinearLayout(this).apply {
+                                    orientation = LinearLayout.VERTICAL
+                                    layoutDirection = View.LAYOUT_DIRECTION_RTL
+                                }
+                                contentBox.addView(modeGrid, LinearLayout.LayoutParams(
+                                    ViewGroup.LayoutParams.MATCH_PARENT,
+                                    ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                                    topMargin = dp(2); bottomMargin = dp(6)
+                                })
+                            }
+                            addModeCell(modeGrid!!, f, modeCells)
+                            modeCells++
+                            continue
+                        }
+                        addField(contentBox, f)
+                    }
                     flushPendingTest(contentBox)
                 }
                 formBox.addView(card, lp)
@@ -1800,10 +1949,18 @@ class MainActivity : AppCompatActivity() {
         "quality", "workers", "bubbles", "timeout", "batchw", "maxre",
         "reqdelay", "temp", "top_p", "readord", "clean_method", "two_pass",
         "fake_test", "clean_only", "web_debug", "prompt_mode",
-        "prompt_body")
+        "prompt_body", "thinking", "safety", "max_tokens", "max_tokens_custom")
 
     private fun settingIds(k: String): List<String> = when (k) {
         "prompt_body" -> listOf("prompt_preview_body", "manga_prompt_body", "prompt_body")
+        "two_pass" -> listOf("manga_cb_twopass", "two_pass", "manga_two_pass")
+        "thinking", "deep_thinking" -> listOf("manga_cb_thinking", "thinking", "manga_deep_thinking")
+        "safety", "safety_settings" -> listOf("manga_cb_safety", "safety", "manga_safety_settings")
+        "fake_test" -> listOf("manga_cb_faketest", "fake_test", "manga_fake_test")
+        "clean_only" -> listOf("manga_cb_cleanup", "clean_only", "manga_clean_only")
+        "web_debug" -> listOf("manga_cb_debug", "web_debug", "manga_web_debug")
+        "max_tokens" -> listOf("manga_max_tokens", "max_tokens")
+        "max_tokens_custom" -> listOf("manga_max_tokens_custom", "max_tokens_custom")
         else -> listOf(k, "manga_$k")
     }
 
@@ -2437,7 +2594,21 @@ class MainActivity : AppCompatActivity() {
                         }.show()
                 }
                 if (selected >= 0) values[id] = items[selected].second
-                row.addView(btn)
+                val tipTxt = modeTips[id]
+                if (tipTxt != null) {
+                    val hrow = LinearLayout(this).apply {
+                        orientation = LinearLayout.HORIZONTAL
+                        gravity = Gravity.CENTER_VERTICAL
+                        layoutDirection = View.LAYOUT_DIRECTION_RTL
+                    }
+                    hrow.addView(btn, LinearLayout.LayoutParams(0,
+                        ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+                    hrow.addView(tipButton(tipTxt), LinearLayout.LayoutParams(
+                        dp(17), dp(17)).apply { marginStart = dp(6) })
+                    row.addView(hrow)
+                } else {
+                    row.addView(btn)
+                }
                 infoView()?.let { row.addView(it) }
                 fieldViews[id] = btn
                 selectMaps[id] = items
@@ -2716,6 +2887,11 @@ class MainActivity : AppCompatActivity() {
         map.put("clean_only", optBool(o, "clean_only"))
         map.put("clean_method", firstNonEmpty(o, "clean_method") ?: "lama-manga")
         map.put("two_pass", optBoolD(o, true, "two_pass"))
+        map.put("thinking", optBoolD(o, true, "manga_cb_thinking", "thinking", "deep_thinking"))
+        map.put("safety", optBool(o, "manga_cb_safety", "safety", "safety_settings"))
+        map.put("max_tokens", firstNonEmpty(o, "manga_max_tokens", "max_tokens") ?: "auto")
+        val mtcS = firstNonEmpty(o, "manga_max_tokens_custom", "max_tokens_custom")
+        map.put("max_tokens_custom", ((mtcS?.toIntOrNull() ?: 4096)).coerceAtLeast(1024))
         map.put("readord", firstNonEmpty(o, "readord") ?: "rtl")
         map.put("instruction", firstNonEmpty(o, "instruction_text", "instruction") ?: "")
         map.put("prompt_mode", firstNonEmpty(o, "prompt_mode") ?: "professional")

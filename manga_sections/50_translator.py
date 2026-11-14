@@ -7,6 +7,99 @@ class MangaTranslator:
     _ANDROID_LAMA_WARN_AVAIL_GB = 1.2
     _ANDROID_LAMA_STRONG_CPU_CORES = 6
 
+    @property
+    def ocr(self):
+        try:
+            _tls = self.__dict__.get("_ocr_tls")
+            if _tls is not None:
+                _e = getattr(_tls, "engine", None)
+                if _e is not None:
+                    return _e
+        except Exception:
+            pass
+        return self.__dict__.get("_ocr_main")
+
+    @ocr.setter
+    def ocr(self, v):
+        self.__dict__["_ocr_main"] = v
+
+    def _ocr_gpu_active(self) -> bool:
+        try:
+            _m = self.__dict__.get("_ocr_main")
+            _ep = str(getattr(_m, "_ocr_ep_active", "") or "").strip()
+            return bool(_ep) and not _ep.lower().startswith("cpu")
+        except Exception:
+            return False
+
+    def _ensure_ocr_cpu(self):
+        try:
+            _e = self.__dict__.get("_ocr_cpu")
+            if _e is not None:
+                return _e
+            if self.__dict__.get("_ocr_cpu_failed"):
+                return None
+            if _on_android() or not self._ocr_gpu_active():
+                return None
+            _main = self.__dict__.get("_ocr_main")
+            if not isinstance(_main, RapidOCRBackend):
+                return None
+            try:
+                _av = self._available_ram_gb()
+            except Exception:
+                _av = None
+            if _av is not None and _av < 3.0:
+                return None
+            _e = RapidOCRBackend(lang=str(getattr(_main, "lang", "en") or "en"),
+                                 prefer_gpu=False)
+            if _e is None:
+                self.__dict__["_ocr_cpu_failed"] = True
+                return None
+            self.__dict__["_ocr_cpu"] = _e
+            return _e
+        except Exception:
+            self.__dict__["_ocr_cpu_failed"] = True
+            return None
+
+    def _ensure_lama_cpu_twin(self):
+        try:
+            _s = self.__dict__.get("_lama_cpu_twin")
+            if _s is not None:
+                return _s
+            if self.__dict__.get("_lama_cpu_twin_failed"):
+                return None
+            if _on_android() or not self.use_lama:
+                return None
+            _main = getattr(self, "_lama", None)
+            if _main is None:
+                return None
+            _ep = str(getattr(_main, "ep_used", "") or "").strip().lower()
+            if _ep in ("", "cpu", "none"):
+                return None
+            try:
+                _av = self._available_ram_gb()
+            except Exception:
+                _av = None
+            if _av is not None and _av < 2.5:
+                return None
+            try:
+                _cores = int(self._cpu_core_count() or 4)
+            except Exception:
+                _cores = 4
+            _t = max(1, min(4, _cores // 2))
+            _mp = getattr(self, "_lama_model_path", None)
+            _s = (LamaMangaONNX(prefer_gpu=False, threads=_t, model_path=_mp)
+                  if _mp else LamaMangaONNX(prefer_gpu=False, threads=_t))
+            if _s is None:
+                self.__dict__["_lama_cpu_twin_failed"] = True
+                return None
+            self.__dict__["_lama_cpu_twin"] = _s
+            print(f"    [*] سشنِ دومِ LaMa روی CPU ساخته شد ({_t} نخ) "
+                  f"— پاکسازیِ دو-دستگاهه", flush=True)
+            return _s
+        except Exception:
+            self.__dict__["_lama_cpu_twin_failed"] = True
+            return None
+
     @staticmethod
     def _detect_paddle_gpu() -> bool:
         try:
@@ -371,6 +464,8 @@ class MangaTranslator:
         self._lama = None
         self._lama_lock = threading.Lock()
         self._lama_preload_started = False
+        self._ocr_tls = threading.local()
+        self._lama_tls = threading.local()
         self._title_skip_patterns: List[str] = []
         MangaTranslator._title_skip_patterns = []
         if not hasattr(MangaTranslator, "_page_clean_lock"):
@@ -711,6 +806,14 @@ class MangaTranslator:
             self._lama_preload_started = False
 
     def _get_lama(self, threads: int = 0, force: bool = False):
+        try:
+            _tls = self.__dict__.get("_lama_tls")
+            if _tls is not None:
+                _s = getattr(_tls, "sess", None)
+                if _s is not None:
+                    return _s
+        except Exception:
+            pass
         _t_lw = time.time()
         with self._lama_lock:
             try:

@@ -1567,6 +1567,8 @@ class _MangaTranslatorBody_95:
                 return it
 
         def _ext_worker(role: str) -> None:
+            if role == "bwd" and _ocr_cpu_twin is not None:
+                self._ocr_tls.engine = _ocr_cpu_twin
             while True:
                 if stop_requested():
                     return
@@ -1617,8 +1619,23 @@ class _MangaTranslatorBody_95:
                     pass
                 _map_spill_page(page_i)
 
-        print(f"[*] استخراج دوطرفه: صفحهٔ ۱→{max(0, len(pending))} و "
-              f"صفحهٔ {max(0, len(pending))}→۱ همزمان (دیدار در وسط).")
+        _ocr_cpu_twin = None
+        try:
+            _ocr_cpu_twin = self._ensure_ocr_cpu()
+        except Exception:
+            _ocr_cpu_twin = None
+        if _ocr_cpu_twin is not None:
+            try:
+                _ep_nm = str(getattr(self.ocr, "_ocr_ep_active", "") or "")
+                print(f"[*] استخراج دو-دستگاهه: صفحهٔ ۱→{max(0, len(pending))} "
+                      f"روی GPU ({_ep_nm}) و صفحهٔ "
+                      f"{max(0, len(pending))}→۱ روی CPU همزمان "
+                      f"(دیدار در وسط).")
+            except Exception:
+                pass
+        else:
+            print(f"[*] استخراج دوطرفه: صفحهٔ ۱→{max(0, len(pending))} و "
+                  f"صفحهٔ {max(0, len(pending))}→۱ همزمان (دیدار در وسط).")
         _t_fwd = threading.Thread(target=_ext_worker, args=("fwd",),
                                   daemon=True, name="extract-fwd")
         _t_bwd = threading.Thread(target=_ext_worker, args=("bwd",),
@@ -1642,14 +1659,34 @@ class _MangaTranslatorBody_95:
         if _backlog:
             _mid = (len(_backlog) + 1) // 2
             _top_seq, _bot_seq = _backlog[:_mid], _backlog[_mid:]
-            print(f"[*] پاکسازی دوطرفه: {len(_top_seq)} صفحه از بالا→پایین، "
-                  f"{len(_bot_seq)} صفحه از پایین→بالا…")
+            _lama_cpu_twin = None
+            try:
+                self._get_lama()
+            except Exception:
+                pass
+            try:
+                _lama_cpu_twin = self._ensure_lama_cpu_twin()
+            except Exception:
+                _lama_cpu_twin = None
+            if _lama_cpu_twin is not None:
+                print(f"[*] پاکسازی دو-دستگاهه: {len(_top_seq)} صفحه از "
+                      f"بالا→پایین روی GPU، {len(_bot_seq)} صفحه از "
+                      f"پایین→بالا روی CPU…")
+            else:
+                print(f"[*] پاکسازی دوطرفه: {len(_top_seq)} صفحه از بالا→پایین، "
+                      f"{len(_bot_seq)} صفحه از پایین→بالا…")
             clean_all_futs.append(clean_pool.submit(
                 _clean_seq_job, list(_top_seq)))
             clean_pool2 = ThreadPoolExecutor(
                 max_workers=1, thread_name_prefix="clean2")
+
+            def _clean_bwd_job(pages):
+                if _lama_cpu_twin is not None:
+                    self._lama_tls.sess = _lama_cpu_twin
+                _clean_seq_job(pages)
+
             clean_all_futs.append(clean_pool2.submit(
-                _clean_seq_job, list(reversed(_bot_seq))))
+                _clean_bwd_job, list(reversed(_bot_seq))))
 
         if stop_requested():
             trans_pool.shutdown(wait=False)

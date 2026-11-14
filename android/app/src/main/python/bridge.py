@@ -343,6 +343,23 @@ def manifest():
             if f.get("id") in ("manga_api_base", "api_base"):
                 f["visible_if"] = {"field": "provider", "equals": "custom"}
                 f["label"] = "دامنهٔ API سفارشی (فقط برای custom — مثال: https://api.example.com/v1)"
+            if f.get("id") in ("max_tokens", "manga_max_tokens"):
+                _mtc = f.get("default")
+                _mtc = _mtc.get("default") if isinstance(_mtc, dict) else _mtc
+                if not (isinstance(_mtc, str) and _mtc.strip()
+                        in ("auto", "8192", "16384", "32768",
+                            "65536", "custom")):
+                    f["default"] = "auto"
+            if f.get("id") in ("max_tokens_custom", "manga_max_tokens_custom"):
+                f["visible_if"] = {"field": "manga_max_tokens", "equals": "custom"}
+                _mtd = f.get("default")
+                _mtd = _mtd.get("default") if isinstance(_mtd, dict) else _mtd
+                try:
+                    _okd = int(_mtd) >= 1024
+                except Exception:
+                    _okd = False
+                if not _okd:
+                    f["default"] = 4096
             if f.get("id") in ("out_fmt", "manga_out_fmt", "fmt") and _android():
                 f["choices"] = _drop_choice(f.get("choices") or [], "psd")
             if f.get("id") == "clean_method" and _android():
@@ -1087,6 +1104,12 @@ def _run(job):
                     gpu=False if (p.get("force_cpu") and not p.get("clean_method")) else None,
                     clean_method=_clean_method_of(p),
                     two_pass_ocr=bool(p.get("two_pass", True)),
+                    deep_thinking=bool(p.get("thinking",
+                                             p.get("deep_thinking", True))),
+                    safety_settings=bool(p.get("safety",
+                                               p.get("safety_settings", False))),
+                    max_tokens_mode=str(p.get("max_tokens", "auto") or "auto"),
+                    max_tokens_custom=_i("max_tokens_custom", 4096),
                     debug=bool(p.get("debug")),
                     fake_translate=bool(p.get("fake")),
                     clean_only=bool(p.get("clean_only")),
