@@ -233,7 +233,10 @@ def _parallel_budget(kind: str = "ocr") -> int:
     if _env > 0:
         return max(1, min(8, _env))
     try:
-        _gpu = (not _IS_ANDROID) and (_ort_has_cuda() or _ort_has_dml())
+        _gpu = (not _IS_ANDROID)
+        if _gpu:
+            _preload_pip_cuda_libs()
+            _gpu = (_ort_has_cuda() or _ort_has_dml())
     except Exception:
         _gpu = False
     if kind == "clean":
@@ -463,6 +466,7 @@ def _ensure_all_dependencies() -> None:
                         "nvidia-curand-cu12",
                     )
             _clear_ort_modules()
+            _preload_pip_cuda_libs()
             if not ok_pip or not _ort_has_cuda():
                 if major >= 13:
                     print("[*] نسخهٔ پایدار CUDA EP نداد → ort-cuda-13-nightly")
