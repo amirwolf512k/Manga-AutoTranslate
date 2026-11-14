@@ -818,6 +818,7 @@ class RapidOCRBackend:
                         _cuda_ok = False
                         _ep_active = str(_pe)[:90]
                     if _cuda_ok:
+                        self._gpu_locked = True
                         _gpu_flags["EngineConfig.onnxruntime.use_cuda"] = True
                         _gpu_flags["EngineConfig.onnxruntime.cuda_ep_cfg.cudnn_conv_use_max_workspace"] = "1"
                         _algo_h3 = _cudnn_algo_search()
@@ -848,6 +849,7 @@ class RapidOCRBackend:
                     if _dml_ok:
                         _gpu_flags["EngineConfig.onnxruntime.use_dml"] = True
                         self._dml_locked = True
+                        self._gpu_locked = True
                     else:
                         print("[!] DirectML در عمل لود نشد (درایور/DirectX را "
                               "آپدیت کن) → OCR روی CPU.")
@@ -909,7 +911,10 @@ class RapidOCRBackend:
                     self.engine = NewRapidOCR(params=_p2)
                     self._eng_params = _p2
                     self._dml_locked = False
+                    self._gpu_locked = False
+                    self._ocr_ep_active = "CPUExecutionProvider"
                 self._new_api = True
+                self._gpu_warmup()
                 _ep_disp = (f" | EP={getattr(self, '_ocr_ep_active', '')}"
                                if str(getattr(self, "_ocr_ep_active", "") or "").strip()
                                else "")
@@ -929,7 +934,10 @@ class RapidOCRBackend:
                 self.engine = NewRapidOCR(params=_pb2)
                 self._eng_params = _pb2
                 self._dml_locked = False
+                self._gpu_locked = False
+                self._ocr_ep_active = "CPUExecutionProvider"
             self._new_api = True
+            self._gpu_warmup()
             _ep_disp = (f" | EP={getattr(self, '_ocr_ep_active', '')}"
                            if str(getattr(self, "_ocr_ep_active", "") or "").strip()
                            else "")
@@ -1089,16 +1097,19 @@ class RapidOCRBackend:
                 return self._engine_run_nolock(image_bgr)
         return self._engine_run_nolock(image_bgr)
 
-    def _dml_recover(self, err) -> bool:
-        if not getattr(self, "_dml_locked", False):
+    def _gpu_recover(self, err, force: bool = False) -> bool:
+        if not getattr(self, "_gpu_locked", False):
             return False
-        _m = str(err).lower()
-        if not any(_s in _m for _s in (
-                "887a0006", "80070057", "gpu will not respond",
-                "device hung", "device removed", "dml", "directml")):
-            return False
+        if not force:
+            _m = str(err).lower()
+            if not any(_s in _m for _s in (
+                    "887a0006", "80070057", "gpu will not respond",
+                    "device hung", "device removed", "dml", "directml",
+                    "cuda", "cublas", "cudnn", "cufft", "cudart", "cupti",
+                    "gpu", "out of memory", "outofmemory")):
+                return False
         with _RAPIDOCR_RECOVER_LOCK:
-            if not getattr(self, "_dml_locked", False):
+            if not getattr(self, "_gpu_locked", False):
                 return True
             try:
                 from rapidocr import RapidOCR as NewRapidOCR
@@ -1114,12 +1125,40 @@ class RapidOCRBackend:
                 self.engine = NewRapidOCR(params=_p)
                 self._eng_params = _p
                 self._dml_locked = False
+                self._gpu_locked = False
                 self._ocr_ep_active = "CPUExecutionProvider"
                 print("[!] خطایِ GPU در OCR → موتور رویِ CPU بازساخته شد "
                       "(کیفیت حفظ شد؛ بقیهٔ صفحات بدونِ وقفه)")
                 return True
             except Exception:
                 return False
+
+    def _gpu_warmup(self):
+        if not getattr(self, "_gpu_locked", False):
+            return
+        try:
+            _img = np.full((110, 520, 3), 255, np.uint8)
+            try:
+                cv2.rectangle(_img, (10, 10), (510, 100), (0, 0, 0), 2)
+                cv2.putText(_img, "MANGA 12345", (22, 72),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.6, (0, 0, 0), 4)
+            except Exception:
+                pass
+            try:
+                self._engine_run(_img)
+            except Exception as _we:
+                _wm = str(_we).lower()
+                if ("detection result is empty" in _wm
+                        or "text detection result is empty" in _wm):
+                    return
+                raise
+        except Exception as _we2:
+            print(f"[!] GPU در اولین اجرایِ OCR خطا داد ({str(_we2)[:130]}) "
+                  f"→ موتور روی CPU بازساخته شد")
+            try:
+                self._gpu_recover(_we2, force=True)
+            except Exception:
+                pass
 
     def ocr(self, image_bgr: np.ndarray, crop_mode: bool = False):
 
@@ -1173,20 +1212,17 @@ class RapidOCRBackend:
                     msg = str(e).lower()
                     if "text detection result is empty" in msg or "detection result is empty" in msg:
                         return None
-                    if _att == 0 and self._dml_recover(e):
+                    if _att == 0 and self._gpu_recover(e):
                         continue
-                    print(f"    [OCR] rapidocr جدید خطا: {e} → موتور قدیمی")
-                    self._new_api = False
-                    if not _HAS_RAPIDOCR:
-                        return None
-                    break
+                    print(f"    [OCR] خطای موتور OCR: {str(e)[:150]}")
+                    return None
         try:
             result, _ = self._engine_run(image_bgr)
         except Exception as e:
             msg = str(e).lower()
             if "text detection result is empty" in msg or "detection result is empty" in msg:
                 return None
-            if self._dml_recover(e):
+            if self._gpu_recover(e):
                 try:
                     result, _ = self._engine_run(image_bgr)
                 except Exception:

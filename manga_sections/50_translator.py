@@ -60,6 +60,106 @@ class MangaTranslator:
             self.__dict__["_ocr_cpu_failed"] = True
             return None
 
+    def _ocr_bench_img(self):
+        _img = np.full((240, 720, 3), 255, np.uint8)
+        for _i, _txt in enumerate(("CHAPTER ONE", "MANGA 12345",
+                                   "THE QUICK TEST")):
+            cv2.putText(_img, _txt, (24, 66 + _i * 62),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.3, (0, 0, 0), 3)
+        return _img
+
+    def _ocr_bench_path(self):
+        return os.path.join(
+            os.environ.get("MANGA_FILES_DIR") or os.getcwd(),
+            "ocr_ep_bench.json")
+
+    def _ocr_bench_cached(self):
+        try:
+            with open(self._ocr_bench_path(), "r", encoding="utf-8") as _fh:
+                _d = json.load(_fh)
+            if time.time() - float(_d.get("ts") or 0) > 14 * 86400:
+                return None
+            _v = str(_d.get("pick") or "").lower()
+            return _v if _v in ("cpu", "gpu") else None
+        except Exception:
+            return None
+
+    def _ocr_bench_save(self, pick, gpu_ms, cpu_ms):
+        try:
+            with open(self._ocr_bench_path(), "w",
+                      encoding="utf-8") as _fh:
+                json.dump({"pick": pick, "gpu_ms": gpu_ms, "cpu_ms": cpu_ms,
+                           "ts": time.time()}, _fh)
+        except Exception:
+            pass
+
+    def _ocr_bench_time(self, eng):
+        _img = self._ocr_bench_img()
+        _best = None
+        for _ in range(2):
+            _t0 = time.time()
+            try:
+                _r = eng.ocr(_img)
+            except Exception:
+                _r = None
+            _dt = (time.time() - _t0) * 1000.0
+            if _r is None:
+                return None
+            if _best is None or _dt < _best:
+                _best = _dt
+        return _best
+
+    def _ocr_dual_setup(self):
+        try:
+            if _on_android() or not _dual_device_enabled():
+                return None
+            _main = self.__dict__.get("_ocr_main")
+            if not isinstance(_main, RapidOCRBackend):
+                return None
+            if not self._ocr_gpu_active():
+                return None
+            _twin = self._ensure_ocr_cpu()
+            if _twin is None:
+                return None
+            _benv = str(os.environ.get("MANGA_OCR_BENCH", "1")
+                        or "1").strip().lower()
+            _bench_on = _benv not in ("0", "false", "off")
+            _force = _benv in ("force", "rerun", "2")
+            _pick = None if _force else self._ocr_bench_cached()
+            _gpu_ms = _cpu_ms = None
+            if _pick is None:
+                if not _bench_on:
+                    _pick = "gpu"
+                else:
+                    _gpu_ms = self._ocr_bench_time(_main)
+                    _cpu_ms = self._ocr_bench_time(_twin)
+                    if _gpu_ms is None and _cpu_ms is None:
+                        _pick = "gpu"
+                    elif _gpu_ms is None:
+                        _pick = "cpu"
+                    elif _cpu_ms is None:
+                        _pick = "gpu"
+                    else:
+                        _pick = "cpu" if _cpu_ms * 1.10 < _gpu_ms else "gpu"
+                    self._ocr_bench_save(_pick, _gpu_ms, _cpu_ms)
+            if _pick == "cpu":
+                self.__dict__["_ocr_main"] = _twin
+                self.__dict__["_ocr_helper"] = _main
+                _gms = "-" if _gpu_ms is None else f"{_gpu_ms:.0f}ms"
+                _cms = "-" if _cpu_ms is None else f"{_cpu_ms:.0f}ms"
+                print(f"[*] بنچمارکِ OCR: GPU={_gms} | CPU={_cms} → "
+                      f"CPU قوی‌تر است و موتورِ اصلی شد؛ "
+                      f"GPU از پایینِ هر صفحه کمک می‌کند.")
+                return _main
+            self.__dict__["_ocr_helper"] = _twin
+            if _gpu_ms is not None and _cpu_ms is not None:
+                print(f"[*] بنچمارکِ OCR: GPU={_gpu_ms:.0f}ms | "
+                      f"CPU={_cpu_ms:.0f}ms → GPU قوی‌تر است؛ "
+                      f"CPU از پایینِ هر صفحه کمک می‌کند.")
+            return _twin
+        except Exception:
+            return None
+
     def _ensure_lama_cpu_twin(self):
         try:
             _s = self.__dict__.get("_lama_cpu_twin")

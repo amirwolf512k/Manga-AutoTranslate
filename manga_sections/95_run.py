@@ -1273,10 +1273,11 @@ class _MangaTranslatorBody_95:
             min_batch = 15
         else:
             print(
-                f"[*] سبکِ مرجع: اول استخراجِ دوطرفهٔ همهٔ {len(pending)} صفحه "
-                f"+ پاکسازیٔ یکطرفهٔ بالا→پایین همزمان؛ بعد از اتمامِ "
-                f"کاملِ استخراج: پاکسازیٔ دوطرفه + ترجمهٔ همه در «یک» "
-                f"درخواست (هیچ متنی زودتر از اتمامِ استخراج به مترجم نمیرود)."
+                f"[*] سبکِ مرجع: استخراجِ هر صفحه دوطرفه (موتورِ قوی از بالا، "
+                f"موتورِ دوم از پایین — دیدار در وسطِ همان صفحه) + پاکسازیِ "
+                f"همان صفحه با همین سبک به ترتیبِ بالا→پایین؛ بعد از اتمامِ "
+                f"کاملِ استخراج: ترجمهٔ همه در «یک» درخواست (هیچ متنی زودتر "
+                f"از اتمامِ استخراج به مترجم نمیرود)."
             )
 
         quota_flag = {"dead": False}
@@ -1324,7 +1325,6 @@ class _MangaTranslatorBody_95:
 
         clean_pool = ThreadPoolExecutor(
             max_workers=1, thread_name_prefix="clean")
-        clean_pool2 = None
         clean_all_futs: list = []
         clean_started: set = set()
         clean_claimed: set = set()
@@ -1514,19 +1514,6 @@ class _MangaTranslatorBody_95:
                 _ev = clean_done_ev.get(page_i)
             return _ev is None or _ev.is_set()
 
-        def _clean_seq_job(seq) -> None:
-            for _p in seq:
-                if stop_requested() or quota_flag["dead"]:
-                    _clean_done_mark(_p)
-                    continue
-                with _clean_cond:
-                    if _p in finished_pages:
-                        _clean_done_mark(_p)
-                        continue
-                    pending_clean.discard(_p)
-                if _clean_one_page(_p):
-                    _clean_done_mark(_p)
-
         def _dispatch_chunk_clean(chunk: List[TextRegion]) -> None:
             _pgs = sorted({page_of_region.get(r.id) for r in chunk
                            if page_of_region.get(r.id) is not None})
@@ -1534,8 +1521,7 @@ class _MangaTranslatorBody_95:
                 _clean_pages_bg(_pgs)
 
         _ext_lock = threading.Lock()
-        _ext_fwd = {"v": 0}
-        _ext_bwd = {"v": len(pending) - 1}
+        _ext_next = {"i": 0}
         _ext_quota = {"v": False}
         _ext_err = {"exc": None}
         _qd_lock = threading.Lock()
@@ -1553,28 +1539,21 @@ class _MangaTranslatorBody_95:
             except Exception:
                 pass
 
-        def _claim_ext(role: str):
+        def _claim_ext():
             with _ext_lock:
-                f, b = _ext_fwd["v"], _ext_bwd["v"]
-                if f > b:
+                if _ext_next["i"] >= len(pending):
                     return None
-                if role == "fwd":
-                    it = pending[f]
-                    _ext_fwd["v"] = f + 1
-                else:
-                    it = pending[b]
-                    _ext_bwd["v"] = b - 1
+                it = pending[_ext_next["i"]]
+                _ext_next["i"] += 1
                 return it
 
-        def _ext_worker(role: str) -> None:
-            if role == "bwd" and _ocr_cpu_twin is not None:
-                self._ocr_tls.engine = _ocr_cpu_twin
+        def _ext_worker() -> None:
             while True:
                 if stop_requested():
                     return
                 if quota_flag["dead"] or _ext_quota["v"]:
                     return
-                item = _claim_ext(role)
+                item = _claim_ext()
                 if item is None:
                     return
                 try:
@@ -1587,7 +1566,7 @@ class _MangaTranslatorBody_95:
                     _ext_err["exc"] = e
                     return
                 except Exception as e:
-                    print(f"    [!] خطای کارگرِ استخراج({role}): {e}",
+                    print(f"    [!] خطای کارگرِ استخراج: {e}",
                           file=sys.stderr)
                     _ext_prog_tick()
                     continue
@@ -1619,31 +1598,27 @@ class _MangaTranslatorBody_95:
                     pass
                 _map_spill_page(page_i)
 
-        _ocr_cpu_twin = None
+        _ocr_helper = None
         try:
-            _ocr_cpu_twin = self._ensure_ocr_cpu()
+            _ocr_helper = self._ocr_dual_setup()
         except Exception:
-            _ocr_cpu_twin = None
-        if _ocr_cpu_twin is not None:
+            _ocr_helper = None
+        if _ocr_helper is not None:
             try:
-                _ep_nm = str(getattr(self.ocr, "_ocr_ep_active", "") or "")
-                print(f"[*] استخراج دو-دستگاهه: صفحهٔ ۱→{max(0, len(pending))} "
-                      f"روی GPU ({_ep_nm}) و صفحهٔ "
-                      f"{max(0, len(pending))}→۱ روی CPU همزمان "
-                      f"(دیدار در وسط).")
+                _mn = str(getattr(self.ocr, "_ocr_ep_active", "") or "GPU")
+                _hn = str(getattr(_ocr_helper, "_ocr_ep_active", "")
+                          or "CPU")
+                print(f"[*] استخراج دو-دستگاهه: در «همان» صفحه {_mn} "
+                      f"از بالا و {_hn} از پایین همزمان استخراج میزنند "
+                      f"و وسطِ صفحه همدیگر را می‌بینند.")
             except Exception:
                 pass
         else:
-            print(f"[*] استخراج دوطرفه: صفحهٔ ۱→{max(0, len(pending))} و "
-                  f"صفحهٔ {max(0, len(pending))}→۱ همزمان (دیدار در وسط).")
-        _t_fwd = threading.Thread(target=_ext_worker, args=("fwd",),
-                                  daemon=True, name="extract-fwd")
-        _t_bwd = threading.Thread(target=_ext_worker, args=("bwd",),
-                                  daemon=True, name="extract-bwd")
-        _t_fwd.start()
-        _t_bwd.start()
-        _t_fwd.join()
-        _t_bwd.join()
+            print(f"[*] استخراج: {len(pending)} صفحه به ترتیبِ بالا→پایین.")
+        _t_ext = threading.Thread(target=_ext_worker,
+                                  daemon=True, name="extract")
+        _t_ext.start()
+        _t_ext.join()
 
         extraction_done["v"] = True
         with _clean_cond:
@@ -1657,36 +1632,9 @@ class _MangaTranslatorBody_95:
         with _clean_cond:
             _backlog = sorted(pending_clean)
         if _backlog:
-            _mid = (len(_backlog) + 1) // 2
-            _top_seq, _bot_seq = _backlog[:_mid], _backlog[_mid:]
-            _lama_cpu_twin = None
-            try:
-                self._get_lama()
-            except Exception:
-                pass
-            try:
-                _lama_cpu_twin = self._ensure_lama_cpu_twin()
-            except Exception:
-                _lama_cpu_twin = None
-            if _lama_cpu_twin is not None:
-                print(f"[*] پاکسازی دو-دستگاهه: {len(_top_seq)} صفحه از "
-                      f"بالا→پایین روی GPU، {len(_bot_seq)} صفحه از "
-                      f"پایین→بالا روی CPU…")
-            else:
-                print(f"[*] پاکسازی دوطرفه: {len(_top_seq)} صفحه از بالا→پایین، "
-                      f"{len(_bot_seq)} صفحه از پایین→بالا…")
-            clean_all_futs.append(clean_pool.submit(
-                _clean_seq_job, list(_top_seq)))
-            clean_pool2 = ThreadPoolExecutor(
-                max_workers=1, thread_name_prefix="clean2")
-
-            def _clean_bwd_job(pages):
-                if _lama_cpu_twin is not None:
-                    self._lama_tls.sess = _lama_cpu_twin
-                _clean_seq_job(pages)
-
-            clean_all_futs.append(clean_pool2.submit(
-                _clean_bwd_job, list(reversed(_bot_seq))))
+            print(f"[*] پاکسازیِ باقی‌مانده: {len(_backlog)} صفحه به ترتیبِ "
+                  f"بالا→پایین (در هر صفحه LaMa اصلی از بالا و LaMa دوم "
+                  f"از پایین همزمان)…")
 
         if stop_requested():
             trans_pool.shutdown(wait=False)
@@ -1848,11 +1796,6 @@ class _MangaTranslatorBody_95:
             pass
         try:
             clean_pool.shutdown(wait=True)
-        except Exception:
-            pass
-        try:
-            if clean_pool2 is not None:
-                clean_pool2.shutdown(wait=True)
         except Exception:
             pass
 

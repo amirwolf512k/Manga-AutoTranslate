@@ -5340,6 +5340,63 @@ class _MangaTranslatorBody_85:
             c[5] = sub_bgr[cy0 - ey0:cy1 - ey0, cx0 - ex0:cx1 - ex0]
             c[6] = "LaMa"
 
+    def _lama_run_dual(self, image: np.ndarray, groups: List[List[list]],
+                       lama, twin, page_kernel, batched: bool = True) -> None:
+        _gsorted = sorted(
+            groups,
+            key=lambda g: min((int(c[1]) for c in g), default=0))
+        _cap_side = max(1, min(4, int(self._lama_batch_cap() or 4)))
+        _lc = {"f": 0, "b": len(_gsorted) - 1}
+        _lc_lock = threading.Lock()
+        _lama_err: list = []
+
+        def _claim_groups(front: bool) -> list:
+            with _lc_lock:
+                if front:
+                    _i = _lc["f"]
+                    if _i > _lc["b"]:
+                        return []
+                    _j = min(_lc["b"], _i + _cap_side - 1)
+                    _lc["f"] = _j + 1
+                    return _gsorted[_i:_j + 1]
+                _j = _lc["b"]
+                if _j < _lc["f"]:
+                    return []
+                _i = max(_lc["f"], _j - _cap_side + 1)
+                _lc["b"] = _i - 1
+                return _gsorted[_i:_j + 1]
+
+        def _side_job(sess, front: bool) -> None:
+            self._lama_tls.sess = sess
+            while True:
+                _chunk = _claim_groups(front)
+                if not _chunk:
+                    return
+                try:
+                    if batched:
+                        self._lama_run_groups_batched(image, _chunk, sess,
+                                                      page_kernel)
+                    else:
+                        for _grp in _chunk:
+                            self._lama_run_group(image, _grp, sess,
+                                                 page_kernel)
+                except JobCancelled as _jc:
+                    _lama_err.append(_jc)
+                    return
+                except Exception:
+                    continue
+
+        _t_a = threading.Thread(target=_side_job, args=(lama, True),
+                                daemon=True, name="lama-top")
+        _t_b = threading.Thread(target=_side_job, args=(twin, False),
+                                daemon=True, name="lama-bottom")
+        _t_a.start()
+        _t_b.start()
+        _t_a.join()
+        _t_b.join()
+        if _lama_err:
+            raise _lama_err[0]
+
     @staticmethod
     def _lama_batch_cap() -> int:
         try:
@@ -8931,7 +8988,20 @@ class _MangaTranslatorBody_85:
                             pass
                     _no_batch_m = self._lama_batch_cap() <= 0 \
                         or not hasattr(lama, "run_batch_tensors")
-                    if not _no_batch_m:
+                    _lama_twin = None
+                    if ((not _on_android()) and _dual_device_enabled()
+                            and len(groups) >= 2):
+                        try:
+                            _lama_twin = self._ensure_lama_cpu_twin()
+                        except Exception:
+                            _lama_twin = None
+                    if _lama_twin is not None:
+                        _raise_if_stop()
+                        self._lama_run_dual(image, groups, lama, _lama_twin,
+                                            page_kernel,
+                                            batched=(not _no_batch_m))
+                        _raise_if_stop()
+                    elif not _no_batch_m:
                         _raise_if_stop()
                         self._lama_run_groups_batched(image, groups, lama,
                                                       page_kernel)

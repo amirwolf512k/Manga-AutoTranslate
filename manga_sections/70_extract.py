@@ -2474,7 +2474,65 @@ class _MangaTranslatorBody_70:
 
             n_workers = max(1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
             _ocr_ts = isinstance(self.ocr, RapidOCRBackend)
-            if n_workers > 1 and _ocr_ts:
+            _helper_eng = getattr(self, "_ocr_helper", None)
+            _dual_split = (_ocr_ts
+                           and isinstance(_helper_eng, RapidOCRBackend)
+                           and len(cand) >= 2 and _dual_device_enabled()
+                           and not _on_android())
+            if _dual_split:
+                _order = sorted(range(len(cand)),
+                                key=lambda k: (cand[k][3], cand[k][2]))
+                _curs = {"f": 0, "b": len(_order) - 1}
+                _curs_lock = threading.Lock()
+                _side_errs: list = []
+
+                def _claim_side(front: bool):
+                    with _curs_lock:
+                        if front:
+                            _i = _curs["f"]
+                            if _i > _curs["b"]:
+                                return None
+                            _curs["f"] = _i + 1
+                            return _order[_i]
+                        _j = _curs["b"]
+                        if _j < _curs["f"]:
+                            return None
+                        _curs["b"] = _j - 1
+                        return _order[_j]
+
+                def _side_run(engine, front: bool) -> None:
+                    self._ocr_tls.engine = engine
+                    while True:
+                        _k = _claim_side(front)
+                        if _k is None:
+                            return
+                        try:
+                            ocr_results[_k] = _ocr_one(_k)
+                        except Exception as _se:
+                            _side_errs.append(_se)
+                            return
+
+                if self.debug and not getattr(self, "_dual_note", False):
+                    self._dual_note = True
+                    print(f"    [*] استخراجِ دوطرفهٔ همان صفحه: {len(cand)} ناحیه "
+                          f"| بالا→پایین روی "
+                          f"{getattr(self.__dict__.get('_ocr_main'), '_ocr_ep_active', 'GPU')}"
+                          f" و پایین→بالا روی "
+                          f"{getattr(_helper_eng, '_ocr_ep_active', 'CPU')}")
+                _t_top = threading.Thread(
+                    target=_side_run,
+                    args=(self.__dict__.get("_ocr_main") or self.ocr, True),
+                    daemon=True, name="ocr-top")
+                _t_bot = threading.Thread(
+                    target=_side_run, args=(_helper_eng, False),
+                    daemon=True, name="ocr-bottom")
+                _t_top.start()
+                _t_bot.start()
+                _t_top.join()
+                _t_bot.join()
+                if _side_errs:
+                    raise _side_errs[0]
+            elif n_workers > 1 and _ocr_ts:
                 if self.debug and not getattr(self, "_par_note", False):
                     self._par_note = True
                     print(f"    [*] استخراجِ موازی: {len(cand)} ناحیه × "
