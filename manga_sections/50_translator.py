@@ -63,16 +63,16 @@ class MangaTranslator:
 
     def _ocr_dual_setup(self):
         try:
-            if str(getattr(self, "device_pref", "auto") or "auto") != "auto":
+            if _on_android():
                 return None
-            if _on_android() or not _dual_device_enabled():
+            if str(getattr(self, "device_pref", "auto") or "auto") == "cpu":
                 return None
             _main = self.__dict__.get("_ocr_main")
             if not isinstance(_main, RapidOCRBackend):
                 return None
             if not self._ocr_gpu_active():
                 return None
-            _twin = self._ensure_ocr_cpu()
+            _twin = self._ensure_ocr_gpu2()
             if _twin is None:
                 return None
             self.__dict__["_ocr_helper"] = _twin
@@ -163,27 +163,8 @@ class MangaTranslator:
             _ep = str(getattr(_main, "ep_used", "") or "").strip().lower()
             if _ep in ("", "cpu", "none"):
                 return None
-            try:
-                _av = self._available_ram_gb()
-            except Exception:
-                _av = None
-            if _av is not None and _av < 2.5:
-                return None
-            try:
-                _cores = int(self._cpu_core_count() or 4)
-            except Exception:
-                _cores = 4
-            _t = max(1, min(4, _cores // 2))
-            _mp = getattr(self, "_lama_model_path", None)
-            _s = (LamaMangaONNX(prefer_gpu=False, threads=_t, model_path=_mp)
-                  if _mp else LamaMangaONNX(prefer_gpu=False, threads=_t))
-            if _s is None:
-                self.__dict__["_lama_cpu_twin_failed"] = True
-                return None
-            self.__dict__["_lama_cpu_twin"] = _s
-            print(f"    [*] سشنِ دومِ LaMa روی CPU ساخته شد ({_t} نخ) "
-                  f"— پاکسازیِ دو-دستگاهه", flush=True)
-            return _s
+            self.__dict__["_lama_cpu_twin_failed"] = True
+            return None
         except Exception:
             self.__dict__["_lama_cpu_twin_failed"] = True
             return None

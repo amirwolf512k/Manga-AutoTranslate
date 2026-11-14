@@ -1274,7 +1274,7 @@ def _dual_device_enabled() -> bool:
             return False
     except Exception:
         pass
-    return True
+    return False
 
 def _gpu_head_of(session):
     try:

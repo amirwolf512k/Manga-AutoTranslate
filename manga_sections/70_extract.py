@@ -2476,9 +2476,14 @@ class _MangaTranslatorBody_70:
             n_workers = 1 if _img_par else max(
                 1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
             _ocr_ts = isinstance(self.ocr, RapidOCRBackend)
+            _dev_gpu = (self._ocr_gpu_active()
+                        and str(getattr(self, "device_pref", "auto") or "auto")
+                        != "cpu")
             _helper_eng = getattr(self, "_ocr_helper", None)
-            _dev_gpu = (str(getattr(self, "device_pref", "auto") or "auto") == "gpu"
-                        and self._ocr_gpu_active())
+            if _helper_eng is not None:
+                _he_ep = str(getattr(_helper_eng, "_ocr_ep_active", "") or "").strip()
+                if not _he_ep or _he_ep.lower().startswith("cpu"):
+                    _helper_eng = None
             if _helper_eng is None and _ocr_ts and _dev_gpu:
                 try:
                     _helper_eng = self._ensure_ocr_gpu2()
@@ -2487,7 +2492,7 @@ class _MangaTranslatorBody_70:
             _dual_split = (not _img_par and _ocr_ts
                            and isinstance(_helper_eng, RapidOCRBackend)
                            and len(cand) >= 2
-                           and (_dev_gpu or _dual_device_enabled())
+                           and _dev_gpu
                            and not _on_android())
             if _dual_split:
                 _order = sorted(range(len(cand)),
@@ -2528,7 +2533,7 @@ class _MangaTranslatorBody_70:
                           f"| بالا→پایین روی "
                           f"{getattr(self.__dict__.get('_ocr_main'), '_ocr_ep_active', 'GPU')}"
                           f" و پایین→بالا روی "
-                          f"{getattr(_helper_eng, '_ocr_ep_active', 'CPU')}")
+                          f"{getattr(_helper_eng, '_ocr_ep_active', 'GPU')}")
                 _t_top = threading.Thread(
                     target=_side_run,
                     args=(self.__dict__.get("_ocr_main") or self.ocr, True),

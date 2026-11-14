@@ -1289,16 +1289,7 @@ class _MangaTranslatorBody_95:
             min_batch = 15
         else:
             _dev_style = str(getattr(self, "device_pref", "auto") or "auto").strip().lower()
-            if _dev_style == "gpu":
-                print(
-                    f"[*] سبکِ پردازش: عکس‌های ۱و۲ با دو ورکرِ GPU همزمان "
-                    f"استخراج میشوند (تک‌عکس: دو سشنِ GPU از بالا و پایینِ "
-                    f"همان عکس) و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ "
-                    f"پاکسازی هم هم‌زمان تک‌تک از عکسِ اول تا آخر فقط با "
-                    f"LaMa روی GPU؛ بعد از اتمامِ کاملِ استخراج: ترجمهٔ همه "
-                    f"در «یک» درخواست."
-                )
-            elif _dev_style == "cpu":
+            if _dev_style == "cpu":
                 print(
                     f"[*] سبکِ پردازش: عکس‌های ۱و۲ با دو ورکرِ CPU همزمان "
                     f"استخراج میشوند و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ "
@@ -1308,12 +1299,12 @@ class _MangaTranslatorBody_95:
                 )
             else:
                 print(
-                    f"[*] سبکِ پردازش: عکس‌های ۱و۲ روی GPU و ۳و۴ روی CPU "
-                    f"همزمان استخراج میشوند (تک‌عکس: GPU از بالا، CPU از پایین) "
-                    f"و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ پاکسازی هم "
-                    f"هم‌زمان تک‌تک از عکسِ اول تا آخر (LaMa از بالا + LaMa دوم "
-                    f"از پایینِ همان صفحه)؛ بعد از اتمامِ کاملِ استخراج: "
-                    f"ترجمهٔ همه در «یک» درخواست."
+                    f"[*] سبکِ پردازش: عکس‌های ۱و۲ با دو ورکرِ GPU همزمان "
+                    f"استخراج میشوند (تک‌عکس: دو سشنِ GPU از بالا و پایینِ "
+                    f"همان عکس) و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ "
+                    f"پاکسازی هم هم‌زمان تک‌تک از عکسِ اول تا آخر فقط با "
+                    f"LaMa روی GPU؛ بعد از اتمامِ کاملِ استخراج: ترجمهٔ همه "
+                    f"در «یک» درخواست."
                 )
 
         quota_flag = {"dead": False}
@@ -1644,19 +1635,10 @@ class _MangaTranslatorBody_95:
         _n_pend = len(pending)
         _main_eng = self.__dict__.get("_ocr_main")
         _dev_pref = str(getattr(self, "device_pref", "auto") or "auto").strip().lower()
-        _gpu_mode = (_dev_pref == "gpu" and self._ocr_gpu_active())
-        _dual_ocr = _ocr_helper is not None and _n_pend >= 2
+        _gpu_mode = self._ocr_gpu_active() and _dev_pref != "cpu"
         if _gpu_mode:
             self._ocr_img_parallel = _n_pend >= 2
             _dev_spec = ["g", "g"] if _n_pend >= 2 else []
-        elif _dual_ocr:
-            self._ocr_img_parallel = True
-            if _n_pend == 2:
-                _dev_spec = ["g", "c"]
-            elif _n_pend == 3:
-                _dev_spec = ["g", "g", "c"]
-            else:
-                _dev_spec = ["g", "g", "c", "c"]
         elif _n_pend >= 2:
             self._ocr_img_parallel = True
             _dev_spec = ["c", "c"]
@@ -1664,29 +1646,24 @@ class _MangaTranslatorBody_95:
             self._ocr_img_parallel = False
             _dev_spec = []
         _g_pool = [_main_eng]
-        _c_pool = [_ocr_helper if _dual_ocr else _main_eng]
+        _c_pool = [_main_eng]
         if _gpu_mode:
-            try:
-                _g2 = self._ensure_ocr_gpu2()
-            except Exception:
-                _g2 = None
-            if _g2 is not None:
-                _g_pool.append(_g2)
-        else:
-            if _dual_ocr and _n_pend >= 3:
+            if _ocr_helper is not None:
+                _g_pool.append(_ocr_helper)
+            else:
                 try:
                     _g2 = self._ensure_ocr_gpu2()
                 except Exception:
                     _g2 = None
                 if _g2 is not None:
                     _g_pool.append(_g2)
-            if _n_pend >= (4 if _dual_ocr else 2):
-                try:
-                    _c2 = self._ensure_ocr_cpu2()
-                except Exception:
-                    _c2 = None
-                if _c2 is not None:
-                    _c_pool.append(_c2)
+        elif _n_pend >= 2:
+            try:
+                _c2 = self._ensure_ocr_cpu2()
+            except Exception:
+                _c2 = None
+            if _c2 is not None:
+                _c_pool.append(_c2)
         _specs: list = []
         if _n_pend == 1:
             _specs = [None]
@@ -1710,20 +1687,6 @@ class _MangaTranslatorBody_95:
                     print(f"[*] استخراج دوکارگهٔ GPU: {_n_pend} عکس — عکس‌های "
                           f"۱و۲ روی GPU همزمان؛ هر کارگر که زودتر تمام شود "
                           f"عکسِ بعدی را برمی‌دارد.")
-            elif _ocr_helper is not None and _n_pend == 1:
-                print(f"[*] استخراج: ۱ عکس — GPU از بالا و CPU از "
-                      f"پایینِ همان عکس همزمان.")
-            elif _dual_ocr:
-                if _n_pend == 2:
-                    print(f"[*] استخراج: ۲ عکس — عکسِ ۱ روی GPU و عکسِ ۲ "
-                          f"روی CPU همزمان.")
-                elif _n_pend == 3:
-                    print(f"[*] استخراج: ۳ عکس — عکس‌های ۱و۲ روی GPU و "
-                          f"عکسِ ۳ روی CPU همزمان.")
-                else:
-                    print(f"[*] استخراج چهارکارگه: {_n_pend} عکس — عکس‌های "
-                          f"۱و۲ با GPU و ۳و۴ با CPU شروع میشوند؛ هر کارگر "
-                          f"که زودتر تمام شود عکسِ بعدی را برمی‌دارد.")
             elif _n_pend >= 2:
                 print(f"[*] استخراج دوکارگهٔ CPU: {_n_pend} عکس — عکس‌های ۱و۲ "
                       f"همزمان؛ هر کارگر که زودتر تمام شود عکسِ بعدی را "
@@ -1758,13 +1721,9 @@ class _MangaTranslatorBody_95:
             if _dev_pref == "gpu":
                 print(f"[*] پاکسازیِ باقی‌مانده: {len(_backlog)} صفحه به ترتیبِ "
                       f"بالا→پایین — LaMa فقط روی GPU…")
-            elif _dev_pref == "cpu":
-                print(f"[*] پاکسازیِ باقی‌مانده: {len(_backlog)} صفحه به ترتیبِ "
-                      f"بالا→پایین — LaMa فقط روی CPU…")
             else:
                 print(f"[*] پاکسازیِ باقی‌مانده: {len(_backlog)} صفحه به ترتیبِ "
-                      f"بالا→پایین — در هر صفحه LaMa اصلی از بالا و LaMa دوم "
-                      f"از پایینِ همان صفحه همزمان…")
+                      f"بالا→پایین — LaMa فقط روی CPU…")
 
         if stop_requested():
             trans_pool.shutdown(wait=False)

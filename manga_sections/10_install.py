@@ -144,6 +144,46 @@ def _ort_has_cuda() -> bool:
     except Exception:
         return False
 
+_PIP_CUDA_PRELOADED = False
+
+def _preload_pip_cuda_libs() -> None:
+    global _PIP_CUDA_PRELOADED
+    if _PIP_CUDA_PRELOADED or os.name == "nt":
+        return
+    _PIP_CUDA_PRELOADED = True
+    try:
+        import ctypes
+        import glob as _glob
+        import site as _site
+        _roots = list(_site.getsitepackages() or [])
+        try:
+            _us = _site.getusersitepackages()
+            if _us and os.path.isdir(_us):
+                _roots.append(_us)
+        except Exception:
+            pass
+        _pats = (
+            "nvidia/cuda_runtime/lib/libcudart*.so*",
+            "nvidia/cublas/lib/libcublas*.so*",
+            "nvidia/cufft/lib/libcufft*.so*",
+            "nvidia/curand/lib/libcurand*.so*",
+            "nvidia/cuda_nvrtc/lib/libnvrtc*.so*",
+            "nvidia/cudnn/lib/libcudnn*.so*",
+        )
+        _n = 0
+        for _pat in _pats:
+            for _root in _roots:
+                for _f in sorted(_glob.glob(os.path.join(_root, _pat))):
+                    try:
+                        ctypes.CDLL(_f, mode=ctypes.RTLD_GLOBAL)
+                        _n += 1
+                    except OSError:
+                        continue
+        if _n:
+            print(f"[*] {_n} کتابخانهٔ CUDA از pip پیش‌بارگذاری شد.")
+    except Exception:
+        pass
+
 def _ort_has_dml() -> bool:
     try:
         import onnxruntime as _ort
@@ -366,6 +406,7 @@ def _ensure_all_dependencies() -> None:
                 del sys.modules[name]
 
     def _ort_prepare_cuda() -> bool:
+        _preload_pip_cuda_libs()
         try:
             import torch
         except Exception:
@@ -403,25 +444,8 @@ def _ensure_all_dependencies() -> None:
         _pip_uninstall("onnxruntime", "onnxruntime-gpu")
 
         ok_pip = False
-        if major >= 13:
-            print("[*] CUDA 13+ → ort-cuda-13-nightly")
-            cmd = [
-                sys.executable, "-m", "pip", "install", "-q", "--prefer-binary", "--pre",
-                "--index-url",
-                "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/",
-                "onnxruntime-gpu",
-            ]
-            try:
-                r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
-                ok_pip = r.returncode == 0
-                if not ok_pip:
-                    print("    [!] nightly ناموفق → PyPI onnxruntime-gpu")
-                    ok_pip = _pip_install("onnxruntime-gpu")
-            except Exception as e:
-                print(f"    [!] {e}")
-                ok_pip = _pip_install("onnxruntime-gpu")
-        elif major == 12 or major == 0:
-            print("[*] CUDA 12 → onnxruntime-gpu==1.26.0 (+ cuda/cudnn runtime)")
+        if major != 11:
+            print("[*] ابتدا نسخهٔ پایدارِ onnxruntime-gpu (سازگار با درایورهای جدید) ...")
             ok_pip = _pip_install("onnxruntime-gpu==1.26.0")
             if not ok_pip:
                 for pkg in ("onnxruntime-gpu==1.25.1", "onnxruntime-gpu==1.22.0"):
@@ -438,7 +462,29 @@ def _ensure_all_dependencies() -> None:
                         "nvidia-cufft-cu12",
                         "nvidia-curand-cu12",
                     )
-        elif major == 11:
+            _clear_ort_modules()
+            if not ok_pip or not _ort_has_cuda():
+                if major >= 13:
+                    print("[*] نسخهٔ پایدار CUDA EP نداد → ort-cuda-13-nightly")
+                    cmd = [
+                        sys.executable, "-m", "pip", "install", "-q", "--prefer-binary", "--pre",
+                        "--index-url",
+                        "https://aiinfra.pkgs.visualstudio.com/PublicPackages/_packaging/ort-cuda-13-nightly/pypi/simple/",
+                        "onnxruntime-gpu",
+                    ]
+                    try:
+                        r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+                        ok_pip = r.returncode == 0
+                        if not ok_pip:
+                            print("    [!] nightly ناموفق → PyPI onnxruntime-gpu")
+                            ok_pip = _pip_install("onnxruntime-gpu")
+                    except Exception as e:
+                        print(f"    [!] {e}")
+                        ok_pip = _pip_install("onnxruntime-gpu")
+                    _clear_ort_modules()
+                elif not ok_pip:
+                    ok_pip = _pip_install("onnxruntime-gpu")
+        else:
             print("[*] CUDA 11 → feed cuda-11")
             subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-q", "--prefer-binary",
@@ -458,8 +504,6 @@ def _ensure_all_dependencies() -> None:
                 ok_pip = False
             if not ok_pip:
                 ok_pip = _pip_install("onnxruntime-gpu==1.18.1")
-        else:
-            ok_pip = _pip_install("onnxruntime-gpu")
 
         if not ok_pip:
             return "fail"

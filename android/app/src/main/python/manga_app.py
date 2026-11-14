@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.308"
+APP_VER = "1.14.309"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -613,6 +613,26 @@ def resolve_ai_auto(models: list, api_keys: str = "", model_id: str = "",
                      + (f" ({err})" if err else "") + " → بعدی…")
     lines.append("❌ auto: هیچ‌کدام از مدلها در دسترس نبودند.")
     return ("", "", "", "", lines)
+
+def _server_has_gpu() -> bool:
+    _cache = globals().get("_SERVER_GPU_CACHE")
+    if _cache is not None:
+        return _cache
+    ok = False
+    try:
+        r = subprocess.run(["nvidia-smi", "-L"], capture_output=True,
+                           timeout=8)
+        ok = r.returncode == 0 and b"GPU" in (r.stdout or b"")
+    except Exception:
+        ok = False
+    if not ok and sys.platform == "win32":
+        try:
+            import onnxruntime as _ort
+            ok = "DmlExecutionProvider" in _ort.get_available_providers()
+        except Exception:
+            ok = False
+    globals()["_SERVER_GPU_CACHE"] = ok
+    return ok
 
 def find_font() -> str:
     cands = []
@@ -5865,10 +5885,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 if _dv0 not in ("auto", "cpu", "gpu"):
                     _dv0 = "auto"
                 device = gr.Radio(
-                    choices=[["auto (GPU+CPU)", "auto"],
+                    choices=[["auto (خودکار)", "auto"],
                              ["cpu (دوتا CPU)", "cpu"],
                              ["gpu (دوتا GPU)", "gpu"]],
                     value=_dv0,
+                    visible=_server_has_gpu(),
                     label=TX("app.device", "دستگاه پردازش (استخراج + پاکسازی)"))
             with gr.Row(elem_id="manga_mode_grid"):
                 two_pass = gr.Checkbox(
@@ -7471,6 +7492,22 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             except Exception:
                 pass
             with job["lock"]:
+                _prev_src = str(job.get("src") or "").strip()
+                _same_src = bool(_prev_src) and _prev_src == str(src or "").strip()
+                _keep_log = _same_src and bool((job.get("log") or "").strip()
+                                               or (job.get("buf") or []))
+                _old_log = ""
+                _old_buf = []
+                if _keep_log:
+                    _old_log = str(job.get("log") or "").rstrip() + "\n"
+                    _old_buf = list(job.get("buf") or [])
+                else:
+                    try:
+                        _lf = os.path.join(SESS_DIR, f"{sid}.log")
+                        if os.path.isfile(_lf):
+                            os.remove(_lf)
+                    except Exception:
+                        pass
                 job["result_visible"] = False
                 job["download_path"] = None
                 job["download_debug"] = None
@@ -7478,14 +7515,14 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 job["html_debug"] = ""
                 job["reader_path"] = None
                 job["reader_debug_path"] = None
-                job["buf"] = []
+                job["buf"] = _old_buf
                 job["t0"] = t0
                 job["returncode"] = None
                 job["done_event"] = False
                 job["out_v"] = out_v
                 job["src"] = src
                 job["running"] = True
-                job["log"] = ("\n".join(_auto_log_lines) + "\n"
+                job["log"] = _old_log + ("\n".join(_auto_log_lines) + "\n"
                               if _auto_log_lines else "") + "▶ در حال شروع…"
                 job["ts"] = time.time()
             _append_job_logfile(
