@@ -1254,8 +1254,19 @@ class RapidOCRBackend:
         return [lines] if lines else None
 
 
+def _device_pref() -> str:
+    try:
+        _v = os.environ.get("MANGA_DEVICE", "").strip().lower()
+        if _v in ("cpu", "gpu"):
+            return _v
+    except Exception:
+        pass
+    return "auto"
+
 def _dual_device_enabled() -> bool:
     try:
+        if _device_pref() != "auto":
+            return False
         _v = os.environ.get("MANGA_DUAL_DEVICE", "").strip().lower()
         if _v in ("1", "true", "yes", "on"):
             return True

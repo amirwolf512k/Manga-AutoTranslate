@@ -63,6 +63,8 @@ class MangaTranslator:
 
     def _ocr_dual_setup(self):
         try:
+            if str(getattr(self, "device_pref", "auto") or "auto") != "auto":
+                return None
             if _on_android() or not _dual_device_enabled():
                 return None
             _main = self.__dict__.get("_ocr_main")
@@ -150,6 +152,8 @@ class MangaTranslator:
             if _s is not None:
                 return _s
             if self.__dict__.get("_lama_cpu_twin_failed"):
+                return None
+            if str(getattr(self, "device_pref", "auto") or "auto") != "auto":
                 return None
             if _on_android() or not self.use_lama:
                 return None
@@ -378,9 +382,16 @@ class MangaTranslator:
         max_tokens_custom: int = 4096,
         clean_sfx: bool = False,
         repair_page_seams: bool = True,
+        device_pref: str = "auto",
     ):
         self.fake_translate = bool(fake_translate)
         self.clean_only = bool(clean_only)
+        _dev_pref = str(device_pref or "auto").strip().lower()
+        if _dev_pref not in ("auto", "cpu", "gpu"):
+            _dev_pref = "auto"
+        self.device_pref = _dev_pref
+        if _dev_pref != "auto" and gpu is None:
+            gpu = (_dev_pref == "gpu")
         self.translate_retranslate = bool(translate_retranslate)
         self.deep_thinking = bool(deep_thinking) and (
             os.environ.get("MANGA_NO_THINKING", "").strip().lower()
@@ -634,7 +645,11 @@ class MangaTranslator:
                     print("[*] GPU پیدا نشد؛ OCR روی CPU اجرا می‌شه.")
         else:
             ocr_gpu = bool(gpu)
-            if ocr_gpu:
+            if self.device_pref == "gpu":
+                print("[*] تنظیمِ دستگاه: GPU — استخراجِ متن و پاکسازی فقط روی GPU.")
+            elif self.device_pref == "cpu":
+                print("[*] تنظیمِ دستگاه: CPU — استخراجِ متن و پاکسازی فقط روی CPU.")
+            elif ocr_gpu:
                 print("[*] --gpu زده شده؛ OCR روی GPU.")
             else:
                 print("[*] --cpu زده شده؛ OCR روی CPU.")

@@ -50,6 +50,10 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="اجبار به GPU برای OCR و LaMa ONNX")
     p.add_argument("--cpu", dest="gpu", action="store_false",
                    help="اجبار به CPU (OpenCV inpaint)")
+    p.add_argument("--device", choices=["auto", "cpu", "gpu"], default="auto",
+                   help="دستگاهِ استخراجِ متن و پاکسازی: auto (پیش‌فرض — با GPU: "
+                        "۲ ورکر GPU + ۲ ورکر CPU؛ بدون GPU: ۲ ورکر CPU) | "
+                        "cpu (فقط ۲ ورکر CPU) | gpu (فقط ۲ ورکر GPU)")
     p.add_argument("--lama", action="store_true", default=False,
                    help="حتی روی CPU هم پاک‌سازی big-lama.pt را فعال کن (کندتر، تمیزتر)")
     p.add_argument("--clean-method", dest="clean_method",
@@ -173,6 +177,15 @@ def main():
         pass
     args = build_arg_parser().parse_args()
 
+    _dev_arg = str(getattr(args, "device", "auto") or "auto").strip().lower()
+    if _dev_arg not in ("auto", "cpu", "gpu"):
+        _dev_arg = "auto"
+    if _dev_arg != "auto":
+        os.environ["MANGA_DEVICE"] = _dev_arg
+    _cpu_flag = args.gpu is False
+    if _dev_arg != "auto" and args.gpu is None:
+        args.gpu = (_dev_arg == "gpu")
+
     if str(os.environ.get("MANGA_SPEED_TEST", "") or "").strip() == "1":
         try:
             speed_lab_env({})
@@ -268,7 +281,7 @@ def main():
         force_lama=bool(getattr(args, "lama", False)),
         clean_method=(getattr(args, "clean_method", None)
                       or ("lama-big" if getattr(args, "lama", False)
-                          else ("opencv" if args.gpu is False else "lama-manga"))),
+                          else ("opencv" if _cpu_flag else "lama-manga"))),
         max_retries=args.max_retries,
         det_confidence=getattr(args, "det_confidence", 0.28),
         request_delay=args.request_delay,
@@ -311,6 +324,7 @@ def main():
             os.environ.get("MANGA_SAFETY", "").strip() in ("1", "true", "yes")),
         max_tokens_mode=str(getattr(args, "max_tokens", "auto") or "auto"),
         max_tokens_custom=int(getattr(args, "max_tokens_custom", 4096) or 4096),
+        device_pref=_dev_arg,
     )
     if getattr(args, "lama", False):
         translator.use_lama = True

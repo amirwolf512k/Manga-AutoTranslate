@@ -2477,9 +2477,17 @@ class _MangaTranslatorBody_70:
                 1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
             _ocr_ts = isinstance(self.ocr, RapidOCRBackend)
             _helper_eng = getattr(self, "_ocr_helper", None)
+            _dev_gpu = (str(getattr(self, "device_pref", "auto") or "auto") == "gpu"
+                        and self._ocr_gpu_active())
+            if _helper_eng is None and _ocr_ts and _dev_gpu:
+                try:
+                    _helper_eng = self._ensure_ocr_gpu2()
+                except Exception:
+                    _helper_eng = None
             _dual_split = (not _img_par and _ocr_ts
                            and isinstance(_helper_eng, RapidOCRBackend)
-                           and len(cand) >= 2 and _dual_device_enabled()
+                           and len(cand) >= 2
+                           and (_dev_gpu or _dual_device_enabled())
                            and not _on_android())
             if _dual_split:
                 _order = sorted(range(len(cand)),

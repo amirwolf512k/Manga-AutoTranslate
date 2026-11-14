@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.307"
+APP_VER = "1.14.308"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1163,6 +1163,11 @@ def run_cli_interactive():
     if provider == "custom" and api_base_v:
         cmd += ["--api-base", api_base_v]
     cmd += ["--clean-method", str(cfg.get("clean_method") or "lama-manga")]
+    _dv_cli = str(cfg.get("device") or "auto").strip().lower()
+    if _dv_cli not in ("auto", "cpu", "gpu"):
+        _dv_cli = "auto"
+    if _dv_cli != "auto":
+        cmd += ["--device", _dv_cli]
 
     print("\n▶ " + " ".join(cmd) + "\n")
     proc = subprocess.Popen(cmd, cwd=HERE, stdout=subprocess.PIPE,
@@ -5856,6 +5861,15 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                              ["opencv", "opencv"]],
                     value=_cm0,
                     label=TX("app.cleanup", "روش پاکسازی"))
+                _dv0 = str(cfg.get("device") or "auto").strip().lower()
+                if _dv0 not in ("auto", "cpu", "gpu"):
+                    _dv0 = "auto"
+                device = gr.Radio(
+                    choices=[["auto (GPU+CPU)", "auto"],
+                             ["cpu (دوتا CPU)", "cpu"],
+                             ["gpu (دوتا GPU)", "gpu"]],
+                    value=_dv0,
+                    label=TX("app.device", "دستگاه پردازش (استخراج + پاکسازی)"))
             with gr.Row(elem_id="manga_mode_grid"):
                 two_pass = gr.Checkbox(
                     label=TX("app.two_pass", "OCR دومرحله‌ای"), value=True,
@@ -6555,7 +6569,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         LS_KEY = "manga_autotranslate_form_v2"
         JOB_KEY = "manga_job_v1"
         save_form_js = f"""
-(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, twopass, fake, cleano, think, safety, mtmode, mtcust) => {{
+(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, device, twopass, fake, cleano, think, safety, mtmode, mtcust) => {{
   try {{
     const realSid = (sid || sidBox || "").toString().trim();
     const clean = (v) => {{
@@ -6580,6 +6594,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       top_p: (topp === null || topp === undefined) ? 0.9 : topp,
       readord: readord || "",
       cleanm: clean(cleanm) || "lama-manga",
+      device: (clean(device) || "auto"),
       twopass: twopass === null || twopass === undefined ? true : !!twopass,
       fake_test: !!fake,
       clean_only: !!cleano,
@@ -7100,7 +7115,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             out_fmt_v, quality_v, font_up,
                             workers_v, bubbles_v, timeout_v,
                             batchw_v, maxre_v, reqdelay_v, temp_v, top_p_v, readord_v,
-                            clean_method_v, two_pass_v,
+                            clean_method_v, device_v, two_pass_v,
                             fake_test_v, clean_only_v, web_debug_v, prompt_mode_v, prompt_body_v,
                             api_base_v,
                             thinking_v, safety_v, max_tokens_v, max_tokens_custom_v,
@@ -7409,6 +7424,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             if _cm_v not in ("lama-manga", "lama-big", "opencv"):
                 _cm_v = "lama-manga"
             cmd += ["--clean-method", _cm_v]
+            _dv_v = str(device_v or "auto").strip().lower()
+            if _dv_v not in ("auto", "cpu", "gpu"):
+                _dv_v = "auto"
+            if _dv_v != "auto":
+                cmd += ["--device", _dv_v]
             if _batch_no_stitch:
                 cmd += ["--stitch-max-height", "0"]
             if not two_pass_v:
@@ -8236,7 +8256,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     out_fmt, quality, font_upload,
                     workers, bubbles, timeout,
                     batchw, maxre, reqdelay, temp, top_p, readord,
-                    clean_method, two_pass,
+                    clean_method, device, two_pass,
                     fake_test, clean_only, web_debug, prompt_mode, prompt_preview_body,
                     api_base,
                     deep_thinking, safety_settings, max_tokens, max_tokens_custom,
@@ -8320,7 +8340,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         _save_inputs = [
             session_id, sid_box, inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
-            clean_method, two_pass, fake_test, clean_only,
+            clean_method, device, two_pass, fake_test, clean_only,
             deep_thinking, safety_settings, max_tokens, max_tokens_custom,
         ]
 
@@ -8352,7 +8372,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 except Exception:
                     pass
         for _comp in (quality, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
-                      clean_method, two_pass, fake_test, clean_only,
+                      clean_method, device, two_pass, fake_test, clean_only,
                       deep_thinking, safety_settings, max_tokens, max_tokens_custom):
             try:
                 _comp.change(fn=None, inputs=_save_inputs, outputs=[], js=save_form_js)
@@ -8374,7 +8394,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             else:
                 sid = ""
             if not sid:
-                return (gr.update(),) * 32
+                return (gr.update(),) * 33
             job = _get_job(sid)
             meta = _load_job_meta(sid) if sid else {}
             
@@ -8475,6 +8495,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     return gr.update(value="lama-big")
                 return gr.update(value="lama-manga")
 
+            def u_dev():
+                v = str(data.get("device") or "").strip().lower()
+                if v not in ("auto", "cpu", "gpu"):
+                    v = "auto"
+                return gr.update(value=v)
+
             _MT_OK = ("auto", "8192", "16384", "32768", "65536", "custom")
 
             def u_max_tokens():
@@ -8521,6 +8547,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 u_num("top_p"),
                 u_str("readord"),
                 u_cleanm(),
+                u_dev(),
                 u_bool("twopass"),
                 u_bool("fake_test"),
                 u_bool("clean_only"),
@@ -8534,7 +8561,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
             inp_path, provider, api_keys, model, out_fmt, quality,
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
-            clean_method, two_pass, fake_test, clean_only,
+            clean_method, device, two_pass, fake_test, clean_only,
             deep_thinking, safety_settings, max_tokens, max_tokens_custom,
         ]
 
