@@ -146,6 +146,79 @@ class MangaTranslator:
             self.__dict__["_ocr_gpu2_failed"] = True
             return None
 
+    def _ensure_ocr_gpu3(self):
+        try:
+            _e = self.__dict__.get("_ocr_gpu3")
+            if _e is not None:
+                return _e
+            if self.__dict__.get("_ocr_gpu3_failed"):
+                return None
+            _main = self.__dict__.get("_ocr_main")
+            if not isinstance(_main, RapidOCRBackend):
+                return None
+            if not self._ocr_gpu_active():
+                self.__dict__["_ocr_gpu3_failed"] = True
+                return None
+            try:
+                _vram = self._cuda_vram_gb()
+            except Exception:
+                _vram = 0.0
+            if _vram < 5.0:
+                self.__dict__["_ocr_gpu3_failed"] = True
+                return None
+            try:
+                _av = self._available_ram_gb()
+            except Exception:
+                _av = None
+            if _av is not None and _av < 3.0:
+                self.__dict__["_ocr_gpu3_failed"] = True
+                return None
+            _e = RapidOCRBackend(
+                lang=str(getattr(_main, "lang", "en") or "en"),
+                prefer_gpu=True)
+            if _e is None \
+                    or str(getattr(_e, "_ocr_ep_active", "") or "") \
+                    .lower().startswith("cpu"):
+                self.__dict__["_ocr_gpu3_failed"] = True
+                return None
+            self.__dict__["_ocr_gpu3"] = _e
+            return _e
+        except Exception:
+            self.__dict__["_ocr_gpu3_failed"] = True
+            return None
+
+    def _ensure_ocr_cpu3(self):
+        try:
+            _e = self.__dict__.get("_ocr_cpu3")
+            if _e is not None:
+                return _e
+            if self.__dict__.get("_ocr_cpu3_failed"):
+                return None
+            _main = self.__dict__.get("_ocr_main")
+            if not isinstance(_main, RapidOCRBackend):
+                return None
+            if (os.cpu_count() or 2) < 6:
+                self.__dict__["_ocr_cpu3_failed"] = True
+                return None
+            try:
+                _av = self._available_ram_gb()
+            except Exception:
+                _av = None
+            if _av is not None and _av < 4.5:
+                self.__dict__["_ocr_cpu3_failed"] = True
+                return None
+            _e = RapidOCRBackend(
+                lang=str(getattr(_main, "lang", "en") or "en"),
+                prefer_gpu=False)
+            if _e is None:
+                self.__dict__["_ocr_cpu3_failed"] = True
+                return None
+            self.__dict__["_ocr_cpu3"] = _e
+            return _e
+        except Exception:
+            self.__dict__["_ocr_cpu3_failed"] = True
+            return None
+
     def _ensure_lama_cpu_twin(self):
         try:
             _s = self.__dict__.get("_lama_cpu_twin")

@@ -1291,7 +1291,7 @@ class _MangaTranslatorBody_95:
             _dev_style = str(getattr(self, "device_pref", "auto") or "auto").strip().lower()
             if _dev_style == "cpu":
                 print(
-                    f"[*] سبکِ پردازش: عکس‌های ۱و۲ با دو ورکرِ CPU همزمان "
+                    f"[*] سبکِ پردازش: عکس‌ها با تا سه ورکرِ CPU همزمان "
                     f"استخراج میشوند و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ "
                     f"پاکسازی هم هم‌زمان تک‌تک از عکسِ اول تا آخر فقط با "
                     f"LaMa روی CPU؛ بعد از اتمامِ کاملِ استخراج: ترجمهٔ همه "
@@ -1299,9 +1299,9 @@ class _MangaTranslatorBody_95:
                 )
             else:
                 print(
-                    f"[*] سبکِ پردازش: عکس‌های ۱و۲ با دو ورکرِ GPU همزمان "
-                    f"استخراج میشوند (تک‌عکس: دو سشنِ GPU از بالا و پایینِ "
-                    f"همان عکس) و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ "
+                    f"[*] سبکِ پردازش: عکس‌ها با تا سه ورکرِ GPU همزمان "
+                    f"استخراج میشوند (تک‌عکس: حباب‌های همان عکس روی چند "
+                    f"سشنِ GPU همزمان) و هر کارگرِ آزاد عکسِ بعدی را برمی‌دارد؛ "
                     f"پاکسازی هم هم‌زمان تک‌تک از عکسِ اول تا آخر فقط با "
                     f"LaMa روی GPU؛ بعد از اتمامِ کاملِ استخراج: ترجمهٔ همه "
                     f"در «یک» درخواست."
@@ -1638,10 +1638,10 @@ class _MangaTranslatorBody_95:
         _gpu_mode = self._ocr_gpu_active() and _dev_pref != "cpu"
         if _gpu_mode:
             self._ocr_img_parallel = _n_pend >= 2
-            _dev_spec = ["g", "g"] if _n_pend >= 2 else []
+            _dev_spec = ["g"] * min(3, max(1, _n_pend)) if _n_pend >= 1 else []
         elif _n_pend >= 2:
             self._ocr_img_parallel = True
-            _dev_spec = ["c", "c"]
+            _dev_spec = ["c"] * min(3, _n_pend)
         else:
             self._ocr_img_parallel = False
             _dev_spec = []
@@ -1657,6 +1657,13 @@ class _MangaTranslatorBody_95:
                     _g2 = None
                 if _g2 is not None:
                     _g_pool.append(_g2)
+            if len(_g_pool) >= 2 and _n_pend >= 3:
+                try:
+                    _g3 = self._ensure_ocr_gpu3()
+                except Exception:
+                    _g3 = None
+                if _g3 is not None:
+                    _g_pool.append(_g3)
         elif _n_pend >= 2:
             try:
                 _c2 = self._ensure_ocr_cpu2()
@@ -1664,6 +1671,13 @@ class _MangaTranslatorBody_95:
                 _c2 = None
             if _c2 is not None:
                 _c_pool.append(_c2)
+            if len(_c_pool) >= 2 and _n_pend >= 3:
+                try:
+                    _c3 = self._ensure_ocr_cpu3()
+                except Exception:
+                    _c3 = None
+                if _c3 is not None:
+                    _c_pool.append(_c3)
         _specs: list = []
         if _n_pend == 1:
             _specs = [None]
@@ -1681,16 +1695,17 @@ class _MangaTranslatorBody_95:
                 pass
             elif _gpu_mode:
                 if _n_pend == 1:
-                    print(f"[*] استخراج: ۱ عکس — دو سشنِ GPU از بالا و "
-                          f"پایینِ همان عکس همزمان.")
+                    print(f"[*] استخراج: ۱ عکس — چند سشنِ GPU روی "
+                          f"حباب‌های همان عکس همزمان.")
                 else:
-                    print(f"[*] استخراج دوکارگهٔ GPU: {_n_pend} عکس — عکس‌های "
-                          f"۱و۲ روی GPU همزمان؛ هر کارگر که زودتر تمام شود "
-                          f"عکسِ بعدی را برمی‌دارد.")
+                    print(f"[*] استخراجِ {min(3, len(_g_pool))}کارگهٔ GPU: "
+                          f"{_n_pend} عکس — هر کارگر که زودتر تمام شود "
+                          f"عکسِ بعدی را برمی‌دارد "
+                          f"({min(3, len(_g_pool))} سشنِ GPU موازی).")
             elif _n_pend >= 2:
-                print(f"[*] استخراج دوکارگهٔ CPU: {_n_pend} عکس — عکس‌های ۱و۲ "
-                      f"همزمان؛ هر کارگر که زودتر تمام شود عکسِ بعدی را "
-                      f"برمی‌دارد.")
+                print(f"[*] استخراجِ {min(3, len(_c_pool))}کارگهٔ CPU: "
+                      f"{_n_pend} عکس — هر کارگر که زودتر تمام شود "
+                      f"عکسِ بعدی را برمی‌دارد.")
             else:
                 print(f"[*] استخراج: ۱ عکس.")
         except Exception:

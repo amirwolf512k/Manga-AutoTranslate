@@ -2479,74 +2479,98 @@ class _MangaTranslatorBody_70:
             _dev_gpu = (self._ocr_gpu_active()
                         and str(getattr(self, "device_pref", "auto") or "auto")
                         != "cpu")
-            _helper_eng = getattr(self, "_ocr_helper", None)
-            if _helper_eng is not None:
-                _he_ep = str(getattr(_helper_eng, "_ocr_ep_active", "") or "").strip()
-                if not _he_ep or _he_ep.lower().startswith("cpu"):
-                    _helper_eng = None
-            if _helper_eng is None and _ocr_ts and _dev_gpu:
-                try:
-                    _helper_eng = self._ensure_ocr_gpu2()
-                except Exception:
-                    _helper_eng = None
-            _dual_split = (not _img_par and _ocr_ts
-                           and isinstance(_helper_eng, RapidOCRBackend)
-                           and len(cand) >= 2
-                           and _dev_gpu
-                           and not _on_android())
-            if _dual_split:
+            _split_engs: list = []
+            if (not _img_par and _ocr_ts and len(cand) >= 2
+                    and n_workers >= 2 and not _on_android()):
+                _pool: list = []
+                _main = self.__dict__.get("_ocr_main")
+                if isinstance(_main, RapidOCRBackend):
+                    _pool.append(_main)
+                if _dev_gpu:
+                    for _k in ("_ocr_helper", "_ocr_gpu2"):
+                        _e = self.__dict__.get(_k)
+                        if isinstance(_e, RapidOCRBackend) \
+                                and id(_e) not in [id(x) for x in _pool]:
+                            _ep = str(getattr(
+                                _e, "_ocr_ep_active", "") or "").strip()
+                            if _ep and not _ep.lower().startswith("cpu"):
+                                _pool.append(_e)
+                    if len(_pool) < 2:
+                        try:
+                            _e = self._ensure_ocr_gpu2()
+                            if _e is not None \
+                                    and id(_e) not in [id(x) for x in _pool]:
+                                _pool.append(_e)
+                        except Exception:
+                            pass
+                    if len(_pool) == 2 and len(cand) >= 3:
+                        try:
+                            _e = self._ensure_ocr_gpu3()
+                            if _e is not None \
+                                    and id(_e) not in [id(x) for x in _pool]:
+                                _pool.append(_e)
+                        except Exception:
+                            pass
+                else:
+                    for _k in ("_ocr_cpu2", "_ocr_cpu3"):
+                        _e = self.__dict__.get(_k)
+                        if isinstance(_e, RapidOCRBackend) \
+                                and id(_e) not in [id(x) for x in _pool]:
+                            _pool.append(_e)
+                    if len(_pool) < 2:
+                        try:
+                            _e = self._ensure_ocr_cpu2()
+                            if _e is not None \
+                                    and id(_e) not in [id(x) for x in _pool]:
+                                _pool.append(_e)
+                        except Exception:
+                            pass
+                    if len(_pool) == 2 and len(cand) >= 3:
+                        try:
+                            _e = self._ensure_ocr_cpu3()
+                            if _e is not None \
+                                    and id(_e) not in [id(x) for x in _pool]:
+                                _pool.append(_e)
+                        except Exception:
+                            pass
+                _split_engs = _pool[:3]
+            if len(_split_engs) >= 2:
                 _order = sorted(range(len(cand)),
                                 key=lambda k: (cand[k][3], cand[k][2]))
-                _curs = {"f": 0, "b": len(_order) - 1}
-                _curs_lock = threading.Lock()
-                _side_errs: list = []
+                _ne = min(len(_split_engs), len(cand))
+                _engs = _split_engs[:_ne]
+                _chunks: list = [[] for _ in range(_ne)]
+                _ci = 0
+                for _k in _order:
+                    _chunks[_ci].append(_k)
+                    _ci = (_ci + 1) % _ne
+                _seg_errs: list = []
 
-                def _claim_side(front: bool):
-                    with _curs_lock:
-                        if front:
-                            _i = _curs["f"]
-                            if _i > _curs["b"]:
-                                return None
-                            _curs["f"] = _i + 1
-                            return _order[_i]
-                        _j = _curs["b"]
-                        if _j < _curs["f"]:
-                            return None
-                        _curs["b"] = _j - 1
-                        return _order[_j]
-
-                def _side_run(engine, front: bool) -> None:
+                def _seg_run(engine, ks) -> None:
                     self._ocr_tls.engine = engine
-                    while True:
-                        _k = _claim_side(front)
-                        if _k is None:
-                            return
+                    for _k in ks:
                         try:
                             ocr_results[_k] = _ocr_one(_k)
                         except Exception as _se:
-                            _side_errs.append(_se)
+                            _seg_errs.append(_se)
                             return
 
-                if self.debug and not getattr(self, "_dual_note", False):
-                    self._dual_note = True
-                    print(f"    [*] استخراجِ دوطرفهٔ همان صفحه: {len(cand)} ناحیه "
-                          f"| بالا→پایین روی "
-                          f"{getattr(self.__dict__.get('_ocr_main'), '_ocr_ep_active', 'GPU')}"
-                          f" و پایین→بالا روی "
-                          f"{getattr(_helper_eng, '_ocr_ep_active', 'GPU')}")
-                _t_top = threading.Thread(
-                    target=_side_run,
-                    args=(self.__dict__.get("_ocr_main") or self.ocr, True),
-                    daemon=True, name="ocr-top")
-                _t_bot = threading.Thread(
-                    target=_side_run, args=(_helper_eng, False),
-                    daemon=True, name="ocr-bottom")
-                _t_top.start()
-                _t_bot.start()
-                _t_top.join()
-                _t_bot.join()
-                if _side_errs:
-                    raise _side_errs[0]
+                if self.debug and not getattr(self, "_seg_note", False):
+                    self._seg_note = True
+                    print(f"    [*] استخراجِ درون‌صفحه: {len(cand)} ناحیه روی "
+                          f"{_ne} سشنِ "
+                          f"{'GPU' if _dev_gpu else 'CPU'} همزمان")
+                _seg_ths = [
+                    threading.Thread(
+                        target=_seg_run, args=(_engs[i], _chunks[i]),
+                        daemon=True, name=f"ocr-seg-{i}")
+                    for i in range(_ne)]
+                for _t in _seg_ths:
+                    _t.start()
+                for _t in _seg_ths:
+                    _t.join()
+                if _seg_errs:
+                    raise _seg_errs[0]
             elif n_workers > 1 and _ocr_ts:
                 if self.debug and not getattr(self, "_par_note", False):
                     self._par_note = True

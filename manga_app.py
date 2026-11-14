@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.309"
+APP_VER = "1.14.310"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -5886,8 +5886,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     _dv0 = "auto"
                 device = gr.Radio(
                     choices=[["auto (خودکار)", "auto"],
-                             ["cpu (دوتا CPU)", "cpu"],
-                             ["gpu (دوتا GPU)", "gpu"]],
+                             ["cpu (سه‌تایی CPU)", "cpu"],
+                             ["gpu (سه‌تایی GPU)", "gpu"]],
                     value=_dv0,
                     visible=_server_has_gpu(),
                     label=TX("app.device", "دستگاه پردازش (استخراج + پاکسازی)"))
@@ -6115,6 +6115,31 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     f.write(text if text.endswith("\n") else text + "\n")
             except Exception:
                 pass
+
+        def _src_signature(src) -> str:
+            import hashlib
+            parts = []
+            for p in str(src or "").split(","):
+                p = p.strip()
+                if not p:
+                    continue
+                if os.path.isfile(p):
+                    try:
+                        st = os.stat(p)
+                        h = hashlib.md5()
+                        h.update(
+                            f"{os.path.basename(p)}:{st.st_size}".encode())
+                        with open(p, "rb") as f:
+                            h.update(f.read(65536))
+                            if st.st_size > 131072:
+                                f.seek(max(0, st.st_size - 65536))
+                                h.update(f.read(65536))
+                        parts.append(h.hexdigest()[:16])
+                    except Exception:
+                        parts.append("f?")
+                else:
+                    parts.append("u:" + p)
+            return "|".join(parts)
 
         def _find_active_sid(preferred: str = "") -> str:
             
@@ -7493,7 +7518,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 pass
             with job["lock"]:
                 _prev_src = str(job.get("src") or "").strip()
-                _same_src = bool(_prev_src) and _prev_src == str(src or "").strip()
+                _prev_sig = str(job.get("src_sig") or "")
+                _sig = _src_signature(src)
+                _same_src = (bool(_prev_src)
+                             and _prev_src == str(src or "").strip()
+                             and _prev_sig == _sig)
                 _keep_log = _same_src and bool((job.get("log") or "").strip()
                                                or (job.get("buf") or []))
                 _old_log = ""
@@ -7521,6 +7550,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 job["done_event"] = False
                 job["out_v"] = out_v
                 job["src"] = src
+                job["src_sig"] = _sig
                 job["running"] = True
                 job["log"] = _old_log + ("\n".join(_auto_log_lines) + "\n"
                               if _auto_log_lines else "") + "▶ در حال شروع…"
@@ -7588,7 +7618,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 job["proc"] = proc
                 job["running"] = True
                 job["ts"] = time.time()
-                job["log"] = (("\n".join(_auto_log_lines) + "\n")
+                job["log"] = _old_log + (("\n".join(_auto_log_lines) + "\n")
                               if _auto_log_lines else "") \
                     + "▶ شروع شد — لاگ زنده به‌زودی…\n(اگر صفحه را رفرش کنید لاگ از همین جلسه برمی‌گردد)"
             _persist_job_meta(sid)
