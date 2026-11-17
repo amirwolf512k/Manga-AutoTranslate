@@ -87,27 +87,29 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
+      # v1.14.327 — ریلیزِ امضاشده (v1+v2+v3 با keys/manga-release.keystore):
+      # اپِ debug امضا با Play Protect «ناامن» گرفته میشد؛ ریلیز رفع میکند.
       - name: Build arm64 APK
         working-directory: android
         run: |
-          gradle :app:assembleDebug -PappAbis="arm64-v8a" \
+          gradle :app:assembleRelease -PappAbis="arm64-v8a" \
             -PchaquopyBuildPython="$(command -v python3)"
           mkdir -p ../dist
-          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-arm64.apk
+          cp app/build/outputs/apk/release/app-release.apk ../dist/MangaTranslator-arm64.apk
 
       - name: Build armv7a APK
         working-directory: android
         run: |
-          gradle :app:assembleDebug -PappAbis="armeabi-v7a" \
+          gradle :app:assembleRelease -PappAbis="armeabi-v7a" \
             -PchaquopyBuildPython="$(command -v python3)"
-          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-armv7a.apk
+          cp app/build/outputs/apk/release/app-release.apk ../dist/MangaTranslator-armv7a.apk
 
       - name: Build universal APK
         working-directory: android
         run: |
-          gradle :app:assembleDebug -PappAbis="arm64-v8a,armeabi-v7a" \
+          gradle :app:assembleRelease -PappAbis="arm64-v8a,armeabi-v7a" \
             -PchaquopyBuildPython="$(command -v python3)"
-          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-universal.apk
+          cp app/build/outputs/apk/release/app-release.apk ../dist/MangaTranslator-universal.apk
 
       - name: Show sizes
         run: ls -la dist/

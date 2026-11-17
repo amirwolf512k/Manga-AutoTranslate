@@ -19,9 +19,27 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    /* v1.14.327 — امضایِ ریلیز (v1+v2+v3): اپِ debug امضا با Play
+       Protect «ناامن» میشود؛ ریلیزِ امضاشده این هشدار را رفع میکند. */
+    val mangaKeystore = rootProject.file("../../keys/manga-release.keystore")
+    signingConfigs {
+        create("release") {
+            if (mangaKeystore.exists()) {
+                storeFile = mangaKeystore
+                storePassword = "manga-1398-rel"
+                keyAlias = "manga"
+                keyPassword = "manga-1398-rel"
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (mangaKeystore.exists())
+                signingConfig = signingConfigs.getByName("release")
         }
     }
 }

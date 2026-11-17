@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.326"
+APP_VER = "1.14.327"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1419,7 +1419,8 @@ _MT_BROWSER_WIN_JS = """
   goBtn.onclick=go;
   var cnt=document.createElement('span');cnt.className='mtcnt';cnt.textContent='\\u2026';
   var btn=document.createElement('button');
-  btn.type='button';btn.textContent='\\ud83d\\uddbc \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u0642 \\u0639\\u06a9\\u0633';
+  /* v1.14.327 — «استخراج» با جیم (قبلاً با ق اشتباه نوشته شده بود) */
+  btn.type='button';btn.textContent='\\ud83d\\uddbc \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u062c \\u0639\\u06a9\\u0633';
   btn.onclick=function(){
     try{
       var out=collect();
@@ -1432,7 +1433,10 @@ _MT_BROWSER_WIN_JS = """
       catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0631\\u0633\\u0627\\u0644 \\u0628\\u0647 \\u0627\\u067e: '+e)}
     }catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u062c: '+e)}
   };
-  box.appendChild(back);box.appendChild(fwd);box.appendChild(url);
+  /* v1.14.327 — جابه‌جایی: نوارِ RTL است؛ برای اینکه چشمِ کاربر
+     «< >» ببیند (عقب چپ، جلو راست — مثلِ مرورگرها) باید جلو
+     اول بشیند تا سمتِ راستِ نوار بیفتد و عقبِ چپِ آن. */
+  box.appendChild(fwd);box.appendChild(back);box.appendChild(url);
   box.appendChild(goBtn);box.appendChild(btn);box.appendChild(cnt);
   function mount(){
     try{
@@ -1458,16 +1462,46 @@ class _DesktopApi:
     def __init__(self):
         self._main_win = None
         self._br_win = None
+        # v1.14.327 — آخرین سایتی که کاربر در مرورگرِ داخلی دیده؛
+        # بعد از استخراج، دوباره‌گشتنِ مرورگر باید همین سایت را
+        # نشان دهد، نه لینکهای عکسِ نشسته در فیلدِ ورودی.
+        self._last_site = None
 
-    def openBrowser(self, url):
+    # v1.14.327 — تبدیلِ متنِ فیلدِ ورودی به مقصدِ مرورگر:
+    #   خالی                    → سایتِ قبلی یا گوگل
+    #   چند لینک / لینکِ عکس     → سایتِ قبلی یا گوگل (خروجیِ استخراج)
+    #   لینکِ تک                 → همان لینک
+    #   متنِ آزاد (amir)         → سرچِ گوگل (مثلِ گوشی)
+    #   دامنه‌مانند (mangaread..)→ https + دامنه
+    def _br_target(self, raw):
+        s = str(raw or "").strip()
+        lines = [x.strip() for x in s.replace(",", "\n").splitlines()
+                 if x.strip()]
+        fallback = self._last_site or "https://www.google.com"
+        if not lines:
+            return fallback
+        n_http = sum(1 for x in lines
+                     if x.lower().startswith(("http://", "https://")))
+        if n_http >= 2:
+            return fallback
+        u = lines[0]
+        if n_http == 1:
+            path = u.split("?", 1)[0].split("#", 1)[0]
+            if re.search(r"\.(jpe?g|png|webp|gif|avif|bmp|tiff?)$",
+                         path, re.I):
+                return fallback
+            return u
+        if not re.search(r"\s", u) and re.match(
+                r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)+(:\d+)?([/?#].*)?$",
+                u):
+            return "https://" + u
+        return ("https://www.google.com/search?q="
+                + urllib.parse.quote_plus(u))
+
+    def openBrowser(self, raw):
         try:
             import webview
-            u = str(url or "").strip()
-            # v1.14.325 — مثلِ گوشی: بدونِ لینک = گوگل (خودت سرچ کن)
-            if not u:
-                u = "https://www.google.com"
-            if not u.lower().startswith(("http://", "https://")):
-                u = "https://" + u
+            u = self._br_target(raw)
             try:
                 if self._br_win is not None:
                     self._br_win.destroy()
@@ -1488,6 +1522,19 @@ class _DesktopApi:
     def _on_br_loaded(self):
         try:
             if self._br_win is not None:
+                # v1.14.327 — آدرسِ صفحهٔ تازه‌لودشده را نگه دار تا
+                # دوباره‌گشتنِ مرورگر همان‌جا باز شود (بعد از استخراج).
+                try:
+                    u = self._br_win.get_current_url()
+                except Exception:
+                    u = None
+                if not u:
+                    try:
+                        u = self._br_win.evaluate_js("location.href")
+                    except Exception:
+                        u = None
+                if u and str(u).lower().startswith(("http://", "https://")):
+                    self._last_site = str(u)
                 self._br_win.evaluate_js(_MT_BROWSER_WIN_JS)
         except Exception:
             pass
@@ -8439,28 +8486,32 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 queue=False,
                 js="""() => {
   try {
-    let initUrl = '';
+    /* v1.14.327 — متنِ کاملِ فیلد فرستاده میشود تا پایتون خودش
+       تصمیم بگیرد: لینکِ عکس/چندلینک = سایتِ قبلی (بعد از
+       استخراج)، متنِ آزاد = سرچِ گوگل، دامنه = https. */
+    let fieldText = '';
     try {
       const el = document.querySelector('#manga_inp_path textarea')
               || document.querySelector('[id*="manga_inp_path"] textarea')
               || document.querySelector('#manga_inp_path input');
-      if (el) {
-        const parts = String(el.value || '').split(/[\\n,]/);
-        for (const p of parts) {
-          const t = p.trim();
-          if (t.startsWith('http://') || t.startsWith('https://')) {
-            initUrl = t;
-            break;
-          }
-        }
-      }
+      if (el) fieldText = String(el.value || '').slice(0, 4000);
     } catch (e) {}
     if (window.pywebview && window.pywebview.api
         && window.pywebview.api.openBrowser) {
-      try { window.pywebview.api.openBrowser(initUrl); } catch (e) {}
+      try { window.pywebview.api.openBrowser(fieldText); } catch (e) {}
       return;
     }
-    window.open(initUrl || 'https://www.google.com', '_blank');
+    const toUrl = (t) => {
+      t = String(t || '').trim();
+      if (!t) return 'https://www.google.com';
+      if (/^https?:/i.test(t)) return t;
+      if (!/\\s/.test(t) &&
+          /^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)+([\\/?#].*)?$/.test(t))
+        return 'https://' + t;
+      return 'https://www.google.com/search?q=' + encodeURIComponent(t);
+    };
+    const first = String(fieldText || '').split(/[\\n,]/)[0] || '';
+    window.open(toUrl(first), '_blank');
   } catch (e) {
     try { alert(String(e)); } catch (e2) {}
   }
