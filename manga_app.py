@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.327"
+APP_VER = "1.14.328"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1308,15 +1308,27 @@ def _ensure_webview() -> bool:
 # میشود: نوارِ بالای تمام-عرض (مثلِ اندروید — سرچ بالا) با دکمههای
 # عقب/جلو + فیلدِ جستجو/آدرس (سرچِ گوگل مثلِ گوشی) + «برو» + شمارشِ
 # زنده + «استخراج عکس» — همان تجربهٔ اپِ گوشی، ولی داخلِ خودِ برنامه.
+# v1.14.328 — نوار دیگر نمیپرد/نمیرود:
+#   • میزبان = document.documentElement (نه body) — سایتها body را
+#     پاک/بازسازی میکنند ولی html را دست نمیزنند.
+#   • MutationObserver: اگر سایتی نوار یا استایلش را بردارد، همان
+#     لحظه دوباره وصل میشود (مثلِ محافظِ خودترمیم).
+#   • تیکِ ۲ ثانیه: آدرسِ فیلد با location.href همگام میماند (SPAها
+#     بدونِ لود، آدرس عوض میکنند) و نوار هم دوباره چک میشود.
+#   • !important روی position/top/z-index تا CSSِ سایت جمعش نکند.
 _MT_BROWSER_WIN_JS = """
 (function(){
   if (window.__mtBwBtn) return; window.__mtBwBtn = 1;
+  var st=null;
   function css(){
     try{
-      var s=document.createElement('style');
-      s.textContent='#mtbw{position:fixed;left:0;right:0;top:0;'
-        +'z-index:2147483647;direction:rtl;font-family:Tahoma,Arial,sans-serif;'
-        +'display:flex;align-items:center;gap:8px;background:rgba(13,13,16,.97);'
+      if(st&&st.parentNode)return;
+      st=document.createElement('style');
+      st.textContent='#mtbw{position:fixed!important;left:0!important;'
+        +'right:0!important;top:0!important;z-index:2147483647!important;'
+        +'direction:rtl;font-family:Tahoma,Arial,sans-serif;'
+        +'display:flex!important;align-items:center;gap:8px;'
+        +'background:rgba(13,13,16,.97) !important;'
         +'border-bottom:1px solid #1f1f24;padding:8px 10px;box-sizing:border-box;'
         +'box-shadow:0 8px 28px rgba(0,0,0,.55)}'
         +'#mtbw .mturl{flex:1;min-width:110px;direction:ltr;text-align:left;'
@@ -1333,7 +1345,7 @@ _MT_BROWSER_WIN_JS = """
         +'padding:9px 0;text-align:center;font-size:16px;line-height:1}'
         +'#mtbw .mtcnt{color:#97948c;font-size:11.5px;max-width:170px;'
         +'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
-      (document.head||document.documentElement).appendChild(s);
+      (document.head||document.documentElement).appendChild(st);
     }catch(e){}
   }
   function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}
@@ -1438,13 +1450,46 @@ _MT_BROWSER_WIN_JS = """
      اول بشیند تا سمتِ راستِ نوار بیفتد و عقبِ چپِ آن. */
   box.appendChild(fwd);box.appendChild(back);box.appendChild(url);
   box.appendChild(goBtn);box.appendChild(btn);box.appendChild(cnt);
+  /* v1.14.328 — نصب روی documentElement (نه body — سایتها body را
+     میپاکند) + استایل + خودترمیمی */
   function mount(){
     try{
-      if(!document.getElementById('mtbw'))
-        (document.body||document.documentElement).appendChild(box);
+      css();
+      if(box.parentNode!==document.documentElement){
+        try{if(box.parentNode)box.parentNode.removeChild(box)}catch(e){}
+        document.documentElement.appendChild(box);
+      }
     }catch(e){}
   }
-  mount();setTimeout(mount,600);setTimeout(mount,2000);
+  mount();setTimeout(mount,300);setTimeout(mount,900);setTimeout(mount,2500);
+  /* v1.14.328 — نگهبان: اگر سایتی نوار یا استایل را برداشت،
+     بیدرنگ دوباره وصل میشود */
+  try{
+    var pend=0;
+    var obs=new MutationObserver(function(ms){
+      for(var i=0;i<ms.length;i++){
+        var m=ms[i];
+        if(!m.removedNodes||!m.removedNodes.length)continue;
+        for(var j=0;j<m.removedNodes.length;j++){
+          var n=m.removedNodes[j];
+          if(n===box||n===st){
+            if(!pend){pend=1;setTimeout(function(){pend=0;mount()},80)}
+            return;
+          }
+        }
+      }
+    });
+    obs.observe(document.documentElement||document,{childList:true,subtree:true});
+  }catch(e){}
+  /* v1.14.328 — تیکِ ۲ ثانیه: نوار سرِ جایش میماند و آدرسِ فیلد
+     با location.href همگام است (SPAها بدونِ لود آدرس عوض میکنند) */
+  setInterval(function(){
+    mount();
+    try{
+      if(document.activeElement!==url&&url.value!==location.href)
+        url.value=location.href;
+    }catch(e){}
+  },2000);
   function upd(){try{cnt.textContent=collect().length+' \\u0639\\u06a9\\u0633 \\u0622\\u0645\\u0627\\u062f\\u0647'}catch(e){}}
   setTimeout(upd,400);setTimeout(upd,1600);setInterval(upd,5000);
 })();

@@ -154,6 +154,41 @@ jobs:
           copy /y README-fa.txt pkg64\ >nul
           dir pkg64
 
+      - name: Smoke test x64 — run 25s, expect alive, no CRASH
+        # v1.14.328 — خودِ رانرِ ویندوز WebView2 دارد؛ اپ واقعاً اجرا
+        # میشود و اگر کرشِ استارتاپ داشته باشد، بیلد قرمز میشود.
+        shell: pwsh
+        working-directory: cloud-apps/desktop/win32
+        run: |
+          $env:MANGA_SMOKE = "1"
+          $exe = Join-Path (Get-Location) "MangaCloud.exe"
+          if (-not (Test-Path $exe)) { throw "MangaCloud.exe missing" }
+          $p = Start-Process -FilePath $exe -PassThru -WorkingDirectory (Get-Location)
+          Start-Sleep -Seconds 25
+          $alive = -not $p.HasExited
+          $log = Join-Path (Get-Location) "run.log"
+          if (Test-Path $log) {
+            echo "=== run.log ==="
+            Get-Content $log
+            if (Select-String -Path $log -Pattern "CRASH" -Quiet) {
+              echo "!! CRASH detected in run.log"
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+              exit 1
+            }
+          } else {
+            echo "no run.log produced"
+          }
+          if (-not $alive) {
+            echo "!! APP EXITED EARLY with code $($p.ExitCode)"
+            exit 1
+          }
+          echo "APP ALIVE after 25s — smoke OK"
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Stop-Process -Name "msedgewebview2" -Force -ErrorAction SilentlyContinue
+          Remove-Item $log -ErrorAction SilentlyContinue
+          Get-ChildItem -Filter "*.dmp" | Remove-Item -ErrorAction SilentlyContinue
+
       - name: Build x86 32bit (MSVC)
         shell: cmd
         working-directory: cloud-apps/desktop/win32

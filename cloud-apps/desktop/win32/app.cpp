@@ -1,17 +1,20 @@
 /* Manga Cloud — نسخهٔ کلودِ پی‌سی (Win32 + WebView2)
-   v1.14.327 — بازنویسی با هدرِ رسمیِ WebView2 SDK:
-   • بدونِ شماره‌جعلیِ vtable — همهٔ فراخوانیها با interfaceهایِ
-     واقعی (WebView2.h از NuGet) → رفعِ کرشِ نسخههای قبلی.
-   • لینکِ ایستا با WebView2LoaderStatic.lib → دیگر
-     WebView2Loader.dll کنارِ exe لازم نیست (یک فایلِ کمتر،
-     یک حالتِ خرابیِ کمتر).
-   • بدونِ «دانلود و اجرایِ نصبکننده» (الگویِ مشکوکِ آنتیویروس
-     حذف شد) — صفحهٔ خطا فقط صفحهٔ رسمی را در مرورگر باز میکند.
-   • لاگِ اجرا هم کنارِ exe و هم در %LOCALAPPDATA%.
-   • مثلِ پی‌سیِ واقعی: بعد از استخراج، دوباره‌گشتنِ مرورگر همان
-     سایتِ قبلی را نشان میدهد؛ متنِ آزاد = سرچِ گوگل.
+   v1.14.328 — رفعِ کرشِ v1.14.327 (لاگِ کاربر: environment و
+   کنترلرها اوکی، ۶ ثانیه بعد C0000005):
+   • یافتهٔ اصلی: کالکِ اتمامِ محیط، «همزمان» داخلِ خودِ فراخوانیِ
+     CreateCoreWebView2EnvironmentWithOptions اجرا میشد و ما از
+     داخلِ همان استکِ لودر دو CreateCoreWebView2Controller میزدیم
+     (تودرتوییِ ممنوع). حالا: کالک فقط محیط را نگه میدارد و یک
+     PostMessage میفرستد؛ ساختِ کنترلر در صفِ پیام و روی استکِ تمیز
+     انجام میشود — دقیقاً مثلِ نمونهٔ رسمی.
+   • کنترلرِ مرورگر «تنبل» شد: فقط با کلیکِ کره ساخته میشود
+     (اولین بار چند ثانیه طول میکشد، بعدش آماده است).
+   • همهٔ callbackها با SEH (__try/__except) محافظت شدهاند —
+     خطای باقیمانده دیگر اپ را نمیکُشد، فقط لاگ + minidump.
+   • لاگِ کرشِ کاملتر: نوعِ خواندن/نوشتن، آدرسِ نسبیِ تصویر،
+     ردِ پشته + فایلِ MangaCloud-crash.dmp کنارِ exe.
    ساخت: cl /std:c++17 /EHsc /O2 /MT /I <sdk>\build\native\include
-         app.cpp /link WebView2LoaderStatic.lib … (MSVC، windows-latest) */
+         app.cpp app.res /link WebView2LoaderStatic.lib … (MSVC) */
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -47,6 +50,9 @@ static const WCHAR APP_TITLE[] =
 #define ID_BTN_SYSBR   110
 #define ID_BTN_RETRY   111
 
+/* v1.14.328 — پیامهای داخلیِ صف: ساختِ کنترلرها روی استکِ تمیز */
+#define WM_APP_CREATCTL (WM_APP + 1)
+
 #define TOP_BAND_H  46
 #define PROG_H       3
 #define BOT_BAND_H  54
@@ -59,11 +65,15 @@ static HWND g_hwnd = NULL;
 
 /* ————— دو وب‌ویو: خودِ اپ + مرورگرِ داخلی (مثلِ گوشی) —————
    حالتِ اپ: صفحهٔ اپ تمام‌صفحه + دکمهٔ شناورِ 🌐 (پایین-چپ).
-   حالتِ مرورگر: نوارِ بالا (آدرس) + نوارِ پایین (برگشت/شمارش/استخراج). */
+   حالتِ مرورگر: نوارِ بالا (آدرس) + نوارِ پایین (برگشت/شمارش/استخراج).
+   v1.14.328 — وب‌ویوی مرورگر «تنبل» است: با اولین کلیکِ کره ساخته
+   میشود (CreateController روی استکِ تمیز، نه داخلِ کالکِ لودر). */
+static ICoreWebView2Environment *g_env = NULL;
 static ICoreWebView2Controller *g_appCtl = NULL;
 static ICoreWebView2 *g_webApp = NULL;
 static ICoreWebView2Controller *g_brCtl = NULL;
 static ICoreWebView2 *g_webBr = NULL;
+static BOOL g_brPending = FALSE;    /* ساختِ کنترلرِ مرورگر در جریان است */
 static BOOL g_browserMode = FALSE;
 static std::wstring g_fillUrl;   /* پشتیبانِ #imgs= اگر __mtFillLinks نبود */
 /* v1.14.327 — آخرین سایتی که کاربر در مرورگرِ داخلی دیده */
@@ -192,6 +202,8 @@ L"}catch(e){return ''}})()";
    %LOCALAPPDATA%\MangaCloud — تا کاربر همیشه پیدایش کند ————— */
 static std::wstring g_logNear;   /* <پوشهٔ exe>\\run.log */
 static std::wstring g_logMain;   /* %LOCALAPPDATA%\\MangaCloud\\run.log */
+static std::wstring g_dirNear;   /* پوشهٔ exe */
+static std::wstring g_dirMain;   /* %LOCALAPPDATA%\\MangaCloud */
 
 static void MtWriteLog(const std::wstring &path, const char *line) {
     if (path.empty() || line == NULL)
@@ -213,6 +225,12 @@ static void MtLog(const char *line) {
     MtWriteLog(g_logMain, line);
 }
 
+static void MtLogHr(const char *what, HRESULT hr) {
+    char b[120];
+    sprintf(b, "%s hr=%08lX", what, (unsigned long)hr);
+    MtLog(b);
+}
+
 static void MtInitLogPath(void) {
     WCHAR base[MAX_PATH];
     WCHAR exe[MAX_PATH];
@@ -221,29 +239,129 @@ static void MtInitLogPath(void) {
         std::wstring dir(exe);
         size_t cut = dir.find_last_of(L"\\/");
         if (cut != std::wstring::npos) {
-            g_logNear = dir.substr(0, cut) + L"\\run.log";
+            g_dirNear = dir.substr(0, cut);
+            g_logNear = g_dirNear + L"\\run.log";
             /* پوشه فقط-خواندنی؟ مشکلی نیست — MtWriteLog نادیده میگیرد */
         }
     }
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH) > 0) {
-        std::wstring dir = std::wstring(base) + L"\\MangaCloud";
-        CreateDirectoryW(dir.c_str(), NULL);
-        g_logMain = dir + L"\\run.log";
+        g_dirMain = std::wstring(base) + L"\\MangaCloud";
+        CreateDirectoryW(g_dirMain.c_str(), NULL);
+        g_logMain = g_dirMain + L"\\run.log";
     }
 }
 
-/* کرشِ غیرمنتظره → پیش ازِ مرگ، در لاگ ثبت میشود */
+/* ————— v1.14.328 — minidump هنگامِ کرش (بدونِ هدرِ اضافه) ————— */
+typedef BOOL (WINAPI *MtMiniDumpFn)(HANDLE, DWORD, HANDLE, DWORD,
+                                    const void *, const void *, const void *);
+typedef struct MtMiniDumpExcInfo {
+    DWORD ThreadId;
+    EXCEPTION_POINTERS *ExceptionPointers;
+    BOOL ClientPointers;
+} MtMiniDumpExcInfo;
+
+static BOOL g_inCrash = FALSE;   /* جلوگیری از بازگشتِ بینهایت */
+
+static void MtWriteMinidump(EXCEPTION_POINTERS *ep) {
+    HMODULE db = LoadLibraryW(L"dbghelp.dll");
+    if (db == NULL)
+        return;
+    MtMiniDumpFn fn = (MtMiniDumpFn)(void *)(uintptr_t)GetProcAddress(
+        db, "MiniDumpWriteDump");
+    if (fn == NULL)
+        return;
+    const wchar_t *names[2] = {NULL, NULL};
+    std::wstring nearDump, mainDump;
+    if (!g_dirNear.empty()) {
+        nearDump = g_dirNear + L"\\MangaCloud-crash.dmp";
+        names[0] = nearDump.c_str();
+    }
+    if (!g_dirMain.empty()) {
+        mainDump = g_dirMain + L"\\MangaCloud-crash.dmp";
+        names[1] = mainDump.c_str();
+    }
+    for (int i = 0; i < 2; i++) {
+        if (names[i] == NULL)
+            continue;
+        HANDLE h = CreateFileW(names[i], GENERIC_WRITE, 0, NULL,
+                               CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (h == INVALID_HANDLE_VALUE)
+            continue;
+        MtMiniDumpExcInfo mei;
+        mei.ThreadId = GetCurrentThreadId();
+        mei.ExceptionPointers = ep;
+        mei.ClientPointers = FALSE;
+        fn(GetCurrentProcess(), GetCurrentProcessId(), h,
+           0 /* MiniDumpNormal */, &mei, NULL, NULL);
+        CloseHandle(h);
+    }
+}
+
+/* ————— کرشِ غیرمنتظره → لاگِ کامل + minidump، بعد مرگ ————— */
 static LONG WINAPI MtCrashFilter(EXCEPTION_POINTERS *ep) {
-    char b[96];
+    if (g_inCrash)
+        return EXCEPTION_CONTINUE_SEARCH;
+    g_inCrash = TRUE;
+    char b[256];
+    unsigned long code = 0;
+    void *addr = NULL;
+    ULONG_PTR rw = 99, target = 0;
+    if (ep != NULL && ep->ExceptionRecord != NULL) {
+        code = (unsigned long)ep->ExceptionRecord->ExceptionCode;
+        addr = ep->ExceptionRecord->ExceptionAddress;
+        if (ep->ExceptionRecord->ExceptionInformation != NULL
+                && ep->ExceptionRecord->NumberParameters >= 2) {
+            rw = (ULONG_PTR)ep->ExceptionRecord->ExceptionInformation[0];
+            target = (ULONG_PTR)ep->ExceptionRecord->ExceptionInformation[1];
+        }
+    }
+    HMODULE img = GetModuleHandleW(NULL);
+    sprintf(b, "CRASH code=%08lX addr=%p imgbase=%p type=%lu target=0x%llX",
+            code, addr, (void *)img, (unsigned long)rw,
+            (unsigned long long)target);
+    MtLog(b);
+    if (addr != NULL && img != NULL) {
+        char b2[96];
+        sprintf(b2, "CRASH offset=+%llX",
+                (unsigned long long)((uintptr_t)addr - (uintptr_t)img));
+        MtLog(b2);
+    }
+    {
+        /* ردِ پشته — نسبی به تصویرِ خودمان */
+        void *fr[24];
+        USHORT n = CaptureStackBackTrace(0, 24, fr, NULL);
+        for (USHORT i = 0; i < n; i++) {
+            char b3[96];
+            if (img != NULL
+                    && (uintptr_t)fr[i] >= (uintptr_t)img
+                    && (uintptr_t)fr[i] < (uintptr_t)img + 0x4000000u) {
+                sprintf(b3, "stack[%u] +0x%llX", (unsigned)i,
+                        (unsigned long long)((uintptr_t)fr[i]
+                                             - (uintptr_t)img));
+            } else {
+                sprintf(b3, "stack[%u] %p", (unsigned)i, fr[i]);
+            }
+            MtLog(b3);
+        }
+    }
+    MtWriteMinidump(ep);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* ————— v1.14.328 — فیلترِ SEH: خطا را لاگ میکند و میبلعد —————
+   (برایِ کالکهای بدونِ شیءِ C++ — برایِ بقیه، ترامپولین) */
+static int MtSehLog(const char *who, EXCEPTION_POINTERS *ep) {
+    char b[160];
     unsigned long code = 0;
     void *addr = NULL;
     if (ep != NULL && ep->ExceptionRecord != NULL) {
         code = (unsigned long)ep->ExceptionRecord->ExceptionCode;
         addr = ep->ExceptionRecord->ExceptionAddress;
     }
-    sprintf(b, "CRASH code=%08lX addr=%p", code, addr);
+    sprintf(b, "SEH-CAUGHT %s code=%08lX addr=%p", who, code, addr);
     MtLog(b);
-    return EXCEPTION_CONTINUE_SEARCH;
+    MtWriteMinidump(ep);
+    return EXCEPTION_EXECUTE_HANDLER;
 }
 
 /* ————— JSON کوچک: آرایهٔ رشته‌ها («["u1","u2"]») ————— */
@@ -467,6 +585,14 @@ static void LayoutChildren(void);
 static void EnterBrowserMode(const wchar_t *url);
 static void LeaveBrowserMode(void);
 static void Wv2Recount(void);
+static void MtOpenBrowserUi(void);
+
+/* v1.14.328 — SEH فقط در MSVC (تستِ محلی با کلنگ هم کامپایل شود) */
+#if defined(_MSC_VER)
+#define MT_HAS_SEH 1
+#else
+#define MT_HAS_SEH 0
+#endif
 
 /* ————— هندلرهای WebView2 (هدرِ رسمی؛ بدونِ حدسِ vtable) —————
    شیءهای ایستا هستند و هرگز حذف نمیشوند — شمارندهٔ مرجع فقط
@@ -500,12 +626,25 @@ struct MtHandlerBase : public IFACE {
 struct MtExecHandler : MtHandlerBase<ICoreWebView2ExecuteScriptCompletedHandler> {
     int mode;
     explicit MtExecHandler(int m) : mode(m) {}
+    /* v1.14.328 — بدنه در MtExecImpl (بدنه با C++) و این پوستهٔ
+       SEH (بدونِ شیء) خطا را لاگ میکند و اپ زنده میماند. */
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
-                                             LPCWSTR resultObjectAsJson);
+                                             LPCWSTR resultObjectAsJson) {
+#if MT_HAS_SEH
+        __try {
+            return MtExecImpl(mode, errorCode, resultObjectAsJson);
+        } __except (MtSehLog("exec", GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return MtExecImpl(mode, errorCode, resultObjectAsJson);
+#endif
+    }
+    static HRESULT MtExecImpl(int mode, HRESULT errorCode,
+                              LPCWSTR resultObjectAsJson);
 };
 
 static MtExecHandler g_execExtract(0);
-static MtExecHandler g_execNoop(1);
 static MtExecHandler g_execCount(2);
 static MtExecHandler g_execGetUrl(3);
 static MtExecHandler g_execFill(4);
@@ -632,66 +771,79 @@ static void LeaveBrowserMode(void) {
     LayoutChildren();
 }
 
-/* دکمهٔ شناور: محتوای فیلدِ ورودیِ اپ را بخوان (مثلِ گوشی). */
-static void GlobeClicked(void) {
-    if (g_webApp != NULL) {
-        g_webApp->ExecuteScript(MT_GETFIELD_JS, &g_execGetUrl);
-        return;
-    }
-    if (g_webBr != NULL) {
-        /* v1.14.327 — سایتِ قبلی یا گوگل */
-        EnterBrowserMode(g_lastSite.empty() ? BROWSER_HOME
-                                            : g_lastSite.c_str());
-    }
-}
-
 /* هندلرِ اتمامِ ساختِ کنترلر — browser=TRUE یعنی وب‌ویوی مرورگر. */
 struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler> {
     BOOL browser;
     explicit MtCtlHandler(BOOL b) : browser(b) {}
+    /* v1.14.328 — SEH: خطای داخلِ کالک دیگر اپ را نمیکشد */
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
                                              ICoreWebView2Controller *controller) {
+#if MT_HAS_SEH
+        __try {
+            return InvokeImpl(errorCode, controller);
+        } __except (MtSehLog(browser ? "ctl(br)" : "ctl(app)",
+                             GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return InvokeImpl(errorCode, controller);
+#endif
+    }
+    HRESULT InvokeImpl(HRESULT errorCode,
+                       ICoreWebView2Controller *controller) {
         if (FAILED(errorCode) || controller == NULL) {
             char lb[96];
             sprintf(lb, "controller(%s) failed hr=%08lX",
                     browser ? "browser" : "app", (unsigned long)errorCode);
+            MtLog(lb);
             if (!browser) {
                 /* v1.14.326 — اپ نمی‌میرد: صفحهٔ راه‌حل نشان بده */
                 g_failMode = TRUE;
-                MtLog(lb);
-                LayoutChildren();
             } else {
-                /* مرورگرِ داخلی نیامد — دکمهٔ شناور مخفی میشود */
-                MtLog(lb);
-                LayoutChildren();
+                g_brPending = FALSE;
             }
+            LayoutChildren();
             return S_OK;
         }
         ICoreWebView2 *wv = NULL;
         HRESULT hr = controller->get_CoreWebView2(&wv);
-        if (SUCCEEDED(hr) && wv != NULL) {
-            if (browser) {
-                g_brCtl = controller;
-                g_webBr = wv;
-                /* رویدادهای مرورگر: نوار + آدرس + شمارش */
-                wv->add_NavigationStarting(&g_navStartHandler, &g_evTokBrNav);
-                wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokBrDone);
-                wv->add_SourceChanged(&g_srcHandler, &g_evTokBrSrc);
-                controller->put_IsVisible(FALSE);
-            } else {
-                g_appCtl = controller;
-                g_webApp = wv;
-                /* ترجمهٔ پیام‌های نشانک قبل از هر اسکریپتی */
-                wv->AddScriptToExecuteOnDocumentCreated(MT_PRELOAD_JS,
-                                                        &g_noopScript);
-                /* رویدادهای اپ: عنوانِ پنجره */
-                wv->add_NavigationStarting(&g_navStartHandler, &g_evTokAppNav);
-                wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokAppDone);
-                wv->add_DocumentTitleChanged(&g_titleHandler, &g_evTokAppTitle);
-                wv->Navigate(APP_URL);
-                MtLog("app webview created — navigating");
-            }
+        MtLogHr(browser ? "br: get_CoreWebView2" : "app: get_CoreWebView2", hr);
+        if (FAILED(hr) || wv == NULL) {
+            if (!browser)
+                g_failMode = TRUE;
+            else
+                g_brPending = FALSE;
+            LayoutChildren();
+            return S_OK;
         }
+        if (browser) {
+            g_brCtl = controller;
+            g_webBr = wv;
+            /* رویدادهای مرورگر: نوار + آدرس + شمارش */
+            wv->add_NavigationStarting(&g_navStartHandler, &g_evTokBrNav);
+            wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokBrDone);
+            wv->add_SourceChanged(&g_srcHandler, &g_evTokBrSrc);
+            controller->put_IsVisible(FALSE);
+            MtLog("br webview created");
+            LayoutChildren();
+            /* اگر این ساختِ «تنبل» بود (کلیکِ کره) → حالا بازش کن */
+            if (g_brPending) {
+                g_brPending = FALSE;
+                MtOpenBrowserUi();
+            }
+            return S_OK;
+        }
+        g_appCtl = controller;
+        g_webApp = wv;
+        /* ترجمهٔ پیام‌های نشانک قبل از هر اسکریپتی */
+        wv->AddScriptToExecuteOnDocumentCreated(MT_PRELOAD_JS,
+                                                &g_noopScript);
+        /* رویدادهای اپ: عنوانِ پنجره */
+        wv->add_NavigationStarting(&g_navStartHandler, &g_evTokAppNav);
+        wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokAppDone);
+        wv->add_DocumentTitleChanged(&g_titleHandler, &g_evTokAppTitle);
+        wv->Navigate(APP_URL);
+        MtLog("app webview created — navigating");
         LayoutChildren();
         return S_OK;
     }
@@ -702,10 +854,49 @@ struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCom
 static MtCtlHandler g_ctlApp(FALSE);
 static MtCtlHandler g_ctlBr(TRUE);
 
-/* هندلرِ اتمامِ ساختِ محیط — دو کنترلر میسازد. */
+static void MtOpenBrowserUi(void) {
+    if (g_webBr != NULL) {
+        if (g_webApp != NULL) {
+            g_webApp->ExecuteScript(MT_GETFIELD_JS, &g_execGetUrl);
+        } else {
+            EnterBrowserMode(g_lastSite.empty() ? BROWSER_HOME
+                                                : g_lastSite.c_str());
+        }
+        return;
+    }
+    if (g_brPending)
+        return;   /* در حالِ ساخت — صبر */
+    if (g_env == NULL || g_hwnd == NULL)
+        return;
+    g_brPending = TRUE;
+    MtLog("lazy: creating browser controller");
+    HRESULT hr = g_env->CreateCoreWebView2Controller(g_hwnd, &g_ctlBr);
+    MtLogHr("lazy: create br", hr);
+    if (FAILED(hr)) {
+        g_brPending = FALSE;
+        LayoutChildren();
+    }
+}
+
+/* v1.14.328 — کالکِ محیط: فقط نگه‌داشتن + PostMessage.
+   ساختِ کنترلر از داخلِ این کالک ممنوع است — لاگِ v1.14.327 نشان
+   داد که این کالک «همزمان» داخلِ فراخوانیِ خودِ CreateEnvironment
+   اجرا میشود و فراخوانیِ تودرتویِ CreateController به کرش میانجامید. */
 struct MtEnvHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> {
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
                                              ICoreWebView2Environment *environment) {
+#if MT_HAS_SEH
+        __try {
+            return InvokeImpl(errorCode, environment);
+        } __except (MtSehLog("env", GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return InvokeImpl(errorCode, environment);
+#endif
+    }
+    HRESULT InvokeImpl(HRESULT errorCode,
+                       ICoreWebView2Environment *environment) {
         if (FAILED(errorCode) || environment == NULL) {
             char lb[80];
             sprintf(lb, "environment failed hr=%08lX",
@@ -716,17 +907,10 @@ struct MtEnvHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2EnvironmentCo
             return S_OK;
         }
         MtLog("environment created");
-        HRESULT hr1 = environment->CreateCoreWebView2Controller(g_hwnd, &g_ctlApp);
-        HRESULT hr2 = environment->CreateCoreWebView2Controller(g_hwnd, &g_ctlBr);
-        char lb[96];
-        sprintf(lb, "CreateController app=%08lX br=%08lX",
-                (unsigned long)hr1, (unsigned long)hr2);
-        MtLog(lb);
-        if (FAILED(hr1)) {
-            g_failMode = TRUE;
-            LayoutChildren();
-        }
-        (void)hr2;   /* خطای مرورگر = مخفی‌شدنِ دکمهٔ شناور */
+        g_env = environment;
+        g_env->AddRef();   /* برایِ عمرِ برنامه نگه میداریم */
+        /* ساختنِ کنترلر با پیام به صف — روی استکِ تمیزِ پمپِ پیام */
+        PostMessage(g_hwnd, WM_APP_CREATCTL, 0, 0);
         return S_OK;
     }
 };
@@ -748,8 +932,6 @@ static void TryStartEnv(void) {
     {
         std::wstring v = L"wv2 runtime: ";
         v += ver;
-        v += L"\n";
-        /* لاگِ واید → لاگِ بایت */
         std::string a;
         int need = WideCharToMultiByte(CP_UTF8, 0, v.c_str(), (int)v.size(),
                                        NULL, 0, NULL, FALSE);
@@ -771,9 +953,7 @@ static void TryStartEnv(void) {
     }
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
         NULL, userDataFolder, NULL, &g_envHandler);
-    char lb[80];
-    sprintf(lb, "createEnv hr=%08lX", (unsigned long)hr);
-    MtLog(lb);
+    MtLogHr("createEnv", hr);
     if (FAILED(hr)) {
         g_failMode = TRUE;
         LayoutChildren();
@@ -804,9 +984,10 @@ static void LayoutChildren(void) {
     ShowWindow(g_btnFwd, br ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblStatus, br ? SW_SHOW : SW_HIDE);
     ShowWindow(g_btnExtract, br ? SW_SHOW : SW_HIDE);
-    /* کرهٔ شناور فقط در حالتِ اپ و فقط اگر مرورگر آماده باشد */
+    /* v1.14.328 — کره وقتی دیده میشود که صفحهٔ اپ آماده باشد؛
+       وب‌ویوی مرورگر تنبل است و با کلیک ساخته میشود */
     ShowWindow(g_btnGlobe,
-               (!br && !fail && g_webBr != NULL) ? SW_SHOW : SW_HIDE);
+               (!br && !fail && g_webApp != NULL) ? SW_SHOW : SW_HIDE);
     /* کنترلهای صفحهٔ خطا */
     ShowWindow(g_lblFailTitle, fail ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblFailBody, fail ? SW_SHOW : SW_HIDE);
@@ -986,6 +1167,20 @@ static void ShowFailScreen(const char *logReason) {
 
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
+    case WM_APP_CREATCTL: {
+        /* v1.14.328 — ساختِ کنترلرِ اپ روی استکِ تمیزِ پمپِ پیام
+           (نه داخلِ کالکِ محیط — رفعِ کرشِ v1.14.327) */
+        if (g_env != NULL && g_webApp == NULL && g_appCtl == NULL) {
+            MtLog("creating app controller (from message queue)");
+            HRESULT hr = g_env->CreateCoreWebView2Controller(g_hwnd, &g_ctlApp);
+            MtLogHr("create ctl(app)", hr);
+            if (FAILED(hr)) {
+                g_failMode = TRUE;
+                LayoutChildren();
+            }
+        }
+        return 0;
+    }
     case WM_COMMAND: {
         int id = LOWORD(wp);
         int code = HIWORD(wp);
@@ -1015,7 +1210,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (id == ID_BTN_GLOBE) {
-                GlobeClicked();
+                MtOpenBrowserUi();
                 return 0;
             }
             if (id == ID_BTN_WV2DL) {
@@ -1098,7 +1293,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return 0;
         }
         if (wp == TIMER_RECOUNT) {
-            if (!g_browserMode && g_btnGlobe != NULL && g_webBr != NULL) {
+            if (!g_browserMode && g_btnGlobe != NULL && g_webApp != NULL) {
                 /* کره روی وب‌ویو بماند */
                 SetWindowPos(g_btnGlobe, HWND_TOP, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -1171,8 +1366,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 
 /* ————— بدنهٔ Invoke هندلرِ اسکریپت (اینجا چون از نمونههای
    ایستا استفاده میکند باید بعد از تعریفها باشد) ————— */
-HRESULT STDMETHODCALLTYPE MtExecHandler::Invoke(HRESULT errorCode,
-                                                LPCWSTR resultObjectAsJson) {
+HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
+                                  LPCWSTR resultObjectAsJson) {
     if (FAILED(errorCode)) {
         /* اجرای JS نشد (مثلاً صفحه هنوز لود نشده) */
         if (mode == 4 && g_webApp != NULL && !g_fillUrl.empty())
@@ -1255,7 +1450,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     /* v1.14.326 — لاگِ اجرا + ضبطِ کرش، قبل از هر کاری */
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.327 (WebView2 SDK)");
+    MtLog("WinMain — MangaCloud v1.14.328 (deferred ctl + SEH + dump)");
 
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32 != NULL) {
@@ -1305,10 +1500,13 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
                              WS_OVERLAPPEDWINDOW, x, y, ww, wh,
                              NULL, NULL, hInst, NULL);
     if (g_hwnd == NULL) {
-        MessageBoxW(NULL,
-            L"\u067E\u0646\u062C\u0631\u0647 \u0633\u0627\u062E\u062A\u0647 \u0646\u0634\u062F \u2014 \u0645\u0633\u06CC\u0631 \u0627\u067E \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0628\u0627\u0632 \u0645\u06CC\u200C\u0634\u0648\u062F.",
-            L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
-            MB_OK | MB_ICONERROR | MB_RTLREADING | MB_RIGHT);
+        MtLog("CreateWindow failed");
+        if (GetEnvironmentVariableW(L"MANGA_SMOKE", NULL, 0) == 0) {
+            MessageBoxW(NULL,
+                L"\u067E\u0646\u062C\u0631\u0647 \u0633\u0627\u062E\u062A\u0647 \u0646\u0634\u062F \u2014 \u0645\u0633\u06CC\u0631 \u0627\u067E \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0628\u0627\u0632 \u0645\u06CC\u200C\u0634\u0648\u062F.",
+                L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+                MB_OK | MB_ICONERROR | MB_RTLREADING | MB_RIGHT);
+        }
         ShellExecuteW(NULL, L"open", APP_URL, NULL, NULL, SW_SHOWNORMAL);
         return 1;
     }
