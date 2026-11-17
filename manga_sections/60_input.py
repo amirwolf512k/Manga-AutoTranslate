@@ -36,10 +36,10 @@ class _MangaTranslatorBody_60:
         u = (url or "").strip()
         low = u.lower()
         path = low.split("?")[0]
-        exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
+        exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
         if any(path.endswith(e) for e in exts):
             return True
-        if re.search(r"\.(jpe?g|png|webp|bmp|gif)(/|$)", path):
+        if re.search(r"\.(jpe?g|png|webp|bmp)(/|$)", path):
             return True
         if "gstatic.com/images" in low and "q=tbn:" in low:
             return True
@@ -179,8 +179,8 @@ class _MangaTranslatorBody_60:
             suffix = m.group(4)
 
             is_page_glob = MangaTranslator._is_direct_image_url(suffix if suffix.startswith(".") else suffix + "x") or (
-                suffix.lower().lstrip(".").split("?")[0] in ("jpg", "jpeg", "png", "webp", "bmp", "gif")
-                or any(suffix.lower().endswith(e) for e in (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"))
+                suffix.lower().lstrip(".").split("?")[0] in ("jpg", "jpeg", "png", "webp", "bmp")
+                or any(suffix.lower().endswith(e) for e in (".jpg", ".jpeg", ".png", ".webp", ".bmp"))
             )
 
             label = "صفحه" if is_page_glob else "فصل"
@@ -236,6 +236,9 @@ class _MangaTranslatorBody_60:
         path = low.split("?")[0]
         if path.endswith((".js", ".css", ".html", ".php", ".json", ".xml")):
             return True
+        # گیف فقط برایِ انیمیشن است — صفحهٔ مانگا نیست
+        if path.endswith(".gif"):
+            return True
         return False
 
     @staticmethod
@@ -243,7 +246,8 @@ class _MangaTranslatorBody_60:
         attrs = (
             "src", "data-src", "data-original", "data-lazy-src", "data-lazy",
             "data-url", "data-image", "data-full", "data-srcset", "srcset",
-            "data-pagespeed-lazy-src", "data-orig-src",
+            "data-pagespeed-lazy-src", "data-orig-src", "data-original-src",
+            "data-echo",
         )
         found = []
         for a in attrs:
@@ -272,7 +276,7 @@ class _MangaTranslatorBody_60:
             return urls
 
         pattern = re.compile(
-            r"^(?P<prefix>.+/)(?P<num>\d+)(?P<suffix>\.(?:jpe?g|png|webp|gif))(?:\?.*)?$",
+            r"^(?P<prefix>.+/)(?P<num>\d+)(?P<suffix>\.(?:jpe?g|png|webp))(?:\?.*)?$",
             re.I,
         )
         parsed = []
@@ -539,6 +543,14 @@ class _MangaTranslatorBody_60:
             "Referer": url,
         }
         url = MangaTranslator._normalize_image_url(url)
+
+        # گیف = انیمیشن است، صفحهٔ مانگا نه — کلاً رد میشود
+        try:
+            if os.path.splitext(urlparse(url).path)[1].lower() == ".gif":
+                print("    [!] گیف رد شد (GIF صفحهٔ مانگا نیست).")
+                return []
+        except Exception:
+            pass
 
         use_numeric_sort = False
 

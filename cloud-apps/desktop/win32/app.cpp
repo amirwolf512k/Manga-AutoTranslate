@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <objbase.h>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -15,13 +16,12 @@ typedef struct Wv2WebView Wv2WebView;
 typedef struct Wv2Controller Wv2Controller;
 typedef struct Wv2Environment Wv2Environment;
 typedef struct Wv2CtlHandler Wv2CtlHandler;
-typedef struct Wv2ExecHandler Wv2ExecHandler;
+typedef struct Wv2EnvHandler Wv2EnvHandler;
 
 static const WCHAR APP_URL[] =
     L"https://amirwolf512-manga-autotranslate.hf.space/";
 static const WCHAR APP_TITLE[] =
-    L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F"
-    L" \u2014 \u0645\u062A\u0631\u062C\u0645 \u0627\u0646\u06AF\u0627";
+    L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F";
 
 static const IID IID_WV2_ENV_DONE = {
     0x4e8a3389, 0xc9d8, 0x4bd2,
@@ -32,13 +32,18 @@ static const IID IID_WV2_CTL_DONE = {
 
 #define ID_BTN_GO      101
 #define ID_BTN_BACK    102
-#define ID_BTN_HOME    103
+#define ID_BTN_FWD     103
 #define ID_BTN_EXTRACT 104
-#define ID_EDIT_URL    105
-#define ID_LBL_STATUS  106
+#define ID_BTN_CLOSE   105
+#define ID_EDIT_URL    106
+#define ID_LBL_STATUS  107
 
 #define TOP_BAND_H  46
+#define PROG_H       3
 #define BOT_BAND_H  54
+
+#define TIMER_PROGRESS 1
+#define TIMER_RECOUNT  2
 
 static HWND g_hwnd = NULL;
 static Wv2Controller *g_controller = NULL;
@@ -47,22 +52,34 @@ static Wv2WebView *g_webView = NULL;
 static HWND g_editUrl = NULL;
 static HWND g_btnGo = NULL;
 static HWND g_btnBack = NULL;
-static HWND g_btnHome = NULL;
+static HWND g_btnFwd = NULL;
+static HWND g_btnClose = NULL;
 static HWND g_btnExtract = NULL;
 static HWND g_lblStatus = NULL;
 static HFONT g_font = NULL;
 static HFONT g_fontBold = NULL;
-static HBRUSH g_darkBrush = NULL;
+static HBRUSH g_barBrush = NULL;   /* نوارها */
+static HBRUSH g_urlBrush = NULL;   /* فیلدِ آدرس */
+static RECT g_urlRing = {0, 0, 0, 0};
 
-static const COLORREF CLR_BG     = RGB(11, 14, 20);
-static const COLORREF CLR_CARD   = RGB(16, 19, 27);
-static const COLORREF CLR_TXT    = RGB(232, 235, 243);
-static const COLORREF CLR_MUT    = RGB(135, 145, 165);
-static const COLORREF CLR_ACC    = RGB(232, 89, 12);
-static const COLORREF CLR_ACC_DN = RGB(160, 60, 8);
+static int g_progress = 0;         /* 0..100 */
+static BOOL g_loading = FALSE;
+static int g_doneTicks = 0;
 
-/* ————— v1.14.323 — جاوااسکریپتِ استخراجِ عکس (همان فیلترهای اپ) —————
-   خروجی: آرایهٔ URLها — WebView2 خودش JSON-انکودش میکند. */
+/* رنگها — همان پالتِ نسخهٔ گوشی */
+static const COLORREF CLR_BAR    = RGB(16, 19, 27);     /* #10131b */
+static const COLORREF CLR_URLBG  = RGB(26, 31, 43);     /* #1a1f2b */
+static const COLORREF CLR_URLBR  = RGB(39, 48, 67);     /* #273043 */
+static const COLORREF CLR_TXT    = RGB(231, 235, 243);  /* #e7ebf3 */
+static const COLORREF CLR_MUT    = RGB(138, 147, 168);  /* #8a93a8 */
+static const COLORREF CLR_BTN    = RGB(32, 38, 51);     /* #202633 */
+static const COLORREF CLR_BTN_DN = RGB(45, 54, 73);     /* #2d3649 */
+static const COLORREF CLR_ACC    = RGB(232, 89, 12);    /* #e8590c */
+static const COLORREF CLR_ACC_DN = RGB(160, 60, 8);     /* #a03c08 */
+
+/* ————— استخراجِ عکس — همان فیلترهای نشانکِ اپ —————
+   data-original-src برای سایت‌های وردپرسی مثل mgread،
+   gif حذف میشود (فقط صفحهٔ ثابت). خروجی: آرایهٔ URLها. */
 static const wchar_t *MT_COLLECT_JS =
 L"(function(){"
 L"var seen={},out=[];"
@@ -71,15 +88,19 @@ L"function junk(u){"
 L"if(!u)return 1;"
 L"if(u.indexOf('data:')===0)return 1;"
 L"if(!/^https?:/i.test(u))return 1;"
-L"if(/\\.(svg|ico)([?#]|$)/i.test(u))return 1;"
-L"if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|ads?[._-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;"
+L"if(/\\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;"
+L"if(/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;"
+L"if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;"
 L"return 0}"
 L"var els=document.querySelectorAll('img,source');"
 L"for(var i=0;i<els.length;i++){"
 L"var el=els[i],cs=null;"
 L"try{cs=el.currentSrc||el.src||null}catch(e){}"
 L"var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),"
-L"el.getAttribute('data-original'),el.getAttribute('data-echo')];"
+L"el.getAttribute('data-original'),el.getAttribute('data-original-src'),"
+L"el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),"
+L"el.getAttribute('data-url'),el.getAttribute('data-image'),"
+L"el.getAttribute('data-echo')];"
 L"var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');"
 L"if(ss){var p=ss.split(',');"
 L"if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}"
@@ -95,9 +116,12 @@ L"if(w&&h&&(w<120||h<120))continue;"
 L"seen[u]=1;out.push(u);break}}"
 L"function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];"
 L"for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}"
-L"out.sort(function(a,b){var x=nk(a),y=nk(b);"
-L"for(var i=0;i<Math.min(x.length,y.length);i++){"
-L"if(x[i]!==y[i])return x[i]-y[i]}return a<b?-1:1});"
+L"function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}"
+L"out.sort(function(a,b){var x=ln(a),y=ln(b);"
+L"if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);"
+L"var p=nk(a),q=nk(b);"
+L"for(var i=0;i<Math.min(p.length,q.length);i++){"
+L"if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});"
 L"return out;})()";
 
 /* قبل از اسکریپتهای صفحه اجرا میشود: ترجمهٔ پیام‌های الکیِ نشانک. */
@@ -140,40 +164,56 @@ struct Wv2Controller {
     virtual HRESULT STDMETHODCALLTYPE put_Bounds(RECT bounds) = 0;
 };
 
-/* ————— هندلرِ اتمامِ ExecuteScript —————
-   QI برای هر IID جواب میدهد (AddRef/Release ایستا هستند و چیدمانِ
-   همهٔ هندلرهای اتمام یکی است: QI/AddRef/Release/Invoke). */
-struct Wv2ExecHandler {
-    int mode; /* 0 = استخراج و پرکردن اپ | 1 = بی‌اثر (history.back و…) */
-    explicit Wv2ExecHandler(int m) : mode(m) {}
-    virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
-        if (ppv == NULL)
-            return E_POINTER;
-        *ppv = this;
-        return S_OK;
-    }
-    virtual ULONG STDMETHODCALLTYPE AddRef() { return 2; }
-    virtual ULONG STDMETHODCALLTYPE Release() { return 1; }
-    virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
-                                             LPCWSTR resultObjectAsJson);
-};
-
+/* ————— چیدمانِ واقعیِ vtable (WebView2 SDK 1.0.2903) —————
+   ICoreWebView2:
+     11 add_SourceChanged | 15 add_NavigationCompleted |
+     27 AddScriptToExecuteOnDocumentCreated | 29 ExecuteScript |
+     40 GoBack | 41 GoForward | 48 get_DocumentTitle
+   ICoreWebView2Controller: 6 put_Bounds | 25 get_CoreWebView2 */
 static void *vslot(void *obj, unsigned int idx) {
     void **vt = *(void ***)obj;
     return vt[idx];
 }
 
 typedef HRESULT (STDMETHODCALLTYPE *Wv2ExecuteScriptFn)(
-    Wv2WebView *, LPCWSTR, Wv2ExecHandler *);
+    Wv2WebView *, LPCWSTR, void *);
 typedef HRESULT (STDMETHODCALLTYPE *Wv2AddScriptFn)(
-    Wv2WebView *, LPCWSTR, Wv2ExecHandler *);
+    Wv2WebView *, LPCWSTR, void *);
+typedef HRESULT (STDMETHODCALLTYPE *Wv2AddEventFn)(
+    Wv2WebView *, void *, int64_t *);
+typedef HRESULT (STDMETHODCALLTYPE *Wv2NoArgFn)(Wv2WebView *);
+typedef HRESULT (STDMETHODCALLTYPE *Wv2GetStrFn)(Wv2WebView *, LPWSTR *);
 
-static void Wv2ExecuteScript(Wv2WebView *wv, const wchar_t *js,
-                             Wv2ExecHandler *h) {
+static void Wv2ExecuteScript(Wv2WebView *wv, const wchar_t *js, void *h) {
     if (wv == NULL)
         return;
-    ((Wv2ExecuteScriptFn)vslot(wv, 31))(wv, js, h);
+    ((Wv2ExecuteScriptFn)vslot(wv, 29))(wv, js, h);
 }
+
+static void Wv2AddDocScript(Wv2WebView *wv, const wchar_t *js) {
+    if (wv == NULL)
+        return;
+    ((Wv2AddScriptFn)vslot(wv, 27))(wv, js, NULL);
+}
+
+static void Wv2AddEvent(Wv2WebView *wv, unsigned int slot, void *handler) {
+    int64_t token = 0;
+    if (wv == NULL)
+        return;
+    ((Wv2AddEventFn)vslot(wv, slot))(wv, handler, &token);
+}
+
+static void Wv2GoBack(void) {
+    if (g_webView != NULL)
+        ((Wv2NoArgFn)vslot(g_webView, 40))(g_webView);
+}
+
+static void Wv2GoForward(void) {
+    if (g_webView != NULL)
+        ((Wv2NoArgFn)vslot(g_webView, 41))(g_webView);
+}
+
+static void Wv2Recount(void);
 
 static void OpenFallback(void) {
     ShellExecuteW(NULL, L"open", APP_URL, NULL, NULL, SW_SHOWNORMAL);
@@ -308,9 +348,49 @@ static std::string MtUrlEncode(const std::wstring &in) {
     return out;
 }
 
+/* ————— هندلرِ اتمامِ ExecuteScript —————
+   QI برای هر IID جواب میدهد؛ چیدمانِ همهٔ هندلرهای اتمام یکی است:
+   QI/AddRef/Release/Invoke. mode: 0=استخراج 1=بی‌اثر 2=شمارش */
+struct Wv2ExecHandler {
+    int mode;
+    explicit Wv2ExecHandler(int m) : mode(m) {}
+    virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
+        if (ppv == NULL)
+            return E_POINTER;
+        *ppv = this;
+        return S_OK;
+    }
+    virtual ULONG STDMETHODCALLTYPE AddRef() { return 2; }
+    virtual ULONG STDMETHODCALLTYPE Release() { return 1; }
+    virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
+                                             LPCWSTR resultObjectAsJson);
+};
+
+static void MtSetStatusCount(int n) {
+    std::wstring s;
+    if (n > 0) {
+        s = std::to_wstring(n);
+        s += L" \u0639\u06A9\u0633 \u0622\u0645\u0627\u062F\u0647"
+             L" \u0627\u0633\u062A\u062E\u0631\u0627\u062C";
+    } else {
+        s = L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F"
+            L" \u2014 \u0627\u0648\u0644 \u0641\u0635\u0644 \u0631\u0627"
+            L" \u0628\u0627\u0632 \u06A9\u0646";
+    }
+    SetWindowTextW(g_lblStatus, s.c_str());
+}
+
 HRESULT STDMETHODCALLTYPE Wv2ExecHandler::Invoke(HRESULT errorCode,
                                                  LPCWSTR resultObjectAsJson) {
-    if (mode != 0 || FAILED(errorCode) || g_webView == NULL)
+    if (FAILED(errorCode))
+        return S_OK;
+    if (mode == 2) { /* شمارشِ زنده */
+        std::vector<std::wstring> links;
+        MtParseMaybeWrapped(resultObjectAsJson, links);
+        MtSetStatusCount((int)links.size());
+        return S_OK;
+    }
+    if (mode != 0 || g_webView == NULL)
         return S_OK;
     std::vector<std::wstring> links;
     if (!MtParseMaybeWrapped(resultObjectAsJson, links) || links.empty()) {
@@ -346,6 +426,107 @@ HRESULT STDMETHODCALLTYPE Wv2ExecHandler::Invoke(HRESULT errorCode,
 
 static Wv2ExecHandler g_execExtract(0);
 static Wv2ExecHandler g_execNoop(1);
+static Wv2ExecHandler g_execCount(2);
+
+/* ————— هندلرهای رویدادِ WebView2 ————— */
+struct Wv2NavStartingHandler {
+    virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
+        if (ppv == NULL)
+            return E_POINTER;
+        *ppv = this;
+        return S_OK;
+    }
+    virtual ULONG STDMETHODCALLTYPE AddRef() { return 2; }
+    virtual ULONG STDMETHODCALLTYPE Release() { return 1; }
+    virtual HRESULT STDMETHODCALLTYPE Invoke(Wv2WebView *sender, void *args) {
+        (void)sender; (void)args;
+        g_loading = TRUE;
+        g_progress = 8;
+        g_doneTicks = 0;
+        SetTimer(g_hwnd, TIMER_PROGRESS, 40, NULL);
+        InvalidateRect(g_hwnd, NULL, FALSE);
+        return S_OK;
+    }
+};
+
+struct Wv2NavCompletedHandler {
+    virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
+        if (ppv == NULL)
+            return E_POINTER;
+        *ppv = this;
+        return S_OK;
+    }
+    virtual ULONG STDMETHODCALLTYPE AddRef() { return 2; }
+    virtual ULONG STDMETHODCALLTYPE Release() { return 1; }
+    virtual HRESULT STDMETHODCALLTYPE Invoke(Wv2WebView *sender, void *args) {
+        (void)sender; (void)args;
+        g_loading = FALSE;
+        g_progress = 100;
+        g_doneTicks = 8; /* ~320ms نمایشِ کامل، بعد محو */
+        InvalidateRect(g_hwnd, NULL, FALSE);
+        Wv2Recount();
+        return S_OK;
+    }
+};
+
+struct Wv2SourceChangedHandler {
+    virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
+        if (ppv == NULL)
+            return E_POINTER;
+        *ppv = this;
+        return S_OK;
+    }
+    virtual ULONG STDMETHODCALLTYPE AddRef() { return 2; }
+    virtual ULONG STDMETHODCALLTYPE Release() { return 1; }
+    virtual HRESULT STDMETHODCALLTYPE Invoke(Wv2WebView *sender, void *args) {
+        (void)args;
+        if (sender != NULL) {
+            LPWSTR uri = NULL;
+            if (SUCCEEDED(sender->get_Source(&uri)) && uri != NULL) {
+                SetWindowTextW(g_editUrl, uri);
+                CoTaskMemFree(uri);
+            }
+        }
+        return S_OK;
+    }
+};
+
+struct Wv2DocTitleHandler {
+    virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
+        if (ppv == NULL)
+            return E_POINTER;
+        *ppv = this;
+        return S_OK;
+    }
+    virtual ULONG STDMETHODCALLTYPE AddRef() { return 2; }
+    virtual ULONG STDMETHODCALLTYPE Release() { return 1; }
+    virtual HRESULT STDMETHODCALLTYPE Invoke(Wv2WebView *sender, void *args) {
+        (void)args;
+        if (sender != NULL) {
+            LPWSTR t = NULL;
+            if (SUCCEEDED(((Wv2GetStrFn)vslot(sender, 48))(sender, &t))
+                    && t != NULL) {
+                std::wstring s = t;
+                s += L" \u2014 ";
+                s += APP_TITLE;
+                SetWindowTextW(g_hwnd, s.c_str());
+                CoTaskMemFree(t);
+            }
+        }
+        return S_OK;
+    }
+};
+
+static Wv2NavStartingHandler g_navStartHandler;
+static Wv2NavCompletedHandler g_navDoneHandler;
+static Wv2SourceChangedHandler g_srcHandler;
+static Wv2DocTitleHandler g_titleHandler;
+
+static void Wv2Recount(void) {
+    if (g_webView == NULL)
+        return;
+    Wv2ExecuteScript(g_webView, MT_COLLECT_JS, &g_execCount);
+}
 
 struct Wv2CtlHandler {
     virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
@@ -373,9 +554,24 @@ struct Wv2CtlHandler {
                       vslot(controller, 25))(controller, &wv);
         if (SUCCEEDED(hr) && wv != NULL) {
             g_webView = wv;
-            /* v1.14.323 — ترجمهٔ پیام‌های نشانک قبل از هر اسکریپتی */
-            ((Wv2AddScriptFn)vslot(wv, 29))(wv, MT_PRELOAD_JS, &g_execNoop);
+            /* ترجمهٔ پیام‌های نشانک قبل از هر اسکریپتی */
+            Wv2AddDocScript(wv, MT_PRELOAD_JS);
+            /* رویدادها: نوارِ پیشرفت + همگام‌سازیِ آدرس و عنوان */
+            Wv2AddEvent(wv, 7, &g_navStartHandler);   /* NavigationStarting */
+            Wv2AddEvent(wv, 15, &g_navDoneHandler);   /* NavigationCompleted */
+            Wv2AddEvent(wv, 11, &g_srcHandler);       /* SourceChanged */
+            Wv2AddEvent(wv, 46, &g_titleHandler);     /* DocumentTitleChanged */
             wv->Navigate(APP_URL);
+        }
+        /* فیکسِ «مپره بعدِ فول‌صفحه»: باندِ WebView2 همان لحظهٔ
+           آماده‌شدنِ کنترلر تنظیم میشود — دیگر لازم نیست کاربر
+           پنجره را تغییرِ اندازه بدهد تا محتوا ظاهر شود. */
+        RECT rc;
+        GetClientRect(g_hwnd, &rc);
+        if (g_controller != NULL && rc.right > 0) {
+            RECT wvrc = {0, TOP_BAND_H + PROG_H, rc.right,
+                         rc.bottom - BOT_BAND_H};
+            g_controller->put_Bounds(wvrc);
         }
         return S_OK;
     }
@@ -414,36 +610,45 @@ struct Wv2EnvHandler {
 
 static Wv2EnvHandler g_envHandler;
 
+/* ————— چیدمان — همان نسخهٔ گوشی —————
+   بالا: [✕] [آدرس ........] [برو]  |  پایین: [↩][↪] [شمارش] [استخراج] */
 static void LayoutChildren(void) {
     RECT rc;
     GetClientRect(g_hwnd, &rc);
     int w = rc.right;
     int h = rc.bottom;
-    int topH = TOP_BAND_H;
-    int botH = BOT_BAND_H;
+    if (w <= 0 || h <= 0)
+        return;
 
-    /* — نوارِ بالا: آدرس + برو + برگشت + اپ — */
-    int x = w;
-    int bwHome = 74, bwBack = 44, bwGo = 66, bh = 32;
-    int editR = 14;
-    x -= 10;
-    MoveWindow(g_btnHome, x - bwHome, 7, bwHome, bh, TRUE);
-    x -= bwHome + 6;
-    MoveWindow(g_btnBack, x - bwBack, 7, bwBack, bh, TRUE);
-    x -= bwBack + 6;
-    MoveWindow(g_btnGo, x - bwGo, 7, bwGo, bh, TRUE);
-    x -= bwGo + 8;
-    MoveWindow(g_editUrl, editR, 7, x - editR - 2, bh, TRUE);
+    /* — نوارِ بالا — */
+    int bwClose = 42, bwGo = 66, bh = 32;
+    int m = 10;
+    MoveWindow(g_btnClose, w - m - bwClose, 7, bwClose, bh, TRUE);
+    MoveWindow(g_btnGo, m, 7, bwGo, bh, TRUE);
+    int ex1 = m + bwGo + 8;
+    int ex2 = w - m - bwClose - 8;
+    if (ex2 > ex1 + 60)
+        MoveWindow(g_editUrl, ex1 + 2, 9, ex2 - ex1 - 4, bh - 4, TRUE);
+    g_urlRing.left = ex1;
+    g_urlRing.top = 7;
+    g_urlRing.right = ex2;
+    g_urlRing.bottom = 7 + bh;
 
-    /* — نوارِ پایین: وضعیت + استخراج — */
-    int bwEx = 168, bhEx = 36;
-    MoveWindow(g_btnExtract, w - bwEx - 10, h - botH + 9, bwEx, bhEx, TRUE);
-    MoveWindow(g_lblStatus, 14, h - botH + 4, w - bwEx - 40, botH - 8, TRUE);
+    /* — نوارِ پایین — */
+    int bwNav = 42, bhNav = 34;
+    int bwEx = 176, bhEx = 36;
+    int by = h - BOT_BAND_H;
+    MoveWindow(g_btnBack, m, by + 10, bwNav, bhNav, TRUE);
+    MoveWindow(g_btnFwd, m + bwNav + 6, by + 10, bwNav, bhNav, TRUE);
+    MoveWindow(g_btnExtract, w - m - bwEx, by + 9, bwEx, bhEx, TRUE);
+    MoveWindow(g_lblStatus, m + 2 * bwNav + 18, by + 4,
+               w - m - bwEx - (m + 2 * bwNav + 18) - 12, BOT_BAND_H - 8, TRUE);
 
     if (g_controller != NULL) {
-        RECT wvrc = {0, topH, w, h - botH};
+        RECT wvrc = {0, TOP_BAND_H + PROG_H, w, by};
         g_controller->put_Bounds(wvrc);
     }
+    InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
 static void OnGo(void) {
@@ -451,7 +656,6 @@ static void OnGo(void) {
     int n = GetWindowTextW(g_editUrl, buf, 2046);
     if (n <= 0)
         return;
-    /* فاصله‌های ابتدایی/انتهایی */
     wchar_t *s = buf;
     while (*s == L' ' || *s == L'\t')
         s++;
@@ -480,6 +684,31 @@ static LRESULT CALLBACK MtEditProc(HWND h, UINT m, WPARAM w, LPARAM l) {
     return CallWindowProcW(g_editProc, h, m, w, l);
 }
 
+/* ————— دکمهٔ گرد (owner-draw) ————— */
+static void MtDrawPill(HDC hdc, const RECT &rc, COLORREF bg,
+                       const wchar_t *txt, HFONT f) {
+    HBRUSH b = CreateSolidBrush(bg);
+    HPEN pen = CreatePen(PS_SOLID, 1, bg);
+    HGDIOBJ ob = SelectObject(hdc, pen);
+    HGDIOBJ obb = SelectObject(hdc, b);
+    int rh = rc.bottom - rc.top;
+    int rx = rh / 2;
+    if (rx > 18)
+        rx = 18;
+    RoundRect(hdc, rc.left, rc.top, rc.right, rc.bottom, rx * 2, rx * 2);
+    SelectObject(hdc, ob);
+    SelectObject(hdc, obb);
+    DeleteObject(pen);
+    DeleteObject(b);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    HGDIOBJ of = SelectObject(hdc, f ? f : g_font);
+    RECT r = rc;
+    DrawTextW(hdc, txt, -1, &r,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+    SelectObject(hdc, of);
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_COMMAND: {
@@ -491,12 +720,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (id == ID_BTN_BACK) {
-                Wv2ExecuteScript(g_webView, L"history.back()", &g_execNoop);
+                Wv2GoBack();
                 return 0;
             }
-            if (id == ID_BTN_HOME) {
-                if (g_webView != NULL)
-                    g_webView->Navigate(APP_URL);
+            if (id == ID_BTN_FWD) {
+                Wv2GoForward();
+                return 0;
+            }
+            if (id == ID_BTN_CLOSE) {
+                DestroyWindow(hwnd);
                 return 0;
             }
             if (id == ID_BTN_EXTRACT) {
@@ -509,42 +741,99 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_CTLCOLOREDIT: {
         HDC hdc = (HDC)wp;
         SetTextColor(hdc, CLR_TXT);
-        SetBkColor(hdc, CLR_CARD);
-        return (LRESULT)CreateSolidBrush(CLR_CARD);
+        SetBkColor(hdc, CLR_URLBG);
+        return (LRESULT)g_urlBrush;
     }
     case WM_CTLCOLORSTATIC: {
         HDC hdc = (HDC)wp;
         SetTextColor(hdc, CLR_MUT);
-        SetBkColor(hdc, CLR_BG);
-        return (LRESULT)g_darkBrush;
+        SetBkColor(hdc, CLR_BAR);
+        return (LRESULT)g_barBrush;
     }
     case WM_DRAWITEM: {
         DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)lp;
         if (d == NULL || d->CtlType != ODT_BUTTON)
             break;
-        BOOL red = (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_EXTRACT);
+        BOOL acc = (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_EXTRACT);
         COLORREF bg = (d->itemState & ODS_SELECTED)
-                          ? (red ? CLR_ACC_DN : RGB(42, 42, 50))
-                          : (red ? CLR_ACC : RGB(28, 28, 34));
-        HBRUSH b = CreateSolidBrush(bg);
-        FillRect(d->hDC, &d->rcItem, b);
-        DeleteObject(b);
-        SetBkMode(d->hDC, TRANSPARENT);
-        SetTextColor(d->hDC, RGB(255, 255, 255));
-        HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
-        HFONT old = (HFONT)SelectObject(d->hDC, f ? f : g_font);
+                          ? (acc ? CLR_ACC_DN : CLR_BTN_DN)
+                          : (acc ? CLR_ACC : CLR_BTN);
         wchar_t txt[128];
         GetWindowTextW(d->hwndItem, txt, 127);
-        RECT r = d->rcItem;
-        DrawTextW(d->hDC, txt, -1, &r,
-                  DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
-        SelectObject(d->hDC, old);
+        HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
+        MtDrawPill(d->hDC, d->rcItem, bg, txt, f ? f : g_font);
         return TRUE;
+    }
+    case WM_TIMER: {
+        if (wp == TIMER_PROGRESS) {
+            if (g_loading) {
+                g_progress += (g_progress < 70) ? 5
+                             : (g_progress < 90) ? 3 : 1;
+                if (g_progress > 96)
+                    g_progress = 96;
+            } else if (g_doneTicks > 0) {
+                g_doneTicks--;
+                if (g_doneTicks == 0) {
+                    g_progress = 0;
+                    KillTimer(hwnd, TIMER_PROGRESS);
+                }
+            } else {
+                g_progress = 0;
+                KillTimer(hwnd, TIMER_PROGRESS);
+            }
+            InvalidateRect(hwnd, NULL, FALSE);
+            return 0;
+        }
+        if (wp == TIMER_RECOUNT) {
+            if (g_webView != NULL && !g_loading)
+                Wv2Recount();
+            return 0;
+        }
+        break;
     }
     case WM_SIZE:
         LayoutChildren();
         return 0;
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO *mmi = (MINMAXINFO *)lp;
+        if (mmi != NULL) {
+            mmi->ptMinTrackSize.x = 520;
+            mmi->ptMinTrackSize.y = 380;
+        }
+        return 0;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        FillRect(hdc, &rc, g_barBrush);
+        /* قابِ گردِ فیلدِ آدرس */
+        if (g_urlRing.right > g_urlRing.left) {
+            HPEN pen = CreatePen(PS_SOLID, 1, CLR_URLBR);
+            HGDIOBJ ob = SelectObject(hdc, pen);
+            HGDIOBJ obb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            RoundRect(hdc, g_urlRing.left, g_urlRing.top,
+                      g_urlRing.right, g_urlRing.bottom, 20, 20);
+            SelectObject(hdc, ob);
+            SelectObject(hdc, obb);
+            DeleteObject(pen);
+        }
+        /* نوارِ پیشرفت */
+        if (g_progress > 0 && rc.right > 0) {
+            RECT pr = {0, TOP_BAND_H,
+                       (rc.right * g_progress) / 100,
+                       TOP_BAND_H + PROG_H};
+            HBRUSH b = CreateSolidBrush(CLR_ACC);
+            FillRect(hdc, &pr, b);
+            DeleteObject(b);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
     case WM_DESTROY:
+        KillTimer(hwnd, TIMER_PROGRESS);
+        KillTimer(hwnd, TIMER_RECOUNT);
         PostQuitMessage(0);
         return 0;
     default:
@@ -567,7 +856,8 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     }
     CoInitializeEx(NULL, COINIT_APARTMENTTHREADED);
 
-    g_darkBrush = CreateSolidBrush(CLR_BG);
+    g_barBrush = CreateSolidBrush(CLR_BAR);
+    g_urlBrush = CreateSolidBrush(CLR_URLBG);
     g_font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0,
                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -586,7 +876,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     wc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(1));
     wc.hIconSm = wc.hIcon;
     wc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    wc.hbrBackground = g_darkBrush;
+    wc.hbrBackground = g_barBrush;
     wc.lpszClassName = L"MangaCloudWnd";
     RegisterClassExW(&wc);
 
@@ -603,52 +893,50 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     if (g_hwnd == NULL)
         return 1;
 
-    /* ——— نوارِ بالا ——— */
-    g_editUrl = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
-                                WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL |
-                                    ES_LEFT,
-                                14, 7, 400, 32, g_hwnd,
-                                (HMENU)(INT_PTR)ID_EDIT_URL, hInst, NULL);
+    /* ——— نوارِ بالا: بستن + آدرس + برو (مثل گوشی) ——— */
+    g_btnClose = CreateWindowExW(0, L"BUTTON", L"\u2715",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 42, 32, g_hwnd, (HMENU)(INT_PTR)ID_BTN_CLOSE, hInst, NULL);
+    g_editUrl = CreateWindowExW(0, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_LEFT,
+        0, 9, 400, 28, g_hwnd,
+        (HMENU)(INT_PTR)ID_EDIT_URL, hInst, NULL);
     g_btnGo = CreateWindowExW(0, L"BUTTON",
         L"\u0628\u0631\u0648",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 66, 32, g_hwnd, (HMENU)(INT_PTR)ID_BTN_GO, hInst, NULL);
-    g_btnBack = CreateWindowExW(0, L"BUTTON", L"\u2199",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 44, 32, g_hwnd, (HMENU)(INT_PTR)ID_BTN_BACK, hInst, NULL);
-    g_btnHome = CreateWindowExW(0, L"BUTTON",
-        L"\u0627\u067E",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 74, 32, g_hwnd, (HMENU)(INT_PTR)ID_BTN_HOME, hInst, NULL);
 
-    /* ——— نوارِ پایین ——— */
+    /* ——— نوارِ پایین: برگشت/جلو + شمارشِ زنده + استخراج ——— */
+    g_btnBack = CreateWindowExW(0, L"BUTTON", L"\u2190",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 42, 34, g_hwnd, (HMENU)(INT_PTR)ID_BTN_BACK, hInst, NULL);
+    g_btnFwd = CreateWindowExW(0, L"BUTTON", L"\u2192",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 42, 34, g_hwnd, (HMENU)(INT_PTR)ID_BTN_FWD, hInst, NULL);
     g_lblStatus = CreateWindowExW(0, L"STATIC",
-        L"\u06A9\u067E\u0686\u0627 \u0631\u0627 \u0631\u062F \u06A9\u0646\u060C "
-        L"\u0641\u0635\u0644 \u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646\u060C "
-        L"\u0628\u0639\u062F \u00AB\u0627\u0633\u062A\u062E\u0631\u0627\u0642 "
-        L"\u0639\u06A9\u0633\u00BB \u0631\u0627 \u0628\u0632\u0646 \u2014 "
-        L"\u0644\u06CC\u0646\u06A9\u200C\u0647\u0627 \u062E\u0648\u062F\u06A9\u0627\u0631 "
-        L"\u062F\u0631 \u0641\u06CC\u0644\u062F\u0650 \u0648\u0631\u0648\u062F\u06CC "
-        L"\u0627\u067E \u0645\u06CC\u0646\u0634\u06CC\u0646\u0646\u062F",
-        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE,
+        L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u2014 "
+        L"\u0627\u0648\u0644 \u0641\u0635\u0644 \u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646",
+        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE | SS_ENDELLIPSIS,
         0, 0, 600, 40, g_hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS, hInst, NULL);
     g_btnExtract = CreateWindowExW(0, L"BUTTON",
         L"\U0001F5BC \u0627\u0633\u062A\u062E\u0631\u0627\u0642 \u0639\u06A9\u0633",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 168, 36, g_hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
+        0, 0, 176, 36, g_hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
 
     SendMessageW(g_editUrl, WM_SETFONT, (WPARAM)g_font, TRUE);
     g_editProc = (WNDPROC)SetWindowLongPtrW(g_editUrl, GWLP_WNDPROC,
                                             (LONG_PTR)MtEditProc);
     SendMessageW(g_btnGo, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnBack, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_btnHome, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnFwd, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnClose, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
 
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
     LayoutChildren();
+    SetTimer(g_hwnd, TIMER_RECOUNT, 3000, NULL);
 
     HMODULE loader = LoadLibraryW(L"WebView2Loader.dll");
     if (loader == NULL) {

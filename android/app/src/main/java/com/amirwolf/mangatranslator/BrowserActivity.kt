@@ -47,15 +47,19 @@ class BrowserActivity : Activity() {
     if(!u)return 1;
     if(u.indexOf('data:')===0)return 1;
     if(!/^https?:/i.test(u))return 1;
-    if(/\.(svg|ico)([?#]|$)/i.test(u))return 1;
-    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|ads?[._-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;
+    if(/\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;
+    if(/-\d{2,4}x\d{2,4}\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;
+    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;
     return 0}
   var els=document.querySelectorAll('img,source');
   for(var i=0;i<els.length;i++){
     var el=els[i],cs=null;
     try{cs=el.currentSrc||el.src||null}catch(e){}
     var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),
-           el.getAttribute('data-original'),el.getAttribute('data-echo')];
+           el.getAttribute('data-original'),el.getAttribute('data-original-src'),
+           el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),
+           el.getAttribute('data-url'),el.getAttribute('data-image'),
+           el.getAttribute('data-echo')];
     var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');
     if(ss){var p=ss.split(',');
       if(p.length)c.push(p[p.length-1].trim().split(/\s+/)[0])}
@@ -71,9 +75,12 @@ class BrowserActivity : Activity() {
       seen[u]=1;out.push(u);break}}
   function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];
     for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}
-  out.sort(function(a,b){var x=nk(a),y=nk(b);
-    for(var i=0;i<Math.min(x.length,y.length);i++){
-      if(x[i]!==y[i])return x[i]-y[i]}return a<b?-1:1});
+  function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\d+)(?!.*\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}
+  out.sort(function(a,b){var x=ln(a),y=ln(b);
+  if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);
+  var p=nk(a),q=nk(b);
+  for(var i=0;i<Math.min(p.length,q.length);i++){
+  if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});
   return out;
 })()
 """

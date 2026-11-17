@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.323"
+APP_VER = "1.14.324"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1332,8 +1332,9 @@ _MT_BROWSER_WIN_JS = """
     if(!u)return 1;
     if(u.indexOf('data:')===0)return 1;
     if(!/^https?:/i.test(u))return 1;
-    if(/\\.(svg|ico)([?#]|$)/i.test(u))return 1;
-    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|ads?[._-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;
+    if(/\\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;
+    if(/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;
+    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;
     return 0}
   function collect(){
     var seen={},out=[];
@@ -1342,7 +1343,10 @@ _MT_BROWSER_WIN_JS = """
       var el=els[i],cs=null;
       try{cs=el.currentSrc||el.src||null}catch(e){}
       var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),
-             el.getAttribute('data-original'),el.getAttribute('data-echo')];
+             el.getAttribute('data-original'),el.getAttribute('data-original-src'),
+             el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),
+             el.getAttribute('data-url'),el.getAttribute('data-image'),
+             el.getAttribute('data-echo')];
       var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');
       if(ss){var p=ss.split(',');
         if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}
@@ -1358,9 +1362,12 @@ _MT_BROWSER_WIN_JS = """
         seen[u]=1;out.push(u);break}}
     function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];
       for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}
-    out.sort(function(a,b){var x=nk(a),y=nk(b);
-      for(var i=0;i<Math.min(x.length,y.length);i++){
-        if(x[i]!==y[i])return x[i]-y[i]}return a<b?-1:1});
+    function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}
+    out.sort(function(a,b){var x=ln(a),y=ln(b);
+    if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);
+    var p=nk(a),q=nk(b);
+    for(var i=0;i<Math.min(p.length,q.length);i++){
+    if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});
     return out;
   }
   css();
@@ -1395,12 +1402,16 @@ _MT_BROWSER_WIN_JS = """
 
 
 class _DesktopApi:
-    """v1.14.323 — js_api پنجرهٔ دسکتاپ: مرورگرِ داخلی برای سایت‌های
-    کپچادار (مثلِ BrowserActivity اندروید، ولی با pywebview)."""
+    """js_api پنجرهٔ دسکتاپ: مرورگرِ داخلی برای سایت‌های کپچادار
+    (مثلِ BrowserActivity اندروید، ولی با pywebview).
+
+    نامهای فیلدها حتماً با «_» شروع میشوند — pywebview همهٔ
+    اعضای عمومیِ js_api را برایِ JS باز میکند و پیمودنِ اشیایِ
+    pywebview (پنجرهها) به خطایِ COM و بازگشتِ بی‌نهایت می‌انجامید."""
 
     def __init__(self):
-        self.main_win = None
-        self.br_win = None
+        self._main_win = None
+        self._br_win = None
 
     def openBrowser(self, url):
         try:
@@ -1411,26 +1422,26 @@ class _DesktopApi:
             if not u.lower().startswith(("http://", "https://")):
                 u = "https://" + u
             try:
-                if self.br_win is not None:
-                    self.br_win.destroy()
+                if self._br_win is not None:
+                    self._br_win.destroy()
             except Exception:
                 pass
-            self.br_win = webview.create_window(
+            self._br_win = webview.create_window(
                 "مرورگر داخلی — استخراج عکس مانهوا", u,
                 width=1150, height=840, min_size=(760, 520),
                 background_color="#060607", js_api=self)
-            self.br_win.events.loaded += self._on_br_loaded
-            self.br_win.events.closed += self._on_br_closed
+            self._br_win.events.loaded += self._on_br_loaded
+            self._br_win.events.closed += self._on_br_closed
         except Exception as e:
             print(f"[!] مرورگرِ داخلی باز نشد: {e}")
 
     def _on_br_closed(self):
-        self.br_win = None
+        self._br_win = None
 
     def _on_br_loaded(self):
         try:
-            if self.br_win is not None:
-                self.br_win.evaluate_js(_MT_BROWSER_WIN_JS)
+            if self._br_win is not None:
+                self._br_win.evaluate_js(_MT_BROWSER_WIN_JS)
         except Exception:
             pass
 
@@ -1453,19 +1464,19 @@ class _DesktopApi:
                             if str(x).strip())
             if not text:
                 return
-            if self.main_win is not None:
+            if self._main_win is not None:
                 try:
-                    self.main_win.evaluate_js(
+                    self._main_win.evaluate_js(
                         "window.__mtFillLinks && window.__mtFillLinks(%s);"
                         % _j.dumps(text))
                 except Exception as e:
                     print(f"[!] پرکردنِ فیلدِ لینک ناموفق: {e}")
             try:
-                if self.br_win is not None:
-                    self.br_win.destroy()
+                if self._br_win is not None:
+                    self._br_win.destroy()
             except Exception:
                 pass
-            self.br_win = None
+            self._br_win = None
         except Exception as e:
             print(f"[!] استخراجِ مرورگرِ داخلی: خطا — {e}")
 
@@ -1474,6 +1485,10 @@ def run_desktop():
     import socket
     import time as _t
     import webbrowser
+
+    # پروکسیِ سیستم نباید لوکال‌هاست را بگیرد — قبل ازِ زایشِ
+    # زیرپروسهٔ وب ست میشود تا ارث برسد.
+    _no_proxy_localhost()
 
     port = int(os.environ.get("MANGA_APP_PORT", "7860") or 7860)
     url = f"http://127.0.0.1:{port}/?desktop=1"
@@ -1521,7 +1536,7 @@ def run_desktop():
                 _start_kw["storage_path"] = _store
             # v1.14.323 — js_api: مرورگرِ داخلی برای سایت‌های کپچادار
             _api = _DesktopApi()
-            _api.main_win = webview.create_window(
+            _api._main_win = webview.create_window(
                 f"{APP_NAME} v{APP_VER}", url,
                 width=1280, height=880,
                 min_size=(980, 640),
@@ -1902,8 +1917,9 @@ textarea { scrollbar-color: var(--ink-line) #08080a !important; }
 .compact-upload .empty .icon-wrap { display: none !important; }
 .compact-upload label { position: static !important; margin: 4px 0 !important; }
 
-#manga_ocr_lang .wrap { padding: 2px 0 !important; background: transparent !important; gap: 4px 16px !important; }
-#manga_ocr_lang label { margin: 0 !important; }
+#manga_ocr_lang .wrap { padding: 2px 0 !important; background: transparent !important; gap: 4px 16px !important; flex-wrap: wrap !important; }
+#manga_ocr_lang label { margin: 0 !important; flex: 0 0 calc(50% - 10px) !important; }
+#manga_ocr_lang .wrap > label:nth-child(1), #manga_ocr_lang .wrap > label:nth-child(2) { padding-top: 2px !important; }
 
 footer { display: none !important; }
 
@@ -2173,9 +2189,10 @@ _MT_BM_CODE = (
     "if(!u)return 1;"
     "if(u.indexOf('data:')===0)return 1;"
     "if(!/^https?:/i.test(u))return 1;"
-    "if(/\\.(svg|ico)([?#]|$)/i.test(u))return 1;"
+    "if(/\\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;"
+    "if(/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;"
     "if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|"
-    "ads?[._-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;"
+    "(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;"
     "return 0}"
     "var els=document.querySelectorAll('img,source');"
     "for(var i=0;i<els.length;i++){"
@@ -2183,7 +2200,9 @@ _MT_BM_CODE = (
     "try{cs=el.currentSrc||el.src||null}catch(e){}"
     "var c=[cs,el.getAttribute('data-src'),"
     "el.getAttribute('data-lazy-src'),el.getAttribute('data-original'),"
-    "el.getAttribute('data-echo')];"
+    "el.getAttribute('data-original-src'),el.getAttribute('data-orig-src'),"
+    "el.getAttribute('data-lazy'),el.getAttribute('data-url'),"
+    "el.getAttribute('data-image'),el.getAttribute('data-echo')];"
     "var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');"
     "if(ss){var p=ss.split(',');"
     "if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}"
@@ -2200,9 +2219,12 @@ _MT_BM_CODE = (
     "if(!out.length){alert('__MT_NOLINKS__');return}"
     "function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),"
     "r=[];for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}"
-    "out.sort(function(a,b){var x=nk(a),y=nk(b);"
-    "for(var i=0;i<Math.min(x.length,y.length);i++){"
-    "if(x[i]!==y[i])return x[i]-y[i]}return a<b?-1:1});"
+    "function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}"
+    "out.sort(function(a,b){var x=ln(a),y=ln(b);"
+    "if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);"
+    "var p=nk(a),q=nk(b);"
+    "for(var i=0;i<Math.min(p.length,q.length);i++){"
+    "if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});"
     "var payload=out.join('\\n');"
     "var app='__MTAPP__';"
     "try{var url=app+'#imgs='+encodeURIComponent(payload);"
@@ -2495,12 +2517,39 @@ def _dark_js_src() -> str:
 }
 """
 
+def _no_proxy_localhost():
+    """پروکسیِ سیستم (ویندوز/وپن‌ان‌هو) نباید لوکال‌هاست را بگیرد.
+
+    گرادیو بعد ازِ راه‌اندازی با یک درخواستِ HTTP چک میکند که
+    localhost در دسترس است؛ اگر پروکسیِ کاربر این درخواست را
+    ببلعد، برنامه با «localhost is not accessible» می‌میرد —
+    همان خطایی که اپِ پی‌سی را باز نمی‌کرد."""
+    hosts = "localhost,127.0.0.1,0.0.0.0,::1"
+    for k in ("NO_PROXY", "no_proxy"):
+        cur = os.environ.get(k, "").strip()
+        parts = [p.strip() for p in cur.split(",") if p.strip()]
+        for h in hosts.split(","):
+            if h not in parts:
+                parts.insert(0, h)
+        os.environ[k] = ",".join(parts)
+    # اگر httpx قبلاً پروکسیها را کش کرده، پاک شود
+    try:
+        import httpx
+        try:
+            httpx._utils.get_environment_proxies.cache_clear()
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def run_web():
     try:
         purge_web_secrets()
     except Exception:
         pass
 
+    _no_proxy_localhost()
     os.environ["GRADIO_ALLOWED_PATHS"] = os.pathsep.join(
         {str(WORK_DIR), str(OUT_DIR), str(UPLOAD_DIR), str(FONT_DIR), str(HERE)})
     os.environ.setdefault("GRADIO_ANALYTICS_CACHE_FREQUENCY", "1000000000")
@@ -6312,9 +6361,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ocr_lang = gr.CheckboxGroup(
                 choices=[
                     ("ژاپنی", "ja"),
+                    ("انگلیسی", "en"),
                     ("کره‌ای", "ko"),
                     ("چینی", "zh"),
-                    ("انگلیسی", "en"),
                 ],
                 value=_ocr_lang_ui_value(cfg.get("ocr_lang", "en")),
                 label=TX("app.ocr_lang", "زبانهای متن مانگا (OCR) — تیک بزن"),
@@ -10417,7 +10466,7 @@ try { window.__mangaUpdateProg('', ''); } catch (e) {}
     if _web_host():
         _blocked_paths = [str(CUSTOM_MODELS_PATH), str(CFG_PATH), str(HIST_PATH)]
         print("[🛡] میزبانِ وبِ عمومی: فایلهایِ حساسِ workspace از /file= بسته شدند.")
-    demo.queue(max_size=64).launch(
+    _launch_kw = dict(
         server_name="0.0.0.0",
         server_port=int(os.environ.get("MANGA_APP_PORT", "7860")),
         share=on_colab or on_codespace or (not has_display()),
@@ -10425,8 +10474,18 @@ try { window.__mangaUpdateProg('', ''); } catch (e) {}
         show_error=True,
         allowed_paths=[str(WORK_DIR), str(OUT_DIR), str(UPLOAD_DIR), str(FONT_DIR)],
         blocked_paths=_blocked_paths,
-        **launch_kw,
     )
+    _launch_kw.update(launch_kw)
+    try:
+        demo.queue(max_size=64).launch(**_launch_kw)
+    except ValueError as _ve:
+        # پروکسیِ سیستم چکِ لوکال‌هاستِ گرادیو را سد کرده — یک بار
+        # دیگر با محیطِ تازه (بدونِ پروکسی برایِ localhost) تلاش کن.
+        if "localhost" not in str(_ve).lower():
+            raise
+        print("[!] پروکسیِ سیستم چکِ لوکال‌هاست را سد کرد — تلاشِ دوباره…")
+        _no_proxy_localhost()
+        demo.queue(max_size=64).launch(**_launch_kw)
 
 def main():
     ensure_dirs()
