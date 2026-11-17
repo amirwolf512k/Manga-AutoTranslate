@@ -147,7 +147,7 @@ jobs:
           where cl || exit /b 1
           del /q MangaCloud.exe 2>nul
           rc /nologo /fo app64.res app.rc || exit /b 1
-          cl /nologo /std:c++17 /EHsc /O2 /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"%GITHUB_WORKSPACE%\wv2sdk\build\native\include" app.cpp /Fe:MangaCloud.exe /Fo:app64.obj /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /LIBPATH:"%GITHUB_WORKSPACE%\wv2sdk\build\native\x64" WebView2LoaderStatic.lib user32.lib gdi32.lib ole32.lib shell32.lib advapi32.lib uuid.lib
+          cl /nologo /std:c++17 /EHsc /O2 /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"%GITHUB_WORKSPACE%\wv2sdk\build\native\include" app.cpp app64.res /Fe:MangaCloud.exe /Fo:app64.obj /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /LIBPATH:"%GITHUB_WORKSPACE%\wv2sdk\build\native\x64" WebView2LoaderStatic.lib user32.lib gdi32.lib ole32.lib shell32.lib advapi32.lib uuid.lib
           if not exist MangaCloud.exe exit /b 1
           mkdir pkg64 2>nul
           copy /y MangaCloud.exe pkg64\ >nul
@@ -164,7 +164,7 @@ jobs:
           where cl || exit /b 1
           del /q MangaCloud.exe 2>nul
           rc /nologo /fo app86.res app.rc || exit /b 1
-          cl /nologo /std:c++17 /EHsc /O2 /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"%GITHUB_WORKSPACE%\wv2sdk\build\native\include" app.cpp /Fe:MangaCloud.exe /Fo:app86.obj /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /LIBPATH:"%GITHUB_WORKSPACE%\wv2sdk\build\native\x86" WebView2LoaderStatic.lib user32.lib gdi32.lib ole32.lib shell32.lib advapi32.lib uuid.lib
+          cl /nologo /std:c++17 /EHsc /O2 /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"%GITHUB_WORKSPACE%\wv2sdk\build\native\include" app.cpp app86.res /Fe:MangaCloud.exe /Fo:app86.obj /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /LIBPATH:"%GITHUB_WORKSPACE%\wv2sdk\build\native\x86" WebView2LoaderStatic.lib user32.lib gdi32.lib ole32.lib shell32.lib advapi32.lib uuid.lib
           if not exist MangaCloud.exe exit /b 1
           mkdir pkg86 2>nul
           copy /y MangaCloud.exe pkg86\ >nul
@@ -198,7 +198,10 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_5122 }}
         run: |
-          if (gh release view apks --repo amirwolf5122/Manga-AutoTranslate > $null 2>&1) {
+          # pwsh: باید $LASTEXITCODE را چک کنیم — «if (cmd > $null)»
+          # خروجیِ (خالی‌شده) را میسنجد نه کدِ خروج را (باگِ ترجمه از بش!)
+          gh release view apks --repo amirwolf5122/Manga-AutoTranslate *> $null
+          if ($LASTEXITCODE -eq 0) {
             gh release upload clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --clobber 2>$null
             if ($LASTEXITCODE -ne 0) {
               gh release create clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --title "clouds" --target main --notes "Windows" 2>$null
