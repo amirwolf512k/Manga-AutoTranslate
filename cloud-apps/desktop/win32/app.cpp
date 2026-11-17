@@ -190,10 +190,10 @@ static void Wv2ExecuteScript(Wv2WebView *wv, const wchar_t *js, void *h) {
     ((Wv2ExecuteScriptFn)vslot(wv, 29))(wv, js, h);
 }
 
-static void Wv2AddDocScript(Wv2WebView *wv, const wchar_t *js) {
+static void Wv2AddDocScript(Wv2WebView *wv, const wchar_t *js, void *h) {
     if (wv == NULL)
         return;
-    ((Wv2AddScriptFn)vslot(wv, 27))(wv, js, NULL);
+    ((Wv2AddScriptFn)vslot(wv, 27))(wv, js, h);
 }
 
 static void Wv2AddEvent(Wv2WebView *wv, unsigned int slot, void *handler) {
@@ -555,7 +555,7 @@ struct Wv2CtlHandler {
         if (SUCCEEDED(hr) && wv != NULL) {
             g_webView = wv;
             /* ترجمهٔ پیام‌های نشانک قبل از هر اسکریپتی */
-            Wv2AddDocScript(wv, MT_PRELOAD_JS);
+            Wv2AddDocScript(wv, MT_PRELOAD_JS, &g_execNoop);
             /* رویدادها: نوارِ پیشرفت + همگام‌سازیِ آدرس و عنوان */
             Wv2AddEvent(wv, 7, &g_navStartHandler);   /* NavigationStarting */
             Wv2AddEvent(wv, 15, &g_navDoneHandler);   /* NavigationCompleted */
