@@ -1,21 +1,23 @@
 /* Manga Cloud — نسخهٔ کلودِ پی‌سی (Win32 + WebView2)
-   v1.14.330 — رفعِ کرشِ واقعیِ v1.14.329 (لاگِ کاربر:
-   «lazy: create br hr=0» → ۵ ثانیه بعد C0000005 از نوعِ ۸ =
-   اجرایِ آدرسِ غیرقابلِاجرا؛ نه «br: get_CoreWebView2» در لاگ
-   هست و نه «SEH-CAUGHT» → کرش داخلِ خودِ رانِتایمِ WebView2 و
-   قبل از رسیدنِ نوبت به کالکِ ماست):
-   • یافتهٔ اصلی: هر دو کنترلر (اپ + مرورگر) رویِ «یک» HWND والد
-     (پنجرهٔ اصلی) ساخته میشدند. رانِتایمِ WebView2 برایِ هر HWND
-     فقط یک کنترلر پشتیبانی میکند؛ کنترللرِ دوم حالتِ داخلیِ
-     همان پنجره را خراب میکند و چند ثانیه بعد، فراخوانیِ vtableِ
-     داخلیِ آزادشده → پرش به آدرسِ بی‌معنا → C0000005 (type=8).
-     همین الگو در لاگهای v327 و v328 هم دیده میشد.
-   • رفع: هر کنترلر HWND میزبانِ خودش را دارد — دو پنجرهٔ فرزندِ
-     سادهٔ WS_CHILD از پنجرهٔ اصلی (الگوی رسمیِ چند-وب‌ویو در
-     یک پنجره). Boundsِ هر کنترلر نسبت به میزبانِ خودش است.
-   • تستِ دودیِ جدید: MANGA_SMOKE=2 هشت ثانیه بعد از آمادهشدنِ
-     اپ، خودش کره را میزند تا مسیرِ ساختِ کنترللرِ مرورگر (جایِ
-     کرشهای v327–v329) در CI هم اجرا و بررسی شود.
+   v1.14.331 — ادامهٔ رفعِ کرشِ مرورگرِ داخلی (تستِ دودیِ CI در
+   v1.14.330 نشان داد: با میزبانِ جدا، کالکِ اتمام تا «br webview
+   created» پیش میرود ولی بعدش یک C0000005 (گیرافتاده در SEH) در
+   بدنهٔ خودِ کالک رخ میداد — در LayoutChildren/MtOpenBrowserUi
+   که داخلِ کالکِ اتمام اجرا میشدند):
+   • کالکِ اتمامِ کنترللرِ مرورگر حالا «هیچ کاری» نمیکند — فقط
+     نگه‌داشتن + لاگ + PostMessage(WM_APP_BRREADY)؛ چیدمان و
+     بازکردنِ مرورگر در صفِ پیام و رویِ استکِ تمیز انجام میشود
+     (همان الگویی که کرشِ v1.14.327 را در کالکِ محیط رفع کرد).
+   • SEH-CAUGHT حالا آفستِ نسبت به تصویر + ردِ پشته را هم لاگ
+     میکند تا اگر خطایی ماند، دقیقاً معلوم شود کجا بوده.
+   v1.14.330 — ریشهٔ کرشهای v327–v329: هر دو کنترلر رویِ «یک»
+   HWND والد ساخته میشدند؛ رانِتایمِ WebView2 برایِ هر HWND فقط
+   یک کنترلر میپذیرد → کنترللرِ دوم همان پنجره را خراب میکرد و
+   چند ثانیه بعد C0000005 (type=8 = اجرایِ آدرسِ غیرقابلِاجرا،
+   داخلِ خودِ رانِتایم — نه «br: get_CoreWebView2» در لاگ، نه
+   «SEH-CAUGHT»). حالا هر کنترلر پنجرهٔ میزبانِ WS_CHILD خودش
+   را دارد (الگوی رسمیِ چند-وب‌ویو) + تستِ دودیِ MANGA_SMOKE=2
+   در CI خودش کره را میزند و «br webview created» را الزام میکند.
    ساخت: cl /std:c++17 /EHsc /O2 /MT /I <sdk>\build\native\include
          app.cpp app.res /link WebView2LoaderStatic.lib … (MSVC) */
 #ifndef UNICODE
@@ -55,6 +57,7 @@ static const WCHAR APP_TITLE[] =
 
 /* v1.14.328 — پیامهای داخلیِ صف: ساختِ کنترلرها روی استکِ تمیز */
 #define WM_APP_CREATCTL (WM_APP + 1)
+#define WM_APP_BRREADY  (WM_APP + 2)  /* v1.14.331 — مرورگر آماده است */
 
 #define TOP_BAND_H  46
 #define PROG_H       3
@@ -372,6 +375,32 @@ static int MtSehLog(const char *who, EXCEPTION_POINTERS *ep) {
     }
     sprintf(b, "SEH-CAUGHT %s code=%08lX addr=%p", who, code, addr);
     MtLog(b);
+    /* v1.14.331 — آفستِ نسبت به تصویر + ردِ پشته: اگر خطایی در
+       کالکها ماند، دقیقاً معلوم شود کجا بوده */
+    {
+        HMODULE img = GetModuleHandleW(NULL);
+        if (addr != NULL && img != NULL) {
+            char b2[96];
+            sprintf(b2, "SEH offset=+%llX",
+                    (unsigned long long)((uintptr_t)addr - (uintptr_t)img));
+            MtLog(b2);
+        }
+        void *fr[12];
+        USHORT n = CaptureStackBackTrace(0, 12, fr, NULL);
+        for (USHORT i = 0; i < n; i++) {
+            char b3[96];
+            if (img != NULL
+                    && (uintptr_t)fr[i] >= (uintptr_t)img
+                    && (uintptr_t)fr[i] < (uintptr_t)img + 0x4000000u) {
+                sprintf(b3, "seh-stack[%u] +0x%llX", (unsigned)i,
+                        (unsigned long long)((uintptr_t)fr[i]
+                                             - (uintptr_t)img));
+            } else {
+                sprintf(b3, "seh-stack[%u] %p", (unsigned)i, fr[i]);
+            }
+            MtLog(b3);
+        }
+    }
     MtWriteMinidump(ep);
     return EXCEPTION_EXECUTE_HANDLER;
 }
@@ -892,12 +921,11 @@ struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCom
             wv->add_SourceChanged(&g_srcHandler, &g_evTokBrSrc);
             controller->put_IsVisible(FALSE);
             MtLog("br webview created");
-            LayoutChildren();
-            /* اگر این ساختِ «تنبل» بود (کلیکِ کره) → حالا بازش کن */
-            if (g_brPending) {
-                g_brPending = FALSE;
-                MtOpenBrowserUi();
-            }
+            /* v1.14.331 — بقیهٔ کار در صفِ پیام: هیچ کاری داخلِ
+               کالکِ اتمام انجام نشود (تستِ دودیِ CI در v1.14.330:
+               C0000005ِ گیرافتاده در SEH، بعد از همین لاگ، همینجا
+               رخ میداد) — همان الگوی رفعِ کرشِ محیط در v1.14.328 */
+            PostMessage(g_hwnd, WM_APP_BRREADY, 0, 0);
             return S_OK;
         }
         g_appCtl = controller;
@@ -1268,6 +1296,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_APP_BRREADY: {
+        /* v1.14.331 — کنترللرِ مرورگر آماده شد (از صفِ پیام، نه
+           داخلِ کالکِ اتمام): چیدمان + بازکردن روی استکِ تمیز */
+        if (g_brPending) {
+            g_brPending = FALSE;
+            MtOpenBrowserUi();
+        } else {
+            LayoutChildren();
+        }
+        return 0;
+    }
     case WM_COMMAND: {
         int id = LOWORD(wp);
         int code = HIWORD(wp);
@@ -1544,7 +1583,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     /* v1.14.326 — لاگِ اجرا + ضبطِ کرش، قبل از هر کاری */
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.330 (own host hwnd per controller + honest QI + all-SEH)");
+    MtLog("WinMain — MangaCloud v1.14.331 (own host hwnd + deferred callbacks + honest QI + all-SEH)");
     /* v1.14.330 — MANGA_SMOKE=2: تستِ دودیِ مسیرِ مرورگر — بعد
        از ۸ ثانیه کره خودکار زده میشود (رگرسیونِ کرشِ v327–v329) */
     {
