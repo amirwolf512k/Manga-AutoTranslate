@@ -74,7 +74,7 @@ public class BrowserActivity extends Activity {
         "out.sort(function(a,b){var x=nk(a),y=nk(b);" +
         "for(var i=0;i<Math.min(x.length,y.length);i++){" +
         "if(x[i]!==y[i])return x[i]-y[i]}return a<b?-1:1});" +
-        "return JSON.stringify(out);" +
+        "return out;" +
         "})()";
 
     private WebView web;
@@ -82,6 +82,22 @@ public class BrowserActivity extends Activity {
     private TextView extractBtn;
     private TextView countLbl;
     private ProgressBar progress;
+
+    /** v1.14.323 — اگر JS آرایه برگرداند raw خودِ آرایه است؛ اگر
+     *  رشتهٔ JSON-stringify شده باشد (نسخه‌های قدیمی) یک لایه باز میشود. */
+    private static JSONArray parseLinksRaw(String raw) {
+        String s = raw == null ? "" : raw.trim();
+        if (s.isEmpty()) return null;
+        try {
+            Object v = new org.json.JSONTokener(s).nextValue();
+            if (v instanceof JSONArray) return (JSONArray) v;
+            if (v instanceof String) {
+                Object inner = new org.json.JSONTokener((String) v).nextValue();
+                if (inner instanceof JSONArray) return (JSONArray) inner;
+            }
+        } catch (Exception ignored) {}
+        return null;
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -216,8 +232,8 @@ public class BrowserActivity extends Activity {
             web.loadUrl(startUrl);
             recountAsync();
         } else {
-            web.loadUrl("about:blank");
-            urlBox.requestFocus();
+            // v1.14.323 — پیش‌فرض google.com به‌جای about:blank
+            web.loadUrl("https://www.google.com");
         }
     }
 
@@ -291,7 +307,8 @@ public class BrowserActivity extends Activity {
         try {
             web.evaluateJavascript(EXTRACT_JS, value -> {
                 try {
-                    final int n = new JSONArray(value != null ? value : "[]").length();
+                    JSONArray arr = parseLinksRaw(value);
+                    final int n = arr == null ? 0 : arr.length();
                     runOnUiThread(() -> countLbl.setText(n > 0
                             ? n + " عکس آماده استخراج"
                             : "عکسی پیدا نشده — اول فصل را باز کن"));
@@ -314,8 +331,8 @@ public class BrowserActivity extends Activity {
             web.evaluateJavascript(EXTRACT_JS, value -> runOnUiThread(() -> {
                 extractBtn.setText("🖼 استخراج عکس");
                 try {
-                    JSONArray arr = new JSONArray(value != null ? value : "[]");
-                    if (arr.length() == 0) {
+                    JSONArray arr = parseLinksRaw(value);
+                    if (arr == null || arr.length() == 0) {
                         countLbl.setText("عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن");
                         Toast.makeText(BrowserActivity.this,
                                 "هیچ عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن " +

@@ -74,7 +74,7 @@ class BrowserActivity : Activity() {
   out.sort(function(a,b){var x=nk(a),y=nk(b);
     for(var i=0;i<Math.min(x.length,y.length);i++){
       if(x[i]!==y[i])return x[i]-y[i]}return a<b?-1:1});
-  return JSON.stringify(out);
+  return out;
 })()
 """
     }
@@ -93,6 +93,27 @@ class BrowserActivity : Activity() {
     private lateinit var progress: ProgressBar
 
     private var lastCount = 0
+
+    /** v1.14.323 — evaluateJavascript نتیجه را JSON-انکود می‌دهد؛ اگر
+     *  JS آرایه برگرداند raw خودِ آرایه است، ولی اگر (نسخه‌های قدیمی)
+     *  رشتهٔ JSON-stringify شده برگرداند، باید یک لایه باز شود. */
+    private fun parseLinksRaw(raw: String?): JSONArray? {
+        var s = (raw ?: "").trim()
+        if (s.isEmpty()) return null
+        return try {
+            val v = org.json.JSONTokener(s).nextValue()
+            when (v) {
+                is JSONArray -> v
+                is String -> {
+                    val inner = org.json.JSONTokener(v).nextValue()
+                    if (inner is JSONArray) inner else null
+                }
+                else -> null
+            }
+        } catch (_: Exception) {
+            null
+        }
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -218,8 +239,8 @@ class BrowserActivity : Activity() {
             web.loadUrl(startUrl)
             recountAsync()
         } else {
-            web.loadUrl("about:blank")
-            urlBox.requestFocus()
+            // v1.14.323 — پیش‌فرض google.com به‌جای about:blank
+            web.loadUrl("https://www.google.com")
         }
     }
 
@@ -289,7 +310,8 @@ class BrowserActivity : Activity() {
         try {
             web.evaluateJavascript(EXTRACT_JS) { raw ->
                 try {
-                    val n = JSONArray(raw ?: "[]").length()
+                    val arr = parseLinksRaw(raw)
+                    val n = arr?.length() ?: 0
                     runOnUiThread {
                         lastCount = n
                         countLbl.text = if (n > 0) {
@@ -316,8 +338,8 @@ class BrowserActivity : Activity() {
                 runOnUiThread {
                     extractBtn.text = "🖼 استخراج عکس"
                     try {
-                        val arr = JSONArray(raw ?: "[]")
-                        if (arr.length() == 0) {
+                        val arr = parseLinksRaw(raw)
+                        if (arr == null || arr.length() == 0) {
                             countLbl.text = "عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن"
                             Toast.makeText(this,
                                 "هیچ عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن " +

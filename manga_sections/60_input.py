@@ -106,6 +106,7 @@ class _MangaTranslatorBody_60:
         return [u1[:p] + _m.group(1) + str(n).zfill(width) + _m.group(3)
                 + u1[len(u1) - s:] for n in nums]
 
+    @staticmethod
     def _expand_input_urls(input_str: str) -> List[str]:
         import requests
 

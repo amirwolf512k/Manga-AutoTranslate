@@ -9,6 +9,7 @@ _WIDGETS = {
     "Dropdown": "select",
     "Radio": "radio",
     "Checkbox": "bool",
+    "CheckboxGroup": "checks",
     "Textbox": "text",
     "Slider": "slider",
     "File": "file",

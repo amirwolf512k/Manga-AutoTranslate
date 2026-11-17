@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.322"
+APP_VER = "1.14.323"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -342,6 +342,46 @@ def _web_host() -> bool:
             or os.environ.get("RAILWAY_STATIC_URL", "").strip() != ""
             or os.environ.get("SPACE_ID", "").strip() != ""
             or os.environ.get("HF_SPACE_ID", "").strip() != "")
+
+
+# ————— v1.14.323 — انتخابِ زبان به‌صورتِ تیک —————
+# ورودی میتواند رشتهٔ قدیمی («ko en» / «multi») یا لیستِ تیک‌های
+# CheckboxGroup باشد؛ خروجی همیشه رشتهٔ استانداردِ موتور است:
+#   «en» | «ja» | «ja en» | «ko en» | «zh en» | … | «multi» (۲+ زبانِ شرقی)
+_OCR_LANG_ORDER = {"ja": 0, "ko": 1, "zh": 2, "en": 3}
+
+def _ocr_lang_norm(v) -> str:
+    try:
+        if isinstance(v, str):
+            _s = str(v or "").strip()
+            # مقاوم به «"['ja', 'en']"» (لیستِ رشته‌شده)
+            _s = _s.strip("[]").replace("'", "").replace('"', "")
+            parts = [p for p in re.split(r"[,\s]+", _s) if p]
+        elif isinstance(v, (list, tuple)):
+            parts = []
+            for x in (v or []):
+                parts += [p for p in re.split(r"[,\s]+", str(x or "").strip()) if p]
+        else:
+            parts = []
+        parts = [p.lower() for p in parts]
+        if "multi" in parts:
+            return "multi"
+        if len([p for p in parts if p in ("ja", "ko", "zh")]) >= 2:
+            return "multi"
+        keep = [p for p in parts if p in _OCR_LANG_ORDER]
+        if not keep:
+            return "en"
+        keep.sort(key=lambda p: _OCR_LANG_ORDER[p])
+        return " ".join(keep)
+    except Exception:
+        return "en"
+
+def _ocr_lang_ui_value(v):
+    """رشتهٔ استاندارد → مقدارِ درستِ CheckboxGroup (لیست)."""
+    s = _ocr_lang_norm(v)
+    if s == "multi":
+        return ["ja", "ko", "zh", "en"]
+    return s.split() if s else ["en"]
 
 
 # ————— v1.14.322 — پاکسازیِ خودکارِ خروجیها فقط در نسخهٔ وبِ آنلاین —————
@@ -1262,6 +1302,174 @@ def _ensure_webview() -> bool:
         print(f"[!] pywebview نصب نشد ({e}) → مرورگر")
         return False
 
+
+# ————— v1.14.323 — مرورگرِ داخلی برای سایت‌های کپچادار (دسکتاپ) —————
+# این JS بعد از هر بارِ لودِ صفحه، در پنجرهٔ دومِ pywebview تزریق
+# میشود: دکمهٔ شناورِ «استخراج عکس» + شمارشِ زنده — همان تجربهٔ اپِ
+# گوشی، ولی داخلِ خودِ برنامهٔ پی‌سی/لینوکس.
+_MT_BROWSER_WIN_JS = """
+(function(){
+  if (window.__mtBwBtn) return; window.__mtBwBtn = 1;
+  function css(){
+    try{
+      var s=document.createElement('style');
+      s.textContent='#mtbw{position:fixed;left:14px;bottom:14px;z-index:2147483647;'
+        +'direction:rtl;font-family:Tahoma,Arial,sans-serif;display:flex;'
+        +'align-items:center;gap:10px;background:rgba(13,13,16,.93);'
+        +'border:1px solid #1f1f24;border-radius:16px;padding:8px 10px;'
+        +'box-shadow:0 8px 28px rgba(0,0,0,.55)}'
+        +'#mtbw button{border:0;cursor:pointer;font-weight:700;font-size:13px;'
+        +'color:#fff;background:linear-gradient(135deg,#ff4a3d,#c9271c);'
+        +'border-radius:12px;padding:9px 14px;font-family:inherit}'
+        +'#mtbw span{color:#97948c;font-size:11.5px;max-width:220px;'
+        +'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
+      (document.head||document.documentElement).appendChild(s);
+    }catch(e){}
+  }
+  function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}
+    catch(e){return null}}
+  function junk(u){
+    if(!u)return 1;
+    if(u.indexOf('data:')===0)return 1;
+    if(!/^https?:/i.test(u))return 1;
+    if(/\\.(svg|ico)([?#]|$)/i.test(u))return 1;
+    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|ads?[._-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;
+    return 0}
+  function collect(){
+    var seen={},out=[];
+    var els=document.querySelectorAll('img,source');
+    for(var i=0;i<els.length;i++){
+      var el=els[i],cs=null;
+      try{cs=el.currentSrc||el.src||null}catch(e){}
+      var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),
+             el.getAttribute('data-original'),el.getAttribute('data-echo')];
+      var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');
+      if(ss){var p=ss.split(',');
+        if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}
+      if(el.tagName==='SOURCE'&&el.parentNode){
+        var pp=el.parentNode.querySelector('img');
+        if(pp&&pp.src)c.push(pp.src)}
+      for(var j=0;j<c.length;j++){
+        var u=c[j];if(!u)continue;
+        u=abs(String(u).trim());
+        if(!u||junk(u)||seen[u])continue;
+        var w=el.naturalWidth||el.width||0,h=el.naturalHeight||el.height||0;
+        if(w&&h&&(w<120||h<120))continue;
+        seen[u]=1;out.push(u);break}}
+    function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];
+      for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}
+    out.sort(function(a,b){var x=nk(a),y=nk(b);
+      for(var i=0;i<Math.min(x.length,y.length);i++){
+        if(x[i]!==y[i])return x[i]-y[i]}return a<b?-1:1});
+    return out;
+  }
+  css();
+  var box=document.createElement('div');box.id='mtbw';
+  var cnt=document.createElement('span');cnt.textContent='…';
+  var btn=document.createElement('button');
+  btn.type='button';btn.textContent='\\ud83d\\uddbc استخراج عکس';
+  btn.onclick=function(){
+    try{
+      var out=collect();
+      if(!out.length){
+        alert('عکسی پیدا نشد — اول فصل را باز کن و تا آخرِ صفحه اسکرول کن تا عکس‌های تنبل لود بشن');
+        return;
+      }
+      cnt.textContent=out.length+' عکس — در حال انتقال…';
+      try{window.pywebview.api.onExtract(JSON.stringify(out));}
+      catch(e){alert('خطا در ارسال به اپ: '+e)}
+    }catch(e){alert('خطا در استخراج: '+e)}
+  };
+  box.appendChild(cnt);box.appendChild(btn);
+  function mount(){
+    try{
+      if(!document.getElementById('mtbw'))
+        (document.body||document.documentElement).appendChild(box);
+    }catch(e){}
+  }
+  mount();setTimeout(mount,600);setTimeout(mount,2000);
+  function upd(){try{cnt.textContent=collect().length+' عکس آماده'}catch(e){}}
+  setTimeout(upd,400);setTimeout(upd,1600);setInterval(upd,5000);
+})();
+"""
+
+
+class _DesktopApi:
+    """v1.14.323 — js_api پنجرهٔ دسکتاپ: مرورگرِ داخلی برای سایت‌های
+    کپچادار (مثلِ BrowserActivity اندروید، ولی با pywebview)."""
+
+    def __init__(self):
+        self.main_win = None
+        self.br_win = None
+
+    def openBrowser(self, url):
+        try:
+            import webview
+            u = str(url or "").strip()
+            if not u:
+                return
+            if not u.lower().startswith(("http://", "https://")):
+                u = "https://" + u
+            try:
+                if self.br_win is not None:
+                    self.br_win.destroy()
+            except Exception:
+                pass
+            self.br_win = webview.create_window(
+                "مرورگر داخلی — استخراج عکس مانهوا", u,
+                width=1150, height=840, min_size=(760, 520),
+                background_color="#060607", js_api=self)
+            self.br_win.events.loaded += self._on_br_loaded
+            self.br_win.events.closed += self._on_br_closed
+        except Exception as e:
+            print(f"[!] مرورگرِ داخلی باز نشد: {e}")
+
+    def _on_br_closed(self):
+        self.br_win = None
+
+    def _on_br_loaded(self):
+        try:
+            if self.br_win is not None:
+                self.br_win.evaluate_js(_MT_BROWSER_WIN_JS)
+        except Exception:
+            pass
+
+    def onExtract(self, payload):
+        try:
+            import json as _j
+            links = None
+            if isinstance(payload, str):
+                s = payload.strip()
+                if s.startswith("["):
+                    try:
+                        links = _j.loads(s)
+                    except Exception:
+                        links = [x for x in s.splitlines() if x.strip()]
+                else:
+                    links = [x for x in s.splitlines() if x.strip()]
+            elif isinstance(payload, (list, tuple)):
+                links = list(payload)
+            text = "\n".join(str(x).strip() for x in (links or [])
+                            if str(x).strip())
+            if not text:
+                return
+            if self.main_win is not None:
+                try:
+                    self.main_win.evaluate_js(
+                        "window.__mtFillLinks && window.__mtFillLinks(%s);"
+                        % _j.dumps(text))
+                except Exception as e:
+                    print(f"[!] پرکردنِ فیلدِ لینک ناموفق: {e}")
+            try:
+                if self.br_win is not None:
+                    self.br_win.destroy()
+            except Exception:
+                pass
+            self.br_win = None
+        except Exception as e:
+            print(f"[!] استخراجِ مرورگرِ داخلی: خطا — {e}")
+
+
 def run_desktop():
     import socket
     import time as _t
@@ -1311,10 +1519,14 @@ def run_desktop():
             _start_kw = {"private_mode": False}
             if _store:
                 _start_kw["storage_path"] = _store
-            webview.create_window(f"{APP_NAME} v{APP_VER}", url,
-                                  width=1280, height=880,
-                                  min_size=(980, 640),
-                                  background_color="#060607")
+            # v1.14.323 — js_api: مرورگرِ داخلی برای سایت‌های کپچادار
+            _api = _DesktopApi()
+            _api.main_win = webview.create_window(
+                f"{APP_NAME} v{APP_VER}", url,
+                width=1280, height=880,
+                min_size=(980, 640),
+                background_color="#060607",
+                js_api=_api)
             print("[i] پنجرهٔ دسکتاپ (همان رابط وب) باز شد — با بستن پنجره، برنامه تمام می‌شود")
             webview.start(**_start_kw)
         except Exception as e:
@@ -1690,8 +1902,8 @@ textarea { scrollbar-color: var(--ink-line) #08080a !important; }
 .compact-upload .empty .icon-wrap { display: none !important; }
 .compact-upload label { position: static !important; margin: 4px 0 !important; }
 
-#manga_ocr_lang .wrap { padding: 0 !important; background: transparent !important; }
-#manga_ocr_lang svg { display: none !important; }
+#manga_ocr_lang .wrap { padding: 2px 0 !important; background: transparent !important; gap: 4px 16px !important; }
+#manga_ocr_lang label { margin: 0 !important; }
 
 footer { display: none !important; }
 
@@ -2011,6 +2223,22 @@ def _browser_extract_js() -> str:
     if (!window.__mtLinksInstalled) {
       window.__mtLinksInstalled = true;
 
+      // v1.14.323 — تشخیصِ میزبان: پنجرهٔ دسکتاپ (pywebview) یا
+      // وین۳۲ کلود (chrome.webview) یا مرورگرِ ساده. در دسکتاپِ واقعی
+      // «مرورگرِ داخلی» دیده میشود و نشانک مخفی؛ در وب برعکس.
+      const hostToggle = () => {
+        try {
+          const pw = !!(window.pywebview && window.pywebview.api
+                       && window.pywebview.api.openBrowser);
+          const wv2 = !!(window.chrome && window.chrome.webview
+                        && window.chrome.webview.postMessage);
+          const row = document.getElementById('mt_browser_row');
+          if (row) row.style.display = pw ? '' : 'none';
+          const bm = document.querySelector('details.mt-browser');
+          if (bm) bm.style.display = (pw || wv2) ? 'none' : '';
+        } catch (e) {}
+      };
+
       const setVal = (el, val) => {
         const s = String(val == null ? "" : val);
         try {
@@ -2097,14 +2325,17 @@ def _browser_extract_js() -> str:
       };
 
       window.addEventListener("hashchange", applyHash);
-      const ready = () => { buildBmk(); applyHash(); };
+      const ready = () => { buildBmk(); applyHash(); hostToggle(); };
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", ready);
       } else { ready(); }
       setTimeout(applyHash, 700);
       setTimeout(applyHash, 1800);
+      try { window.addEventListener("pywebviewready", hostToggle); } catch (e) {}
+      setTimeout(hostToggle, 300);
+      setTimeout(hostToggle, 1500);
       const mo = new MutationObserver(() => {
-        try { buildBmk(); } catch (e) {}
+        try { buildBmk(); hostToggle(); } catch (e) {}
       });
       try { mo.observe(document.body, { childList: true, subtree: true }); }
       catch (e) {}
@@ -5987,14 +6218,20 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                    "داخلِ خودِ اپ مرورگرِ داخلی دارد.") + '</div>'
                 '</div></details>')
             _pc_local = not _web_host()
-            with gr.Row(visible=_pc_local) as browser_row:
+            # v1.14.323 — مرورگرِ داخلی (pywebview) به‌جایِ دکمهٔ الکیِ
+            # «باز کردن در مرورگرِ سیستم». فقط وقتی دیده میشود که اپ داخلِ
+            # پنجرهٔ دسکتاپ (pywebview) باشد — با خودِ صفحه تشخیص داده
+            # میشود (window.pywebview). در حالتِ وب همین ردیف مخفی و
+            # نشانک بالا می‌ماند.
+            with gr.Row(visible=_pc_local, elem_id="mt_browser_row") as browser_row:
                 mt_browser_url = gr.Textbox(
-                    label=TX("app.br_open_label",
-                             "آدرس سایت مانهوا (برای باز کردن در مرورگرِ سیستم)"),
+                    label=TX("app.br_open_label2",
+                             "آدرس سایت مانهوا (کپچادار) — در پنجرهٔ داخلیِ خودِ اپ باز میشود"),
                     placeholder="https://mgread.io/manga/...",
                     elem_id="mt_browser_url", scale=4)
-                mt_browser_btn = gr.Button(
-                    TX("app.br_open", "🌐 باز کردن مرورگر"), scale=1)
+                mt_ibtn = gr.Button(
+                    TX("app.br_open2", "🌐 مرورگرِ داخلی"), scale=1,
+                    elem_id="mt_ibtn")
 
         with gr.Group(elem_classes=["stepcard"]):
             gr.HTML('<div class="steptitle"><span class="stepnum">۲</span> مترجم هوش مصنوعی</div>')
@@ -6072,16 +6309,15 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             cm_add_box = gr.Textbox(
                 value="", visible=True, elem_id="manga_cm_add_box",
                 elem_classes=["manga-hide-channel"], container=False)
-            ocr_lang = gr.Dropdown(
+            ocr_lang = gr.CheckboxGroup(
                 choices=[
+                    ("ژاپنی", "ja"),
+                    ("کره‌ای", "ko"),
+                    ("چینی", "zh"),
                     ("انگلیسی", "en"),
-                    ("کره‌ای (+ انگلیسی)", "ko en"),
-                    ("ژاپنی (+ انگلیسی)", "ja en"),
-                    ("چینی (+ انگلیسی)", "zh en"),
-                    ("چندزبانه (کره‌ای/ژاپنی/چینی/انگلیسی)", "multi"),
                 ],
-                value=str(cfg.get("ocr_lang", "en")),
-                label=TX("app.ocr_lang", "زبان متن مانگا (OCR)"),
+                value=_ocr_lang_ui_value(cfg.get("ocr_lang", "en")),
+                label=TX("app.ocr_lang", "زبانهای متن مانگا (OCR) — تیک بزن"),
                 elem_id="manga_ocr_lang", scale=1)
 
         with gr.Group(elem_classes=["stepcard"]):
@@ -7483,6 +7719,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             models_v,
                             *tone_args):
             _t_prep = time.time()
+            # v1.14.323 — تیک‌های زبان (لیست) → رشتهٔ استانداردِ موتور
+            ocr_lang_v = _ocr_lang_norm(ocr_lang_v)
             sid = (sid or sid_box_v or "").strip()
             sid = _find_active_sid(sid) or sid
             if not sid:
@@ -8096,25 +8334,34 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             pass
 
         try:
-            def _open_system_browser(url_v):
-                if _web_host():
-                    return  # روی هاستِ وب، مرورگرِ سرور باز نمی‌شود
-                u = str(url_v or "").strip()
-                if not u:
-                    return
-                if not u.lower().startswith(("http://", "https://")):
-                    u = "https://" + u
-                try:
-                    import webbrowser
-                    webbrowser.open(u)
-                except Exception as e:
-                    print(f"[!] باز کردنِ مرورگرِ سیستم ناموفق: {e}")
-
-            mt_browser_btn.click(
-                _open_system_browser,
+            # v1.14.323 — دکمهٔ مرورگرِ داخلی: کاملاً سمتِ کلاینت — بدون
+            # رفت‌وبرگشت به سرور. در پنجرهٔ pywebview دسکتاپ، آدرس در
+            # پنجرهٔ دومِ داخلِ خودِ اپ باز میشود (مثلِ اپِ گوشی) و با
+            # «استخراج عکس» لینکها در فیلدِ ورودی همین صفحه مینشیند.
+            mt_ibtn.click(
+                fn=None,
                 inputs=[mt_browser_url],
                 outputs=None,
                 queue=False,
+                js="""(u) => {
+  try {
+    const url = String(u || '').trim();
+    if (!url) {
+      alert('__MT_NOURL__');
+      return;
+    }
+    let uu = url;
+    if (!/^https?:\\/\\//i.test(uu)) uu = 'https://' + uu;
+    if (window.pywebview && window.pywebview.api
+        && window.pywebview.api.openBrowser) {
+      try { window.pywebview.api.openBrowser(uu); } catch (e) {}
+      return;
+    }
+    window.open(uu, '_blank');
+  } catch (e) {
+    try { alert(String(e)); } catch (e2) {}
+  }
+}""",
             )
         except Exception:
             pass
@@ -8499,9 +8746,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             try:
                 import datetime as _dt
                 n = len(_BACKUP_FIELDS)
-                settings = {k: (v if isinstance(v, (int, float, bool))
-                                else str(v or ""))
-                            for (k, _), v in zip(_BACKUP_FIELDS, args[:n])}
+                settings = {}
+                for (k, _), v in zip(_BACKUP_FIELDS, args[:n]):
+                    if k == "ocr_lang":
+                        v = _ocr_lang_norm(v)
+                    settings[k] = (v if isinstance(v, (int, float, bool))
+                                   else str(v or ""))
                 if "model" in settings:
                     settings["model"] = _model_str(settings.get("model"))
                 models = list(args[n] or [])
@@ -9826,7 +10076,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             "manga_model": TX("app.model_info",
                               "چند مدل با کاما = فال‌بکِ خودکار (مثال: gemini-3.5-flash-lite,gemini-3.8-flash). ↻ همهٔ مدلهایِ رایگان را داخلِ فیلد می‌نویسد. خالی = پیش‌فرض."),
             "manga_ocr_lang": TX("app.ocr_lang_info",
-                                 "زبان اصلی حباب‌ها — برای مانهوا فارسی/انگلیسی همان انگلیسی بماند."),
+                                 "زبانهای حباب‌ها را تیک بزن (مثلاً فقط ژاپنی، یا ژاپنی+انگلیسی، یا همه). مانهوای فارسی/انگلیسی → فقط انگلیسی کافی است."),
             "manga_quality": TX("app.quality_info",
                                 "کیفیت فشرده‌سازی تصویر خروجی — ۹۰ به بالا = بدون افتِ محسوس"),
             "manga_font_upload": TX("app.font_info",

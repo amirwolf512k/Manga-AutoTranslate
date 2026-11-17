@@ -448,6 +448,20 @@ def manifest():
                     _okd = False
                 if not _okd:
                     f["default"] = 4096
+            # v1.14.323 — تیک‌های زبان: default همیشه لیستِ کدها
+            if f.get("id") in ("manga_ocr_lang", "ocr_lang"):
+                _olv = f.get("default")
+                _olv = _olv.get("default") if isinstance(_olv, dict) else _olv
+                if isinstance(_olv, str):
+                    _olv = [x for x in re.split(r"[,\s]+", _olv)
+                            if x in ("ja", "ko", "zh", "en")]
+                if not isinstance(_olv, (list, tuple)):
+                    _olv = []
+                _olv = [x for x in _olv if x in ("ja", "ko", "zh", "en")]
+                f["default"] = (_olv if _olv
+                                else (["ja", "ko", "zh", "en"]
+                                      if "multi" in str(f.get("default"))
+                                      else ["en"]))
             if f.get("id") in ("device", "manga_device") and _android():
                 f["drop"] = True
             if f.get("id") in ("out_fmt", "manga_out_fmt", "fmt") and _android():
@@ -1111,7 +1125,15 @@ def _run(job):
                         pass
         except Exception:
             pass
-        langs = [x for x in str(p.get("ocr_lang") or "en").split() if x.strip()]
+        # v1.14.323 — تیک‌های زبان (لیست از فرمِ اندروید) یا رشتهٔ قدیمی
+        _olv = p.get("ocr_lang")
+        if isinstance(_olv, (list, tuple)):
+            langs = [str(x).strip() for x in _olv if str(x).strip()]
+        else:
+            langs = [x for x in str(_olv or "en").split() if x.strip()]
+        if "multi" not in langs and \
+                len([x for x in langs if x in ("ja", "ko", "zh")]) >= 2:
+            langs = ["multi"]
         try:
             _oe = str(p.get("ocr_engine") or "").strip().lower()
             if _oe:

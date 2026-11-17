@@ -22,6 +22,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.GridLayout
@@ -2815,6 +2816,61 @@ class MainActivity : AppCompatActivity() {
                 row.addView(sw)
                 infoView()?.let { row.addView(it) }
                 fieldViews[id] = sw
+            }
+            "checks" -> {
+                // v1.14.323 — گروهِ تیک (مثلِ زبانهای OCR): چند انتخابِ
+                // همزمان؛ مقدار به‌صورتِ «ja ko zh en» ذخیره میشود.
+                val choices = f.optJSONArray("choices")
+                if (choices == null) return
+                val dfltSet = HashSet<String>()
+                when (val dr = f.opt("default")) {
+                    is org.json.JSONArray -> {
+                        for (i in 0 until dr.length()) dfltSet.add(dr.optString(i))
+                    }
+                    is String -> {
+                        dfltSet.addAll(dr.split(" ", ",").map { it.trim() }
+                            .filter { it.isNotEmpty() })
+                    }
+                }
+                val checked = HashSet<String>()
+                val savedChk = savedOr(id, null)?.toString()
+                if (!savedChk.isNullOrBlank()) {
+                    checked.addAll(savedChk.split(" ", ",").map { it.trim() }
+                        .filter { it.isNotEmpty() })
+                } else {
+                    checked.addAll(dfltSet)
+                }
+                val cbs = ArrayList<Pair<String, CheckBox>>()
+                fun saveChecks() {
+                    val sel = cbs.filter { it.second.isChecked }.map { it.first }
+                    saveVal(id, sel.joinToString(" "))
+                }
+                val wrap = LinearLayout(this).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    setPadding(dp(2), dp(6), dp(2), dp(4))
+                }
+                for (i in 0 until choices.length()) {
+                    val c = choices.optJSONArray(i)
+                    val name = if (c != null) c.optString(0) else choices.optString(i)
+                    val value = if (c != null) c.optString(1) else choices.optString(i)
+                    val cb = CheckBox(this).apply {
+                        text = name
+                        setTextColor(TXT); textSize = 13f
+                        buttonTintList = android.content.res.ColorStateList.valueOf(ACC)
+                        isChecked = checked.contains(value)
+                        setOnCheckedChangeListener { _, _ -> saveChecks() }
+                    }
+                    cbs.add(Pair(value, cb))
+                    wrap.addView(cb, LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                            marginEnd = dp(12)
+                        })
+                }
+                if (values[id] == null) saveChecks()
+                row.addView(wrap)
+                infoView()?.let { row.addView(it) }
+                fieldViews[id] = wrap
             }
             "slider" -> {
                 val stepAny = f.opt("step")
