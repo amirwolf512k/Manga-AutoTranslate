@@ -8,6 +8,7 @@
 #include <windows.h>
 #include <shellapi.h>
 #include <objbase.h>
+#include <stdio.h>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -40,6 +41,9 @@ static const IID IID_WV2_CTL_DONE = {
 #define ID_EDIT_URL    106
 #define ID_LBL_STATUS  107
 #define ID_BTN_GLOBE   108
+#define ID_BTN_WV2DL   109
+#define ID_BTN_SYSBR   110
+#define ID_BTN_RETRY   111
 
 #define TOP_BAND_H  46
 #define PROG_H       3
@@ -71,6 +75,15 @@ static HWND g_lblStatus = NULL;
 static HWND g_btnGlobe = NULL;
 static HFONT g_font = NULL;
 static HFONT g_fontBold = NULL;
+static HFONT g_fontFail = NULL;
+/* v1.14.326 — صفحهٔ خطا: به‌جایِ بستنِ اپ، راه‌حل نشان بده */
+static HWND g_lblFailTitle = NULL;
+static HWND g_lblFailBody = NULL;
+static HWND g_btnWv2Dl = NULL;
+static HWND g_btnSysBr = NULL;
+static HWND g_btnRetry = NULL;
+static BOOL g_failMode = FALSE;
+static std::wstring g_logPath;   /* %LOCALAPPDATA%\MangaCloud\run.log */
 static HBRUSH g_barBrush = NULL;   /* نوارها */
 static HBRUSH g_urlBrush = NULL;   /* فیلدِ آدرس */
 static RECT g_urlRing = {0, 0, 0, 0};
@@ -247,24 +260,102 @@ static void Wv2GoForward(void) {
 }
 
 static void Wv2Recount(void);
+static void LayoutChildren(void);
 
-/* v1.14.325 — خطای واضح به‌جایِ سکوت: اگر موتورِ وب نبود، کاربر
-   باید بفهمد چرا اپ نیامد و چطور درستش کند (نصبِ WebView2). */
-static void Wv2Fail(void) {
-    int r = MessageBoxW(g_hwnd,
-        L"\u0645\u0648\u062A\u0648\u0631\u0650 \u0648\u0628\u0650 \u0648\u06CC\u0646\u062F\u0648\u0632 (WebView2) \u0631\u0648\u06CC \u0627\u06CC\u0646 \u0633\u06CC\u0633\u062A\u0645 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F.\n\n"
-        L"\u0631\u0627\u0647\u200C\u062D\u0644: \u00ABWebView2 Runtime\u00BB \u0631\u0627 \u0627\u0632 \u0633\u0627\u06CC\u062A\u0650 \u0645\u0627\u06CC\u06A9\u0631\u0648\u0633\u0627\u0641\u062A \u0646\u0635\u0628 \u06A9\u0646 \u0648 \u0627\u067E \u0631\u0627 \u062F\u0648\u0628\u0627\u0631\u0647 \u0628\u0627\u0632 \u06A9\u0646.\n\n"
-        L"\u0647\u0645\u06CC\u0646 \u062D\u0627\u0644\u0627 \u0635\u0641\u062D\u0647\u0654 \u062F\u0627\u0646\u0644\u0648\u062F\u0650 WebView2 \u0628\u0627\u0632 \u0634\u0648\u062F\u061F\n"
-        L"(\u00AB\u0646\u0647\u00BB = \u0633\u0627\u06CC\u062A\u0650 \u0627\u067E \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u0650 \u0633\u06CC\u0633\u062A\u0645 \u0628\u0627\u0632 \u0645\u06CC\u200C\u0634\u0648\u062F)",
-        L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
-        MB_YESNO | MB_ICONWARNING | MB_RTLREADING | MB_RIGHT);
-    if (r == IDYES) {
+/* v1.14.326 — لاگِ اجرا در %LOCALAPPDATA%\MangaCloud\run.log:
+   برای تشخیصِ «چرا اپ برایِ این کاربر باز نشد» (کرش/نبودِ WebView2). */
+static void MtInitLogPath(void) {
+    WCHAR base[MAX_PATH];
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH) <= 0)
+        return;
+    std::wstring dir = std::wstring(base) + L"\\MangaCloud";
+    CreateDirectoryW(dir.c_str(), NULL);
+    g_logPath = dir + L"\\run.log";
+}
+
+static void MtLog(const char *line) {
+    if (g_logPath.empty() || line == NULL)
+        return;
+    FILE *f = _wfopen(g_logPath.c_str(), L"a");
+    if (f == NULL)
+        return;
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    fprintf(f, "%04u-%02u-%02u %02u:%02u:%02u %s\n",
+            (unsigned)st.wYear, (unsigned)st.wMonth, (unsigned)st.wDay,
+            (unsigned)st.wHour, (unsigned)st.wMinute, (unsigned)st.wSecond,
+            line);
+    fclose(f);
+}
+
+/* کرشِ غیرمنتظره → پیش ازِ مرگ، در لاگ ثبت میشود */
+static LONG WINAPI MtCrashFilter(EXCEPTION_POINTERS *ep) {
+    char b[96];
+    unsigned long code = 0;
+    void *addr = NULL;
+    if (ep != NULL && ep->ExceptionRecord != NULL) {
+        code = (unsigned long)ep->ExceptionRecord->ExceptionCode;
+        addr = ep->ExceptionRecord->ExceptionAddress;
+    }
+    sprintf(b, "CRASH code=%08lX addr=%p", code, addr);
+    MtLog(b);
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+/* v1.14.326 — متنِ صفحهٔ خطا (وب‌ویو نبود/باز نشد) */
+static const wchar_t MT_FAIL_BODY[] =
+    L"\u0645\u0648\u062A\u0648\u0631\u0650 \u0648\u0628\u0650 \u0648\u06CC\u0646\u062F\u0648\u0632 (WebView2) \u0631\u0648\u06CC \u0627\u06CC\u0646 \u0633\u06CC\u0633\u062A\u0645 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u06CC\u0627 \u0627\u062C\u0631\u0627 \u0646\u0634\u062F \u2014 \u0628\u062F\u0648\u0646\u0650 \u0622\u0646 \u0635\u0641\u062D\u0647\u0654 \u0627\u067E \u0628\u0627\u0632 \u0646\u0645\u06CC\u0634\u0648\u062F.\n\n"
+    L"1) \u00AB\u0646\u0635\u0628 \u062E\u0648\u062F\u06A9\u0627\u0631 WebView2\u00BB \u0631\u0627 \u0628\u0632\u0646 \u2014 \u0646\u0635\u0628\u200C\u06A9\u0646\u0646\u062F\u0647\u0654 \u0631\u0633\u0645\u06CC\u0650 \u0645\u0627\u06CC\u06A9\u0631\u0648\u0633\u0627\u0641\u062A \u062F\u0627\u0646\u0644\u0648\u062F \u0648 \u0627\u062C\u0631\u0627 \u0645\u06CC\u0634\u0648\u062F (\u0627\u06CC\u0646\u062A\u0631\u0646\u062A \u0644\u0627\u0632\u0645 \u0627\u0633\u062A).\n"
+    L"2) \u0628\u0639\u062F \u0627\u0632 \u067E\u0627\u06CC\u0627\u0646\u0650 \u0646\u0635\u0628\u060C \u00AB\u062A\u0644\u0627\u0634 \u062F\u0648\u0628\u0627\u0631\u0647\u00BB \u0631\u0627 \u0628\u0632\u0646.\n\n"
+    L"\u06CC\u0627 \u0647\u0645\u06CC\u0646 \u062D\u0627\u0644\u0627 \u00AB\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 \u0627\u067E \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u00BB \u0631\u0627 \u0628\u0632\u0646 \u2014 \u0647\u0645\u0647\u0654 \u0627\u0645\u06A9\u0627\u0646\u0627\u062A \u0647\u0645\u0627\u0646\u0627\u0633\u062A.";
+
+static void ShowFailScreen(const char *logReason) {
+    g_failMode = TRUE;
+    if (logReason != NULL)
+        MtLog(logReason);
+    LayoutChildren();
+}
+
+/* دانلود و اجرایِ نصبکنندهٔ رسمیِ WebView2 (بوت‌استرپرِ اورگرین) */
+typedef HRESULT (WINAPI *MtUrlDlFn)(void *, PCWSTR, PCWSTR, DWORD, void *);
+
+static void MtDownloadAndRunWv2(void) {
+    MtLog("wv2 bootstrapper: download begin");
+    SetWindowTextW(g_lblFailBody,
+        L"\u23F3 \u062F\u0631 \u062D\u0627\u0644\u0650 \u062F\u0627\u0646\u0644\u0648\u062F\u0650 \u0646\u0635\u0628\u200C\u06A9\u0646\u0646\u062F\u0647\u0654 WebView2 \u2014 \u0686\u0646\u062F \u062F\u0642\u06CC\u0642\u0647 \u0635\u0628\u0631 \u06A9\u0646\u2026");
+    InvalidateRect(g_hwnd, NULL, FALSE);
+    UpdateWindow(g_hwnd);
+    HMODULE um = LoadLibraryW(L"urlmon.dll");
+    MtUrlDlFn dl = (MtUrlDlFn)(void *)(uintptr_t)(um != NULL
+        ? GetProcAddress(um, "URLDownloadToFileW") : NULL);
+    WCHAR tmp[MAX_PATH + 40];
+    tmp[0] = 0;
+    if (GetTempPathW(MAX_PATH, tmp) > 0)
+        lstrcatW(tmp, L"MicrosoftEdgeWebView2Setup.exe");
+    HRESULT hr = E_FAIL;
+    if (dl != NULL && tmp[0] != 0)
+        hr = dl(NULL,
+                L"https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+                tmp, 0, NULL);
+    char lb[80];
+    sprintf(lb, "wv2 bootstrapper: hr=%08lX", (unsigned long)hr);
+    MtLog(lb);
+    if (FAILED(hr) || dl == NULL || tmp[0] == 0) {
+        SetWindowTextW(g_lblFailBody, MT_FAIL_BODY);
+        MessageBoxW(g_hwnd,
+            L"\u062F\u0627\u0646\u0644\u0648\u062F \u0646\u0634\u062F \u2014 \u0635\u0641\u062D\u0647\u0654 \u062F\u0627\u0646\u0644\u0648\u062F \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0628\u0627\u0632 \u0645\u06CC\u200C\u0634\u0648\u062F.",
+            L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+            MB_OK | MB_ICONWARNING | MB_RTLREADING | MB_RIGHT);
         ShellExecuteW(NULL, L"open",
             L"https://developer.microsoft.com/microsoft-edge/webview2/",
             NULL, NULL, SW_SHOWNORMAL);
-    } else {
-        ShellExecuteW(NULL, L"open", APP_URL, NULL, NULL, SW_SHOWNORMAL);
+        return;
     }
+    SetWindowTextW(g_lblFailBody,
+        L"\u2714 \u0646\u0635\u0628\u200C\u06A9\u0646\u0646\u062F\u0647 \u062F\u0627\u0646\u0644\u0648\u062F \u0634\u062F \u2014 \u0627\u0644\u0627\u0646 \u0646\u0635\u0628 \u0631\u0627 \u06A9\u0627\u0645\u0644 \u06A9\u0646\u062B \u0628\u0639\u062F \u0628\u0631\u06AF\u0631\u062F \u0648 \u00AB\u062A\u0644\u0627\u0634 \u062F\u0648\u0628\u0627\u0631\u0647\u00BB \u0631\u0627 \u0628\u0632\u0646.");
+    InvalidateRect(g_hwnd, NULL, FALSE);
+    UpdateWindow(g_hwnd);
+    ShellExecuteW(NULL, L"open", tmp, NULL, NULL, SW_SHOWNORMAL);
 }
 
 /* ————— JSON کوچک: آرایهٔ رشته‌ها («["u1","u2"]») ————— */
@@ -719,9 +810,11 @@ struct Wv2CtlHandler {
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode, Wv2Controller *controller) {
         if (FAILED(errorCode) || controller == NULL) {
             if (!browser) {
-                /* خودِ اپ بی‌موتور ماند — بی‌راه‌حل است */
-                Wv2Fail();
-                PostQuitMessage(0);
+                /* v1.14.326 — اپ نمی‌میرد: صفحهٔ راه‌حل نشان بده */
+                char lb[80];
+                sprintf(lb, "controller(app) failed hr=%08lX",
+                        (unsigned long)errorCode);
+                ShowFailScreen(lb);
             } else {
                 /* مرورگرِ داخلی نیامد — دکمهٔ شناور مخفی میشود */
                 LayoutChildren();
@@ -776,16 +869,20 @@ struct Wv2EnvHandler {
     virtual ULONG STDMETHODCALLTYPE Release() { return 1; }
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode, Wv2Environment *environment) {
         if (FAILED(errorCode) || environment == NULL) {
-            Wv2Fail();
-            PostQuitMessage(0);
+            /* v1.14.326 — اپ نمی‌میرد: صفحهٔ راه‌حل نشان بده */
+            char lb[80];
+            sprintf(lb, "environment failed hr=%08lX",
+                    (unsigned long)errorCode);
+            ShowFailScreen(lb);
             return S_OK;
         }
         /* دو کنترلر: خودِ اپ + مرورگرِ داخلی (مثلِ گوشی) */
         HRESULT hr1 = environment->CreateCoreWebView2Controller(g_hwnd, &g_ctlApp);
         HRESULT hr2 = environment->CreateCoreWebView2Controller(g_hwnd, &g_ctlBr);
         if (FAILED(hr1)) {
-            Wv2Fail();
-            PostQuitMessage(0);
+            char lb[80];
+            sprintf(lb, "CreateController(app) hr=%08lX", (unsigned long)hr1);
+            ShowFailScreen(lb);
         }
         (void)hr2;   /* خطای مرورگر = مخفی‌شدنِ دکمهٔ شناور */
         return S_OK;
@@ -804,7 +901,9 @@ static void LayoutChildren(void) {
     if (w <= 0 || h <= 0)
         return;
 
-    BOOL br = g_browserMode;
+    /* v1.14.326 — صفحهٔ خطا همه‌چیزِ دیگر را می‌پوشاند */
+    BOOL fail = g_failMode;
+    BOOL br = g_browserMode && !fail;
 
     /* کنترلهای نوارها فقط در حالتِ مرورگر */
     ShowWindow(g_btnClose, br ? SW_SHOW : SW_HIDE);
@@ -816,9 +915,29 @@ static void LayoutChildren(void) {
     ShowWindow(g_btnExtract, br ? SW_SHOW : SW_HIDE);
     /* کرهٔ شناور فقط در حالتِ اپ و فقط اگر مرورگر آماده باشد */
     ShowWindow(g_btnGlobe,
-               (!br && g_webBr != NULL) ? SW_SHOW : SW_HIDE);
+               (!br && !fail && g_webBr != NULL) ? SW_SHOW : SW_HIDE);
+    /* کنترلهای صفحهٔ خطا */
+    ShowWindow(g_lblFailTitle, fail ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_lblFailBody, fail ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_btnWv2Dl, fail ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_btnSysBr, fail ? SW_SHOW : SW_HIDE);
+    ShowWindow(g_btnRetry, fail ? SW_SHOW : SW_HIDE);
 
-    if (br) {
+    if (fail) {
+        /* — چیدمانِ صفحهٔ راه‌حل — */
+        int bw = w - 48;
+        if (bw > 260)
+            bw = 260;
+        int by = h - 3 * 44 - 2 * 10 - 18;
+        if (by < 190)
+            by = 190;
+        MoveWindow(g_lblFailTitle, 24, 24, w - 48, 40, TRUE);
+        MoveWindow(g_lblFailBody, 24, 78, w - 48,
+                   (by > 120 ? by - 120 : 60), TRUE);
+        MoveWindow(g_btnWv2Dl, w - 24 - bw, by, bw, 44, TRUE);
+        MoveWindow(g_btnSysBr, w - 24 - bw, by + 54, bw, 44, TRUE);
+        MoveWindow(g_btnRetry, w - 24 - bw, by + 108, bw, 44, TRUE);
+    } else if (br) {
         /* — نوارِ بالا — */
         int bwClose = 42, bwGo = 66, bh = 32;
         int m = 10;
@@ -853,6 +972,8 @@ static void LayoutChildren(void) {
     if (g_appCtl != NULL) {
         if (br) {
             g_appCtl->put_IsVisible(FALSE);
+        } else if (fail) {
+            g_appCtl->put_IsVisible(FALSE);
         } else {
             RECT a = {0, 0, w, h};
             g_appCtl->put_Bounds(a);
@@ -872,24 +993,44 @@ static void LayoutChildren(void) {
 }
 
 static void OnGo(void) {
-    wchar_t buf[2048];
-    int n = GetWindowTextW(g_editUrl, buf, 2046);
+    /* v1.14.326 — بدونِ بافرِ ثابت (سرچِ فارسی = ۶ برابر طول) و
+       مثلِ گوشی: متنِ آزاد = سرچِ گوگل، دامنه = https */
+    int n = GetWindowTextLengthW(g_editUrl);
     if (n <= 0)
         return;
-    wchar_t *s = buf;
-    while (*s == L' ' || *s == L'\t')
-        s++;
-    wchar_t *e = s + wcslen(s);
-    while (e > s && (*(e - 1) == L' ' || *(e - 1) == L'\t'))
-        e--;
-    *e = 0;
-    if (*s == 0)
+    std::wstring buf((size_t)n + 1, L'\0');
+    GetWindowTextW(g_editUrl, &buf[0], n + 1);
+    size_t a = buf.find_first_not_of(L" \t");
+    if (a == std::wstring::npos)
         return;
+    size_t b = buf.find_last_not_of(L" \t");
+    std::wstring s = buf.substr(a, b - a + 1);
     std::wstring url;
-    if (_wcsnicmp(s, L"http://", 7) != 0 && _wcsnicmp(s, L"https://", 8) != 0)
-        url = std::wstring(L"https://") + s;
-    else
+    if (_wcsnicmp(s.c_str(), L"http://", 7) == 0
+            || _wcsnicmp(s.c_str(), L"https://", 8) == 0) {
         url = s;
+    } else {
+        BOOL domain = (s.find(L' ') == std::wstring::npos);
+        int dots = 0;
+        for (size_t i = 0; domain && i < s.size(); i++) {
+            wchar_t c = s[i];
+            if (c == L'.') {
+                dots++;
+            } else if (!((c >= L'a' && c <= L'z') ||
+                         (c >= L'A' && c <= L'Z') ||
+                         (c >= L'0' && c <= L'9') ||
+                         c == L'-' || c == L'_' || c == L':' ||
+                         c == L'/' || c == L'?' || c == L'#' ||
+                         c == L'~' || c == L'.')) {
+                domain = FALSE;
+            }
+        }
+        if (domain && dots > 0)
+            url = std::wstring(L"https://") + s;
+        else
+            url = std::wstring(L"https://www.google.com/search?q=")
+                  + MtWideFromAscii(MtUrlEncode(s));
+    }
     if (g_webBr != NULL)
         g_webBr->Navigate(url.c_str());
 }
@@ -963,6 +1104,41 @@ static void MtDrawGlobe(HDC hdc, const RECT &rc, BOOL pressed) {
     DeleteObject(gp);
 }
 
+/* ————— v1.14.326 — شروعِ وب‌ویو (با تلاشِ دوباره) ————— */
+typedef HRESULT (STDMETHODCALLTYPE *CreateEnvFn)(
+    PCWSTR browserFolder, PCWSTR userDataFolder, void *options,
+    Wv2EnvHandler *handler);
+
+static void TryStartEnv(void) {
+    HMODULE loader = LoadLibraryW(L"WebView2Loader.dll");
+    if (loader == NULL) {
+        ShowFailScreen("WebView2Loader.dll not found (next to exe?)");
+        return;
+    }
+    CreateEnvFn createEnv = (CreateEnvFn)(void *)(uintptr_t)GetProcAddress(
+        loader, "CreateCoreWebView2EnvironmentWithOptions");
+    if (createEnv == NULL) {
+        ShowFailScreen("export CreateCoreWebView2EnvironmentWithOptions missing");
+        return;
+    }
+    WCHAR base[MAX_PATH];
+    WCHAR udf[MAX_PATH + 32];
+    PCWSTR userDataFolder = NULL;
+    if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH) > 0) {
+        wsprintfW(udf, L"%s\\MangaCloud", base);
+        userDataFolder = udf;
+    }
+    HRESULT hr = createEnv(NULL, userDataFolder, NULL, &g_envHandler);
+    char lb[80];
+    sprintf(lb, "createEnv hr=%08lX", (unsigned long)hr);
+    MtLog(lb);
+    if (FAILED(hr)) {
+        ShowFailScreen(lb);
+        return;
+    }
+    MtLog("createEnv accepted");
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_COMMAND: {
@@ -994,6 +1170,22 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 GlobeClicked();
                 return 0;
             }
+            if (id == ID_BTN_WV2DL) {
+                MtDownloadAndRunWv2();
+                return 0;
+            }
+            if (id == ID_BTN_SYSBR) {
+                ShellExecuteW(NULL, L"open", APP_URL,
+                              NULL, NULL, SW_SHOWNORMAL);
+                return 0;
+            }
+            if (id == ID_BTN_RETRY) {
+                MtLog("retry pressed");
+                g_failMode = FALSE;
+                LayoutChildren();
+                TryStartEnv();
+                return 0;
+            }
         }
         break;
     }
@@ -1005,7 +1197,9 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CTLCOLORSTATIC: {
         HDC hdc = (HDC)wp;
-        SetTextColor(hdc, CLR_MUT);
+        HWND h = (HWND)lp;
+        SetTextColor(hdc, (h == g_lblFailTitle || h == g_lblFailBody)
+                             ? CLR_TXT : CLR_MUT);
         SetBkColor(hdc, CLR_BAR);
         return (LRESULT)g_barBrush;
     }
@@ -1018,7 +1212,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                         (d->itemState & ODS_SELECTED) != 0);
             return TRUE;
         }
-        BOOL acc = (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_EXTRACT);
+        BOOL acc = (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_EXTRACT
+                    || d->CtlID == ID_BTN_WV2DL);
         COLORREF bg = (d->itemState & ODS_SELECTED)
                           ? (acc ? CLR_ACC_DN : CLR_BTN_DN)
                           : (acc ? CLR_ACC : CLR_BTN);
@@ -1122,11 +1317,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 }
 
 int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow) {
-    typedef HRESULT(STDMETHODCALLTYPE *CreateEnvFn)(
-        PCWSTR browserFolder, PCWSTR userDataFolder, void *options, Wv2EnvHandler *handler);
     typedef BOOL(WINAPI *SetDpiCtxFn)(HANDLE value);
 
     (void)hPrev; (void)cmdLine;
+
+    /* v1.14.326 — لاگِ اجرا + ضبطِ کرش، قبل از هر کاری */
+    MtInitLogPath();
+    SetUnhandledExceptionFilter(MtCrashFilter);
+    MtLog("WinMain");
 
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32 != NULL) {
@@ -1143,6 +1341,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
                          DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+    g_fontFail = CreateFontW(-21, 0, 0, 0, FW_BOLD, 0, 0, 0,
+                             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
+                             CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
+                             DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
     g_fontBold = CreateFontW(-16, 0, 0, 0, FW_BOLD, 0, 0, 0,
                              DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                              CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -1171,12 +1373,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     g_hwnd = CreateWindowExW(0, L"MangaCloudWnd", APP_TITLE,
                              WS_OVERLAPPEDWINDOW, x, y, ww, wh,
                              NULL, NULL, hInst, NULL);
-    if (g_hwnd == NULL)
+    if (g_hwnd == NULL) {
+        MessageBoxW(NULL,
+            L"\u067E\u0646\u062C\u0631\u0647 \u0633\u0627\u062E\u062A\u0647 \u0646\u0634\u062F \u2014 \u0645\u0633\u06CC\u0631 \u0627\u067E \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0628\u0627\u0632 \u0645\u06CC\u200C\u0634\u0648\u062F.",
+            L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+            MB_OK | MB_ICONERROR | MB_RTLREADING | MB_RIGHT);
+        ShellExecuteW(NULL, L"open", APP_URL, NULL, NULL, SW_SHOWNORMAL);
         return 1;
+    }
 
     /* ——— کرهٔ شناور (حالتِ اپ — مثلِ گوشی) ——— */
     g_btnGlobe = CreateWindowExW(0, L"BUTTON",
-        L"\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 \u0645\u0631\u0648\u0631\u06AF\u0631 \u062F\u0627\u062E\u0644\u06CC",
+        L"\u0645\u0631\u0648\u0631\u06AF\u0631 \u062F\u0627\u062E\u0644\u06CC",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         14, 14, FAB_SIZE, FAB_SIZE, g_hwnd,
         (HMENU)(INT_PTR)ID_BTN_GLOBE, hInst, NULL);
@@ -1221,36 +1429,41 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
 
+    /* ——— v1.14.326 — کنترلهای صفحهٔ خطا (مخفی تا وقتش) ——— */
+    g_lblFailTitle = CreateWindowExW(0, L"STATIC",
+        L"\u0648\u0627\u0628\u0633\u062A\u06AF\u06CC\u0650 \u0648\u0628 \u0622\u0645\u0627\u062F\u0647 \u0646\u06CC\u0633\u062A",
+        WS_CHILD | SS_RIGHT | SS_CENTERIMAGE,
+        0, 0, 400, 40, g_hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS,
+        hInst, NULL);
+    g_lblFailBody = CreateWindowExW(0, L"STATIC", MT_FAIL_BODY,
+        WS_CHILD | SS_RIGHT,
+        0, 0, 500, 200, g_hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS,
+        hInst, NULL);
+    g_btnWv2Dl = CreateWindowExW(0, L"BUTTON",
+        L"\u2B07 \u0646\u0635\u0628 \u062E\u0648\u062F\u06A9\u0627\u0631 WebView2",
+        WS_CHILD | BS_OWNERDRAW,
+        0, 0, 260, 44, g_hwnd, (HMENU)(INT_PTR)ID_BTN_WV2DL, hInst, NULL);
+    g_btnSysBr = CreateWindowExW(0, L"BUTTON",
+        L"\U0001F310 \u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 \u0627\u067E \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631",
+        WS_CHILD | BS_OWNERDRAW,
+        0, 0, 260, 44, g_hwnd, (HMENU)(INT_PTR)ID_BTN_SYSBR, hInst, NULL);
+    g_btnRetry = CreateWindowExW(0, L"BUTTON",
+        L"\u21BB \u062A\u0644\u0627\u0634 \u062F\u0648\u0628\u0627\u0631\u0647",
+        WS_CHILD | BS_OWNERDRAW,
+        0, 0, 260, 44, g_hwnd, (HMENU)(INT_PTR)ID_BTN_RETRY, hInst, NULL);
+    SendMessageW(g_lblFailTitle, WM_SETFONT, (WPARAM)g_fontFail, TRUE);
+    SendMessageW(g_lblFailBody, WM_SETFONT, (WPARAM)g_font, TRUE);
+    SendMessageW(g_btnWv2Dl, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnSysBr, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnRetry, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
     LayoutChildren();
     SetTimer(g_hwnd, TIMER_RECOUNT, 3000, NULL);
 
-    HMODULE loader = LoadLibraryW(L"WebView2Loader.dll");
-    if (loader == NULL) {
-        Wv2Fail();
-        return 0;
-    }
-    CreateEnvFn createEnv = (CreateEnvFn)(void *)(uintptr_t)GetProcAddress(
-        loader, "CreateCoreWebView2EnvironmentWithOptions");
-    if (createEnv == NULL) {
-        Wv2Fail();
-        return 0;
-    }
-
-    WCHAR base[MAX_PATH];
-    WCHAR udf[MAX_PATH + 32];
-    PCWSTR userDataFolder = NULL;
-    if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH) > 0) {
-        wsprintfW(udf, L"%s\\MangaCloud", base);
-        userDataFolder = udf;
-    }
-
-    HRESULT hr = createEnv(NULL, userDataFolder, NULL, &g_envHandler);
-    if (FAILED(hr)) {
-        Wv2Fail();
-        return 0;
-    }
+    /* v1.14.326 — اگر وب‌ویو نیامد، اپ زنده میماند و راه‌حل میدهد */
+    TryStartEnv();
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {

@@ -1303,22 +1303,22 @@ def _ensure_webview() -> bool:
         return False
 
 
-# ————— v1.14.323 — مرورگرِ داخلی برای سایت‌های کپچادار (دسکتاپ) —————
+# ————— v1.14.326 — مرورگرِ داخلی برای سایت‌های کپچادار (دسکتاپ) —————
 # این JS بعد از هر بارِ لودِ صفحه، در پنجرهٔ دومِ pywebview تزریق
-# میشود: نوارِ پایینِ تمام-عرض (استایلِ کروم) با فیلدِ آدرس + «برو» +
-# شمارشِ زنده + «استخراج عکس» — همان تجربهٔ اپِ گوشی، ولی داخلِ
-# خودِ برنامهٔ پی‌سی/لینوکس.
+# میشود: نوارِ بالای تمام-عرض (مثلِ اندروید — سرچ بالا) با دکمههای
+# عقب/جلو + فیلدِ جستجو/آدرس (سرچِ گوگل مثلِ گوشی) + «برو» + شمارشِ
+# زنده + «استخراج عکس» — همان تجربهٔ اپِ گوشی، ولی داخلِ خودِ برنامه.
 _MT_BROWSER_WIN_JS = """
 (function(){
   if (window.__mtBwBtn) return; window.__mtBwBtn = 1;
   function css(){
     try{
       var s=document.createElement('style');
-      s.textContent='#mtbw{position:fixed;left:0;right:0;bottom:0;'
+      s.textContent='#mtbw{position:fixed;left:0;right:0;top:0;'
         +'z-index:2147483647;direction:rtl;font-family:Tahoma,Arial,sans-serif;'
         +'display:flex;align-items:center;gap:8px;background:rgba(13,13,16,.97);'
-        +'border-top:1px solid #1f1f24;padding:8px 10px;box-sizing:border-box;'
-        +'box-shadow:0 -8px 28px rgba(0,0,0,.55)}'
+        +'border-bottom:1px solid #1f1f24;padding:8px 10px;box-sizing:border-box;'
+        +'box-shadow:0 8px 28px rgba(0,0,0,.55)}'
         +'#mtbw .mturl{flex:1;min-width:110px;direction:ltr;text-align:left;'
         +'background:#1a1f2b;color:#e7ebf3;border:1px solid #273043;'
         +'border-radius:20px;padding:9px 14px;font-size:13px;outline:none;'
@@ -1329,6 +1329,8 @@ _MT_BROWSER_WIN_JS = """
         +'border-radius:12px;padding:9px 14px;font-family:inherit;'
         +'white-space:nowrap}'
         +'#mtbw .mtgo{background:#2d3649}'
+        +'#mtbw .mtnav{background:#2d3649;width:42px;flex:0 0 42px;'
+        +'padding:9px 0;text-align:center;font-size:16px;line-height:1}'
         +'#mtbw .mtcnt{color:#97948c;font-size:11.5px;max-width:170px;'
         +'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
       (document.head||document.documentElement).appendChild(s);
@@ -1380,14 +1382,31 @@ _MT_BROWSER_WIN_JS = """
   }
   css();
   var box=document.createElement('div');box.id='mtbw';
+  /* v1.14.326 — \u0639\u0642\u0628/\u062c\u0644\u0648 \u0645\u062b\u0644\u0650 \u0645\u0631\u0648\u0631\u06af\u0631\u0650 \u06af\u0648\u0634\u06cc */
+  var back=document.createElement('button');
+  back.type='button';back.className='mtnav';
+  back.textContent='\u2190';back.title='\u0639\u0642\u0628';
+  back.onclick=function(){try{history.back()}catch(e){}};
+  var fwd=document.createElement('button');
+  fwd.type='button';fwd.className='mtnav';
+  fwd.textContent='\u2192';fwd.title='\u062c\u0644\u0648';
+  fwd.onclick=function(){try{history.forward()}catch(e){}};
   var url=document.createElement('input');url.type='text';
-  url.className='mturl';url.placeholder='https://…';
+  url.className='mturl';
+  url.placeholder='\u062c\u0633\u062a\u062c\u0648 \u06cc\u0627 \u0622\u062f\u0631\u0633 \u0633\u0627\u06cc\u062a\u2026';
   try{url.value=location.href}catch(e){}
+  /* v1.14.326 — \u0645\u062b\u0644\u0650 \u06af\u0648\u0634\u06cc: \u0645\u062a\u0646\u0650 \u0622\u0632\u0627\u062f = \u0633\u0631\u0686\u0650 \u06af\u0648\u06af\u0644 */
+  function isDomain(u){
+    return !/\\s/.test(u)&&/^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)+(:\\d+)?([\\/?#].*)?$/.test(u)
+  }
   function go(){
     try{
       var u=String(url.value||'').trim();
       if(!u)return;
-      if(!/^https?:/i.test(u))u='https://'+u;
+      if(!/^https?:/i.test(u)){
+        if(isDomain(u))u='https://'+u;
+        else u='https://www.google.com/search?q='+encodeURIComponent(u);
+      }
       if(u===location.href)return;
       location.href=u;
     }catch(e){}
@@ -1413,8 +1432,8 @@ _MT_BROWSER_WIN_JS = """
       catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0631\\u0633\\u0627\\u0644 \\u0628\\u0647 \\u0627\\u067e: '+e)}
     }catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u062c: '+e)}
   };
-  box.appendChild(cnt);box.appendChild(url);box.appendChild(goBtn);
-  box.appendChild(btn);
+  box.appendChild(back);box.appendChild(fwd);box.appendChild(url);
+  box.appendChild(goBtn);box.appendChild(btn);box.appendChild(cnt);
   function mount(){
     try{
       if(!document.getElementById('mtbw'))
@@ -6299,14 +6318,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                    "داخلِ خودِ اپ مرورگرِ داخلی دارد.") + '</div>'
                 '</div></details>')
             _pc_local = not _web_host()
-            # v1.14.325 — مثلِ گوشی: فیلدِ لینک حذف شد — فقط دکمه.
+            # v1.14.326 — متنِ دکمه کوتاه شد: فقط «مرورگر داخلی».
             # مرورگرِ داخلی با آدرسِ فیلدِ ورودیِ بالا باز میشود و اگر
             # خالی بود با گوگل (خودت سرچ کن) — بعد «استخراج عکس».
             with gr.Row(visible=_pc_local, elem_id="mt_browser_row") as browser_row:
                 mt_ibtn = gr.Button(
-                    TX("app.br_open2",
-                       "🌐 باز کردن مرورگر داخلی — سایت‌های کپچادار "
-                       "(مثل گوشی: سرچ کن، عکس‌ها را استخراج کن)"),
+                    TX("app.br_open2", "🌐 مرورگر داخلی"),
                     elem_id="mt_ibtn")
 
         with gr.Group(elem_classes=["stepcard"]):
