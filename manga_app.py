@@ -1494,9 +1494,13 @@ class _DesktopApi:
                 return
             if self._main_win is not None:
                 try:
+                    # v1.14.325 — مثلِ گوشی (توست): بعد از نشستنِ
+                    # لینکها، پیامِ راهنما هم روی صفحهٔ اصلی میآید.
+                    _n = len([x for x in text.splitlines() if x.strip()])
                     self._main_win.evaluate_js(
-                        "window.__mtFillLinks && window.__mtFillLinks(%s);"
-                        % _j.dumps(text))
+                        "window.__mtFillLinks && (window.__mtFillLinks(%s),"
+                        " alert('%d لینک عکس در فیلدِ ورودی نشست — "
+                        "«شروع ترجمه» را بزن'));" % (_j.dumps(text), _n))
                 except Exception as e:
                     print(f"[!] پرکردنِ فیلدِ لینک ناموفق: {e}")
             try:
