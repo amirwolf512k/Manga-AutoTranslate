@@ -1320,12 +1320,30 @@ class MainActivity : AppCompatActivity() {
                     cornerRadius = dp(14).toFloat()
                 }
                 setOnClickListener {
+                    // v1.14.329 — مثلِ پی‌سی: اگر فیلد پر از خروجیِ استخراج
+                    // است (چند لینک یا لینکِ عکس)، مرورگر رویِ سایتِ قبلی
+                    // باز میشود، نه رویِ اولین لینکِ عکسِ قبلی
                     val cur = linkFieldText()
-                    val initUrl = cur.split("\n", ",").firstOrNull()
-                        ?.trim() ?: ""
+                    val parts = cur.split("\n", ",")
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                    val httpCount = parts.count {
+                        it.startsWith("http://") || it.startsWith("https://")
+                    }
+                    val first = parts.firstOrNull() ?: ""
+                    val imgLink = Regex(
+                        "\\.(jpe?g|png|webp|gif|avif|bmp)([?#]|$)",
+                        RegexOption.IGNORE_CASE
+                    ).containsMatchIn(first)
+                    val many = httpCount > 1 || imgLink
+                    val initUrl = when {
+                        many -> ""
+                        first.startsWith("http") -> first
+                        else -> ""
+                    }
                     val intent = Intent(this@MainActivity,
                         BrowserActivity::class.java)
-                    if (initUrl.startsWith("http")) {
+                    if (initUrl.isNotEmpty()) {
                         intent.putExtra(BrowserActivity.EXTRA_URL, initUrl)
                     }
                     @Suppress("DEPRECATION")

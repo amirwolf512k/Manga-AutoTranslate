@@ -1,18 +1,18 @@
 /* Manga Cloud — نسخهٔ کلودِ پی‌سی (Win32 + WebView2)
-   v1.14.328 — رفعِ کرشِ v1.14.327 (لاگِ کاربر: environment و
-   کنترلرها اوکی، ۶ ثانیه بعد C0000005):
-   • یافتهٔ اصلی: کالکِ اتمامِ محیط، «همزمان» داخلِ خودِ فراخوانیِ
-     CreateCoreWebView2EnvironmentWithOptions اجرا میشد و ما از
-     داخلِ همان استکِ لودر دو CreateCoreWebView2Controller میزدیم
-     (تودرتوییِ ممنوع). حالا: کالک فقط محیط را نگه میدارد و یک
-     PostMessage میفرستد؛ ساختِ کنترلر در صفِ پیام و روی استکِ تمیز
-     انجام میشود — دقیقاً مثلِ نمونهٔ رسمی.
-   • کنترلرِ مرورگر «تنبل» شد: فقط با کلیکِ کره ساخته میشود
-     (اولین بار چند ثانیه طول میکشد، بعدش آماده است).
-   • همهٔ callbackها با SEH (__try/__except) محافظت شدهاند —
-     خطای باقیمانده دیگر اپ را نمیکُشد، فقط لاگ + minidump.
-   • لاگِ کرشِ کاملتر: نوعِ خواندن/نوشتن، آدرسِ نسبیِ تصویر،
-     ردِ پشته + فایلِ MangaCloud-crash.dmp کنارِ exe.
+   v1.14.329 — رفعِ کرشِ واقعیِ v1.14.328 (لاگِ کاربر: C0000005،
+   خواندنِ آدرسِ 0xFFFFFFFFFFFFFFFF، آفستِ +B38A، ۳ تا ۱۹ ثانیه
+   بعد از «navigating» = دقیقاً وقتی صفحهٔ اپ لود میشود):
+   • یافتهٔ اصلی: SEH روشن بود و هیچ «SEH-CAUGHT» در لاگ نیست —
+     یعنی کرش در یکی از هندلرهای بدونِ گارد بوده. تنها هندلری که
+     به دادهها دست میزد DocumentTitleChanged بود (get_DocumentTitle
+     + ساختِ wstring، همزمان با لودِ صفحه). کلِ آن هندلر + رویداد
+     حذف شد؛ عنوانِ پنجره ثابت «مانا کلود» میماند (مثلِ گوشی).
+   • QueryInterface صادق شد: فقط IUnknown و همین اینترفیس —
+     قبلاً برایِ هر IID همین شیء را برمی‌گرداندیم و COM میتوانست
+     از طریقِ vtable اشتباه صدایش بزند.
+   • همهٔ هندلرها (ناوبری/منبع/اسکریپت) حالا گاردِ SEH دارند.
+   • کرهٔ شناور گرد شد: ناحیهٔ پنجرهٔ دکمه بیضی است — گوشه‌های
+     مربعِ سفید دیگر دیده نمیشود و زیرش صفحهٔ اپ پیدا است.
    ساخت: cl /std:c++17 /EHsc /O2 /MT /I <sdk>\build\native\include
          app.cpp app.res /link WebView2LoaderStatic.lib … (MSVC) */
 #ifndef UNICODE
@@ -604,14 +604,26 @@ struct MtHandlerBase : public IFACE {
     /* توجه: destructorِ مجازی نداریم تا vtable دقیقاً
        [QI, AddRef, Release, Invoke] بماند (جابه‌جاییِ COM). */
     virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
-        (void)riid;
         if (ppv == NULL)
             return E_POINTER;
-        /* این هندلرها فقط برایِ WebView2 ساخته شدهاند — QI
-           برایِ هر IID همین شیء را برمیگرداند (تک‌وراثتی). */
+        /* v1.14.329 — صادق: فقط IUnknown و همین اینترفیس پاس میدهدیم.
+           قبلاً برایِ هر IID همین شیء را برمی‌گرداندیم؛ اگر COM
+           دنبالِ اینترفیسِ دیگری (مثلِ marshaling) می‌گشت، متدی با
+           vtableِ اشتباه صدا زده میشد. */
+#if defined(_MSC_VER)
+        if (riid == IID_IUnknown || riid == __uuidof(IFACE)) {
+            *ppv = static_cast<IFACE *>(this);
+            InterlockedIncrement(&m_ref);
+            return S_OK;
+        }
+        *ppv = NULL;
+        return E_NOINTERFACE;
+#else
+        /* بیلدِ محلیِ غیرِ MSVC: مثلِ قبل (تستِ کامپایل) */
         *ppv = static_cast<IFACE *>(this);
         InterlockedIncrement(&m_ref);
         return S_OK;
+#endif
     }
     virtual ULONG STDMETHODCALLTYPE AddRef() {
         return (ULONG)InterlockedIncrement(&m_ref);
@@ -655,6 +667,17 @@ struct MtNoopScriptHandler
         : MtHandlerBase<
             ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler> {
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode, LPCWSTR id) {
+#if MT_HAS_SEH
+        __try {
+            return NoopImpl(errorCode, id);
+        } __except (MtSehLog("noopScript", GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return NoopImpl(errorCode, id);
+#endif
+    }
+    static HRESULT NoopImpl(HRESULT errorCode, LPCWSTR id) {
         (void)errorCode; (void)id;
         return S_OK;
     }
@@ -675,75 +698,107 @@ static void MtSetStatusCount(int n) {
     SetWindowTextW(g_lblStatus, s.c_str());
 }
 
-/* ————— رویدادهای ناوبری ————— */
+/* ————— رویدادهای ناوبری — v1.14.329: همه با گاردِ SEH ————— */
 struct MtNavStartHandler : MtHandlerBase<ICoreWebView2NavigationStartingEventHandler> {
     virtual HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender,
                                              ICoreWebView2NavigationStartingEventArgs *args) {
-        (void)sender; (void)args;
-        g_loading = TRUE;
-        g_progress = 8;
-        g_doneTicks = 0;
-        SetTimer(g_hwnd, TIMER_PROGRESS, 40, NULL);
-        if (g_browserMode)
-            InvalidateRect(g_hwnd, NULL, FALSE);
-        return S_OK;
+#if MT_HAS_SEH
+        __try {
+            return NavStartImpl(sender, args);
+        } __except (MtSehLog("navStart", GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return NavStartImpl(sender, args);
+#endif
     }
+    static HRESULT NavStartImpl(ICoreWebView2 *sender,
+                                ICoreWebView2NavigationStartingEventArgs *args);
 };
 
 struct MtNavDoneHandler : MtHandlerBase<ICoreWebView2NavigationCompletedEventHandler> {
     virtual HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender,
                                              ICoreWebView2NavigationCompletedEventArgs *args) {
-        (void)args;
-        g_loading = FALSE;
-        g_progress = 100;
-        g_doneTicks = 8; /* ~320ms نمایشِ کامل، بعد محو */
-        if (g_browserMode)
-            InvalidateRect(g_hwnd, NULL, FALSE);
-        if (sender == g_webBr)
-            Wv2Recount();
-        return S_OK;
+#if MT_HAS_SEH
+        __try {
+            return NavDoneImpl(sender, args);
+        } __except (MtSehLog("navDone", GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return NavDoneImpl(sender, args);
+#endif
     }
+    static HRESULT NavDoneImpl(ICoreWebView2 *sender,
+                               ICoreWebView2NavigationCompletedEventArgs *args);
 };
 
 struct MtSrcChangedHandler : MtHandlerBase<ICoreWebView2SourceChangedEventHandler> {
     virtual HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender,
                                              ICoreWebView2SourceChangedEventArgs *args) {
-        (void)args;
-        if (sender == g_webBr && sender != NULL) {
-            LPWSTR uri = NULL;
-            if (SUCCEEDED(sender->get_Source(&uri)) && uri != NULL) {
-                SetWindowTextW(g_editUrl, uri);
-                /* v1.14.327 — سایتِ قبلی را همیشه به‌روز نگه دار */
-                g_lastSite = uri;
-                CoTaskMemFree(uri);
-            }
+#if MT_HAS_SEH
+        __try {
+            return SrcChangedImpl(sender, args);
+        } __except (MtSehLog("srcChanged", GetExceptionInformation())) {
+            return S_OK;
         }
-        return S_OK;
+#else
+        return SrcChangedImpl(sender, args);
+#endif
     }
+    static HRESULT SrcChangedImpl(ICoreWebView2 *sender,
+                                  ICoreWebView2SourceChangedEventArgs *args);
 };
 
-struct MtTitleHandler : MtHandlerBase<ICoreWebView2DocumentTitleChangedEventHandler> {
-    virtual HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender,
-                                             IUnknown *args) {
-        (void)args;
-        if (sender == g_webApp && sender != NULL) {
-            LPWSTR t = NULL;
-            if (SUCCEEDED(sender->get_DocumentTitle(&t)) && t != NULL) {
-                std::wstring s = t;
-                s += L" \u2014 ";
-                s += APP_TITLE;
-                SetWindowTextW(g_hwnd, s.c_str());
-                CoTaskMemFree(t);
-            }
-        }
-        return S_OK;
-    }
-};
+/* v1.14.329 — DocumentTitleChanged کلاً حذف شد: لاگِ کرشِ v1.14.328
+   (C0000005، خواندنِ 0xFFFFFFFFFFFFFFFF، ۳–۱۹ ثانیه بعد از ناوبری =
+   دقیقاً هنگامِ لودشدنِ صفحه و تغییرِ عنوان) نشان داد تنها هندلرِ
+   بدونِ گارد که به دادهها دست میزد همین بود. عنوانِ پنجره مثلِ
+   نسخهٔ گوشی ثابت «مانا کلود» است. */
 
 static MtNavStartHandler g_navStartHandler;
 static MtNavDoneHandler g_navDoneHandler;
 static MtSrcChangedHandler g_srcHandler;
-static MtTitleHandler g_titleHandler;
+
+HRESULT MtNavStartHandler::NavStartImpl(
+        ICoreWebView2 *sender, ICoreWebView2NavigationStartingEventArgs *args) {
+    (void)sender; (void)args;
+    g_loading = TRUE;
+    g_progress = 8;
+    g_doneTicks = 0;
+    SetTimer(g_hwnd, TIMER_PROGRESS, 40, NULL);
+    if (g_browserMode)
+        InvalidateRect(g_hwnd, NULL, FALSE);
+    return S_OK;
+}
+
+HRESULT MtNavDoneHandler::NavDoneImpl(
+        ICoreWebView2 *sender, ICoreWebView2NavigationCompletedEventArgs *args) {
+    (void)args;
+    g_loading = FALSE;
+    g_progress = 100;
+    g_doneTicks = 8; /* ~320ms نمایشِ کامل، بعد محو */
+    if (g_browserMode)
+        InvalidateRect(g_hwnd, NULL, FALSE);
+    if (sender == g_webBr)
+        Wv2Recount();
+    return S_OK;
+}
+
+HRESULT MtSrcChangedHandler::SrcChangedImpl(
+        ICoreWebView2 *sender, ICoreWebView2SourceChangedEventArgs *args) {
+    (void)args;
+    if (sender == g_webBr && sender != NULL) {
+        LPWSTR uri = NULL;
+        if (SUCCEEDED(sender->get_Source(&uri)) && uri != NULL) {
+            SetWindowTextW(g_editUrl, uri);
+            /* v1.14.327 — سایتِ قبلی را همیشه به‌روز نگه دار */
+            g_lastSite = uri;
+            CoTaskMemFree(uri);
+        }
+    }
+    return S_OK;
+}
 
 static void Wv2Recount(void) {
     if (g_webBr == NULL)
@@ -838,16 +893,15 @@ struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCom
         /* ترجمهٔ پیام‌های نشانک قبل از هر اسکریپتی */
         wv->AddScriptToExecuteOnDocumentCreated(MT_PRELOAD_JS,
                                                 &g_noopScript);
-        /* رویدادهای اپ: عنوانِ پنجره */
+        /* رویدادهای اپ: ناوبری (عنوانِ پنجره حذف شد — v1.14.329) */
         wv->add_NavigationStarting(&g_navStartHandler, &g_evTokAppNav);
         wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokAppDone);
-        wv->add_DocumentTitleChanged(&g_titleHandler, &g_evTokAppTitle);
         wv->Navigate(APP_URL);
         MtLog("app webview created — navigating");
         LayoutChildren();
         return S_OK;
     }
-    EventRegistrationToken g_evTokAppNav, g_evTokAppDone, g_evTokAppTitle;
+    EventRegistrationToken g_evTokAppNav, g_evTokAppDone;
     EventRegistrationToken g_evTokBrNav, g_evTokBrDone, g_evTokBrSrc;
 };
 
@@ -1133,17 +1187,19 @@ static void MtDrawGlobe(HDC hdc, const RECT &rc, BOOL pressed) {
     SelectObject(hdc, obb);
     DeleteObject(ring);
     DeleteObject(bg);
-    /* کره: دایره + نصف‌النهار + استوا — سفید */
+    /* کره: دایره + دو نصف‌النهار + استوا — سفید (v1.14.329: خواناتر) */
     HPEN gp = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
     HGDIOBJ og = SelectObject(hdc, gp);
     HGDIOBJ onb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-    int gr = r - 9;
+    int gr = r - 7;
     if (gr < 4)
         gr = 4;
     Ellipse(hdc, cx - gr, cy - gr, cx + gr, cy + gr);
-    Ellipse(hdc, cx - gr / 2, cy - gr, cx + gr / 2, cy + gr);
+    Ellipse(hdc, cx - gr * 55 / 100, cy - gr, cx + gr * 55 / 100, cy + gr);
     MoveToEx(hdc, cx - gr, cy, NULL);
     LineTo(hdc, cx + gr, cy);
+    MoveToEx(hdc, cx - gr * 55 / 100, cy - gr, NULL);
+    LineTo(hdc, cx - gr * 55 / 100, cy + gr);
     SelectObject(hdc, og);
     SelectObject(hdc, onb);
     DeleteObject(gp);
@@ -1450,7 +1506,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     /* v1.14.326 — لاگِ اجرا + ضبطِ کرش، قبل از هر کاری */
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.328 (deferred ctl + SEH + dump)");
+    MtLog("WinMain — MangaCloud v1.14.329 (no-title-handler + honest QI + all-SEH)");
 
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32 != NULL) {
@@ -1517,6 +1573,10 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         14, 14, FAB_SIZE, FAB_SIZE, g_hwnd,
         (HMENU)(INT_PTR)ID_BTN_GLOBE, hInst, NULL);
+    /* v1.14.329 — فقط دایره: ناحیهٔ پنجرهٔ دکمه بیضی شد تا گوشه‌های
+       مربعِ روشنِ دکمه دیگر دیده نشوند (زیرش صفحهٔ اپ پیدا است) */
+    SetWindowRgn(g_btnGlobe, CreateEllipticRgn(0, 0, FAB_SIZE, FAB_SIZE),
+                 TRUE);
 
     /* ——— نوارِ بالای مرورگر: برو + آدرس + بستن ——— */
     g_btnClose = CreateWindowExW(0, L"BUTTON", L"\u2715",

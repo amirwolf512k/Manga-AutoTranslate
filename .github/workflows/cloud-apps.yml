@@ -151,7 +151,6 @@ jobs:
           if not exist MangaCloud.exe exit /b 1
           mkdir pkg64 2>nul
           copy /y MangaCloud.exe pkg64\ >nul
-          copy /y README-fa.txt pkg64\ >nul
           dir pkg64
 
       - name: Smoke test x64 — run 25s, expect alive, no CRASH
@@ -203,7 +202,6 @@ jobs:
           if not exist MangaCloud.exe exit /b 1
           mkdir pkg86 2>nul
           copy /y MangaCloud.exe pkg86\ >nul
-          copy /y README-fa.txt pkg86\ >nul
           dir pkg86
 
       - name: Zip Windows packages

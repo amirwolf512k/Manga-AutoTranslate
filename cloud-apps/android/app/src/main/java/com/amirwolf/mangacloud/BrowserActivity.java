@@ -8,6 +8,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
@@ -37,6 +38,10 @@ public class BrowserActivity extends Activity {
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_LINKS = "links";
+
+    /** v1.14.329 — آخرین سایتی که کاربر دیده؛ بعد از استخراج،
+     *  دوباره‌گشتنِ مرورگر همان‌جا باز میشود (مثلِ پی‌سی). */
+    public static String lastSite = "";
 
     /** همان فیلترهای نشانکِ وب — img/source + لودِ تنبل + حذفِ آیکون‌ها */
     private static final String EXTRACT_JS =
@@ -89,6 +94,16 @@ public class BrowserActivity extends Activity {
     private TextView extractBtn;
     private TextView countLbl;
     private ProgressBar progress;
+
+    /** v1.14.329 — شمارشِ زنده هر ۳ ثانیه (سایتهای مانهوا فصل را با
+     *  آجاکس عوض میکنند و onPageFinished صدا نمیخورد — مثلِ تایمرِ پی‌سی) */
+    private final Handler recountHandler = new Handler();
+    private final Runnable recountTick = new Runnable() {
+        @Override public void run() {
+            try { recountAsync(); } catch (Exception ignored) {}
+            recountHandler.postDelayed(this, 3000);
+        }
+    };
 
     /** v1.14.323 — اگر JS آرایه برگرداند raw خودِ آرایه است؛ اگر
      *  رشتهٔ JSON-stringify شده باشد (نسخه‌های قدیمی) یک لایه باز میشود. */
@@ -239,8 +254,10 @@ public class BrowserActivity extends Activity {
             web.loadUrl(startUrl);
             recountAsync();
         } else {
-            // v1.14.323 — پیش‌فرض google.com به‌جای about:blank
-            web.loadUrl("https://www.google.com");
+            // v1.14.329 — سایتِ قبلی یا گوگل (فیلد پر از لینکهای استخراج بود)
+            String home = lastSite.startsWith("http") ? lastSite
+                    : "https://www.google.com";
+            web.loadUrl(home);
         }
     }
 
@@ -277,7 +294,22 @@ public class BrowserActivity extends Activity {
             @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
-                try { urlBox.setText(url != null ? url : ""); } catch (Exception ignored) {}
+                try {
+                    if (url != null && url.startsWith("http")) lastSite = url;
+                    urlBox.setText(url != null ? url : "");
+                } catch (Exception ignored) {}
+                recountAsync();
+            }
+
+            @Override
+            public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
+                super.doUpdateVisitedHistory(view, url, isReload);
+                // v1.14.329 — سایتهای تک‌صفحه‌ای (مانهوا) فصل را با pushState
+                // عوض میکنند؛ اینجا هم آدرس و شمارش تازه میشود
+                try {
+                    if (url != null && url.startsWith("http")) lastSite = url;
+                    urlBox.setText(url != null ? url : "");
+                } catch (Exception ignored) {}
                 recountAsync();
             }
         });
@@ -301,10 +333,35 @@ public class BrowserActivity extends Activity {
         });
     }
 
+    /** v1.14.329 — مثلِ پی‌سی: متنِ آزاد = سرچِ گوگل («hi» دیگر
+     *  https://hi/ نمیشود)، دامنه = https، لینکِ کامل = خودش. */
+    private static String smartUrl(String input) {
+        String u = input == null ? "" : input.trim();
+        if (u.isEmpty()) return null;
+        if (u.startsWith("http://") || u.startsWith("https://")) return u;
+        boolean domain = u.indexOf(' ') < 0 && u.indexOf('\t') < 0;
+        int dots = 0;
+        for (int i = 0; domain && i < u.length(); i++) {
+            char c = u.charAt(i);
+            if (c == '.') { dots++; continue; }
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                    || (c >= '0' && c <= '9')
+                    || c == '-' || c == '_' || c == ':' || c == '/'
+                    || c == '?' || c == '#' || c == '~';
+            if (!ok) domain = false;
+        }
+        if (domain && dots > 0) return "https://" + u;
+        try {
+            return "https://www.google.com/search?q="
+                    + java.net.URLEncoder.encode(u, "UTF-8");
+        } catch (Exception e) {
+            return "https://www.google.com/search?q=" + u;
+        }
+    }
+
     private void goUrl() {
-        String u = urlBox.getText().toString().trim();
-        if (u.isEmpty()) return;
-        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://" + u;
+        String u = smartUrl(urlBox.getText().toString());
+        if (u == null) return;
         urlBox.setText(u);
         web.loadUrl(u);
     }
@@ -380,6 +437,19 @@ public class BrowserActivity extends Activity {
         } catch (Exception e) {
             finish();
         }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        recountHandler.removeCallbacks(recountTick);
+        recountHandler.postDelayed(recountTick, 1200);
+    }
+
+    @Override
+    protected void onPause() {
+        recountHandler.removeCallbacks(recountTick);
+        super.onPause();
     }
 
     @Override

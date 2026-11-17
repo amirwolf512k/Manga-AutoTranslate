@@ -286,12 +286,27 @@ public class MainActivity extends Activity {
 
     /** v1.14.322 — مرورگرِ داخلی: آدرسِ فعلیِ فیلدِ لینک را میخواند و
      *  BrowserActivity را باز میکند؛ نتیجه در onActivityResult به
-     *  همان فیلد تزریق میشود. */
+     *  همان فیلد تزریق میشود.
+     *  v1.14.329 — مثلِ پی‌سی: اگر فیلد پر از خروجیِ استخراج باشد
+     *  (چند لینک یا لینکِ عکس)، مرورگر رویِ همان سایت قبلی باز میشود،
+     *  نه رویِ اولین لینکِ عکسِ قبلی. */
     private void openInAppBrowser() {
         try {
-            final String js = "(function(){try{var el=document.querySelector('#manga_inp_path textarea')"
+            final String js = "(function(){try{"
+                    + "var el=document.querySelector('#manga_inp_path textarea')"
                     + "||document.querySelector('[id*=\"manga_inp_path\"] textarea');"
-                    + "return el?String(el.value||''):''}catch(e){return ''}})()";
+                    + "var v=el?String(el.value||''):'';"
+                    + "var p=v.split(/\\n|,/).map(function(x){return x.trim()})"
+                    + ".filter(function(x){return x.length>0});"
+                    + "if(!p.length)return '';"
+                    + "var n=0;for(var i=0;i<p.length;i++){var t=p[i];"
+                    + "if(t.indexOf('http://')===0||t.indexOf('https://')===0)n++}"
+                    + "if(n>1)return '__MT_MANY__';"
+                    + "var t=p[0];"
+                    + "if(/\\.(jpe?g|png|webp|gif|avif|bmp)([?#]|$)/i.test(t))"
+                    + "return '__MT_MANY__';"
+                    + "return t;"
+                    + "}catch(e){return ''}})()";
             web.evaluateJavascript(js, new ValueCallback<String>() {
                 @Override public void onReceiveValue(String value) {
                     String initUrl = "";
@@ -300,13 +315,12 @@ public class MainActivity extends Activity {
                         if (v.length() >= 2 && v.startsWith("\"")) {
                             v = v.substring(1, v.length() - 1);
                         }
-                        String[] parts = v.split("\\n|,");
-                        for (String p : parts) {
-                            String t = p.trim();
-                            if (t.startsWith("http://") || t.startsWith("https://")) {
-                                initUrl = t;
-                                break;
-                            }
+                        v = v.trim();
+                        if (v.equals("__MT_MANY__")) {
+                            initUrl = "";   /* خروجیِ استخراج — سایتِ قبلی */
+                        } else if (v.startsWith("http://")
+                                || v.startsWith("https://")) {
+                            initUrl = v;
                         }
                     } catch (Exception ignored) {}
                     Intent it = new Intent(MainActivity.this, BrowserActivity.class);

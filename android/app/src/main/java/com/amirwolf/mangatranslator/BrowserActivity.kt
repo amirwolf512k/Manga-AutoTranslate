@@ -8,6 +8,7 @@ import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
@@ -37,6 +38,10 @@ class BrowserActivity : Activity() {
     companion object {
         const val EXTRA_URL = "url"
         const val EXTRA_LINKS = "links"
+
+        /** v1.14.329 — آخرین سایتی که کاربر دیده؛ بعد از استخراج،
+         *  دوباره‌گشتنِ مرورگر همان‌جا باز میشود (مثلِ پی‌سی). */
+        var lastSite: String = ""
 
         /** همان فیلترهای نشانکِ وب — img/source + لودِ تنبل + حذفِ آیکون‌ها */
         private const val EXTRACT_JS = """
@@ -100,6 +105,16 @@ class BrowserActivity : Activity() {
     private lateinit var progress: ProgressBar
 
     private var lastCount = 0
+
+    /** v1.14.329 — شمارشِ زنده هر ۳ ثانیه (سایتهای مانهوا فصل را با
+     *  آجاکس عوض میکنند و onPageFinished صدا نمیخورد — مثلِ تایمرِ پی‌سی) */
+    private val recountHandler = Handler()
+    private val recountTick = object : Runnable {
+        override fun run() {
+            try { recountAsync() } catch (_: Exception) {}
+            recountHandler.postDelayed(this, 3000)
+        }
+    }
 
     /** v1.14.323 — evaluateJavascript نتیجه را JSON-انکود می‌دهد؛ اگر
      *  JS آرایه برگرداند raw خودِ آرایه است، ولی اگر (نسخه‌های قدیمی)
@@ -246,8 +261,10 @@ class BrowserActivity : Activity() {
             web.loadUrl(startUrl)
             recountAsync()
         } else {
-            // v1.14.323 — پیش‌فرض google.com به‌جای about:blank
-            web.loadUrl("https://www.google.com")
+            // v1.14.329 — سایتِ قبلی یا گوگل (فیلد پر از لینکهای استخراج بود)
+            val home = if (lastSite.startsWith("http")) lastSite
+                else "https://www.google.com"
+            web.loadUrl(home)
         }
     }
 
@@ -280,7 +297,22 @@ class BrowserActivity : Activity() {
 
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
-                try { urlBox.setText(url ?: "") } catch (_: Exception) {}
+                try {
+                    if (url != null && url.startsWith("http")) lastSite = url
+                    urlBox.setText(url ?: "")
+                } catch (_: Exception) {}
+                recountAsync()
+            }
+
+            override fun doUpdateVisitedHistory(view: WebView?, url: String?,
+                                                isReload: Boolean) {
+                super.doUpdateVisitedHistory(view, url, isReload)
+                // v1.14.329 — سایتهای تک‌صفحه‌ای (مانهوا) فصل را با pushState
+                // عوض میکنند؛ اینجا هم آدرس و شمارش تازه میشود
+                try {
+                    if (url != null && url.startsWith("http")) lastSite = url
+                    urlBox.setText(url ?: "")
+                } catch (_: Exception) {}
                 recountAsync()
             }
         }
@@ -304,10 +336,31 @@ class BrowserActivity : Activity() {
         }
     }
 
+    /** v1.14.329 — مثلِ پی‌سی: متنِ آزاد = سرچِ گوگل («hi» دیگر
+     *  https://hi/ نمیشود)، دامنه = https، لینکِ کامل = خودش. */
+    private fun smartUrl(input: String?): String? {
+        val u = input?.trim() ?: ""
+        if (u.isEmpty()) return null
+        if (u.startsWith("http://") || u.startsWith("https://")) return u
+        var domain = u.indexOf(' ') < 0 && u.indexOf('\t') < 0
+        var dots = 0
+        var i = 0
+        while (domain && i < u.length) {
+            val c = u[i]
+            if (c == '.') { dots++; i++; continue }
+            val ok = (c in 'a'..'z') || (c in 'A'..'Z') || (c in '0'..'9') ||
+                    c == '-' || c == '_' || c == ':' || c == '/' ||
+                    c == '?' || c == '#' || c == '~'
+            if (!ok) domain = false
+            i++
+        }
+        if (domain && dots > 0) return "https://$u"
+        return "https://www.google.com/search?q=" +
+                java.net.URLEncoder.encode(u, "UTF-8")
+    }
+
     private fun goUrl() {
-        var u = urlBox.text.toString().trim()
-        if (u.isEmpty()) return
-        if (!u.startsWith("http://") && !u.startsWith("https://")) u = "https://$u"
+        val u = smartUrl(urlBox.text.toString()) ?: return
         urlBox.setText(u)
         web.loadUrl(u)
     }
@@ -386,6 +439,17 @@ class BrowserActivity : Activity() {
         } catch (_: Exception) {
             finish()
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        recountHandler.removeCallbacks(recountTick)
+        recountHandler.postDelayed(recountTick, 1200)
+    }
+
+    override fun onPause() {
+        recountHandler.removeCallbacks(recountTick)
+        super.onPause()
     }
 
     override fun onDestroy() {
