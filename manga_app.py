@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.328"
+APP_VER = "1.14.336"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -344,17 +344,12 @@ def _web_host() -> bool:
             or os.environ.get("HF_SPACE_ID", "").strip() != "")
 
 
-# ————— v1.14.323 — انتخابِ زبان به‌صورتِ تیک —————
-# ورودی میتواند رشتهٔ قدیمی («ko en» / «multi») یا لیستِ تیک‌های
-# CheckboxGroup باشد؛ خروجی همیشه رشتهٔ استانداردِ موتور است:
-#   «en» | «ja» | «ja en» | «ko en» | «zh en» | … | «multi» (۲+ زبانِ شرقی)
 _OCR_LANG_ORDER = {"ja": 0, "ko": 1, "zh": 2, "en": 3}
 
 def _ocr_lang_norm(v) -> str:
     try:
         if isinstance(v, str):
             _s = str(v or "").strip()
-            # مقاوم به «"['ja', 'en']"» (لیستِ رشته‌شده)
             _s = _s.strip("[]").replace("'", "").replace('"', "")
             parts = [p for p in re.split(r"[,\s]+", _s) if p]
         elif isinstance(v, (list, tuple)):
@@ -377,19 +372,13 @@ def _ocr_lang_norm(v) -> str:
         return "en"
 
 def _ocr_lang_ui_value(v):
-    """رشتهٔ استاندارد → مقدارِ درستِ CheckboxGroup (لیست)."""
     s = _ocr_lang_norm(v)
     if s == "multi":
         return ["ja", "ko", "zh", "en"]
     return s.split() if s else ["en"]
 
 
-# ————— v1.14.322 — پاکسازیِ خودکارِ خروجیها فقط در نسخهٔ وبِ آنلاین —————
-# (اندروید و پی‌سی/لینوکس فایلهایشان همیشه می‌ماند؛ این منطق فقط روی
-# هاستِ وب فعال میشود و پس از ~۲ ساعتِ نبودِ کاربر، کلِ پوشهٔ همان
-# کاربر پاک میشود تا دیسکِ اشتراکی پر نشود.)
 def _web_file_ttl() -> int:
-    """مهلتِ ماندنِ خروجیها روی وب — ثانیه (پیش‌فرض ۲ ساعت)."""
     try:
         _m = int(os.environ.get("MANGA_WEB_TTL_MIN", "120") or 120)
     except Exception:
@@ -413,7 +402,6 @@ def _web_seen_load() -> None:
 
 
 def _web_touch(sid: str) -> None:
-    """ثبتِ «کاربر آنلاین است» — هر تیکِ صفحهٔ باز این را صدا میزند."""
     global _web_seen_flush_ts
     sid = str(sid or "").strip()
     if not sid or not _web_host():
@@ -989,7 +977,6 @@ def smart_output_base(input_path: str) -> str:
     if not raw:
         return "chapter_fa"
 
-    # v1.14.322 — بازهٔ دو لینکِ کامل: نام از فصلِ اول + شمارهٔ آخر
     _rg = re.match(r"^(https?://\S+?)\s*[<>]\s*(https?://\S+)$", raw)
     if _rg:
         _b1 = smart_output_base(_rg.group(1))
@@ -1303,19 +1290,6 @@ def _ensure_webview() -> bool:
         return False
 
 
-# ————— v1.14.326 — مرورگرِ داخلی برای سایت‌های کپچادار (دسکتاپ) —————
-# این JS بعد از هر بارِ لودِ صفحه، در پنجرهٔ دومِ pywebview تزریق
-# میشود: نوارِ بالای تمام-عرض (مثلِ اندروید — سرچ بالا) با دکمههای
-# عقب/جلو + فیلدِ جستجو/آدرس (سرچِ گوگل مثلِ گوشی) + «برو» + شمارشِ
-# زنده + «استخراج عکس» — همان تجربهٔ اپِ گوشی، ولی داخلِ خودِ برنامه.
-# v1.14.328 — نوار دیگر نمیپرد/نمیرود:
-#   • میزبان = document.documentElement (نه body) — سایتها body را
-#     پاک/بازسازی میکنند ولی html را دست نمیزنند.
-#   • MutationObserver: اگر سایتی نوار یا استایلش را بردارد، همان
-#     لحظه دوباره وصل میشود (مثلِ محافظِ خودترمیم).
-#   • تیکِ ۲ ثانیه: آدرسِ فیلد با location.href همگام میماند (SPAها
-#     بدونِ لود، آدرس عوض میکنند) و نوار هم دوباره چک میشود.
-#   • !important روی position/top/z-index تا CSSِ سایت جمعش نکند.
 _MT_BROWSER_WIN_JS = """
 (function(){
   if (window.__mtBwBtn) return; window.__mtBwBtn = 1;
@@ -1497,27 +1471,12 @@ _MT_BROWSER_WIN_JS = """
 
 
 class _DesktopApi:
-    """js_api پنجرهٔ دسکتاپ: مرورگرِ داخلی برای سایت‌های کپچادار
-    (مثلِ BrowserActivity اندروید، ولی با pywebview).
-
-    نامهای فیلدها حتماً با «_» شروع میشوند — pywebview همهٔ
-    اعضای عمومیِ js_api را برایِ JS باز میکند و پیمودنِ اشیایِ
-    pywebview (پنجرهها) به خطایِ COM و بازگشتِ بی‌نهایت می‌انجامید."""
 
     def __init__(self):
         self._main_win = None
         self._br_win = None
-        # v1.14.327 — آخرین سایتی که کاربر در مرورگرِ داخلی دیده؛
-        # بعد از استخراج، دوباره‌گشتنِ مرورگر باید همین سایت را
-        # نشان دهد، نه لینکهای عکسِ نشسته در فیلدِ ورودی.
         self._last_site = None
 
-    # v1.14.327 — تبدیلِ متنِ فیلدِ ورودی به مقصدِ مرورگر:
-    #   خالی                    → سایتِ قبلی یا گوگل
-    #   چند لینک / لینکِ عکس     → سایتِ قبلی یا گوگل (خروجیِ استخراج)
-    #   لینکِ تک                 → همان لینک
-    #   متنِ آزاد (amir)         → سرچِ گوگل (مثلِ گوشی)
-    #   دامنه‌مانند (mangaread..)→ https + دامنه
     def _br_target(self, raw):
         s = str(raw or "").strip()
         lines = [x.strip() for x in s.replace(",", "\n").splitlines()
@@ -1567,8 +1526,6 @@ class _DesktopApi:
     def _on_br_loaded(self):
         try:
             if self._br_win is not None:
-                # v1.14.327 — آدرسِ صفحهٔ تازه‌لودشده را نگه دار تا
-                # دوباره‌گشتنِ مرورگر همان‌جا باز شود (بعد از استخراج).
                 try:
                     u = self._br_win.get_current_url()
                 except Exception:
@@ -1605,8 +1562,6 @@ class _DesktopApi:
                 return
             if self._main_win is not None:
                 try:
-                    # v1.14.325 — مثلِ گوشی (توست): بعد از نشستنِ
-                    # لینکها، پیامِ راهنما هم روی صفحهٔ اصلی میآید.
                     _n = len([x for x in text.splitlines() if x.strip()])
                     self._main_win.evaluate_js(
                         "window.__mtFillLinks && (window.__mtFillLinks(%s),"
@@ -1629,8 +1584,6 @@ def run_desktop():
     import time as _t
     import webbrowser
 
-    # پروکسیِ سیستم نباید لوکال‌هاست را بگیرد — قبل ازِ زایشِ
-    # زیرپروسهٔ وب ست میشود تا ارث برسد.
     _no_proxy_localhost()
 
     port = int(os.environ.get("MANGA_APP_PORT", "7860") or 7860)
@@ -1677,7 +1630,6 @@ def run_desktop():
             _start_kw = {"private_mode": False}
             if _store:
                 _start_kw["storage_path"] = _store
-            # v1.14.323 — js_api: مرورگرِ داخلی برای سایت‌های کپچادار
             _api = _DesktopApi()
             _api._main_win = webview.create_window(
                 f"{APP_NAME} v{APP_VER}", url,
@@ -2320,9 +2272,6 @@ def _gradio_major() -> int:
         return 0
 
 
-# ————— v1.14.322 — نشانکِ استخراجِ عکس (مرورگرِ کاربر، عبور از کپچا) —————
-# کاربر سایتِ مانهوا را در مرورگرِ خودش باز میکند (کپچا را خودش رد
-# میکند)، نشانک را میزند و لینکِ عکس‌ها با هشِ #imgs= به اپ برمی‌گردد.
 _MT_BM_CODE = (
     "(function(){"
     "var seen={},out=[];"
@@ -2379,9 +2328,6 @@ _MT_BM_CODE = (
 
 
 def _browser_extract_js() -> str:
-    """جاوااسکریپتِ صفحهٔ اپ: پرکردنِ فیلدِ لینک از هشِ #imgs=، ساختِ
-    نشانکِ استخراج با آدرسِ همین اپ، و window.__mtFillLinks برای
-    مرورگرِ داخلیِ اپِ اندروید."""
     import json as _json
     tpl = """() => {
   try {
@@ -2400,7 +2346,8 @@ def _browser_extract_js() -> str:
           const row = document.getElementById('mt_browser_row');
           if (row) row.style.display = pw ? '' : 'none';
           const bm = document.querySelector('details.mt-browser');
-          if (bm) bm.style.display = (pw || wv2) ? 'none' : '';
+          if (bm) bm.style.display = (pw || wv2 || window.__mtWebFab)
+            ? 'none' : '';
         } catch (e) {}
       };
 
@@ -2461,6 +2408,7 @@ def _browser_extract_js() -> str:
           const a = document.getElementById("mt_bmk");
           if (!a) return;
           const code = __BM_CODE__.replace(/__MTAPP__/g, location.origin);
+          try { window.__mtBmCode = code; } catch (e) {}
           a.setAttribute("href", "javascript:" + encodeURIComponent(code));
           a.addEventListener("click", (ev) => {
             ev.preventDefault();
@@ -2490,7 +2438,375 @@ def _browser_extract_js() -> str:
       };
 
       window.addEventListener("hashchange", applyHash);
-      const ready = () => { buildBmk(); applyHash(); hostToggle(); };
+
+      // ————— v1.14.336 — مرورگرِ داخلیِ وب (کلودِ لینوکس + مرورگر):
+      // کرهٔ شناورِ پایین-چپ + پوششِ تمام-صفحه با همان نوارِ تک-ردیفِ
+      // نسخهٔ اصلیِ پی‌سی (→ ← آدرس برو استخراج شمارش) + آیفریم؛
+      // سایت‌هایی که اجازه نمی‌دهند → راهنمای نشانک + مرورگرِ سیستم —————
+      const installWebBrowser = () => {
+        try {
+          if (window.__mtWebFabInst) return;
+          const pw = !!(window.pywebview && window.pywebview.api
+                       && window.pywebview.api.openBrowser);
+          const wv2 = !!(window.chrome && window.chrome.webview
+                        && window.chrome.webview.postMessage);
+          const andr = /;\\s*wv\\)/i.test(navigator.userAgent || "");
+          if (pw || wv2 || andr) return;
+          window.__mtWebFabInst = true;
+          window.__mtWebFab = true;
+          const bm = document.querySelector('details.mt-browser');
+          if (bm) bm.style.display = 'none';
+
+          const toUrl = (t) => {
+            t = String(t || "").trim();
+            if (!t) return "https://www.google.com";
+            if (/^https?:/i.test(t)) return t;
+            if (!/\\s/.test(t) &&
+                /^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)+([\\/?#].*)?$/.test(t))
+              return "https://" + t;
+            return "https://www.google.com/search?q=" + encodeURIComponent(t);
+          };
+          const fieldTarget = () => {
+            let t = "";
+            try {
+              const el = document.querySelector("#manga_inp_path textarea")
+                || document.querySelector('[id*="manga_inp_path"] textarea')
+                || document.querySelector("#manga_inp_path input");
+              t = String((el && el.value) || "").trim();
+            } catch (e) {}
+            if (!t) return "https://www.google.com";
+            const parts = t.split(/[\\n,]/).map(s => s.trim()).filter(Boolean);
+            const nLinks = parts.filter(p => /^https?:/i.test(p)).length;
+            if (nLinks > 1 ||
+                /\\.(jpe?g|png|webp|gif|avif|bmp)([?#]|$)/i.test(parts[0])) {
+              let last = "";
+              try { last = localStorage.getItem("mt_last_site") || ""; } catch (e) {}
+              return last || "https://www.google.com";
+            }
+            return toUrl(parts[0]);
+          };
+
+          const css = document.createElement("style");
+          css.textContent = ""
+            + "#mtWebFab{position:fixed;left:16px;bottom:16px;width:52px;"
+            + "height:52px;border-radius:50%;background:#1f2431;"
+            + "border:3px solid #e8590c;cursor:pointer;z-index:2147483000;"
+            + "display:flex;align-items:center;justify-content:center;"
+            + "box-shadow:0 6px 18px rgba(0,0,0,.55);padding:0;"
+            + "transition:transform .15s}"
+            + "#mtWebFab:hover{transform:scale(1.08)}"
+            + "#mtWebFab:active{transform:scale(.95)}"
+            + "#mtWbrOv{position:fixed;top:0;left:0;right:0;bottom:0;"
+            + "z-index:2147483600;background:#000;display:flex;"
+            + "flex-direction:column;direction:rtl;"
+            + "font-family:Tahoma,Arial,sans-serif}"
+            + "#mtWbrBar{display:flex;align-items:center;gap:8px;"
+            + "background:rgba(13,13,16,.97);border-bottom:1px solid #1f1f24;"
+            + "padding:8px 10px;box-sizing:border-box;"
+            + "box-shadow:0 8px 28px rgba(0,0,0,.55);flex:none}"
+            + "#mtWbrBar .u{flex:1;min-width:110px;direction:ltr;text-align:left;"
+            + "background:#1a1f2b;color:#e7ebf3;border:1px solid #273043;"
+            + "border-radius:20px;padding:9px 14px;font-size:13px;outline:none;"
+            + "font-family:inherit}"
+            + "#mtWbrBar .u:focus{border-color:#e8590c}"
+            + "#mtWbrBar button{border:0;cursor:pointer;font-weight:700;"
+            + "font-size:13px;color:#fff;background:#2d3649;border-radius:12px;"
+            + "padding:9px 14px;font-family:inherit;white-space:nowrap}"
+            + "#mtWbrBar .nav{width:42px;flex:0 0 42px;padding:9px 0;"
+            + "text-align:center;font-size:16px;line-height:1}"
+            + "#mtWbrBar .ext{background:linear-gradient(135deg,#ff4a3d,#c9271c)}"
+            + "#mtWbrBar .cls{width:42px;flex:0 0 42px;padding:9px 0;"
+            + "text-align:center;font-size:15px;line-height:1}"
+            + "#mtWbrBar .cnt{color:#97948c;font-size:11.5px;max-width:170px;"
+            + "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;"
+            + "flex:0 1 auto}"
+            + "#mtWbrFr{flex:1;border:0;width:100%;background:#fff}"
+            + "#mtWbrFb{flex:1;overflow:auto;background:#0d0d10;color:#e7ebf3;"
+            + "padding:28px 22px;line-height:2.1;font-size:14.5px;"
+            + "box-sizing:border-box}"
+            + "#mtWbrFb .b{display:inline-block;"
+            + "background:linear-gradient(135deg,#f59e0b,#ea580c);"
+            + "color:#fff;font-weight:800;padding:10px 18px;border-radius:10px;"
+            + "text-decoration:none;cursor:grab;margin:4px}"
+            + "#mtWbrFb .k{background:#2d3649;border:0;color:#fff;"
+            + "font-weight:700;padding:10px 18px;border-radius:10px;"
+            + "cursor:pointer;font-family:inherit;font-size:13.5px;margin:4px}"
+            + "#mtWbrFb .u2{color:#7aa2f7;word-break:break-all;direction:ltr;"
+            + "display:block;font-size:12.5px}";
+          (document.head || document.documentElement).appendChild(css);
+
+          const fab = document.createElement("button");
+          fab.type = "button";
+          fab.id = "mtWebFab";
+          fab.title = "مرورگر داخلی";
+          fab.setAttribute("aria-label", "مرورگر داخلی");
+          fab.innerHTML = "<svg viewBox='0 0 24 24' width='26' height='26' "
+            + "fill='none' stroke='#fff' stroke-width='1.6'>"
+            + "<circle cx='12' cy='12' r='9'/>"
+            + "<ellipse cx='12' cy='12' rx='4.2' ry='9'/>"
+            + "<path d='M3 12h18'/></svg>";
+          document.body.appendChild(fab);
+
+          const openBrowser = () => {
+            try {
+              const old = document.getElementById("mtWbrOv");
+              if (old && old.parentNode) old.parentNode.removeChild(old);
+            } catch (e) {}
+            const start = fieldTarget();
+            const ov = document.createElement("div");
+            ov.id = "mtWbrOv";
+            const bar = document.createElement("div");
+            bar.id = "mtWbrBar";
+            const mk = (cls, txt, title) => {
+              const b = document.createElement("button");
+              b.type = "button";
+              if (cls) b.className = cls;
+              b.textContent = txt;
+              if (title) b.title = title;
+              return b;
+            };
+            const fwd = mk("nav", "\u2192", "جلو");
+            const back = mk("nav", "\u2190", "عقب");
+            const url = document.createElement("input");
+            url.type = "text";
+            url.className = "u";
+            url.placeholder = "جستجو یا آدرس سایت…";
+            url.value = start;
+            const goBtn = mk("", "برو");
+            const extBtn = mk("ext", "🖼 استخراج عکس");
+            const cnt = document.createElement("span");
+            cnt.className = "cnt";
+            cnt.textContent = "…";
+            const clsBtn = mk("cls", "\u2715", "بازگشت به اپ");
+            bar.appendChild(fwd); bar.appendChild(back);
+            bar.appendChild(url); bar.appendChild(goBtn);
+            bar.appendChild(extBtn); bar.appendChild(cnt);
+            bar.appendChild(clsBtn);
+            const fr = document.createElement("iframe");
+            fr.id = "mtWbrFr";
+            fr.setAttribute("referrerpolicy", "no-referrer-when-downgrade");
+            const fb = document.createElement("div");
+            fb.id = "mtWbrFb";
+            fb.style.display = "none";
+            ov.appendChild(bar); ov.appendChild(fr); ov.appendChild(fb);
+            document.body.appendChild(ov);
+            try { document.body.style.overflow = "hidden"; } catch (e) {}
+
+            const hist = [start];
+            let pos = 0;
+            const setCount = (n) => {
+              cnt.textContent = (n > 0) ? (n + " عکس آماده") : "—";
+            };
+            const load = (u, push) => {
+              try { if (u && u.indexOf("http") === 0)
+                localStorage.setItem("mt_last_site", u); } catch (e) {}
+              if (push) {
+                hist.splice(pos + 1);
+                hist.push(u); pos = hist.length - 1;
+              }
+              url.value = u;
+              fb.style.display = "none";
+              fr.style.display = "";
+              fr.src = u;
+            };
+            const close = () => {
+              try {
+                const o = document.getElementById("mtWbrOv");
+                if (o && o.parentNode) o.parentNode.removeChild(o);
+              } catch (e) {}
+              try { document.body.style.overflow = ""; } catch (e) {}
+            };
+            const go = () => {
+              const u = toUrl(url.value);
+              if (u) load(u, true);
+            };
+            fwd.addEventListener("click", () => {
+              if (pos < hist.length - 1) { pos++; load(hist[pos], false); }
+            });
+            back.addEventListener("click", () => {
+              if (pos > 0) { pos--; load(hist[pos], false); }
+            });
+            url.addEventListener("keydown", (ev) => {
+              if (ev.key === "Enter" || ev.keyCode === 13) {
+                ev.preventDefault(); go();
+              }
+            });
+            goBtn.addEventListener("click", go);
+            clsBtn.addEventListener("click", close);
+
+            const collectDoc = (d) => {
+              const seen = {}, out = [];
+              const abs = (u) => {
+                try { const a = d.createElement("a"); a.href = u; return a.href; }
+                catch (e) { return null; }
+              };
+              const junk = (u) => {
+                if (!u) return 1;
+                if (u.indexOf("data:") === 0) return 1;
+                if (!/^https?:/i.test(u)) return 1;
+                if (/\\.(svg|ico|gif)([?#]|$)/i.test(u)) return 1;
+                if (/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u)) return 1;
+                if (/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u)) return 1;
+                return 0;
+              };
+              const els = d.querySelectorAll("img,source");
+              for (let i = 0; i < els.length; i++) {
+                const el = els[i];
+                let cs = null;
+                try { cs = el.currentSrc || el.src || null; } catch (e) {}
+                const c = [cs, el.getAttribute("data-src"),
+                  el.getAttribute("data-lazy-src"),
+                  el.getAttribute("data-original"),
+                  el.getAttribute("data-original-src"),
+                  el.getAttribute("data-orig-src"),
+                  el.getAttribute("data-lazy"),
+                  el.getAttribute("data-url"),
+                  el.getAttribute("data-image"),
+                  el.getAttribute("data-echo")];
+                const ss = el.getAttribute("srcset")
+                  || el.getAttribute("data-srcset");
+                if (ss) {
+                  const p = ss.split(",");
+                  if (p.length)
+                    c.push(p[p.length - 1].trim().split(/\\s+/)[0]);
+                }
+                if (el.tagName === "SOURCE" && el.parentNode) {
+                  const pp = el.parentNode.querySelector("img");
+                  if (pp && pp.src) c.push(pp.src);
+                }
+                for (let j = 0; j < c.length; j++) {
+                  let u = c[j];
+                  if (!u) continue;
+                  u = abs(String(u).trim());
+                  if (!u || junk(u) || seen[u]) continue;
+                  const w = el.naturalWidth || el.width || 0;
+                  const h = el.naturalHeight || el.height || 0;
+                  if (w && h && (w < 120 || h < 120)) continue;
+                  seen[u] = 1; out.push(u); break;
+                }
+              }
+              const nk = (s) => {
+                const t = String(s).split(/[^0-9]+/).filter(Boolean), r = [];
+                for (let i = 0; i < t.length; i++) r.push(parseInt(t[i], 10));
+                return r;
+              };
+              const ln = (s) => {
+                try {
+                  const m = String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);
+                  return m ? parseInt(m[1], 10) : null;
+                } catch (e) { return null; }
+              };
+              out.sort((a, b) => {
+                const x = ln(a), y = ln(b);
+                if (x !== y && (x != null || y != null))
+                  return x == null ? 1 : (y == null ? -1 : x - y);
+                const p = nk(a), q = nk(b);
+                for (let i = 0; i < Math.min(p.length, q.length); i++) {
+                  if (p[i] !== q[i]) return p[i] - q[i];
+                }
+                return a < b ? -1 : 1;
+              });
+              return out;
+            };
+
+            const readFrame = () => {
+              try {
+                const d = fr.contentDocument;
+                if (!d) return null;
+                return collectDoc(d);
+              } catch (e) { return null; }
+            };
+
+            extBtn.addEventListener("click", () => {
+              const out = readFrame();
+              if (out && out.length) {
+                if (window.__mtFillLinks
+                    && window.__mtFillLinks(out.join("\\n"))) {
+                  close();
+                  try { alert(out.length
+                    + " لینک عکس در فیلدِ ورودی نشست — «شروع ترجمه» را بزن"); }
+                  catch (e) {}
+                }
+                return;
+              }
+              const cur = String(url.value || "");
+              fr.style.display = "none";
+              fb.style.display = "";
+              fb.innerHTML = ""
+                + "<div style='font-weight:800;font-size:16px;"
+                + "margin-bottom:6px'>این سایت اجازه نمی‌دهد عکس‌هایش"
+                + " داخلِ اپ خوانده شود (امنیتِ مرورگر) — یا هنوز لود"
+                + " نشده است.</div>"
+                + "<div>۱) «در مرورگرِ سیستم باز کن» را بزن، کپچا را رد"
+                + " کن و فصلِ دلخواه را باز کن و تا آخرِ صفحه اسکرول"
+                + " کن.</div>"
+                + "<div>۲) نشانکِ نارنجیِ زیر را با ماوس بگیر و در"
+                + " نوارِ نشانک‌های مرورگرت رها کن (موبایل: «کپی نشانک»).</div>"
+                + "<div>۳) روی سایت، روی نشانکِ «استخراج عکس» بزن —"
+                + " لینک‌ها خودکار در فیلدِ ورودی همین اپ می‌نشینند.</div>"
+                + "<div style='margin:12px 0 4px'>"
+                + "<a id='mtWbrBm' href='#' draggable='true' class='b'>"
+                + "🖼 استخراج عکس مانهوا</a>"
+                + "<button type='button' id='mtWbrBmC' class='k'>"
+                + "📋 کپی نشانک</button> "
+                + "<button type='button' id='mtWbrSys' class='k'>"
+                + "🌐 در مرورگرِ سیستم باز کن</button></div>"
+                + "<span class='u2'></span>";
+              try {
+                const code = window.__mtBmCode || "";
+                const bl = fb.querySelector("#mtWbrBm");
+                if (bl && code)
+                  bl.setAttribute("href", "javascript:"
+                    + encodeURIComponent(code));
+                bl.addEventListener("click", (ev) => ev.preventDefault());
+                const bc = fb.querySelector("#mtWbrBmC");
+                bc.addEventListener("click", async () => {
+                  try {
+                    await navigator.clipboard.writeText(code);
+                    bc.textContent = "✔ کپی شد";
+                    setTimeout(() => { bc.textContent = "📋 کپی نشانک"; }, 2000);
+                  } catch (e) {}
+                });
+                const sy = fb.querySelector("#mtWbrSys");
+                sy.addEventListener("click", () => {
+                  try { window.open(cur, "_blank", "noopener"); }
+                  catch (e) {}
+                });
+                fb.querySelector(".u2").textContent = cur;
+              } catch (e) {}
+            });
+
+            const tick = () => {
+              const out = readFrame();
+              setCount(out ? out.length : -1);
+            };
+            setTimeout(tick, 900);
+            setTimeout(tick, 2500);
+            const iv = setInterval(() => {
+              const o = document.getElementById("mtWbrOv");
+              if (!o) { clearInterval(iv); return; }
+              tick();
+            }, 5000);
+
+            fr.addEventListener("load", () => setTimeout(tick, 300));
+            load(start, false);
+            try { url.focus(); url.select(); } catch (e) {}
+          };
+
+          fab.addEventListener("click", openBrowser);
+          try { window.__mtFabEl = fab; } catch (e) {}
+        } catch (e) {}
+      };
+      const reFab = () => {
+        try {
+          if (window.__mtFabEl && !document.getElementById("mtWebFab"))
+            document.body.appendChild(window.__mtFabEl);
+        } catch (e) {}
+      };
+
+      const ready = () => {
+        buildBmk(); applyHash(); hostToggle(); installWebBrowser();
+      };
       if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", ready);
       } else { ready(); }
@@ -2500,7 +2816,8 @@ def _browser_extract_js() -> str:
       setTimeout(hostToggle, 300);
       setTimeout(hostToggle, 1500);
       const mo = new MutationObserver(() => {
-        try { buildBmk(); hostToggle(); } catch (e) {}
+        try { buildBmk(); hostToggle(); installWebBrowser(); reFab(); }
+        catch (e) {}
       });
       try { mo.observe(document.body, { childList: true, subtree: true }); }
       catch (e) {}
@@ -2661,12 +2978,6 @@ def _dark_js_src() -> str:
 """
 
 def _no_proxy_localhost():
-    """پروکسیِ سیستم (ویندوز/وپن‌ان‌هو) نباید لوکال‌هاست را بگیرد.
-
-    گرادیو بعد ازِ راه‌اندازی با یک درخواستِ HTTP چک میکند که
-    localhost در دسترس است؛ اگر پروکسیِ کاربر این درخواست را
-    ببلعد، برنامه با «localhost is not accessible» می‌میرد —
-    همان خطایی که اپِ پی‌سی را باز نمی‌کرد."""
     hosts = "localhost,127.0.0.1,0.0.0.0,::1"
     for k in ("NO_PROXY", "no_proxy"):
         cur = os.environ.get(k, "").strip()
@@ -2675,7 +2986,6 @@ def _no_proxy_localhost():
             if h not in parts:
                 parts.insert(0, h)
         os.environ[k] = ",".join(parts)
-    # اگر httpx قبلاً پروکسیها را کش کرده، پاک شود
     try:
         import httpx
         try:
@@ -6361,8 +6671,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             inp_path = gr.Textbox(label=TX("app.url", "یا URL تصویر/مانهوا (چند لینک = هر لینک در یک خط با اینتر)"),
                                   placeholder=TX("app.url_ph", "https://mgread.io/manga/cute-war/chapter-20/ > https://mgread.io/manga/cute-war/chapter-24/\nیا هر لینک در یک خط:\nhttps://cdn.example.com/chapter/1/001.webp"),
                                   elem_id="manga_inp_path")
-            # v1.14.322 — سومین روشِ ورودی: مرورگرِ کاربر برای سایت‌های
-            # کپچادار (نشانکِ استخراجِ عکس) + دکمهٔ مرورگرِ سیستم (فقط پی‌سی)
             gr.HTML(
                 '<details class="mt-browser" style="margin-top:8px;'
                 'border:1px solid rgba(148,163,184,.28);border-radius:12px;'
@@ -6410,9 +6718,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                    "داخلِ خودِ اپ مرورگرِ داخلی دارد.") + '</div>'
                 '</div></details>')
             _pc_local = not _web_host()
-            # v1.14.326 — متنِ دکمه کوتاه شد: فقط «مرورگر داخلی».
-            # مرورگرِ داخلی با آدرسِ فیلدِ ورودیِ بالا باز میشود و اگر
-            # خالی بود با گوگل (خودت سرچ کن) — بعد «استخراج عکس».
             with gr.Row(visible=_pc_local, elem_id="mt_browser_row") as browser_row:
                 mt_ibtn = gr.Button(
                     TX("app.br_open2", "🌐 مرورگر داخلی"),
@@ -7376,6 +7681,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       ts: Date.now()
     }};
     localStorage.setItem("{LS_KEY}", JSON.stringify(data));
+    try {{
+      const kk = clean(keys);
+      if (kk) localStorage.setItem("manga_keys_v1",
+        JSON.stringify({{ k: kk, ts: Date.now() }}));
+    }} catch (e) {{}}
     if (realSid) localStorage.setItem("manga_sid", realSid);
   }} catch (e) {{}}
   return [];
@@ -7489,6 +7799,19 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       }}
     }}
     try {{
+      const pk = JSON.parse(localStorage.getItem("manga_keys_v1") || "null");
+      if (pk && pk.k) {{
+        if (raw) {{
+          try {{
+            const dk = JSON.parse(raw) || {{}};
+            if (!dk.keys) {{ dk.keys = pk.k; raw = JSON.stringify(dk); }}
+          }} catch (e) {{}}
+        }} else {{
+          raw = JSON.stringify({{ keys: pk.k }});
+        }}
+      }}
+    }} catch (e) {{}}
+    try {{
       if (raw) {{
         let dj = {{}};
         try {{ dj = JSON.parse(raw) || {{}}; }} catch (e) {{ dj = {{}}; }}
@@ -7502,7 +7825,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         }};
         let ch = false;
         const ck = gv("manga_api_keys");
-        if (ck && ck !== String(dj.keys || "")) {{ dj.keys = ck; ch = true; }}
+        if (ck && ck !== String(dj.keys || "")) {{ dj.keys = ck; ch = true;
+          try {{ localStorage.setItem("manga_keys_v1",
+            JSON.stringify({{ k: ck, ts: Date.now() }})); }} catch (e) {{}}
+        }}
         const cm = gv("manga_model");
         if (cm && cm !== String(dj.model || "")) {{ dj.model = cm; ch = true; }}
         if (ch) {{
@@ -7546,6 +7872,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         }})];
       }}
       try {{ localStorage.removeItem("{LS_KEY}"); }} catch (e) {{}}
+      try {{
+        const pk = JSON.parse(localStorage.getItem("manga_keys_v1") || "null");
+        if (pk && pk.k) return [JSON.stringify({{ keys: pk.k }})];
+      }} catch (e) {{}}
       return [""];
     }}
     if (bestSid) d.sid = bestSid;
@@ -7681,6 +8011,15 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
               }}
             }}
           }}
+        }} else {{
+          try {{
+            const pk2 = JSON.parse(localStorage.getItem("manga_keys_v1") || "null");
+            if (pk2 && pk2.k && !window.__mangaKeysDirty) {{
+              const k = byId("manga_api_keys")
+                || document.querySelector('input[type="password"]');
+              if (k) setVal(k, pk2.k);
+            }}
+          }} catch (e) {{}}
         }}
       }}
 
@@ -7858,6 +8197,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
         def _do_test_key(provider_v, api_keys_v, model_v, api_base_v,
                          models_v=None):
+            if not str(api_keys_v or "").strip():
+                api_keys_v = os.environ.get("GEMINI_API_KEY", "").strip()
             try:
                 from manga import test_api_keys, format_key_test_text
             except Exception as e:
@@ -7904,14 +8245,15 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             models_v,
                             *tone_args):
             _t_prep = time.time()
-            # v1.14.323 — تیک‌های زبان (لیست) → رشتهٔ استانداردِ موتور
+            if not str(api_keys_v or "").strip():
+                api_keys_v = os.environ.get("GEMINI_API_KEY", "").strip()
             ocr_lang_v = _ocr_lang_norm(ocr_lang_v)
             sid = (sid or sid_box_v or "").strip()
             sid = _find_active_sid(sid) or sid
             if not sid:
                 sid = _new_sid()
             try:
-                _web_touch(sid)  # v1.14.322 — حضورِ کاربر ثبت شد
+                _web_touch(sid)
             except Exception:
                 pass
 
@@ -8051,10 +8393,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             _prev_src = ""
             with job["lock"]:
                 _prev_src = str(job.get("src") or "")
-            # v1.14.322 — پاکسازیِ خروجیِ قبلی فقط در نسخهٔ وب:
-            # (۱) ورودیِ عوض‌شده = پاک‌سازیِ کاملِ پوشهٔ کاربر
-            # (۲) هر شروعِ تازه = حذفِ فایلهای خروجیِ قبلی (pdf/zip/
-            #     html/psd) تا حافظهٔ سرورِ اشتراکی گرفته نشود.
             if _web_host():
                 if _prev_src and _prev_src != str(src):
                     try:
@@ -8519,11 +8857,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             pass
 
         try:
-            # v1.14.325 — دکمهٔ مرورگرِ داخلی: کاملاً سمتِ کلاینت —
-            # بدونِ رفت‌وبرگشت به سرور. مثلِ دکمهٔ شناورِ گوشی: آدرسِ
-            # فعلیِ فیلدِ ورودی خوانده میشود (اگر خالی = گوگل — خودت
-            # سرچ کن) و در پنجرهٔ دومِ داخلِ خودِ اپ باز میشود؛ با
-            # «🖼 استخراج عکس» لینکها در فیلدِ ورودی همین صفحه مینشیند.
             mt_ibtn.click(
                 fn=None,
                 inputs=None,
@@ -9286,6 +9619,11 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             else:
                 sid = ""
             if not sid:
+                _ks = str(data.get("keys") or "").strip()
+                if _ks:
+                    _outs = [gr.update()] * 33
+                    _outs[12] = gr.update(value=_ks)
+                    return tuple(_outs)
                 return (gr.update(),) * 33
             job = _get_job(sid)
             meta = _load_job_meta(sid) if sid else {}
@@ -9561,7 +9899,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             if not sid:
                 return empty
             try:
-                _web_touch(sid)  # v1.14.322 — نبودِ ۲ ساعت = پاکسازیِ وب
+                _web_touch(sid)
             except Exception:
                 pass
             job = _get_job(sid)
@@ -9899,10 +10237,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             pass
 
         def _cleanup_old_jobs():
-            # v1.14.322 — روی هاستِ وب: مهلت = MANGA_WEB_TTL_MIN (پیش‌فرض
-            # ۲ ساعت) از آخرینِ حضورِ کاربر (تیکِ صفحهٔ باز) یا آخرین
-            # فایل؛ فقط پوشهٔ همان کاربر پاک میشود. روی پی‌سی/اندرویدِ
-            # واقعی این نخ هیچ‌وقت اجرا نمیشود و فایلها میمانند.
             _file_ttl = _web_file_ttl() if _web_host() else JOB_TTL
             while True:
                 try:
@@ -9913,7 +10247,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             with job["lock"]:
                                 alive = job.get("proc") is not None and job["proc"].poll() is None
                                 ts = job.get("ts") or 0
-                            # حضورِ تازهٔ کاربر (صفحهٔ باز) = نگه‌داشتن
                             _seen = _web_last_seen_of(sid[:12])
                             if _seen > ts:
                                 ts = _seen
@@ -10088,8 +10421,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
 
-        # v1.14.322 — پاکسازیِ خودکار فقط روی هاستِ وبِ آنلاین؛ روی
-        # پی‌سی/لینوکس و اندرویدِ واقعی فایلها برای همیشه میمانند.
         if _web_host():
             try:
                 _web_seen_load()
@@ -10238,7 +10569,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             except Exception:
                 pass
 
-        # v1.14.322 — نشانکِ استخراجِ عکس + پرکردنِ فیلد از هشِ #imgs=
         try:
             demo.load(None, None, None, js=_browser_extract_js())
         except Exception:
@@ -10629,8 +10959,6 @@ try { window.__mangaUpdateProg('', ''); } catch (e) {}
     try:
         demo.queue(max_size=64).launch(**_launch_kw)
     except ValueError as _ve:
-        # پروکسیِ سیستم چکِ لوکال‌هاستِ گرادیو را سد کرده — یک بار
-        # دیگر با محیطِ تازه (بدونِ پروکسی برایِ localhost) تلاش کن.
         if "localhost" not in str(_ve).lower():
             raise
         print("[!] پروکسیِ سیستم چکِ لوکال‌هاست را سد کرد — تلاشِ دوباره…")

@@ -780,7 +780,15 @@ class _MangaTranslatorBody_90:
     def _save_as_pdf(self, image_paths_in_order: List[str], out_path: str) -> None:
         images = []
         for p in image_paths_in_order:
-            im = Image.open(p).convert("RGB")
+            if not os.path.isfile(p):
+                print(f"    [!] صفحهٔ گمشده در PDF رد شد: {os.path.basename(p)}")
+                continue
+            try:
+                im = Image.open(p).convert("RGB")
+            except Exception as e:
+                print(f"    [!] صفحهٔ خراب در PDF رد شد: "
+                      f"{os.path.basename(p)} ({str(e)[:60]})")
+                continue
 
             if im.size[0] < 8 or im.size[1] < 8:
                 print(f"    [!] رد تصویر خیلی کوچک در PDF: {os.path.basename(p)} {im.size}")

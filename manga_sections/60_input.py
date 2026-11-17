@@ -47,14 +47,8 @@ class _MangaTranslatorBody_60:
 
     @staticmethod
     def _expand_url_pair(u1: str, u2: str, op: str) -> Optional[List[str]]:
-        """v1.14.322 — بازهٔ دو لینکِ کاملِ هم‌الگو (فصل ۲۰ > فصل ۲۴).
-
-        اگر دو URL فقط در یک عدد تفاوت داشته باشند (مثل chapter-20 و
-        chapter-24)، همهٔ URLهای بینشان ساخته میشود. خروجی با «>» صعودی
-        و با «<» نزولی است (هم‌قراردادِ بازهٔ تک‌لینکی)."""
         if not u1 or not u2 or u1 == u2:
             return None
-        # یکدستسازیِ اسلشِ انتهایی (غلطِ تایپیِ رایج)
         if u1.endswith("/") and not u2.endswith("/") \
                 and not re.search(r"\.[A-Za-z0-9]{2,5}$", u2):
             u2 += "/"
@@ -63,17 +57,13 @@ class _MangaTranslatorBody_60:
             u1 += "/"
         if u1 == u2:
             return None
-        # پیشوند مشترک (تا اولین تفاوت)
         p = 0
         while p < min(len(u1), len(u2)) and u1[p] == u2[p]:
             p += 1
         if p < len("https://x"):
             return None
-        # اگر تفاوت وسطِ یک عدد افتاده، رقمهای مشترکِ عدد را هم
-        # به تکهٔ میانی بکش (…chapter-2|0 vs …chapter-2|4 → میانی = 20/24)
         while p > 0 and u1[p - 1].isdigit() and u2[p - 1].isdigit():
             p -= 1
-        # پسوند مشترک (از انتها)
         s = 0
         while (s < min(len(u1), len(u2)) - p
                and u1[len(u1) - 1 - s] == u2[len(u2) - 1 - s]):
@@ -82,8 +72,6 @@ class _MangaTranslatorBody_60:
         m2 = u2[p:len(u2) - s]
         if not m1 or not m2 or m1 == m2:
             return None
-        # تکهٔ میانی = (متنِ غیرعددیِ آغازین) + عدد + (بقیه — باید در
-        # هر دو یکسان باشد؛ مثل «؟v=2» یا «.html»)
         _m = re.match(r"^(\D*?)(\d+)(.*)$", m1, re.S)
         _n = re.match(r"^(\D*?)(\d+)(.*)$", m2, re.S)
         if not _m or not _n:
@@ -98,7 +86,6 @@ class _MangaTranslatorBody_60:
             print(f"[!] بازهٔ دو-لینکی خیلی بزرگ نادیده گرفته شد: "
                   f"{u1[:60]} … {u2[:60]}")
             return None
-        # صفرِ پیشوندی فقط وقتی حفظ شود که خودِ الگو صفر دارد
         _s1, _s2 = _m.group(2), _n.group(2)
         width = (max(len(_s1), len(_s2))
                  if (_s1.startswith("0") or _s2.startswith("0")) else 0)
@@ -129,7 +116,6 @@ class _MangaTranslatorBody_60:
         )
 
         for part in parts:
-            # v1.14.322 — بازهٔ دو لینکِ کامل: «آدرس فصل ۲۰ > آدرس فصل ۲۴»
             _pair = re.match(
                 r"^(https?://[^\s<>]+?)\s*([<>])\s*(https?://[^\s<>]+)$",
                 part)
@@ -236,7 +222,6 @@ class _MangaTranslatorBody_60:
         path = low.split("?")[0]
         if path.endswith((".js", ".css", ".html", ".php", ".json", ".xml")):
             return True
-        # گیف فقط برایِ انیمیشن است — صفحهٔ مانگا نیست
         if path.endswith(".gif"):
             return True
         return False
@@ -524,6 +509,137 @@ class _MangaTranslatorBody_60:
         return out_file
 
     @staticmethod
+    def _mp_decrypt_aes(content: bytes, key_text: str) -> bytes:
+        key = key_text.encode("utf-8")[:32]
+        key = key + b"\x00" * (32 - len(key))
+        iv = b"\x00" * 16
+        try:
+            from Crypto.Cipher import AES as _AES
+            dec = _AES.new(key, _AES.MODE_CBC, iv).decrypt(content)
+        except Exception:
+            try:
+                from cryptography.hazmat.primitives.ciphers import (
+                    Cipher as _Cipher, algorithms as _alg, modes as _modes)
+                _c = _Cipher(_alg.AES(key), _modes.CBC(iv)).decryptor()
+                dec = _c.update(content) + _c.finalize()
+            except Exception:
+                import subprocess as _sp, sys as _sys
+                _sp.check_call([_sys.executable, "-m", "pip", "install",
+                                "-q", "pycryptodome"])
+                from Crypto.Cipher import AES as _AES
+                dec = _AES.new(key, _AES.MODE_CBC, iv).decrypt(content)
+        if dec and 1 <= dec[-1] <= 16:
+            pad = dec[-1]
+            if dec[-pad:] == bytes([pad]) * pad:
+                dec = dec[:-pad]
+        return dec
+
+    @staticmethod
+    def _mp_ext_of(content: bytes) -> Optional[str]:
+        if content[:3] == b"\xff\xd8\xff":
+            return ".jpg"
+        if content[:8] == b"\x89PNG\r\n\x1a\n":
+            return ".png"
+        if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+            return ".webp"
+        return None
+
+    @staticmethod
+    def _download_mangaplus_viewer(url: str, dest_dir: str) -> List[str]:
+        import requests
+        from urllib.parse import urlparse
+
+        m = re.search(r"/viewer/(\d+)", url)
+        if not m:
+            print("    [!] لینکِ مانگاپلاس باید viewer باشد "
+                  "(mangaplus.shueisha.co.jp/viewer/…).")
+            return []
+        chapter_id = m.group(1)
+        os.makedirs(dest_dir, exist_ok=True)
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/125.0.0.0 Safari/537.36"),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://mangaplus.shueisha.co.jp/",
+        }
+        sess = requests.Session()
+        sess.headers.update(headers)
+        pages = []
+        for quality in ("super_high", "high", "low"):
+            try:
+                r = sess.get(
+                    "https://jumpg-webapi.tokyo-cdn.com/api/manga_viewer_v3",
+                    params={"chapter_id": chapter_id, "split": "yes",
+                            "img_quality": quality, "clang": "English"},
+                    timeout=45)
+            except Exception as e:
+                print(f"    [!] خطای شبکهٔ مانگاپلاس: {str(e)[:100]}")
+                return []
+            body = r.content[:4096]
+            if b"Account Banned" in body or b"banned" in body.lower():
+                print("    [!] مانگاپلاس این IP را مسدود کرده است "
+                      "(Account Banned) — از IP دیگری امتحان کن.")
+                return []
+            try:
+                data = r.json()
+            except Exception:
+                continue
+            stack = [data]
+            while stack:
+                node = stack.pop()
+                if isinstance(node, dict):
+                    iu = node.get("imageUrl")
+                    if isinstance(iu, str) and iu.startswith("http"):
+                        pages.append({
+                            "url": iu,
+                            "key": node.get("encryptionKey") or ""})
+                    else:
+                        stack.extend(node.values())
+                elif isinstance(node, list):
+                    stack.extend(reversed(node))
+            if pages:
+                break
+        if not pages:
+            print("    [!] هیچ صفحه‌ای از مانگاپلاس گرفته نشد "
+                  "(شاید فصل قفلِ MAX باشد).")
+            return []
+        print(f"    [*] مانگاپلاس: {len(pages)} صفحه از API (فصلِ {chapter_id}).")
+
+        def _fetch_one(args):
+            idx, pg = args
+            try:
+                rr = sess.get(pg["url"], timeout=60)
+                if rr.status_code != 200:
+                    return None
+                content = rr.content
+                if pg["key"]:
+                    content = MangaTranslator._mp_decrypt_aes(content, pg["key"])
+                ext = MangaTranslator._mp_ext_of(content)
+                if ext is None:
+                    return None
+                out_file = os.path.join(dest_dir, f"p{idx:03d}{ext}")
+                with open(out_file, "wb") as f:
+                    f.write(content)
+                return out_file
+            except Exception:
+                return None
+
+        from concurrent.futures import ThreadPoolExecutor
+        saved = []
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            for res in pool.map(_fetch_one, list(enumerate(pages, 1))):
+                if res:
+                    saved.append(res)
+        saved.sort()
+        if len(saved) < len(pages):
+            print(f"    [!] {len(pages) - len(saved)} صفحهٔ مانگاپلاس "
+                  "دانلود/رمزگشایی نشد.")
+        return saved
+
+    @staticmethod
     def _download_images_from_url(url: str, dest_dir: str,
                                   shared_seen: Optional[set] = None) -> List[str]:
         import requests
@@ -544,7 +660,13 @@ class _MangaTranslatorBody_60:
         }
         url = MangaTranslator._normalize_image_url(url)
 
-        # گیف = انیمیشن است، صفحهٔ مانگا نه — کلاً رد میشود
+        if "mangaplus.shueisha.co.jp/viewer/" in url:
+            try:
+                return MangaTranslator._download_mangaplus_viewer(url, dest_dir)
+            except Exception as e:
+                print(f"    [!] خطای استخراجِ مانگاپلاس: {str(e)[:120]}")
+                return []
+
         try:
             if os.path.splitext(urlparse(url).path)[1].lower() == ".gif":
                 print("    [!] گیف رد شد (GIF صفحهٔ مانگا نیست).")
@@ -834,7 +956,6 @@ class _MangaTranslatorBody_60:
 
         ext = spec.lower()
         raw_in = (input_path or "").strip()
-        # v1.14.322 — بازهٔ دو لینکِ کامل: نام از فصلِ اول + شمارهٔ آخر
         _rg_pair = re.match(r"^(https?://\S+?)\s*[<>]\s*(https?://\S+)$",
                             raw_in)
         _rg_tail = ""

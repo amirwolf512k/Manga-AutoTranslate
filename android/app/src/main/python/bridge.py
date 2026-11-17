@@ -448,7 +448,6 @@ def manifest():
                     _okd = False
                 if not _okd:
                     f["default"] = 4096
-            # v1.14.323 — تیک‌های زبان: default همیشه لیستِ کدها
             if f.get("id") in ("manga_ocr_lang", "ocr_lang"):
                 _olv = f.get("default")
                 _olv = _olv.get("default") if isinstance(_olv, dict) else _olv
@@ -562,11 +561,6 @@ def _out_stem_from_src(src: str) -> str:
     s = str(src or "").strip()
     if not s:
         return ""
-    # v1.14.321 — ورودیِ چندلینکی (ch1,ch2,…): نامِ خروجی از slug فصلِ
-    # «اول» ساخته میشود تا هر ورودیِ متفاوت، خروجی/کشِ خودش را داشته
-    # باشد و فصلِ هم‌پوشانِ ورودیِ قبلی کشِ مشترک را قاطی نکند.
-    # v1.14.322 — بازهٔ دو-لینکی (فصل ۲۰ > فصل ۲۴): نام = slug فصلِ
-    # اول + شمارهٔ آخر.
     _rg = re.match(r"^(https?://\S+?)\s*[<>]\s*(https?://\S+)$", s)
     if _rg:
         _last = (_rg.group(2).split("?")[0].rstrip("/")
@@ -584,8 +578,6 @@ def _out_stem_from_src(src: str) -> str:
     try:
         if s.lower().startswith(("http://", "https://")):
             from urllib.parse import urlparse, unquote
-            # v1.14.322 — اسلشِ انتهایی دیگر نام را خالی نمی‌کند
-            # (…/chapter-20/ → «chapter-20» نه «»)
             name = os.path.basename(
                 unquote(urlparse(s).path).rstrip("/"))
         else:
@@ -1125,7 +1117,6 @@ def _run(job):
                         pass
         except Exception:
             pass
-        # v1.14.323 — تیک‌های زبان (لیست از فرمِ اندروید) یا رشتهٔ قدیمی
         _olv = p.get("ocr_lang")
         if isinstance(_olv, (list, tuple)):
             langs = [str(x).strip() for x in _olv if str(x).strip()]

@@ -11132,10 +11132,6 @@ class _MangaTranslatorBody_85:
                         and bool(_extras.any()):
                     _extra_u8 = _extras.astype(np.uint8) * 255
                     _m_final = ((_cmp2 > 0) | _extras).astype(np.uint8) * 255
-                # v1.14.321 — محافظِ جوهرِ پاک‌شده: donorِ قبل از compose
-                # نگه داشته میشود تا پیکسلهایی که مراحلِ میانی داخلِ
-                # ناحیهٔ متنی پاک کرده بودند (ولی بیرونِ ماسک بودند و
-                # compose اصل را برگرداند) از نو بازگردند.
                 _donor_pre = cleaned
                 cleaned = self._compose_two_image(
                     cleaned, image, _m_final, verbose=False, refill=True,
@@ -11147,8 +11143,6 @@ class _MangaTranslatorBody_85:
                     _gx = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
                     _gf = cv2.cvtColor(cleaned, cv2.COLOR_BGR2GRAY)
                     _gd = cv2.cvtColor(_donor_pre, cv2.COLOR_BGR2GRAY)
-                    # پیکسلهایی که compose اصل را برگردانده ولی donor
-                    # واقعاً تمیزشان کرده بود
                     _restored = ((np.abs(_gf.astype(np.int16)
                                          - _gx.astype(np.int16)) <= 20)
                                  & (np.abs(_gd.astype(np.int16)
@@ -11571,9 +11565,6 @@ class _MangaTranslatorBody_85:
                         except Exception:
                             pass
                     continue
-                # v1.14.321 — جارو فقط لاتین نمیپذیرد؛ رانِ CJK/کره‌ایِ
-                # مطمئن هم جامانده حساب میشود (متنِ عمودیِ ژاپنی/چینی
-                # که ماسکِ خط‌ها فقط دُمش را نگرفته بود).
                 if not (re.search(r"[A-Za-z]{3,}", t)
                         or re.search(
                             r"[\u3040-\u30ff\u31f0-\u31ff\u3400-\u4dbf"
@@ -11597,10 +11588,6 @@ class _MangaTranslatorBody_85:
                 sub_go = go[by0:by1, bx0:bx1]
                 sub_same = same[by0:by1, bx0:bx1]
                 _med = float(np.median(sub_go))
-                # v1.14.321 — در زمینهٔ روشن (median بالا) شاخهٔ
-                # «متنِ روشن» همهٔ پیکسلهای سفید را جوهر میشمرد و ماسک
-                # عظیم میساخت؛ آن شاخه فقط وقتی زمینه واقعاً تیره است
-                # معنا دارد (متنِ روشن روی زمینهٔ تیره).
                 if _med < 170.0:
                     _inko = ((sub_go < _med - 45.0)
                              | (sub_go > min(232.0, _med + 45.0)))
@@ -11626,10 +11613,6 @@ class _MangaTranslatorBody_85:
                 _ix1 = min(w, bx1 + _padI)
                 _iy1 = min(h, by1 + _padI)
                 _subI = cleaned[_iy0:_iy1, _ix0:_ix1]
-                # v1.14.321 — resid به ابعادِ باکس است؛ قبلاً با
-                # مختصاتِ کاملِ صفحه ایندکس میشد (برای باکسهای دور از
-                # مبدا همیشه خالی/غلط بود). حالا در بومِ پَد‌شده جانما
-                # میشود.
                 _mI = np.zeros(_subI.shape[:2], np.uint8)
                 _oy = by0 - _iy0
                 _ox = bx0 - _ix0
@@ -11642,9 +11625,6 @@ class _MangaTranslatorBody_85:
                     _selI = _mI > 0
                     _subI[_selI] = _patchI[_selI]
                     cleaned[_iy0:_iy1, _ix0:_ix1] = _subI
-                # v1.14.321 — ثبت به ابعادِ کاملِ صفحه (قبلاً ماسکِ
-                # باکس-اندازه ثبت میشد و compose نهایی بهخاطرِ نابرابریِ
-                # شکل کلش را میانداخت)
                 _rec = np.zeros((h, w), bool)
                 _rec[by0:by1, bx0:bx1] |= resid
                 self._sweep_fix_record(_rec)

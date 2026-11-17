@@ -87,8 +87,6 @@ jobs:
         with:
           gradle-version: "8.10.2"
 
-      # v1.14.327 — ریلیزِ امضاشده (v1+v2+v3 با keys/manga-release.keystore):
-      # اپِ debug امضا با Play Protect «ناامن» گرفته میشد؛ ریلیز رفع میکند.
       - name: Build arm64 APK
         working-directory: android
         run: |
@@ -135,8 +133,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Attach to amirwolf5122 release `apks`
-        # v1.14.321 — اکشنزِ 5122 بن است؛ APK اینجا ساخته و به
-        # ریلیزِ رسمیِ amirwolf5122 منتقل میشود (لینکهایِ VERSION).
         env:
           GH_TOKEN: ${{ secrets.PAT_5122 }}
         run: |

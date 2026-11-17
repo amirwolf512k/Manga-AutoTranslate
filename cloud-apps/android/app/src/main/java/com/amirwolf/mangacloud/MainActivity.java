@@ -54,7 +54,6 @@ public class MainActivity extends Activity {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT));
 
-        // v1.14.322 — دکمهٔ شناورِ مرورگرِ داخلی (سایت‌های کپچادار)
         TextView fab = new TextView(this);
         fab.setText("🌐");
         fab.setTextSize(20);
@@ -284,12 +283,6 @@ public class MainActivity extends Activity {
         return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
     }
 
-    /** v1.14.322 — مرورگرِ داخلی: آدرسِ فعلیِ فیلدِ لینک را میخواند و
-     *  BrowserActivity را باز میکند؛ نتیجه در onActivityResult به
-     *  همان فیلد تزریق میشود.
-     *  v1.14.329 — مثلِ پی‌سی: اگر فیلد پر از خروجیِ استخراج باشد
-     *  (چند لینک یا لینکِ عکس)، مرورگر رویِ همان سایت قبلی باز میشود،
-     *  نه رویِ اولین لینکِ عکسِ قبلی. */
     private void openInAppBrowser() {
         try {
             final String js = "(function(){try{"
@@ -317,7 +310,7 @@ public class MainActivity extends Activity {
                         }
                         v = v.trim();
                         if (v.equals("__MT_MANY__")) {
-                            initUrl = "";   /* خروجیِ استخراج — سایتِ قبلی */
+                            initUrl = "";
                         } else if (v.startsWith("http://")
                                 || v.startsWith("https://")) {
                             initUrl = v;

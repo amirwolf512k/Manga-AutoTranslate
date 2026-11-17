@@ -1,25 +1,3 @@
-/* Manga Cloud — نسخهٔ کلودِ پی‌سی (Win32 + WebView2)
-   v1.14.331 — ادامهٔ رفعِ کرشِ مرورگرِ داخلی (تستِ دودیِ CI در
-   v1.14.330 نشان داد: با میزبانِ جدا، کالکِ اتمام تا «br webview
-   created» پیش میرود ولی بعدش یک C0000005 (گیرافتاده در SEH) در
-   بدنهٔ خودِ کالک رخ میداد — در LayoutChildren/MtOpenBrowserUi
-   که داخلِ کالکِ اتمام اجرا میشدند):
-   • کالکِ اتمامِ کنترللرِ مرورگر حالا «هیچ کاری» نمیکند — فقط
-     نگه‌داشتن + لاگ + PostMessage(WM_APP_BRREADY)؛ چیدمان و
-     بازکردنِ مرورگر در صفِ پیام و رویِ استکِ تمیز انجام میشود
-     (همان الگویی که کرشِ v1.14.327 را در کالکِ محیط رفع کرد).
-   • SEH-CAUGHT حالا آفستِ نسبت به تصویر + ردِ پشته را هم لاگ
-     میکند تا اگر خطایی ماند، دقیقاً معلوم شود کجا بوده.
-   v1.14.330 — ریشهٔ کرشهای v327–v329: هر دو کنترلر رویِ «یک»
-   HWND والد ساخته میشدند؛ رانِتایمِ WebView2 برایِ هر HWND فقط
-   یک کنترلر میپذیرد → کنترللرِ دوم همان پنجره را خراب میکرد و
-   چند ثانیه بعد C0000005 (type=8 = اجرایِ آدرسِ غیرقابلِاجرا،
-   داخلِ خودِ رانِتایم — نه «br: get_CoreWebView2» در لاگ، نه
-   «SEH-CAUGHT»). حالا هر کنترلر پنجرهٔ میزبانِ WS_CHILD خودش
-   را دارد (الگوی رسمیِ چند-وب‌ویو) + تستِ دودیِ MANGA_SMOKE=2
-   در CI خودش کره را میزند و «br webview created» را الزام میکند.
-   ساخت: cl /std:c++17 /EHsc /O2 /MT /I <sdk>\build\native\include
-         app.cpp app.res /link WebView2LoaderStatic.lib … (MSVC) */
 #ifndef UNICODE
 #define UNICODE
 #endif
@@ -38,7 +16,6 @@
 
 static const WCHAR APP_URL[] =
     L"https://amirwolf512-manga-autotranslate.hf.space/";
-/* v1.14.325 — مثلِ گوشی: بدونِ لینک = گوگل (خودت سرچ کن) */
 static const WCHAR BROWSER_HOME[] = L"https://www.google.com";
 static const WCHAR APP_TITLE[] =
     L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F";
@@ -55,89 +32,80 @@ static const WCHAR APP_TITLE[] =
 #define ID_BTN_SYSBR   110
 #define ID_BTN_RETRY   111
 
-/* v1.14.328 — پیامهای داخلیِ صف: ساختِ کنترلرها روی استکِ تمیز */
 #define WM_APP_CREATCTL (WM_APP + 1)
-#define WM_APP_BRREADY  (WM_APP + 2)  /* v1.14.331 — مرورگر آماده است */
+#define WM_APP_BRREADY  (WM_APP + 2)
 
-#define TOP_BAND_H  46
-#define PROG_H       3
-#define BOT_BAND_H  54
+#define BR_BAR_H     52
+#define PROG_H        3
 #define FAB_SIZE    52
 
 #define TIMER_PROGRESS 1
 #define TIMER_RECOUNT  2
-#define TIMER_SMOKE_BR 3   /* v1.14.330 — تستِ دودیِ مسیرِ مرورگر */
+#define TIMER_SMOKE_BR 3
 
 static HWND g_hwnd = NULL;
+static HWND g_hwndBr = NULL;
+static HINSTANCE g_hInst = NULL;
 
-/* v1.14.330 — هر کنترلر HWND میزبانِ خودش را دارد: دو کنترلر رویِ
-   یک HWND والد در رانِتایمِ WebView2 پشتیبانی نمیشود و چند ثانیه
-   بعد به کرشِ C0000005 داخلِ خودِ رانِتایم میانجامد (لاگهای
-   v1.14.327–v1.14.329). میزبانها پنجرهٔ فرزندِ سادهٔ پنجرهٔ اصلی‌اند. */
-static HWND g_hostApp = NULL;   /* میزبانِ وب‌ویوی اپ */
-static HWND g_hostBr = NULL;    /* میزبانِ وب‌ویوی مرورگر */
-static BOOL g_smokeBrowser = FALSE;  /* MANGA_SMOKE=2 → کرهٔ خودکار */
-
-/* ————— دو وب‌ویو: خودِ اپ + مرورگرِ داخلی (مثلِ گوشی) —————
-   حالتِ اپ: صفحهٔ اپ تمام‌صفحه + دکمهٔ شناورِ 🌐 (پایین-چپ).
-   حالتِ مرورگر: نوارِ بالا (آدرس) + نوارِ پایین (برگشت/شمارش/استخراج).
-   v1.14.328 — وب‌ویوی مرورگر «تنبل» است: با اولین کلیکِ کره ساخته
-   میشود (CreateController روی استکِ تمیز، نه داخلِ کالکِ لودر). */
 static ICoreWebView2Environment *g_env = NULL;
 static ICoreWebView2Controller *g_appCtl = NULL;
 static ICoreWebView2 *g_webApp = NULL;
 static ICoreWebView2Controller *g_brCtl = NULL;
 static ICoreWebView2 *g_webBr = NULL;
-static BOOL g_brPending = FALSE;    /* ساختِ کنترلرِ مرورگر در جریان است */
-static BOOL g_browserMode = FALSE;
-static std::wstring g_fillUrl;   /* پشتیبانِ #imgs= اگر __mtFillLinks نبود */
-/* v1.14.327 — آخرین سایتی که کاربر در مرورگرِ داخلی دیده */
+static BOOL g_brPending = FALSE;
+static BOOL g_smokeBrowser = FALSE;
+static std::wstring g_brTarget;
+static std::wstring g_fillUrl;
 static std::wstring g_lastSite;
 
 static HWND g_editUrl = NULL;
 static HWND g_btnGo = NULL;
 static HWND g_btnBack = NULL;
 static HWND g_btnFwd = NULL;
-static HWND g_btnClose = NULL;
 static HWND g_btnExtract = NULL;
 static HWND g_lblStatus = NULL;
 static HWND g_btnGlobe = NULL;
 static HFONT g_font = NULL;
 static HFONT g_fontBold = NULL;
 static HFONT g_fontFail = NULL;
-/* v1.14.326 — صفحهٔ خطا: به‌جایِ بستنِ اپ، راه‌حل نشان بده */
 static HWND g_lblFailTitle = NULL;
 static HWND g_lblFailBody = NULL;
 static HWND g_btnWv2Dl = NULL;
 static HWND g_btnSysBr = NULL;
 static HWND g_btnRetry = NULL;
 static BOOL g_failMode = FALSE;
-static HBRUSH g_barBrush = NULL;   /* نوارها */
-static HBRUSH g_urlBrush = NULL;   /* فیلدِ آدرس */
+static HBRUSH g_barBrush = NULL;
+static HBRUSH g_urlBrush = NULL;
 static RECT g_urlRing = {0, 0, 0, 0};
 
-static int g_progress = 0;         /* 0..100 */
+static int g_progress = 0;
 static BOOL g_loading = FALSE;
 static int g_doneTicks = 0;
 
-/* رنگها — همان پالتِ نسخهٔ گوشی */
-static const COLORREF CLR_BAR    = RGB(16, 19, 27);     /* #10131b */
-static const COLORREF CLR_URLBG  = RGB(26, 31, 43);     /* #1a1f2b */
-static const COLORREF CLR_URLBR  = RGB(39, 48, 67);     /* #273043 */
-static const COLORREF CLR_TXT    = RGB(231, 235, 243);  /* #e7ebf3 */
-static const COLORREF CLR_MUT    = RGB(138, 147, 168);  /* #8a93a8 */
-static const COLORREF CLR_BTN    = RGB(32, 38, 51);     /* #202633 */
-static const COLORREF CLR_BTN_DN = RGB(45, 54, 73);     /* #2d3649 */
-static const COLORREF CLR_ACC    = RGB(232, 89, 12);    /* #e8590c */
-static const COLORREF CLR_ACC_DN = RGB(160, 60, 8);     /* #a03c08 */
-static const COLORREF CLR_FAB    = RGB(31, 36, 49);     /* #1f2431 */
-static const COLORREF CLR_FAB_DN = RGB(45, 52, 70);     /* #2d3446 */
+static const COLORREF CLR_BAR    = RGB(16, 19, 27);
+static const COLORREF CLR_URLBG  = RGB(26, 31, 43);
+static const COLORREF CLR_URLBR  = RGB(39, 48, 67);
+static const COLORREF CLR_TXT    = RGB(231, 235, 243);
+static const COLORREF CLR_MUT    = RGB(138, 147, 168);
+static const COLORREF CLR_BTN    = RGB(32, 38, 51);
+static const COLORREF CLR_BTN_DN = RGB(45, 54, 73);
+static const COLORREF CLR_ACC    = RGB(232, 89, 12);
+static const COLORREF CLR_ACC_DN = RGB(160, 60, 8);
+static const COLORREF CLR_FAB    = RGB(31, 36, 49);
+static const COLORREF CLR_FAB_DN = RGB(45, 52, 70);
+static const COLORREF CLR_BRBAR  = RGB(13, 13, 16);
+static const COLORREF CLR_BRBRD  = RGB(31, 31, 36);
+static const COLORREF CLR_NAV    = RGB(45, 54, 73);
+static const COLORREF CLR_NAV_DN = RGB(60, 72, 97);
+static const COLORREF CLR_EXTR   = RGB(228, 60, 47);
+static const COLORREF CLR_EXTR_DN = RGB(178, 42, 33);
+static const COLORREF CLR_CNT    = RGB(151, 148, 140);
 
-/* ————— استخراجِ عکس — همان فیلترهای نشانکِ اپ —————
-   data-original-src برای سایت‌های وردپرسی مثل mgread،
-   gif حذف میشود (فقط صفحهٔ ثابت). خروجی: آرایهٔ URLها. */
 static const wchar_t *MT_COLLECT_JS =
 L"(function(){"
+L"try{if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)"
+L"&&location.pathname.indexOf('/viewer/')===0)"
+L"return [location.href];}catch(e){}"
 L"var seen={},out=[];"
 L"function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}"
 L"function junk(u){"
@@ -180,7 +148,6 @@ L"for(var i=0;i<Math.min(p.length,q.length);i++){"
 L"if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});"
 L"return out;})()";
 
-/* قبل از اسکریپتهای صفحهٔ اپ اجرا میشود: ترجمهٔ پیام‌های الکیِ نشانک. */
 static const wchar_t *MT_PRELOAD_JS =
 L"(function(){try{var _a=window.alert;window.alert=function(m){"
 L"try{var s=String(m);"
@@ -192,9 +159,6 @@ L"if(s==='__MT_COPY2__'){_a('\\u0644\\u06cc\\u0646\\u06a9\\u200c\\u0647\\u0627 \
 L"if(s==='__MT_NOURL__'){_a('\\u0627\\u0648\\u0644 \\u0622\\u062f\\u0631\\u0633 \\u0633\\u0627\\u06cc\\u062a \\u0645\\u0627\\u0646\\u0647\\u0648\\u0627 \\u0631\\u0627 \\u0628\\u0646\\u0648\\u06cc\\u0633');return;}"
 L"}catch(e){}_a(m)};}catch(e){}})();";
 
-/* v1.14.327 — محتوای فیلدِ ورودیِ صفحهٔ اپ، هوشمند:
-   «__MT_MANY__» = چند لینک یا لینکِ عکس (خروجیِ استخراج) →
-   سایتِ قبلی؛ متنِ آزاد = سرچِ گوگل؛ دامنه/لینک = خودش. */
 static const wchar_t *MT_GETFIELD_JS =
 L"(function(){try{"
 L"var el=document.querySelector('#manga_inp_path textarea')"
@@ -213,12 +177,10 @@ L"return '__MT_MANY__';"
 L"return t;"
 L"}catch(e){return ''}})()";
 
-/* ————— لاگِ اجرا — v1.14.327 دو جا: کنارِ exe و
-   %LOCALAPPDATA%\MangaCloud — تا کاربر همیشه پیدایش کند ————— */
-static std::wstring g_logNear;   /* <پوشهٔ exe>\\run.log */
-static std::wstring g_logMain;   /* %LOCALAPPDATA%\\MangaCloud\\run.log */
-static std::wstring g_dirNear;   /* پوشهٔ exe */
-static std::wstring g_dirMain;   /* %LOCALAPPDATA%\\MangaCloud */
+static std::wstring g_logNear;
+static std::wstring g_logMain;
+static std::wstring g_dirNear;
+static std::wstring g_dirMain;
 
 static void MtWriteLog(const std::wstring &path, const char *line) {
     if (path.empty() || line == NULL)
@@ -256,7 +218,6 @@ static void MtInitLogPath(void) {
         if (cut != std::wstring::npos) {
             g_dirNear = dir.substr(0, cut);
             g_logNear = g_dirNear + L"\\run.log";
-            /* پوشه فقط-خواندنی؟ مشکلی نیست — MtWriteLog نادیده میگیرد */
         }
     }
     if (GetEnvironmentVariableW(L"LOCALAPPDATA", base, MAX_PATH) > 0) {
@@ -266,7 +227,6 @@ static void MtInitLogPath(void) {
     }
 }
 
-/* ————— v1.14.328 — minidump هنگامِ کرش (بدونِ هدرِ اضافه) ————— */
 typedef BOOL (WINAPI *MtMiniDumpFn)(HANDLE, DWORD, HANDLE, DWORD,
                                     const void *, const void *, const void *);
 typedef struct MtMiniDumpExcInfo {
@@ -275,7 +235,7 @@ typedef struct MtMiniDumpExcInfo {
     BOOL ClientPointers;
 } MtMiniDumpExcInfo;
 
-static BOOL g_inCrash = FALSE;   /* جلوگیری از بازگشتِ بینهایت */
+static BOOL g_inCrash = FALSE;
 
 static void MtWriteMinidump(EXCEPTION_POINTERS *ep) {
     HMODULE db = LoadLibraryW(L"dbghelp.dll");
@@ -307,12 +267,11 @@ static void MtWriteMinidump(EXCEPTION_POINTERS *ep) {
         mei.ExceptionPointers = ep;
         mei.ClientPointers = FALSE;
         fn(GetCurrentProcess(), GetCurrentProcessId(), h,
-           0 /* MiniDumpNormal */, &mei, NULL, NULL);
+           0  , &mei, NULL, NULL);
         CloseHandle(h);
     }
 }
 
-/* ————— کرشِ غیرمنتظره → لاگِ کامل + minidump، بعد مرگ ————— */
 static LONG WINAPI MtCrashFilter(EXCEPTION_POINTERS *ep) {
     if (g_inCrash)
         return EXCEPTION_CONTINUE_SEARCH;
@@ -342,7 +301,6 @@ static LONG WINAPI MtCrashFilter(EXCEPTION_POINTERS *ep) {
         MtLog(b2);
     }
     {
-        /* ردِ پشته — نسبی به تصویرِ خودمان */
         void *fr[24];
         USHORT n = CaptureStackBackTrace(0, 24, fr, NULL);
         for (USHORT i = 0; i < n; i++) {
@@ -363,20 +321,78 @@ static LONG WINAPI MtCrashFilter(EXCEPTION_POINTERS *ep) {
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
-/* ————— v1.14.328 — فیلترِ SEH: خطا را لاگ میکند و میبلعد —————
-   (برایِ کالکهای بدونِ شیءِ C++ — برایِ بقیه، ترامپولین) */
+typedef BOOL (WINAPI *MtSymInitFn)(HANDLE, PCSTR, BOOL);
+typedef BOOL (WINAPI *MtSymFromAddrFn)(HANDLE, DWORD64, DWORD64 *, void *);
+static MtSymInitFn g_symInit = NULL;
+static MtSymFromAddrFn g_symFromAddr = NULL;
+static BOOL g_symTried = FALSE;
+
+static void MtSymName(void *addr, char *out, size_t outsz) {
+    if (out == NULL || outsz == 0)
+        return;
+    out[0] = 0;
+    if (!g_symTried) {
+        g_symTried = TRUE;
+        HMODULE db = LoadLibraryW(L"dbghelp.dll");
+        if (db != NULL) {
+            g_symInit = (MtSymInitFn)(void *)(uintptr_t)GetProcAddress(
+                db, "SymInitialize");
+            g_symFromAddr = (MtSymFromAddrFn)(void *)(uintptr_t)
+                GetProcAddress(db, "SymFromAddr");
+        }
+        if (g_symInit != NULL)
+            g_symInit(GetCurrentProcess(), NULL, TRUE);
+    }
+    if (g_symFromAddr == NULL)
+        return;
+    struct { ULONG SizeOfStruct; ULONG TypeIndex; ULONG64 Reserved[2];
+             ULONG Index; ULONG Size; ULONG64 ModBase; ULONG Flags;
+             ULONG64 Value; ULONG64 Address; ULONG Register;
+             ULONG Scope; ULONG Tag; ULONG NameLen; ULONG MaxNameLen;
+             char Name[128]; } si;
+    si.SizeOfStruct = 88;
+    si.MaxNameLen = 128;
+    DWORD64 disp = 0;
+    if (g_symFromAddr(GetCurrentProcess(), (DWORD64)(uintptr_t)addr,
+                      &disp, &si)) {
+        _snprintf(out, outsz - 1, "%s+0x%llX",
+                  si.Name, (unsigned long long)disp);
+        out[outsz - 1] = 0;
+    }
+}
+
 static int MtSehLog(const char *who, EXCEPTION_POINTERS *ep) {
-    char b[160];
+    char b[200];
     unsigned long code = 0;
     void *addr = NULL;
+    unsigned long rw = 99;
+    unsigned long long target = 0;
     if (ep != NULL && ep->ExceptionRecord != NULL) {
         code = (unsigned long)ep->ExceptionRecord->ExceptionCode;
         addr = ep->ExceptionRecord->ExceptionAddress;
+        if (ep->ExceptionRecord->ExceptionInformation != NULL
+                && ep->ExceptionRecord->NumberParameters >= 2) {
+            rw = (unsigned long)ep->ExceptionRecord->ExceptionInformation[0];
+            target = (unsigned long long)
+                ep->ExceptionRecord->ExceptionInformation[1];
+        }
     }
-    sprintf(b, "SEH-CAUGHT %s code=%08lX addr=%p", who, code, addr);
+    char sym[160];
+    MtSymName(addr, sym, sizeof(sym));
+    sprintf(b, "SEH-CAUGHT %s code=%08lX addr=%p type=%lu target=0x%llX%s%s",
+            who, code, addr, rw, target,
+            sym[0] ? " sym=" : "", sym);
     MtLog(b);
-    /* v1.14.331 — آفستِ نسبت به تصویر + ردِ پشته: اگر خطایی در
-       کالکها ماند، دقیقاً معلوم شود کجا بوده */
+    {
+        char bg[160];
+        sprintf(bg,
+                "SEH-STATE webApp=%p appCtl=%p webBr=%p brCtl=%p "
+                "hwnd=%p hwndBr=%p brPending=%d",
+                (void *)g_webApp, (void *)g_appCtl, (void *)g_webBr,
+                (void *)g_brCtl, (void *)g_hwnd, (void *)g_hwndBr,
+                (int)g_brPending);
+        MtLog(bg);
+    }
     {
         HMODULE img = GetModuleHandleW(NULL);
         if (addr != NULL && img != NULL) {
@@ -385,8 +401,8 @@ static int MtSehLog(const char *who, EXCEPTION_POINTERS *ep) {
                     (unsigned long long)((uintptr_t)addr - (uintptr_t)img));
             MtLog(b2);
         }
-        void *fr[12];
-        USHORT n = CaptureStackBackTrace(0, 12, fr, NULL);
+        void *fr[24];
+        USHORT n = CaptureStackBackTrace(0, 24, fr, NULL);
         for (USHORT i = 0; i < n; i++) {
             char b3[96];
             if (img != NULL
@@ -405,7 +421,6 @@ static int MtSehLog(const char *who, EXCEPTION_POINTERS *ep) {
     return EXCEPTION_EXECUTE_HANDLER;
 }
 
-/* ————— JSON کوچک: آرایهٔ رشته‌ها («["u1","u2"]») ————— */
 static void MtUnescape(const wchar_t *src, size_t len, std::wstring &out) {
     for (size_t i = 0; i < len; i++) {
         wchar_t c = src[i];
@@ -479,7 +494,6 @@ static bool MtParseStringArray(const wchar_t *s, std::vector<std::wstring> &out)
     }
 }
 
-/* رشتهٔ JSON انکود شده («"[\"u1\",…]"») → یک لایه باز میشود. */
 static bool MtParseMaybeWrapped(const wchar_t *s,
                                  std::vector<std::wstring> &out) {
     if (s == NULL)
@@ -507,7 +521,6 @@ static bool MtParseMaybeWrapped(const wchar_t *s,
     return false;
 }
 
-/* رشتهٔ JSON («"https://…"» یا «""» یا null) → رشتهٔ خالص. */
 static std::wstring MtParseJsonString(const wchar_t *s) {
     std::wstring out;
     if (s == NULL)
@@ -528,7 +541,6 @@ static std::wstring MtParseJsonString(const wchar_t *s) {
     if (*s != L'"')
         return out;
     MtUnescape(start, (size_t)(s - start), out);
-    /* حاشیه‌ها */
     size_t a = out.find_first_not_of(L" \t\r\n");
     if (a == std::wstring::npos)
         return std::wstring();
@@ -536,7 +548,6 @@ static std::wstring MtParseJsonString(const wchar_t *s) {
     return out.substr(a, b - a + 1);
 }
 
-/* encodeURIComponent معادل — خروجی ASCII. */
 static std::string MtUrlEncode(const std::wstring &in) {
     std::string out;
     int need = WideCharToMultiByte(CP_UTF8, 0, in.c_str(), (int)in.size(),
@@ -563,7 +574,6 @@ static std::string MtUrlEncode(const std::wstring &in) {
     return out;
 }
 
-/* رشتهٔ وایدِ ASCII از خروجیِ MtUrlEncode. */
 static std::wstring MtWideFromAscii(const std::string &s) {
     std::wstring w;
     w.reserve(s.size());
@@ -572,7 +582,6 @@ static std::wstring MtWideFromAscii(const std::string &s) {
     return w;
 }
 
-/* لیترالِ رشتهٔ JS («"…"») با اسکیپِ امن. */
 static std::wstring MtJsQuote(const std::wstring &s) {
     std::wstring o = L"\"";
     for (size_t i = 0; i < s.size(); i++) {
@@ -594,8 +603,6 @@ static std::wstring MtJsQuote(const std::wstring &s) {
     return o;
 }
 
-/* v1.14.327 — متنِ آزاد → آدرس (مثلِ گوشی/پی‌سیِ واقعی):
-   لینکِ کامل = خودش؛ دامنه = https؛ هرچیزِ دیگر = سرچِ گوگل. */
 static std::wstring MtSearchOrUrl(const std::wstring &s) {
     if (_wcsnicmp(s.c_str(), L"http://", 7) == 0
             || _wcsnicmp(s.c_str(), L"https://", 8) == 0)
@@ -622,35 +629,25 @@ static std::wstring MtSearchOrUrl(const std::wstring &s) {
            + MtWideFromAscii(MtUrlEncode(s));
 }
 
-static void LayoutChildren(void);
-static void EnterBrowserMode(const wchar_t *url);
-static void LeaveBrowserMode(void);
+static void LayoutApp(void);
+static void LayoutBrowser(void);
 static void Wv2Recount(void);
 static void MtOpenBrowserUi(void);
+static void MtShowBrowser(void);
 
-/* v1.14.328 — SEH فقط در MSVC (تستِ محلی با کلنگ هم کامپایل شود) */
 #if defined(_MSC_VER)
 #define MT_HAS_SEH 1
 #else
 #define MT_HAS_SEH 0
 #endif
 
-/* ————— هندلرهای WebView2 (هدرِ رسمی؛ بدونِ حدسِ vtable) —————
-   شیءهای ایستا هستند و هرگز حذف نمیشوند — شمارندهٔ مرجع فقط
-   برایی قواعد COM بالا و پایین میرود. */
 template <typename IFACE>
 struct MtHandlerBase : public IFACE {
     volatile LONG m_ref;
     MtHandlerBase() : m_ref(1) {}
-    /* توجه: destructorِ مجازی نداریم تا vtable دقیقاً
-       [QI, AddRef, Release, Invoke] بماند (جابه‌جاییِ COM). */
     virtual HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppv) {
         if (ppv == NULL)
             return E_POINTER;
-        /* v1.14.329 — صادق: فقط IUnknown و همین اینترفیس پاس میدهدیم.
-           قبلاً برایِ هر IID همین شیء را برمی‌گرداندیم؛ اگر COM
-           دنبالِ اینترفیسِ دیگری (مثلِ marshaling) می‌گشت، متدی با
-           vtableِ اشتباه صدا زده میشد. */
 #if defined(_MSC_VER)
         if (riid == IID_IUnknown || riid == __uuidof(IFACE)) {
             *ppv = static_cast<IFACE *>(this);
@@ -660,7 +657,6 @@ struct MtHandlerBase : public IFACE {
         *ppv = NULL;
         return E_NOINTERFACE;
 #else
-        /* بیلدِ محلیِ غیرِ MSVC: مثلِ قبل (تستِ کامپایل) */
         *ppv = static_cast<IFACE *>(this);
         InterlockedIncrement(&m_ref);
         return S_OK;
@@ -674,13 +670,9 @@ struct MtHandlerBase : public IFACE {
     }
 };
 
-/* هندلرِ اتمامِ ExecuteScript — mode: 0=استخراج 1=بی‌اثر
-   2=شمارش 3=محتوای فیلدِ اپ 4=نتیجهٔ پرکردنِ فیلد. */
 struct MtExecHandler : MtHandlerBase<ICoreWebView2ExecuteScriptCompletedHandler> {
     int mode;
     explicit MtExecHandler(int m) : mode(m) {}
-    /* v1.14.328 — بدنه در MtExecImpl (بدنه با C++) و این پوستهٔ
-       SEH (بدونِ شیء) خطا را لاگ میکند و اپ زنده میماند. */
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
                                              LPCWSTR resultObjectAsJson) {
 #if MT_HAS_SEH
@@ -702,8 +694,6 @@ static MtExecHandler g_execCount(2);
 static MtExecHandler g_execGetUrl(3);
 static MtExecHandler g_execFill(4);
 
-/* بی‌اثر — برایِ AddScriptToExecuteOnDocumentCreated (نوعِ هندلرِ
-   جدا دارد) */
 struct MtNoopScriptHandler
         : MtHandlerBase<
             ICoreWebView2AddScriptToExecuteOnDocumentCreatedCompletedHandler> {
@@ -729,17 +719,13 @@ static void MtSetStatusCount(int n) {
     std::wstring s;
     if (n > 0) {
         s = std::to_wstring(n);
-        s += L" \u0639\u06A9\u0633 \u0622\u0645\u0627\u062F\u0647"
-             L" \u0627\u0633\u062A\u062E\u0631\u0627\u062C";
+        s += L" \u0639\u06A9\u0633 \u0622\u0645\u0627\u062F\u0647";
     } else {
-        s = L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F"
-            L" \u2014 \u0627\u0648\u0644 \u0641\u0635\u0644 \u0631\u0627"
-            L" \u0628\u0627\u0632 \u06A9\u0646";
+        s = L"\u2014";
     }
     SetWindowTextW(g_lblStatus, s.c_str());
 }
 
-/* ————— رویدادهای ناوبری — v1.14.329: همه با گاردِ SEH ————— */
 struct MtNavStartHandler : MtHandlerBase<ICoreWebView2NavigationStartingEventHandler> {
     virtual HRESULT STDMETHODCALLTYPE Invoke(ICoreWebView2 *sender,
                                              ICoreWebView2NavigationStartingEventArgs *args) {
@@ -791,12 +777,6 @@ struct MtSrcChangedHandler : MtHandlerBase<ICoreWebView2SourceChangedEventHandle
                                   ICoreWebView2SourceChangedEventArgs *args);
 };
 
-/* v1.14.329 — DocumentTitleChanged کلاً حذف شد: لاگِ کرشِ v1.14.328
-   (C0000005، خواندنِ 0xFFFFFFFFFFFFFFFF، ۳–۱۹ ثانیه بعد از ناوبری =
-   دقیقاً هنگامِ لودشدنِ صفحه و تغییرِ عنوان) نشان داد تنها هندلرِ
-   بدونِ گارد که به دادهها دست میزد همین بود. عنوانِ پنجره مثلِ
-   نسخهٔ گوشی ثابت «مانا کلود» است. */
-
 static MtNavStartHandler g_navStartHandler;
 static MtNavDoneHandler g_navDoneHandler;
 static MtSrcChangedHandler g_srcHandler;
@@ -808,8 +788,8 @@ HRESULT MtNavStartHandler::NavStartImpl(
     g_progress = 8;
     g_doneTicks = 0;
     SetTimer(g_hwnd, TIMER_PROGRESS, 40, NULL);
-    if (g_browserMode)
-        InvalidateRect(g_hwnd, NULL, FALSE);
+    if (g_hwndBr != NULL)
+        InvalidateRect(g_hwndBr, NULL, FALSE);
     return S_OK;
 }
 
@@ -818,9 +798,9 @@ HRESULT MtNavDoneHandler::NavDoneImpl(
     (void)args;
     g_loading = FALSE;
     g_progress = 100;
-    g_doneTicks = 8; /* ~320ms نمایشِ کامل، بعد محو */
-    if (g_browserMode)
-        InvalidateRect(g_hwnd, NULL, FALSE);
+    g_doneTicks = 8;
+    if (g_hwndBr != NULL)
+        InvalidateRect(g_hwndBr, NULL, FALSE);
     if (sender == g_webBr)
         Wv2Recount();
     return S_OK;
@@ -833,7 +813,6 @@ HRESULT MtSrcChangedHandler::SrcChangedImpl(
         LPWSTR uri = NULL;
         if (SUCCEEDED(sender->get_Source(&uri)) && uri != NULL) {
             SetWindowTextW(g_editUrl, uri);
-            /* v1.14.327 — سایتِ قبلی را همیشه به‌روز نگه دار */
             g_lastSite = uri;
             CoTaskMemFree(uri);
         }
@@ -847,31 +826,9 @@ static void Wv2Recount(void) {
     g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execCount);
 }
 
-/* ————— حالتها ————— */
-
-/* ورود به حالتِ مرورگر: نوارها + وب‌ویوی مرورگر + آدرسِ داده‌شده. */
-static void EnterBrowserMode(const wchar_t *url) {
-    g_browserMode = TRUE;
-    LayoutChildren();
-    if (g_webBr != NULL && url != NULL && *url) {
-        SetWindowTextW(g_editUrl, url);
-        g_webBr->Navigate(url);
-    }
-    if (g_editUrl != NULL)
-        SetFocus(g_editUrl);
-}
-
-/* برگشت به حالتِ اپ: صفحهٔ اپ + دکمهٔ شناورِ 🌐. */
-static void LeaveBrowserMode(void) {
-    g_browserMode = FALSE;
-    LayoutChildren();
-}
-
-/* هندلرِ اتمامِ ساختِ کنترلر — browser=TRUE یعنی وب‌ویوی مرورگر. */
 struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCompletedHandler> {
     BOOL browser;
     explicit MtCtlHandler(BOOL b) : browser(b) {}
-    /* v1.14.328 — SEH: خطای داخلِ کالک دیگر اپ را نمیکشد */
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
                                              ICoreWebView2Controller *controller) {
 #if MT_HAS_SEH
@@ -893,14 +850,17 @@ struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCom
                     browser ? "browser" : "app", (unsigned long)errorCode);
             MtLog(lb);
             if (!browser) {
-                /* v1.14.326 — اپ نمی‌میرد: صفحهٔ راه‌حل نشان بده */
                 g_failMode = TRUE;
             } else {
                 g_brPending = FALSE;
             }
-            LayoutChildren();
+            if (browser)
+                LayoutBrowser();
+            else
+                LayoutApp();
             return S_OK;
         }
+        controller->AddRef();
         ICoreWebView2 *wv = NULL;
         HRESULT hr = controller->get_CoreWebView2(&wv);
         MtLogHr(browser ? "br: get_CoreWebView2" : "app: get_CoreWebView2", hr);
@@ -909,38 +869,31 @@ struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCom
                 g_failMode = TRUE;
             else
                 g_brPending = FALSE;
-            LayoutChildren();
+            if (browser)
+                LayoutBrowser();
+            else
+                LayoutApp();
             return S_OK;
         }
         if (browser) {
             g_brCtl = controller;
             g_webBr = wv;
-            /* رویدادهای مرورگر: نوار + آدرس + شمارش */
             wv->add_NavigationStarting(&g_navStartHandler, &g_evTokBrNav);
             wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokBrDone);
             wv->add_SourceChanged(&g_srcHandler, &g_evTokBrSrc);
-            controller->put_IsVisible(FALSE);
             MtLog("br webview created");
-            /* v1.14.331 — بقیهٔ کار در صفِ پیام: هیچ کاری داخلِ
-               کالکِ اتمام انجام نشود (تستِ دودیِ CI در v1.14.330:
-               C0000005ِ گیرافتاده در SEH، بعد از همین لاگ، همینجا
-               رخ میداد) — همان الگوی رفعِ کرشِ محیط در v1.14.328 */
             PostMessage(g_hwnd, WM_APP_BRREADY, 0, 0);
             return S_OK;
         }
         g_appCtl = controller;
         g_webApp = wv;
-        /* ترجمهٔ پیام‌های نشانک قبل از هر اسکریپتی */
         wv->AddScriptToExecuteOnDocumentCreated(MT_PRELOAD_JS,
                                                 &g_noopScript);
-        /* رویدادهای اپ: ناوبری (عنوانِ پنجره حذف شد — v1.14.329) */
         wv->add_NavigationStarting(&g_navStartHandler, &g_evTokAppNav);
         wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokAppDone);
         wv->Navigate(APP_URL);
         MtLog("app webview created — navigating");
-        LayoutChildren();
-        /* v1.14.330 — تستِ دودی: کره را خودکار بزن تا مسیرِ ساختِ
-           کنترللرِ مرورگر (جایِ کرشهای v327–v329) اجرا شود */
+        LayoutApp();
         if (g_smokeBrowser)
             SetTimer(g_hwnd, TIMER_SMOKE_BR, 8000, NULL);
         return S_OK;
@@ -953,33 +906,83 @@ static MtCtlHandler g_ctlApp(FALSE);
 static MtCtlHandler g_ctlBr(TRUE);
 
 static void MtOpenBrowserUi(void) {
-    if (g_webBr != NULL) {
-        if (g_webApp != NULL) {
-            g_webApp->ExecuteScript(MT_GETFIELD_JS, &g_execGetUrl);
-        } else {
-            EnterBrowserMode(g_lastSite.empty() ? BROWSER_HOME
-                                                : g_lastSite.c_str());
-        }
+    if (g_hwndBr != NULL && g_webBr != NULL) {
+        MtShowBrowser();
         return;
     }
     if (g_brPending)
-        return;   /* در حالِ ساخت — صبر */
-    if (g_env == NULL || g_hwnd == NULL || g_hostBr == NULL)
         return;
+    if (g_env == NULL || g_hwnd == NULL)
+        return;
+    if (g_hwndBr == NULL) {
+        int sw = GetSystemMetrics(SM_CXSCREEN);
+        int sh = GetSystemMetrics(SM_CYSCREEN);
+        int ww = sw < 1120 ? (sw > 40 ? sw - 40 : sw) : 1080;
+        int wh = sh < 800 ? (sh > 80 ? sh - 80 : sh) : 720;
+        int x = sw > ww ? (sw - ww) / 2 : 0;
+        int y = sh > wh ? (sh - wh) / 2 : 0;
+        g_hwndBr = CreateWindowExW(0, L"MangaCloudBrWnd",
+            L"\u0645\u0631\u0648\u0631\u06AF\u0631 \u062F\u0627\u062E\u0644\u06CC"
+            L" \u2014 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0639\u06A9\u0633"
+            L" \u0645\u0627\u0646\u0647\u0648\u0627",
+            WS_OVERLAPPEDWINDOW, x, y, ww, wh,
+            g_hwnd, NULL, g_hInst, NULL);
+        if (g_hwndBr == NULL) {
+            MtLog("browser window create failed");
+            return;
+        }
+        LayoutBrowser();
+    }
     g_brPending = TRUE;
-    MtLog("lazy: creating browser controller (on its own host hwnd)");
-    HRESULT hr = g_env->CreateCoreWebView2Controller(g_hostBr, &g_ctlBr);
+    if (g_webApp != NULL) {
+        g_brTarget.clear();
+        g_webApp->ExecuteScript(MT_GETFIELD_JS, &g_execGetUrl);
+    } else {
+        g_brTarget = g_lastSite.empty() ? BROWSER_HOME : g_lastSite;
+    }
+    if (g_hwndBr == NULL) {
+        MtLog("lazy: creating browser window");
+    }
+    MtLog("lazy: creating browser controller (separate top-level window)");
+    HRESULT hr = g_env->CreateCoreWebView2Controller(g_hwndBr, &g_ctlBr);
     MtLogHr("lazy: create br", hr);
     if (FAILED(hr)) {
         g_brPending = FALSE;
-        LayoutChildren();
+        LayoutBrowser();
     }
 }
 
-/* v1.14.328 — کالکِ محیط: فقط نگه‌داشتن + PostMessage.
-   ساختِ کنترلر از داخلِ این کالک ممنوع است — لاگِ v1.14.327 نشان
-   داد که این کالک «همزمان» داخلِ فراخوانیِ خودِ CreateEnvironment
-   اجرا میشود و فراخوانیِ تودرتویِ CreateController به کرش میانجامید. */
+static BOOL g_inBrShow = FALSE;
+static void MtShowBrowser(void) {
+    if (g_hwndBr == NULL)
+        return;
+    MtLog("brShow: begin");
+    if (g_brCtl != NULL)
+        g_brCtl->put_IsVisible(TRUE);
+    MtLog("brShow: ctl visible");
+    g_inBrShow = TRUE;
+    ShowWindow(g_hwndBr, SW_SHOW);
+    if (IsIconic(g_hwndBr))
+        ShowWindow(g_hwndBr, SW_RESTORE);
+    SetWindowPos(g_hwndBr, HWND_TOP, 0, 0, 0, 0,
+                 SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    SetForegroundWindow(g_hwndBr);
+    g_inBrShow = FALSE;
+    MtLog("brShow: window shown");
+    LayoutBrowser();
+    if (g_editUrl != NULL)
+        SetFocus(g_hwndBr);
+}
+
+static void MtHideBrowser(void) {
+    if (g_hwndBr == NULL)
+        return;
+    ShowWindow(g_hwndBr, SW_HIDE);
+    if (g_brCtl != NULL)
+        g_brCtl->put_IsVisible(FALSE);
+    SetForegroundWindow(g_hwnd);
+}
+
 struct MtEnvHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2EnvironmentCompletedHandler> {
     virtual HRESULT STDMETHODCALLTYPE Invoke(HRESULT errorCode,
                                              ICoreWebView2Environment *environment) {
@@ -1001,13 +1004,12 @@ struct MtEnvHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2EnvironmentCo
                     (unsigned long)errorCode);
             g_failMode = TRUE;
             MtLog(lb);
-            LayoutChildren();
+            LayoutApp();
             return S_OK;
         }
         MtLog("environment created");
         g_env = environment;
-        g_env->AddRef();   /* برایِ عمرِ برنامه نگه میداریم */
-        /* ساختنِ کنترلر با پیام به صف — روی استکِ تمیزِ پمپِ پیام */
+        g_env->AddRef();
         PostMessage(g_hwnd, WM_APP_CREATCTL, 0, 0);
         return S_OK;
     }
@@ -1015,16 +1017,13 @@ struct MtEnvHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2EnvironmentCo
 
 static MtEnvHandler g_envHandler;
 
-/* ————— شروعِ وب‌ویو — لینکِ ایستا؛ اگر ران‌تایم نبود،
-   صفحهٔ راه‌حل (بدونِ بستنِ اپ) ————— */
 static void TryStartEnv(void) {
-    /* اول: ران‌تایمِ WebView2 نصب است؟ (پیامِ خطای شفاف) */
     LPWSTR ver = NULL;
     HRESULT hv = GetAvailableCoreWebView2BrowserVersionString(NULL, &ver);
     if (FAILED(hv) || ver == NULL) {
         MtLog("WebView2 runtime NOT found");
         g_failMode = TRUE;
-        LayoutChildren();
+        LayoutApp();
         return;
     }
     {
@@ -1054,15 +1053,13 @@ static void TryStartEnv(void) {
     MtLogHr("createEnv", hr);
     if (FAILED(hr)) {
         g_failMode = TRUE;
-        LayoutChildren();
+        LayoutApp();
         return;
     }
     MtLog("createEnv accepted");
 }
 
-/* ————— چیدمان — حالتِ اپ: تمام‌صفحه + 🌐 شناور —————
-   حالتِ مرورگر: بالا [برو][آدرس……][✕] | پایین [↩][↪][شمارش][استخراج] */
-static void LayoutChildren(void) {
+static void LayoutApp(void) {
     RECT rc;
     GetClientRect(g_hwnd, &rc);
     int w = rc.right;
@@ -1070,23 +1067,10 @@ static void LayoutChildren(void) {
     if (w <= 0 || h <= 0)
         return;
 
-    /* v1.14.326 — صفحهٔ خطا همه‌چیزِ دیگر را می‌پوشاند */
     BOOL fail = g_failMode;
-    BOOL br = g_browserMode && !fail;
 
-    /* کنترلهای نوارها فقط در حالتِ مرورگر */
-    ShowWindow(g_btnClose, br ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_editUrl, br ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_btnGo, br ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_btnBack, br ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_btnFwd, br ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_lblStatus, br ? SW_SHOW : SW_HIDE);
-    ShowWindow(g_btnExtract, br ? SW_SHOW : SW_HIDE);
-    /* v1.14.328 — کره وقتی دیده میشود که صفحهٔ اپ آماده باشد؛
-       وب‌ویوی مرورگر تنبل است و با کلیک ساخته میشود */
     ShowWindow(g_btnGlobe,
-               (!br && !fail && g_webApp != NULL) ? SW_SHOW : SW_HIDE);
-    /* کنترلهای صفحهٔ خطا */
+               (!fail && g_webApp != NULL) ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblFailTitle, fail ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblFailBody, fail ? SW_SHOW : SW_HIDE);
     ShowWindow(g_btnWv2Dl, fail ? SW_SHOW : SW_HIDE);
@@ -1094,7 +1078,6 @@ static void LayoutChildren(void) {
     ShowWindow(g_btnRetry, fail ? SW_SHOW : SW_HIDE);
 
     if (fail) {
-        /* — چیدمانِ صفحهٔ راه‌حل — */
         int bw = w - 48;
         if (bw > 260)
             bw = 260;
@@ -1107,76 +1090,74 @@ static void LayoutChildren(void) {
         MoveWindow(g_btnWv2Dl, w - 24 - bw, by, bw, 44, TRUE);
         MoveWindow(g_btnSysBr, w - 24 - bw, by + 54, bw, 44, TRUE);
         MoveWindow(g_btnRetry, w - 24 - bw, by + 108, bw, 44, TRUE);
-    } else if (br) {
-        /* — نوارِ بالا — */
-        int bwClose = 42, bwGo = 66, bh = 32;
-        int m = 10;
-        MoveWindow(g_btnClose, w - m - bwClose, 7, bwClose, bh, TRUE);
-        MoveWindow(g_btnGo, m, 7, bwGo, bh, TRUE);
-        int ex1 = m + bwGo + 8;
-        int ex2 = w - m - bwClose - 8;
-        if (ex2 > ex1 + 60)
-            MoveWindow(g_editUrl, ex1 + 2, 9, ex2 - ex1 - 4, bh - 4, TRUE);
-        g_urlRing.left = ex1;
-        g_urlRing.top = 7;
-        g_urlRing.right = ex2;
-        g_urlRing.bottom = 7 + bh;
-
-        /* — نوارِ پایین — عقب چپ، جلو راست («< >») — */
-        int bwNav = 42, bhNav = 34;
-        int bwEx = 176, bhEx = 36;
-        int by = h - BOT_BAND_H;
-        MoveWindow(g_btnBack, m, by + 10, bwNav, bhNav, TRUE);
-        MoveWindow(g_btnFwd, m + bwNav + 6, by + 10, bwNav, bhNav, TRUE);
-        MoveWindow(g_btnExtract, w - m - bwEx, by + 9, bwEx, bhEx, TRUE);
-        MoveWindow(g_lblStatus, m + 2 * bwNav + 18, by + 4,
-                   w - m - bwEx - (m + 2 * bwNav + 18) - 12, BOT_BAND_H - 8, TRUE);
     } else {
-        /* — کرهٔ شناور: پایین-چپ (مثلِ گوشی) — */
         MoveWindow(g_btnGlobe, 14, h - 14 - FAB_SIZE, FAB_SIZE, FAB_SIZE, TRUE);
-        /* روی وب‌ویو بماند (HWND های WebView2 بعداً ساخته میشوند) */
         SetWindowPos(g_btnGlobe, HWND_TOP, 0, 0, 0, 0,
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
-    /* v1.14.330 — میزبانها را جابه‌جا کن و کنترلرها را داخلِ
-       میزبانِ خودشان کامل باز کن (Bounds نسبت به میزبان است) */
-    if (g_hostApp != NULL) {
-        if (g_appCtl != NULL && !br && !fail) {
-            MoveWindow(g_hostApp, 0, 0, w, h, FALSE);
-            ShowWindow(g_hostApp, SW_SHOW);
+    if (g_appCtl != NULL) {
+        if (!fail) {
             RECT a = {0, 0, w, h};
             g_appCtl->put_Bounds(a);
             g_appCtl->put_IsVisible(TRUE);
         } else {
-            if (g_appCtl != NULL)
-                g_appCtl->put_IsVisible(FALSE);
-            ShowWindow(g_hostApp, SW_HIDE);
-        }
-    }
-    if (g_hostBr != NULL) {
-        if (g_brCtl != NULL && br) {
-            int top = TOP_BAND_H + PROG_H;
-            int ih = h - BOT_BAND_H - top;
-            if (ih < 1)
-                ih = 1;
-            MoveWindow(g_hostBr, 0, top, w, ih, FALSE);
-            ShowWindow(g_hostBr, SW_SHOW);
-            RECT b = {0, 0, w, ih};
-            g_brCtl->put_Bounds(b);
-            g_brCtl->put_IsVisible(TRUE);
-        } else {
-            if (g_brCtl != NULL)
-                g_brCtl->put_IsVisible(FALSE);
-            ShowWindow(g_hostBr, SW_HIDE);
+            g_appCtl->put_IsVisible(FALSE);
         }
     }
     InvalidateRect(g_hwnd, NULL, FALSE);
 }
 
+static void LayoutBrowser(void) {
+    if (g_hwndBr == NULL)
+        return;
+    RECT rc;
+    GetClientRect(g_hwndBr, &rc);
+    int w = rc.right;
+    int h = rc.bottom;
+    if (w <= 0 || h <= 0)
+        return;
+
+    int m = 10, gap = 8;
+    int bh = 34, by = (BR_BAR_H - bh) / 2;
+    int bwNav = 42, bwGo = 64;
+    int bwExt = (w < 700) ? 96 : 150;
+    int bwCnt = (w < 900) ? 0 : 110;
+
+    MoveWindow(g_btnFwd, w - m - bwNav, by, bwNav, bh, TRUE);
+    MoveWindow(g_btnBack, w - m - bwNav - gap - bwNav, by, bwNav, bh, TRUE);
+    int urlR = w - m - 2 * bwNav - 2 * gap - 2;
+
+    int xL = m;
+    if (bwCnt > 0) {
+        MoveWindow(g_lblStatus, xL, by, bwCnt, bh, TRUE);
+        xL += bwCnt + gap;
+    }
+    MoveWindow(g_btnExtract, xL, by, bwExt, bh, TRUE);
+    xL += bwExt + gap;
+    MoveWindow(g_btnGo, xL, by, bwGo, bh, TRUE);
+    xL += bwGo + gap;
+    int urlL = xL + 2;
+
+    if (urlR > urlL + 60)
+        MoveWindow(g_editUrl, urlL, by + 1, urlR - urlL, bh - 2, TRUE);
+    g_urlRing.left = urlL;
+    g_urlRing.top = by + 1;
+    g_urlRing.right = urlR;
+    g_urlRing.bottom = by + bh - 1;
+
+    if (g_brCtl != NULL) {
+        int top = BR_BAR_H + 1;
+        int ih = h - top;
+        if (ih < 1)
+            ih = 1;
+        RECT b = {0, top, w, top + ih};
+        g_brCtl->put_Bounds(b);
+    }
+    InvalidateRect(g_hwndBr, NULL, FALSE);
+}
+
 static void OnGo(void) {
-    /* v1.14.326 — بدونِ بافرِ ثابت (سرچِ فارسی = ۶ برابر طول) و
-       مثلِ گوشی: متنِ آزاد = سرچِ گوگل، دامنه = https */
     int n = GetWindowTextLengthW(g_editUrl);
     if (n <= 0)
         return;
@@ -1192,17 +1173,26 @@ static void OnGo(void) {
         g_webBr->Navigate(url.c_str());
 }
 
-/* اینتر در فیلدِ آدرس = «برو» */
 static WNDPROC g_editProc = NULL;
-static LRESULT CALLBACK MtEditProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+static LRESULT MtEditProcInner(HWND h, UINT m, WPARAM w, LPARAM l) {
     if (m == WM_KEYDOWN && w == VK_RETURN) {
         OnGo();
         return 0;
     }
     return CallWindowProcW(g_editProc, h, m, w, l);
 }
+static LRESULT CALLBACK MtEditProc(HWND h, UINT m, WPARAM w, LPARAM l) {
+#if MT_HAS_SEH
+    __try {
+        return MtEditProcInner(h, m, w, l);
+    } __except (MtSehLog("editProc", GetExceptionInformation())) {
+        return 0;
+    }
+#else
+    return MtEditProcInner(h, m, w, l);
+#endif
+}
 
-/* ————— دکمهٔ گرد (owner-draw) ————— */
 static void MtDrawPill(HDC hdc, const RECT &rc, COLORREF bg,
                        const wchar_t *txt, HFONT f) {
     HBRUSH b = CreateSolidBrush(bg);
@@ -1227,15 +1217,12 @@ static void MtDrawPill(HDC hdc, const RECT &rc, COLORREF bg,
     SelectObject(hdc, of);
 }
 
-/* ————— کرهٔ شناور (owner-draw): دایرهٔ تیره + حلقهٔ نارنجی +
-   خطوطِ سادهٔ کره — بدونِ فونتِ ایموجی، همه‌جا یکسان ————— */
 static void MtDrawGlobe(HDC hdc, const RECT &rc, BOOL pressed) {
     int cx = (rc.left + rc.right) / 2;
     int cy = (rc.top + rc.bottom) / 2;
     int r = (rc.right - rc.left) / 2 - 2;
     if (r < 8)
         return;
-    /* پس‌زمینهٔ دایره‌ای + حلقهٔ نارنجی */
     HBRUSH bg = CreateSolidBrush(pressed ? CLR_FAB_DN : CLR_FAB);
     HPEN ring = CreatePen(PS_SOLID, 3, CLR_ACC);
     HGDIOBJ ob = SelectObject(hdc, ring);
@@ -1245,7 +1232,6 @@ static void MtDrawGlobe(HDC hdc, const RECT &rc, BOOL pressed) {
     SelectObject(hdc, obb);
     DeleteObject(ring);
     DeleteObject(bg);
-    /* کره: دایره + دو نصف‌النهار + استوا — سفید (v1.14.329: خواناتر) */
     HPEN gp = CreatePen(PS_SOLID, 2, RGB(255, 255, 255));
     HGDIOBJ og = SelectObject(hdc, gp);
     HGDIOBJ onb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
@@ -1263,11 +1249,8 @@ static void MtDrawGlobe(HDC hdc, const RECT &rc, BOOL pressed) {
     DeleteObject(gp);
 }
 
-/* ————— متنِ صفحهٔ خطا (وب‌ویو نبود/باز نشد) — v1.14.327:
-   بدونِ «دانلود و اجرایِ نصبکننده» (الگویِ مشکوکِ آنتیویروس) —
-   فقط صفحهٔ رسمی در مرورگر باز میشود. */
 static const wchar_t MT_FAIL_BODY[] =
-    L"\u0645\u0648\u062A\u0648\u0631\u0650 \u0648\u0628\u0650 \u0648\u06CC\u0646\u062F\u0648\u0632 (WebView2) \u0631\u0648\u06CC \u0627\u06CC\u0646 \u0633\u06CC\u0633\u062A\u0645 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u06CC\u0627 \u0627\u062C\u0631\u0627 \u0646\u0634\u062F \u2014 \u0628\u062F\u0648\u0646\u0650 \u0622\u0646 \u0635\u0641\u062D\u0647\u0654 \u0627\u067E \u0628\u0627\u0632 \u0646\u0645\u06CC\u0634\u0648\u062F.\n\n"
+    L"\u0645\u0648\u062A\u0648\u0631\u0650 \u0648\u0628\u0650 \u0648\u06CC\u0646\u062F\u0648\u0632 (WebView2) \u0631\u0648\u06CC \u0627\u06CC\u0646 \u0633\u06CC\u0633\u062A\u0645 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u06CC\u0627 \u0627\u062C\u0631\u0627 \u0646\u0634\u062F \u2014 \u0628\u062F\u0648\u0646\u0650 \u0622\u0646 \u0635\u0641\u062D\u0647\u0650 \u0627\u067E \u0628\u0627\u0632 \u0646\u0645\u06CC\u0634\u0648\u062F.\n\n"
     L"1) \u00AB\u062F\u0627\u0646\u0644\u0648\u062F WebView2\u00BB \u0631\u0627 \u0628\u0632\u0646 \u2014 \u0635\u0641\u062D\u0647\u0654 \u0631\u0633\u0645\u06CC\u0650 \u0645\u0627\u06CC\u06A9\u0631\u0648\u0633\u0627\u0641\u062A \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0628\u0627\u0632 \u0645\u06CC\u0634\u0648\u062F\u061B \u0646\u0635\u0628\u200C\u06A9\u0646\u0646\u062F\u0647 \u0631\u0627 \u062F\u0627\u0646\u0644\u0648\u062F \u0648 \u0627\u062C\u0631\u0627 \u06A9\u0646 (\u0627\u06CC\u0646\u062A\u0631\u0646\u062A \u0644\u0627\u0632\u0645 \u0627\u0633\u062A).\n"
     L"2) \u0628\u0639\u062F \u0627\u0632 \u067E\u0627\u06CC\u0627\u0646\u0650 \u0646\u0635\u0628\u060C \u00AB\u062A\u0644\u0627\u0634 \u062F\u0648\u0628\u0627\u0631\u0647\u00BB \u0631\u0627 \u0628\u0632\u0646.\n\n"
     L"\u06CC\u0627 \u0647\u0645\u06CC\u0646 \u062D\u0627\u0644\u0627 \u00AB\u0628\u0627\u0632 \u06A9\u0631\u062F\u0646 \u0627\u067E \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631\u00BB \u0631\u0627 \u0628\u0632\u0646 \u2014 \u0647\u0645\u0647\u0654 \u0627\u0645\u06A9\u0627\u0646\u0627\u062A \u0647\u0645\u0627\u0646\u0627\u0633\u062A.";
@@ -1276,37 +1259,107 @@ static void ShowFailScreen(const char *logReason) {
     g_failMode = TRUE;
     if (logReason != NULL)
         MtLog(logReason);
-    LayoutChildren();
+    LayoutApp();
 }
 
-static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-    case WM_APP_CREATCTL: {
-        /* v1.14.328 — ساختِ کنترلرِ اپ روی استکِ تمیزِ پمپِ پیام
-           (نه داخلِ کالکِ محیط — رفعِ کرشِ v1.14.327) */
-        if (g_env != NULL && g_webApp == NULL && g_appCtl == NULL
-                && g_hostApp != NULL) {
-            MtLog("creating app controller (on its own host hwnd)");
-            HRESULT hr = g_env->CreateCoreWebView2Controller(g_hostApp, &g_ctlApp);
-            MtLogHr("create ctl(app)", hr);
-            if (FAILED(hr)) {
-                g_failMode = TRUE;
-                LayoutChildren();
-            }
-        }
-        return 0;
+static LRESULT MtOnCtlColor(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    if (msg == WM_CTLCOLOREDIT) {
+        HDC hdc = (HDC)wp;
+        SetTextColor(hdc, CLR_TXT);
+        SetBkColor(hdc, CLR_URLBG);
+        return (LRESULT)g_urlBrush;
     }
-    case WM_APP_BRREADY: {
-        /* v1.14.331 — کنترللرِ مرورگر آماده شد (از صفِ پیام، نه
-           داخلِ کالکِ اتمام): چیدمان + بازکردن روی استکِ تمیز */
-        if (g_brPending) {
-            g_brPending = FALSE;
-            MtOpenBrowserUi();
+    if (msg == WM_CTLCOLORSTATIC) {
+        HDC hdc = (HDC)wp;
+        HWND h = (HWND)lp;
+        if (h == g_lblStatus) {
+            SetTextColor(hdc, CLR_CNT);
+            SetBkColor(hdc, CLR_BRBAR);
+        } else if (h == g_lblFailTitle || h == g_lblFailBody) {
+            SetTextColor(hdc, CLR_TXT);
+            SetBkColor(hdc, CLR_BAR);
         } else {
-            LayoutChildren();
+            SetTextColor(hdc, CLR_MUT);
+            SetBkColor(hdc, CLR_BAR);
         }
-        return 0;
+        return (LRESULT)g_barBrush;
     }
+    return 0;
+}
+
+static LRESULT MtOnDrawItem(WPARAM wp, LPARAM lp) {
+    (void)wp;
+    DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)lp;
+    if (d == NULL || d->CtlType != ODT_BUTTON)
+        return 0;
+    if (d->CtlID == ID_BTN_GLOBE) {
+        MtDrawGlobe(d->hDC, d->rcItem,
+                    (d->itemState & ODS_SELECTED) != 0);
+        return TRUE;
+    }
+    BOOL down = (d->itemState & ODS_SELECTED) != 0;
+    COLORREF bg;
+    if (d->CtlID == ID_BTN_EXTRACT) {
+        bg = down ? CLR_EXTR_DN : CLR_EXTR;
+    } else if (d->CtlID == ID_BTN_WV2DL) {
+        bg = down ? CLR_ACC_DN : CLR_ACC;
+    } else if (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_BACK
+               || d->CtlID == ID_BTN_FWD) {
+        bg = down ? CLR_NAV_DN : CLR_NAV;
+    } else {
+        bg = down ? CLR_BTN_DN : CLR_BTN;
+    }
+    wchar_t txt[128];
+    GetWindowTextW(d->hwndItem, txt, 127);
+    HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
+    MtDrawPill(d->hDC, d->rcItem, bg, txt, f ? f : g_font);
+    return TRUE;
+}
+
+static void MtBrCreateControls(HWND hwnd) {
+    HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE);
+    g_editUrl = CreateWindowExW(0, L"EDIT", L"",
+        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_LEFT,
+        0, 9, 400, 28, hwnd,
+        (HMENU)(INT_PTR)ID_EDIT_URL, hInst, NULL);
+    g_btnGo = CreateWindowExW(0, L"BUTTON",
+        L"\u0628\u0631\u0648",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 64, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_GO, hInst, NULL);
+    g_btnFwd = CreateWindowExW(0, L"BUTTON", L"\u2192",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 42, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_FWD, hInst, NULL);
+    g_btnBack = CreateWindowExW(0, L"BUTTON", L"\u2190",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 42, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_BACK, hInst, NULL);
+    g_lblStatus = CreateWindowExW(0, L"STATIC",
+        L"\u2026",
+        WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_ENDELLIPSIS,
+        0, 0, 110, 34, hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS, hInst, NULL);
+    g_btnExtract = CreateWindowExW(0, L"BUTTON",
+        L"\U0001F5BC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0639\u06A9\u0633",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 150, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
+
+    SendMessageW(g_editUrl, WM_SETFONT, (WPARAM)g_font, TRUE);
+    g_editProc = (WNDPROC)SetWindowLongPtrW(g_editUrl, GWLP_WNDPROC,
+                                            (LONG_PTR)MtEditProc);
+    SendMessageW(g_btnGo, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnFwd, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnBack, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
+    MtLog("br controls created");
+}
+
+static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE:
+        MtBrCreateControls(hwnd);
+        return 0;
+    case WM_CLOSE:
+        MtHideBrowser();
+        return 0;
     case WM_COMMAND: {
         int id = LOWORD(wp);
         int code = HIWORD(wp);
@@ -1325,23 +1378,135 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                     g_webBr->GoForward();
                 return 0;
             }
-            if (id == ID_BTN_CLOSE) {
-                /* برگشت به اپ — مثلِ بستنِ مرورگرِ گوشی */
-                LeaveBrowserMode();
-                return 0;
-            }
             if (id == ID_BTN_EXTRACT) {
                 if (g_webBr != NULL)
                     g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
                 return 0;
             }
+        }
+        break;
+    }
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC:
+        return MtOnCtlColor(hwnd, msg, wp, lp);
+    case WM_DRAWITEM:
+        return MtOnDrawItem(wp, lp);
+    case WM_MOVE:
+        if (g_brCtl != NULL)
+            g_brCtl->NotifyParentWindowPositionChanged();
+        return 0;
+    case WM_SIZE:
+        if (!g_inBrShow)
+            LayoutBrowser();
+        return 0;
+    case WM_GETMINMAXINFO: {
+        MINMAXINFO *mmi = (MINMAXINFO *)lp;
+        if (mmi != NULL) {
+            mmi->ptMinTrackSize.x = 480;
+            mmi->ptMinTrackSize.y = 360;
+        }
+        return 0;
+    }
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH bb = CreateSolidBrush(CLR_BRBAR);
+        RECT barRc = {0, 0, rc.right, BR_BAR_H};
+        FillRect(hdc, &barRc, bb);
+        DeleteObject(bb);
+        HPEN bp = CreatePen(PS_SOLID, 1, CLR_BRBRD);
+        HGDIOBJ obp = SelectObject(hdc, bp);
+        MoveToEx(hdc, 0, BR_BAR_H, NULL);
+        LineTo(hdc, rc.right, BR_BAR_H);
+        SelectObject(hdc, obp);
+        DeleteObject(bp);
+        FillRect(hdc, &ps.rcPaint, g_barBrush);
+        if (g_urlRing.right > g_urlRing.left) {
+            HPEN pen = CreatePen(PS_SOLID, 1, CLR_URLBR);
+            HGDIOBJ ob = SelectObject(hdc, pen);
+            HGDIOBJ obb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+            RoundRect(hdc, g_urlRing.left - 1, g_urlRing.top - 1,
+                      g_urlRing.right + 1, g_urlRing.bottom + 1, 20, 20);
+            SelectObject(hdc, ob);
+            SelectObject(hdc, obb);
+            DeleteObject(pen);
+        }
+        if (g_progress > 0 && rc.right > 0) {
+            RECT pr = {0, BR_BAR_H + 1,
+                       (rc.right * g_progress) / 100,
+                       BR_BAR_H + 1 + PROG_H};
+            HBRUSH b = CreateSolidBrush(CLR_EXTR);
+            FillRect(hdc, &pr, b);
+            DeleteObject(b);
+        }
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_DESTROY:
+        return 0;
+    default:
+        return DefWindowProcW(hwnd, msg, wp, lp);
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static LRESULT CALLBACK BrWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+#if MT_HAS_SEH
+    __try {
+        return BrWndProcInner(hwnd, msg, wp, lp);
+    } __except (MtSehLog("brWnd", GetExceptionInformation())) {
+        return 0;
+    }
+#else
+    return BrWndProcInner(hwnd, msg, wp, lp);
+#endif
+}
+
+static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_APP_CREATCTL: {
+        if (g_env != NULL && g_webApp == NULL && g_appCtl == NULL) {
+            MtLog("creating app controller (on main window)");
+            HRESULT hr = g_env->CreateCoreWebView2Controller(hwnd, &g_ctlApp);
+            MtLogHr("create ctl(app)", hr);
+            if (FAILED(hr)) {
+                g_failMode = TRUE;
+                LayoutApp();
+            }
+        }
+        return 0;
+    }
+    case WM_APP_BRREADY: {
+        if (g_brPending) {
+            char bb[160];
+            g_brPending = FALSE;
+            sprintf(bb,
+                    "BRREADY: webBr=%p brCtl=%p hwndBr=%p tgtLen=%u",
+                    (void *)g_webBr, (void *)g_brCtl, (void *)g_hwndBr,
+                    (unsigned)g_brTarget.size());
+            MtLog(bb);
+            MtShowBrowser();
+            if (g_webBr != NULL && !g_brTarget.empty()) {
+                MtLog("BRREADY: navigate target");
+                g_webBr->Navigate(g_brTarget.c_str());
+                g_brTarget.clear();
+            }
+            LayoutBrowser();
+            MtLog("BRREADY: done");
+        }
+        return 0;
+    }
+    case WM_COMMAND: {
+        int id = LOWORD(wp);
+        int code = HIWORD(wp);
+        if (code == 0) {
             if (id == ID_BTN_GLOBE) {
                 MtOpenBrowserUi();
                 return 0;
             }
             if (id == ID_BTN_WV2DL) {
-                /* v1.14.327 — فقط صفحهٔ رسمی در مرورگر (بدونِ
-                   دانلود/اجرای خودکار — دوستِ آنتیویروس) */
                 MtLog("open WebView2 download page");
                 ShellExecuteW(NULL, L"open",
                     L"https://developer.microsoft.com/microsoft-edge/webview2/",
@@ -1356,47 +1521,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (id == ID_BTN_RETRY) {
                 MtLog("retry pressed");
                 g_failMode = FALSE;
-                LayoutChildren();
+                LayoutApp();
                 TryStartEnv();
                 return 0;
             }
         }
         break;
     }
-    case WM_CTLCOLOREDIT: {
-        HDC hdc = (HDC)wp;
-        SetTextColor(hdc, CLR_TXT);
-        SetBkColor(hdc, CLR_URLBG);
-        return (LRESULT)g_urlBrush;
-    }
-    case WM_CTLCOLORSTATIC: {
-        HDC hdc = (HDC)wp;
-        HWND h = (HWND)lp;
-        SetTextColor(hdc, (h == g_lblFailTitle || h == g_lblFailBody)
-                           ? CLR_TXT : CLR_MUT);
-        SetBkColor(hdc, CLR_BAR);
-        return (LRESULT)g_barBrush;
-    }
-    case WM_DRAWITEM: {
-        DRAWITEMSTRUCT *d = (DRAWITEMSTRUCT *)lp;
-        if (d == NULL || d->CtlType != ODT_BUTTON)
-            break;
-        if (d->CtlID == ID_BTN_GLOBE) {
-            MtDrawGlobe(d->hDC, d->rcItem,
-                        (d->itemState & ODS_SELECTED) != 0);
-            return TRUE;
-        }
-        BOOL acc = (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_EXTRACT
-                    || d->CtlID == ID_BTN_WV2DL);
-        COLORREF bg = (d->itemState & ODS_SELECTED)
-                          ? (acc ? CLR_ACC_DN : CLR_BTN_DN)
-                          : (acc ? CLR_ACC : CLR_BTN);
-        wchar_t txt[128];
-        GetWindowTextW(d->hwndItem, txt, 127);
-        HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
-        MtDrawPill(d->hDC, d->rcItem, bg, txt, f ? f : g_font);
-        return TRUE;
-    }
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC:
+        return MtOnCtlColor(hwnd, msg, wp, lp);
+    case WM_DRAWITEM:
+        return MtOnDrawItem(wp, lp);
     case WM_TIMER: {
         if (wp == TIMER_PROGRESS) {
             if (g_loading) {
@@ -1414,38 +1550,34 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 g_progress = 0;
                 KillTimer(hwnd, TIMER_PROGRESS);
             }
-            if (g_browserMode)
-                InvalidateRect(hwnd, NULL, FALSE);
+            if (g_hwndBr != NULL && IsWindowVisible(g_hwndBr))
+                InvalidateRect(g_hwndBr, NULL, FALSE);
             return 0;
         }
         if (wp == TIMER_RECOUNT) {
-            if (!g_browserMode && g_btnGlobe != NULL && g_webApp != NULL) {
-                /* کره روی وب‌ویو بماند */
+            if (!g_failMode && g_btnGlobe != NULL && g_webApp != NULL) {
                 SetWindowPos(g_btnGlobe, HWND_TOP, 0, 0, 0, 0,
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
-            if (g_browserMode && g_webBr != NULL && !g_loading)
+            if (g_webBr != NULL && g_hwndBr != NULL
+                    && IsWindowVisible(g_hwndBr) && !g_loading)
                 Wv2Recount();
             return 0;
         }
         if (wp == TIMER_SMOKE_BR) {
-            /* v1.14.330 — تستِ دودی: شبیهِ کلیکِ کره */
             KillTimer(hwnd, TIMER_SMOKE_BR);
-            MtLog("smoke: auto globe click — opening browser ui");
+            MtLog("smoke: auto globe click — opening browser window");
             MtOpenBrowserUi();
             return 0;
         }
         break;
     }
     case WM_MOVE:
-        /* نمونهٔ رسمیِ Win32: بعد از جابه‌جاییِ پنجره لازم است */
         if (g_appCtl != NULL)
             g_appCtl->NotifyParentWindowPositionChanged();
-        if (g_brCtl != NULL)
-            g_brCtl->NotifyParentWindowPositionChanged();
         return 0;
     case WM_SIZE:
-        LayoutChildren();
+        LayoutApp();
         return 0;
     case WM_GETMINMAXINFO: {
         MINMAXINFO *mmi = (MINMAXINFO *)lp;
@@ -1461,34 +1593,16 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         RECT rc;
         GetClientRect(hwnd, &rc);
         FillRect(hdc, &rc, g_barBrush);
-        if (g_browserMode) {
-            /* قابِ گردِ فیلدِ آدرس */
-            if (g_urlRing.right > g_urlRing.left) {
-                HPEN pen = CreatePen(PS_SOLID, 1, CLR_URLBR);
-                HGDIOBJ ob = SelectObject(hdc, pen);
-                HGDIOBJ obb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
-                RoundRect(hdc, g_urlRing.left, g_urlRing.top,
-                          g_urlRing.right, g_urlRing.bottom, 20, 20);
-                SelectObject(hdc, ob);
-                SelectObject(hdc, obb);
-                DeleteObject(pen);
-            }
-            /* نوارِ پیشرفت */
-            if (g_progress > 0 && rc.right > 0) {
-                RECT pr = {0, TOP_BAND_H,
-                           (rc.right * g_progress) / 100,
-                           TOP_BAND_H + PROG_H};
-                HBRUSH b = CreateSolidBrush(CLR_ACC);
-                FillRect(hdc, &pr, b);
-                DeleteObject(b);
-            }
-        }
         EndPaint(hwnd, &ps);
         return 0;
     }
     case WM_DESTROY:
         KillTimer(hwnd, TIMER_PROGRESS);
         KillTimer(hwnd, TIMER_RECOUNT);
+        if (g_hwndBr != NULL) {
+            DestroyWindow(g_hwndBr);
+            g_hwndBr = NULL;
+        }
         PostQuitMessage(0);
         return 0;
     default:
@@ -1497,40 +1611,60 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
-/* ————— بدنهٔ Invoke هندلرِ اسکریپت (اینجا چون از نمونههای
-   ایستا استفاده میکند باید بعد از تعریفها باشد) ————— */
+static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+#if MT_HAS_SEH
+    __try {
+        return WndProcInner(hwnd, msg, wp, lp);
+    } __except (MtSehLog("mainWnd", GetExceptionInformation())) {
+        return 0;
+    }
+#else
+    return WndProcInner(hwnd, msg, wp, lp);
+#endif
+}
+
 HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
                                   LPCWSTR resultObjectAsJson) {
     if (FAILED(errorCode)) {
-        /* اجرای JS نشد (مثلاً صفحه هنوز لود نشده) */
         if (mode == 4 && g_webApp != NULL && !g_fillUrl.empty())
-            g_webApp->Navigate(g_fillUrl.c_str());   /* پشتیبانِ #imgs= */
-        if (mode == 3)
-            EnterBrowserMode(g_lastSite.empty()
-                             ? BROWSER_HOME : g_lastSite.c_str());
+            g_webApp->Navigate(g_fillUrl.c_str());
+        if (mode == 3) {
+            g_brTarget = g_lastSite.empty() ? BROWSER_HOME : g_lastSite;
+            MtShowBrowser();
+            if (g_webBr != NULL && !g_brTarget.empty()) {
+                g_webBr->Navigate(g_brTarget.c_str());
+                g_brTarget.clear();
+            }
+        }
         return S_OK;
     }
-    if (mode == 2) { /* شمارشِ زنده */
+    if (mode == 2) {
         std::vector<std::wstring> links;
         MtParseMaybeWrapped(resultObjectAsJson, links);
         MtSetStatusCount((int)links.size());
         return S_OK;
     }
-    if (mode == 3) { /* محتوای فیلدِ اپ → ورود به حالتِ مرورگر */
+    if (mode == 3) {
         std::wstring u = MtParseJsonString(resultObjectAsJson);
         std::wstring target;
         if (u.empty() || u == L"__MT_MANY__") {
-            /* v1.14.327 — خروجیِ استخراج در فیلد نشسته: سایتِ قبلی */
             target = g_lastSite.empty() ? BROWSER_HOME : g_lastSite;
         } else if (_wcsnicmp(u.c_str(), L"http", 4) == 0) {
             target = u;
         } else {
             target = MtSearchOrUrl(u);
         }
-        EnterBrowserMode(target.c_str());
+        MtLog("field read: target decided");
+        if (g_webBr != NULL) {
+            MtLog("field read: show + navigate");
+            MtShowBrowser();
+            g_webBr->Navigate(target.c_str());
+        } else {
+            g_brTarget = target;
+        }
         return S_OK;
     }
-    if (mode == 4) { /* __mtFillLinks نبود؟ → پشتیبانِ #imgs= */
+    if (mode == 4) {
         const wchar_t *s = resultObjectAsJson ? resultObjectAsJson : L"0";
         if (wcsstr(s, L"1") == NULL && g_webApp != NULL
                 && !g_fillUrl.empty()) {
@@ -1540,8 +1674,6 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
     }
     if (mode != 0 || g_webApp == NULL)
         return S_OK;
-    /* استخراج: از وب‌ویوی مرورگر جمع کن، در فیلدِ اپ بریز
-       (بدونِ ریلود — کلیدها و تنظیماتِ کاربر میماند). */
     std::vector<std::wstring> links;
     if (!MtParseMaybeWrapped(resultObjectAsJson, links) || links.empty()) {
         MessageBoxW(g_hwnd,
@@ -1561,7 +1693,6 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
             payload += L'\n';
         payload += links[i];
     }
-    /* پشتیبان: اگر __mtFillLinks روی صفحه نبود */
     g_fillUrl = std::wstring(APP_URL) + L"#imgs="
                 + MtWideFromAscii(MtUrlEncode(payload));
     std::wstring js = L"(function(){try{if(window.__mtFillLinks){"
@@ -1570,8 +1701,7 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
                       + L"__MT_FILLED2__');return 1}return 0}"
                       L"catch(e){return 0}})()";
     g_webApp->ExecuteScript(js.c_str(), &g_execFill);
-    /* برگشت به حالتِ اپ — صفحهٔ اپ ریلود نمیشود */
-    LeaveBrowserMode();
+    MtHideBrowser();
     return S_OK;
 }
 
@@ -1580,18 +1710,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     (void)hPrev; (void)cmdLine;
 
-    /* v1.14.326 — لاگِ اجرا + ضبطِ کرش، قبل از هر کاری */
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.331 (own host hwnd + deferred callbacks + honest QI + all-SEH)");
-    /* v1.14.330 — MANGA_SMOKE=2: تستِ دودیِ مسیرِ مرورگر — بعد
-       از ۸ ثانیه کره خودکار زده میشود (رگرسیونِ کرشِ v327–v329) */
+    MtLog("WinMain — MangaCloud v1.14.336 (browser bar like the real PC version + ROOT-CAUSE AddRef fix + SEH armor)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
         if (mn > 0 && mn < 15 && mv[0] == L'2')
             g_smokeBrowser = TRUE;
     }
+
+    g_hInst = hInst;
 
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32 != NULL) {
@@ -1630,16 +1759,18 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     wc.lpszClassName = L"MangaCloudWnd";
     RegisterClassExW(&wc);
 
-    /* v1.14.330 — کلاسِ میزبانِ وب‌ویوها: پنجرهٔ فرزندِ سادهٔ
-       بدونِ نقاشی؛ هر کنترللرِ WebView2 میزبانِ HWND خودش را دارد */
-    WNDCLASSEXW hc;
-    ZeroMemory(&hc, sizeof(hc));
-    hc.cbSize = sizeof(hc);
-    hc.lpfnWndProc = DefWindowProcW;
-    hc.hInstance = hInst;
-    hc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
-    hc.lpszClassName = L"MangaCloudHost";
-    RegisterClassExW(&hc);
+    WNDCLASSEXW bc;
+    ZeroMemory(&bc, sizeof(bc));
+    bc.cbSize = sizeof(bc);
+    bc.style = CS_HREDRAW | CS_VREDRAW;
+    bc.lpfnWndProc = BrWndProc;
+    bc.hInstance = hInst;
+    bc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(1));
+    bc.hIconSm = bc.hIcon;
+    bc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    bc.hbrBackground = g_barBrush;
+    bc.lpszClassName = L"MangaCloudBrWnd";
+    RegisterClassExW(&bc);
 
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
@@ -1663,79 +1794,14 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
         return 1;
     }
 
-    /* ——— v1.14.330 — میزبانهای وب‌ویو — هر کنترلر HWND خودش ———
-       قبل از دکمهها ساخته میشوند تا کرهٔ شناور و نوارها همیشه
-       رویشان بمانند (فرزندِ دیرتر = بالاتر در ترتیبِ Z). */
-    RECT crc;
-    GetClientRect(g_hwnd, &crc);
-    g_hostApp = CreateWindowExW(0, L"MangaCloudHost", L"",
-                                WS_CHILD | WS_CLIPSIBLINGS,
-                                0, 0, crc.right, crc.bottom,
-                                g_hwnd, NULL, hInst, NULL);
-    {
-        int brTop = TOP_BAND_H + PROG_H;
-        int brH = crc.bottom - BOT_BAND_H - brTop;
-        if (brH < 1)
-            brH = 1;
-        g_hostBr = CreateWindowExW(0, L"MangaCloudHost", L"",
-                                   WS_CHILD | WS_CLIPSIBLINGS,
-                                   0, brTop, crc.right, brH,
-                                   g_hwnd, NULL, hInst, NULL);
-    }
-
-    /* ——— کرهٔ شناور (حالتِ اپ — مثلِ گوشی) ——— */
     g_btnGlobe = CreateWindowExW(0, L"BUTTON",
         L"\u0645\u0631\u0648\u0631\u06AF\u0631 \u062F\u0627\u062E\u0644\u06CC",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         14, 14, FAB_SIZE, FAB_SIZE, g_hwnd,
         (HMENU)(INT_PTR)ID_BTN_GLOBE, hInst, NULL);
-    /* v1.14.329 — فقط دایره: ناحیهٔ پنجرهٔ دکمه بیضی شد تا گوشه‌های
-       مربعِ روشنِ دکمه دیگر دیده نشوند (زیرش صفحهٔ اپ پیدا است) */
     SetWindowRgn(g_btnGlobe, CreateEllipticRgn(0, 0, FAB_SIZE, FAB_SIZE),
                  TRUE);
 
-    /* ——— نوارِ بالای مرورگر: برو + آدرس + بستن ——— */
-    g_btnClose = CreateWindowExW(0, L"BUTTON", L"\u2715",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 42, 32, g_hwnd, (HMENU)(INT_PTR)ID_BTN_CLOSE, hInst, NULL);
-    g_editUrl = CreateWindowExW(0, L"EDIT", L"",
-        WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | ES_LEFT,
-        0, 9, 400, 28, g_hwnd,
-        (HMENU)(INT_PTR)ID_EDIT_URL, hInst, NULL);
-    g_btnGo = CreateWindowExW(0, L"BUTTON",
-        L"\u0628\u0631\u0648",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 66, 32, g_hwnd, (HMENU)(INT_PTR)ID_BTN_GO, hInst, NULL);
-
-    /* ——— نوارِ پایینِ مرورگر: عقب/جلو («< >») + شمارش + استخراج ——— */
-    g_btnBack = CreateWindowExW(0, L"BUTTON", L"\u2190",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 42, 34, g_hwnd, (HMENU)(INT_PTR)ID_BTN_BACK, hInst, NULL);
-    g_btnFwd = CreateWindowExW(0, L"BUTTON", L"\u2192",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 42, 34, g_hwnd, (HMENU)(INT_PTR)ID_BTN_FWD, hInst, NULL);
-    g_lblStatus = CreateWindowExW(0, L"STATIC",
-        L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u2014 "
-        L"\u0627\u0648\u0644 \u0641\u0635\u0644 \u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646",
-        WS_CHILD | WS_VISIBLE | SS_LEFT | SS_CENTERIMAGE | SS_ENDELLIPSIS,
-        0, 0, 600, 40, g_hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS, hInst, NULL);
-    /* v1.14.327 — «استخراج» با جیم (قبلاً با ق اشتباه بود) */
-    g_btnExtract = CreateWindowExW(0, L"BUTTON",
-        L"\U0001F5BC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0639\u06A9\u0633",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 176, 36, g_hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
-
-    SendMessageW(g_editUrl, WM_SETFONT, (WPARAM)g_font, TRUE);
-    g_editProc = (WNDPROC)SetWindowLongPtrW(g_editUrl, GWLP_WNDPROC,
-                                            (LONG_PTR)MtEditProc);
-    SendMessageW(g_btnGo, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_btnBack, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_btnFwd, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_btnClose, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
-
-    /* ——— v1.14.326 — کنترلهای صفحهٔ خطا (مخفی تا وقتش) ——— */
     g_lblFailTitle = CreateWindowExW(0, L"STATIC",
         L"\u0648\u0627\u0628\u0633\u062A\u06AF\u06CC\u0650 \u0648\u0628 \u0622\u0645\u0627\u062F\u0647 \u0646\u06CC\u0633\u062A",
         WS_CHILD | SS_RIGHT | SS_CENTERIMAGE,
@@ -1765,10 +1831,9 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     ShowWindow(g_hwnd, nCmdShow);
     UpdateWindow(g_hwnd);
-    LayoutChildren();
+    LayoutApp();
     SetTimer(g_hwnd, TIMER_RECOUNT, 3000, NULL);
 
-    /* v1.14.326 — اگر وب‌ویو نیامد، اپ زنده میماند و راه‌حل میدهد */
     TryStartEnv();
 
     MSG msg;

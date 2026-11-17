@@ -28,24 +28,18 @@ import android.widget.Toast;
 
 import org.json.JSONArray;
 
-/**
- * v1.14.322 — مرورگرِ داخلیِ اپِ کلود برای سایت‌هایی که کپچا دارند.
- * کاربر خودش وارد سایتِ مانهوا میشود، کپچا را رد میکند و با
- * «🖼 استخراج عکس» لینکِ عکس‌ها را به صفحهٔ اصلی (فیلدِ ورودیِ
- * وب‌اپ) برمی‌گرداند.
- */
 public class BrowserActivity extends Activity {
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_LINKS = "links";
 
-    /** v1.14.329 — آخرین سایتی که کاربر دیده؛ بعد از استخراج،
-     *  دوباره‌گشتنِ مرورگر همان‌جا باز میشود (مثلِ پی‌سی). */
     public static String lastSite = "";
 
-    /** همان فیلترهای نشانکِ وب — img/source + لودِ تنبل + حذفِ آیکون‌ها */
     private static final String EXTRACT_JS =
         "(function(){" +
+        "try{if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)" +
+        "&&location.pathname.indexOf('/viewer/')===0)" +
+        "return [location.href];}catch(e){}" +
         "var seen={},out=[];" +
         "function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}" +
         "function junk(u){" +
@@ -95,8 +89,6 @@ public class BrowserActivity extends Activity {
     private TextView countLbl;
     private ProgressBar progress;
 
-    /** v1.14.329 — شمارشِ زنده هر ۳ ثانیه (سایتهای مانهوا فصل را با
-     *  آجاکس عوض میکنند و onPageFinished صدا نمیخورد — مثلِ تایمرِ پی‌سی) */
     private final Handler recountHandler = new Handler();
     private final Runnable recountTick = new Runnable() {
         @Override public void run() {
@@ -105,8 +97,6 @@ public class BrowserActivity extends Activity {
         }
     };
 
-    /** v1.14.323 — اگر JS آرایه برگرداند raw خودِ آرایه است؛ اگر
-     *  رشتهٔ JSON-stringify شده باشد (نسخه‌های قدیمی) یک لایه باز میشود. */
     private static JSONArray parseLinksRaw(String raw) {
         String s = raw == null ? "" : raw.trim();
         if (s.isEmpty()) return null;
@@ -130,7 +120,6 @@ public class BrowserActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setBackgroundColor(Color.parseColor("#0b0e14"));
 
-        // ——— نوارِ بالا: آدرس + بستن ———
         LinearLayout top = new LinearLayout(this);
         top.setOrientation(LinearLayout.HORIZONTAL);
         top.setGravity(Gravity.CENTER_VERTICAL);
@@ -203,13 +192,11 @@ public class BrowserActivity extends Activity {
         root.addView(progress, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, dp(3)));
 
-        // ——— وب‌ویو ———
         web = new WebView(this);
         setupWebView();
         root.addView(web, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
 
-        // ——— نوارِ پایین: استخراج ———
         LinearLayout bottom = new LinearLayout(this);
         bottom.setOrientation(LinearLayout.HORIZONTAL);
         bottom.setGravity(Gravity.CENTER_VERTICAL);
@@ -254,7 +241,6 @@ public class BrowserActivity extends Activity {
             web.loadUrl(startUrl);
             recountAsync();
         } else {
-            // v1.14.329 — سایتِ قبلی یا گوگل (فیلد پر از لینکهای استخراج بود)
             String home = lastSite.startsWith("http") ? lastSite
                     : "https://www.google.com";
             web.loadUrl(home);
@@ -304,8 +290,6 @@ public class BrowserActivity extends Activity {
             @Override
             public void doUpdateVisitedHistory(WebView view, String url, boolean isReload) {
                 super.doUpdateVisitedHistory(view, url, isReload);
-                // v1.14.329 — سایتهای تک‌صفحه‌ای (مانهوا) فصل را با pushState
-                // عوض میکنند؛ اینجا هم آدرس و شمارش تازه میشود
                 try {
                     if (url != null && url.startsWith("http")) lastSite = url;
                     urlBox.setText(url != null ? url : "");
@@ -333,8 +317,6 @@ public class BrowserActivity extends Activity {
         });
     }
 
-    /** v1.14.329 — مثلِ پی‌سی: متنِ آزاد = سرچِ گوگل («hi» دیگر
-     *  https://hi/ نمیشود)، دامنه = https، لینکِ کامل = خودش. */
     private static String smartUrl(String input) {
         String u = input == null ? "" : input.trim();
         if (u.isEmpty()) return null;
@@ -366,7 +348,6 @@ public class BrowserActivity extends Activity {
         web.loadUrl(u);
     }
 
-    /** شمارشِ زندهٔ عکسهای صفحه */
     private void recountAsync() {
         try {
             web.evaluateJavascript(EXTRACT_JS, value -> {
