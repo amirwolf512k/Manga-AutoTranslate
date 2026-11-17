@@ -184,10 +184,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if (gh release view clouds --repo $env:GITHUB_REPOSITORY > $null 2>&1) {
-            gh release upload clouds dist/MangaCloud-Windows-* --repo $env:GITHUB_REPOSITORY --clobber
-          } else {
-            gh release create clouds dist/MangaCloud-Windows-* --repo $env:GITHUB_REPOSITORY --title "clouds" --target main --notes "Windows x64 + x86"
+          # دوتا جابِ موازی — رقابت روی ساختِ ریلیز؛ با تلاشِ مجدد حل میشود
+          gh release upload clouds dist/MangaCloud-Windows-* --repo $env:GITHUB_REPOSITORY --clobber 2>$null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create clouds dist/MangaCloud-Windows-* --repo $env:GITHUB_REPOSITORY --title "clouds" --target main --notes "Windows x64 + x86" 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              Start-Sleep -Seconds 5
+              gh release upload clouds dist/MangaCloud-Windows-* --repo $env:GITHUB_REPOSITORY --clobber
+            }
           }
 
       - name: Upload clouds (win) to amirwolf5122
@@ -195,10 +199,13 @@ jobs:
           GH_TOKEN: ${{ secrets.PAT_5122 }}
         run: |
           if (gh release view apks --repo amirwolf5122/Manga-AutoTranslate > $null 2>&1) {
-            if (gh release view clouds --repo amirwolf5122/Manga-AutoTranslate > $null 2>&1) {
-              gh release upload clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --clobber
-            } else {
-              gh release create clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --title "clouds" --target main --notes "Windows"
+            gh release upload clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --clobber 2>$null
+            if ($LASTEXITCODE -ne 0) {
+              gh release create clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --title "clouds" --target main --notes "Windows" 2>$null
+              if ($LASTEXITCODE -ne 0) {
+                Start-Sleep -Seconds 5
+                gh release upload clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --clobber
+              }
             }
           } else {
             echo "apks release not ready on 5122 yet - skipping win upload (will retry next run)"
