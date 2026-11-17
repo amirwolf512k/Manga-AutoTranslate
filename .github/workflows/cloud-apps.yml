@@ -188,6 +188,50 @@ jobs:
           Remove-Item $log -ErrorAction SilentlyContinue
           Get-ChildItem -Filter "*.dmp" | Remove-Item -ErrorAction SilentlyContinue
 
+      # v1.14.330 — رگرسیونِ کرشِ مرورگرِ داخلی: MANGA_SMOKE=2 هشت
+      # ثانیه بعد از آمادهشدنِ اپ، خودش کره را میزند؛ باید
+      # «br webview created» در لاگ بیاید و هیچ CRASH نباشد
+      # (کرشهای v327–v329 دقیقاً همینجا بودند: کنترللرِ دوم رویِ
+      # همان HWND والد → C0000005 داخلِ رانِتایم).
+      - name: Smoke test x64 phase 2 — internal browser (regression for v1.14.330)
+        shell: pwsh
+        working-directory: cloud-apps/desktop/win32
+        run: |
+          $env:MANGA_SMOKE = "2"
+          $exe = Join-Path (Get-Location) "MangaCloud.exe"
+          if (-not (Test-Path $exe)) { throw "MangaCloud.exe missing" }
+          $p = Start-Process -FilePath $exe -PassThru -WorkingDirectory (Get-Location)
+          Start-Sleep -Seconds 50
+          $alive = -not $p.HasExited
+          $log = Join-Path (Get-Location) "run.log"
+          if (Test-Path $log) {
+            echo "=== run.log (phase 2 — internal browser) ==="
+            Get-Content $log
+            if (Select-String -Path $log -Pattern "CRASH" -Quiet) {
+              echo "!! CRASH detected in run.log (internal browser path)"
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+              exit 1
+            }
+            if (-not (Select-String -Path $log -Pattern "br webview created" -Quiet) {
+              echo "!! browser webview was never created — lazy controller path broken"
+              Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+              exit 1
+            }
+          } else {
+            echo "no run.log produced"
+            exit 1
+          }
+          if (-not $alive) {
+            echo "!! APP EXITED EARLY with code $($p.ExitCode)"
+            exit 1
+          }
+          echo "APP ALIVE with internal browser open — smoke phase 2 OK"
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Start-Sleep -Seconds 2
+          Stop-Process -Name "msedgewebview2" -Force -ErrorAction SilentlyContinue
+          Remove-Item $log -ErrorAction SilentlyContinue
+          Get-ChildItem -Filter "*.dmp" | Remove-Item -ErrorAction SilentlyContinue
+
       - name: Build x86 32bit (MSVC)
         shell: cmd
         working-directory: cloud-apps/desktop/win32

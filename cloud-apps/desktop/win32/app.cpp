@@ -1,18 +1,21 @@
 /* Manga Cloud — نسخهٔ کلودِ پی‌سی (Win32 + WebView2)
-   v1.14.329 — رفعِ کرشِ واقعیِ v1.14.328 (لاگِ کاربر: C0000005،
-   خواندنِ آدرسِ 0xFFFFFFFFFFFFFFFF، آفستِ +B38A، ۳ تا ۱۹ ثانیه
-   بعد از «navigating» = دقیقاً وقتی صفحهٔ اپ لود میشود):
-   • یافتهٔ اصلی: SEH روشن بود و هیچ «SEH-CAUGHT» در لاگ نیست —
-     یعنی کرش در یکی از هندلرهای بدونِ گارد بوده. تنها هندلری که
-     به دادهها دست میزد DocumentTitleChanged بود (get_DocumentTitle
-     + ساختِ wstring، همزمان با لودِ صفحه). کلِ آن هندلر + رویداد
-     حذف شد؛ عنوانِ پنجره ثابت «مانا کلود» میماند (مثلِ گوشی).
-   • QueryInterface صادق شد: فقط IUnknown و همین اینترفیس —
-     قبلاً برایِ هر IID همین شیء را برمی‌گرداندیم و COM میتوانست
-     از طریقِ vtable اشتباه صدایش بزند.
-   • همهٔ هندلرها (ناوبری/منبع/اسکریپت) حالا گاردِ SEH دارند.
-   • کرهٔ شناور گرد شد: ناحیهٔ پنجرهٔ دکمه بیضی است — گوشه‌های
-     مربعِ سفید دیگر دیده نمیشود و زیرش صفحهٔ اپ پیدا است.
+   v1.14.330 — رفعِ کرشِ واقعیِ v1.14.329 (لاگِ کاربر:
+   «lazy: create br hr=0» → ۵ ثانیه بعد C0000005 از نوعِ ۸ =
+   اجرایِ آدرسِ غیرقابلِاجرا؛ نه «br: get_CoreWebView2» در لاگ
+   هست و نه «SEH-CAUGHT» → کرش داخلِ خودِ رانِتایمِ WebView2 و
+   قبل از رسیدنِ نوبت به کالکِ ماست):
+   • یافتهٔ اصلی: هر دو کنترلر (اپ + مرورگر) رویِ «یک» HWND والد
+     (پنجرهٔ اصلی) ساخته میشدند. رانِتایمِ WebView2 برایِ هر HWND
+     فقط یک کنترلر پشتیبانی میکند؛ کنترللرِ دوم حالتِ داخلیِ
+     همان پنجره را خراب میکند و چند ثانیه بعد، فراخوانیِ vtableِ
+     داخلیِ آزادشده → پرش به آدرسِ بی‌معنا → C0000005 (type=8).
+     همین الگو در لاگهای v327 و v328 هم دیده میشد.
+   • رفع: هر کنترلر HWND میزبانِ خودش را دارد — دو پنجرهٔ فرزندِ
+     سادهٔ WS_CHILD از پنجرهٔ اصلی (الگوی رسمیِ چند-وب‌ویو در
+     یک پنجره). Boundsِ هر کنترلر نسبت به میزبانِ خودش است.
+   • تستِ دودیِ جدید: MANGA_SMOKE=2 هشت ثانیه بعد از آمادهشدنِ
+     اپ، خودش کره را میزند تا مسیرِ ساختِ کنترللرِ مرورگر (جایِ
+     کرشهای v327–v329) در CI هم اجرا و بررسی شود.
    ساخت: cl /std:c++17 /EHsc /O2 /MT /I <sdk>\build\native\include
          app.cpp app.res /link WebView2LoaderStatic.lib … (MSVC) */
 #ifndef UNICODE
@@ -60,8 +63,17 @@ static const WCHAR APP_TITLE[] =
 
 #define TIMER_PROGRESS 1
 #define TIMER_RECOUNT  2
+#define TIMER_SMOKE_BR 3   /* v1.14.330 — تستِ دودیِ مسیرِ مرورگر */
 
 static HWND g_hwnd = NULL;
+
+/* v1.14.330 — هر کنترلر HWND میزبانِ خودش را دارد: دو کنترلر رویِ
+   یک HWND والد در رانِتایمِ WebView2 پشتیبانی نمیشود و چند ثانیه
+   بعد به کرشِ C0000005 داخلِ خودِ رانِتایم میانجامد (لاگهای
+   v1.14.327–v1.14.329). میزبانها پنجرهٔ فرزندِ سادهٔ پنجرهٔ اصلی‌اند. */
+static HWND g_hostApp = NULL;   /* میزبانِ وب‌ویوی اپ */
+static HWND g_hostBr = NULL;    /* میزبانِ وب‌ویوی مرورگر */
+static BOOL g_smokeBrowser = FALSE;  /* MANGA_SMOKE=2 → کرهٔ خودکار */
 
 /* ————— دو وب‌ویو: خودِ اپ + مرورگرِ داخلی (مثلِ گوشی) —————
    حالتِ اپ: صفحهٔ اپ تمام‌صفحه + دکمهٔ شناورِ 🌐 (پایین-چپ).
@@ -899,6 +911,10 @@ struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCom
         wv->Navigate(APP_URL);
         MtLog("app webview created — navigating");
         LayoutChildren();
+        /* v1.14.330 — تستِ دودی: کره را خودکار بزن تا مسیرِ ساختِ
+           کنترللرِ مرورگر (جایِ کرشهای v327–v329) اجرا شود */
+        if (g_smokeBrowser)
+            SetTimer(g_hwnd, TIMER_SMOKE_BR, 8000, NULL);
         return S_OK;
     }
     EventRegistrationToken g_evTokAppNav, g_evTokAppDone;
@@ -920,11 +936,11 @@ static void MtOpenBrowserUi(void) {
     }
     if (g_brPending)
         return;   /* در حالِ ساخت — صبر */
-    if (g_env == NULL || g_hwnd == NULL)
+    if (g_env == NULL || g_hwnd == NULL || g_hostBr == NULL)
         return;
     g_brPending = TRUE;
-    MtLog("lazy: creating browser controller");
-    HRESULT hr = g_env->CreateCoreWebView2Controller(g_hwnd, &g_ctlBr);
+    MtLog("lazy: creating browser controller (on its own host hwnd)");
+    HRESULT hr = g_env->CreateCoreWebView2Controller(g_hostBr, &g_ctlBr);
     MtLogHr("lazy: create br", hr);
     if (FAILED(hr)) {
         g_brPending = FALSE;
@@ -1095,22 +1111,36 @@ static void LayoutChildren(void) {
                      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
-    if (g_appCtl != NULL) {
-        if (br || fail) {
-            g_appCtl->put_IsVisible(FALSE);
-        } else {
+    /* v1.14.330 — میزبانها را جابه‌جا کن و کنترلرها را داخلِ
+       میزبانِ خودشان کامل باز کن (Bounds نسبت به میزبان است) */
+    if (g_hostApp != NULL) {
+        if (g_appCtl != NULL && !br && !fail) {
+            MoveWindow(g_hostApp, 0, 0, w, h, FALSE);
+            ShowWindow(g_hostApp, SW_SHOW);
             RECT a = {0, 0, w, h};
             g_appCtl->put_Bounds(a);
             g_appCtl->put_IsVisible(TRUE);
+        } else {
+            if (g_appCtl != NULL)
+                g_appCtl->put_IsVisible(FALSE);
+            ShowWindow(g_hostApp, SW_HIDE);
         }
     }
-    if (g_brCtl != NULL) {
-        if (br) {
-            RECT b = {0, TOP_BAND_H + PROG_H, w, h - BOT_BAND_H};
+    if (g_hostBr != NULL) {
+        if (g_brCtl != NULL && br) {
+            int top = TOP_BAND_H + PROG_H;
+            int ih = h - BOT_BAND_H - top;
+            if (ih < 1)
+                ih = 1;
+            MoveWindow(g_hostBr, 0, top, w, ih, FALSE);
+            ShowWindow(g_hostBr, SW_SHOW);
+            RECT b = {0, 0, w, ih};
             g_brCtl->put_Bounds(b);
             g_brCtl->put_IsVisible(TRUE);
         } else {
-            g_brCtl->put_IsVisible(FALSE);
+            if (g_brCtl != NULL)
+                g_brCtl->put_IsVisible(FALSE);
+            ShowWindow(g_hostBr, SW_HIDE);
         }
     }
     InvalidateRect(g_hwnd, NULL, FALSE);
@@ -1226,9 +1256,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_CREATCTL: {
         /* v1.14.328 — ساختِ کنترلرِ اپ روی استکِ تمیزِ پمپِ پیام
            (نه داخلِ کالکِ محیط — رفعِ کرشِ v1.14.327) */
-        if (g_env != NULL && g_webApp == NULL && g_appCtl == NULL) {
-            MtLog("creating app controller (from message queue)");
-            HRESULT hr = g_env->CreateCoreWebView2Controller(g_hwnd, &g_ctlApp);
+        if (g_env != NULL && g_webApp == NULL && g_appCtl == NULL
+                && g_hostApp != NULL) {
+            MtLog("creating app controller (on its own host hwnd)");
+            HRESULT hr = g_env->CreateCoreWebView2Controller(g_hostApp, &g_ctlApp);
             MtLogHr("create ctl(app)", hr);
             if (FAILED(hr)) {
                 g_failMode = TRUE;
@@ -1356,6 +1387,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
             if (g_browserMode && g_webBr != NULL && !g_loading)
                 Wv2Recount();
+            return 0;
+        }
+        if (wp == TIMER_SMOKE_BR) {
+            /* v1.14.330 — تستِ دودی: شبیهِ کلیکِ کره */
+            KillTimer(hwnd, TIMER_SMOKE_BR);
+            MtLog("smoke: auto globe click — opening browser ui");
+            MtOpenBrowserUi();
             return 0;
         }
         break;
@@ -1506,7 +1544,15 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     /* v1.14.326 — لاگِ اجرا + ضبطِ کرش، قبل از هر کاری */
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.329 (no-title-handler + honest QI + all-SEH)");
+    MtLog("WinMain — MangaCloud v1.14.330 (own host hwnd per controller + honest QI + all-SEH)");
+    /* v1.14.330 — MANGA_SMOKE=2: تستِ دودیِ مسیرِ مرورگر — بعد
+       از ۸ ثانیه کره خودکار زده میشود (رگرسیونِ کرشِ v327–v329) */
+    {
+        WCHAR mv[16];
+        DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
+        if (mn > 0 && mn < 15 && mv[0] == L'2')
+            g_smokeBrowser = TRUE;
+    }
 
     HMODULE user32 = GetModuleHandleW(L"user32.dll");
     if (user32 != NULL) {
@@ -1545,6 +1591,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     wc.lpszClassName = L"MangaCloudWnd";
     RegisterClassExW(&wc);
 
+    /* v1.14.330 — کلاسِ میزبانِ وب‌ویوها: پنجرهٔ فرزندِ سادهٔ
+       بدونِ نقاشی؛ هر کنترللرِ WebView2 میزبانِ HWND خودش را دارد */
+    WNDCLASSEXW hc;
+    ZeroMemory(&hc, sizeof(hc));
+    hc.cbSize = sizeof(hc);
+    hc.lpfnWndProc = DefWindowProcW;
+    hc.hInstance = hInst;
+    hc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    hc.lpszClassName = L"MangaCloudHost";
+    RegisterClassExW(&hc);
+
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);
     int ww = sw < 1320 ? (sw > 40 ? sw - 40 : sw) : 1280;
@@ -1565,6 +1622,26 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
         }
         ShellExecuteW(NULL, L"open", APP_URL, NULL, NULL, SW_SHOWNORMAL);
         return 1;
+    }
+
+    /* ——— v1.14.330 — میزبانهای وب‌ویو — هر کنترلر HWND خودش ———
+       قبل از دکمهها ساخته میشوند تا کرهٔ شناور و نوارها همیشه
+       رویشان بمانند (فرزندِ دیرتر = بالاتر در ترتیبِ Z). */
+    RECT crc;
+    GetClientRect(g_hwnd, &crc);
+    g_hostApp = CreateWindowExW(0, L"MangaCloudHost", L"",
+                                WS_CHILD | WS_CLIPSIBLINGS,
+                                0, 0, crc.right, crc.bottom,
+                                g_hwnd, NULL, hInst, NULL);
+    {
+        int brTop = TOP_BAND_H + PROG_H;
+        int brH = crc.bottom - BOT_BAND_H - brTop;
+        if (brH < 1)
+            brH = 1;
+        g_hostBr = CreateWindowExW(0, L"MangaCloudHost", L"",
+                                   WS_CHILD | WS_CLIPSIBLINGS,
+                                   0, brTop, crc.right, brH,
+                                   g_hwnd, NULL, hInst, NULL);
     }
 
     /* ——— کرهٔ شناور (حالتِ اپ — مثلِ گوشی) ——— */
