@@ -48,7 +48,7 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Build desktop shells (Neutralino — win x64 + linux x64/arm64/armhf)
+      - name: Build desktop shells (Neutralino — linux x64/arm64/armhf)
         working-directory: cloud-apps/desktop
         run: |
           npm install --no-fund --no-audit @neutralinojs/neu@11.8.0
@@ -56,25 +56,37 @@ jobs:
           npx neu build --release
           ls -la dist/MangaCloud
           D=dist/MangaCloud
-          mkdir -p pkg/win-x64 pkg/linux-x64 pkg/linux-arm64 pkg/linux-armhf
-          cp "$D/MangaCloud-win_x64.exe" "$D/resources.neu" pkg/win-x64/
+          mkdir -p pkg/linux-x64 pkg/linux-arm64 pkg/linux-armhf
           cp "$D/MangaCloud-linux_x64" "$D/resources.neu" pkg/linux-x64/
           cp "$D/MangaCloud-linux_arm64" "$D/resources.neu" pkg/linux-arm64/
           cp "$D/MangaCloud-linux_armhf" "$D/resources.neu" pkg/linux-armhf/
-          (cd pkg/win-x64 && zip -qr "$GITHUB_WORKSPACE/dist/MangaCloud-Windows-x64.zip" .)
           (cd pkg/linux-x64 && tar -czf "$GITHUB_WORKSPACE/dist/MangaCloud-Linux-x64.tar.gz" .)
           (cd pkg/linux-arm64 && tar -czf "$GITHUB_WORKSPACE/dist/MangaCloud-Linux-arm64.tar.gz" .)
           (cd pkg/linux-armhf && tar -czf "$GITHUB_WORKSPACE/dist/MangaCloud-Linux-armhf.tar.gz" .)
 
-      - name: Build Windows x86 shell (WebView2)
+      - name: Build Windows shells (WebView2 native — x64 + x86 32bit)
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            gcc-mingw-w64-i686 g++-mingw-w64-i686 binutils-mingw-w64-i686
+            gcc-mingw-w64-i686 g++-mingw-w64-i686 \
+            gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 \
+            binutils-mingw-w64-i686 binutils-mingw-w64-x86-64
           curl -sL -o wv2.nupkg \
             "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2903.40"
-          unzip -o -q wv2.nupkg "runtimes/win-x86/native/*" -d wv2sdk
+          unzip -o -q wv2.nupkg "runtimes/win-x86/native/*" "runtimes/win-x64/native/*" -d wv2sdk
           cd cloud-apps/desktop/win32
+          # — x64 — مثلِ گوشی: صفحهٔ اپ تمام‌صفحه + دکمهٔ شناورِ 🌐 (مرورگرِ داخلی)
+          x86_64-w64-mingw32-windres app.rc -O coff -o app64.res
+          x86_64-w64-mingw32-g++ -std=c++11 -O2 -Wall -Wextra -Wno-unused-parameter \
+            -c app.cpp -o app64.o
+          x86_64-w64-mingw32-g++ -mwindows -O2 -static -static-libgcc -static-libstdc++ \
+            app64.o app64.res -o MangaCloud.exe \
+            -lole32 -lshell32 -luser32 -lgdi32 -luuid
+          mkdir -p pkg64
+          cp MangaCloud.exe pkg64/
+          cp "$GITHUB_WORKSPACE/wv2sdk/runtimes/win-x64/native/WebView2Loader.dll" pkg64/
+          (cd pkg64 && zip -qr "$GITHUB_WORKSPACE/dist/MangaCloud-Windows-x64.zip" .)
+          # — x86 32bit —
           i686-w64-mingw32-windres app.rc -O coff -o app.res
           i686-w64-mingw32-g++ -std=c++11 -O2 -Wall -Wextra -Wno-unused-parameter \
             -c app.cpp -o app.o
@@ -96,8 +108,7 @@ jobs:
           NOTES='مانگا کلود — نسخه سبک ابری (همه پردازش روی سرور)
 
           - Android (universal): arm / arm64 / x86 / x86_64
-          - Windows x64 (WebView2)
-          - Windows x86 32bit (WebView2)
+          - Windows x64 + x86 32bit (WebView2) — مثل گوشی: دکمهٔ 🌐 پایین صفحه = مرورگر داخلی + استخراج عکس
           - Linux x64 / arm64 / armhf (32bit ARM)
 
           فقط صفحه https://amirwolf512-manga-autotranslate.hf.space/ را باز می‌کند؛ بدون مدل و بدون وابستگی.'

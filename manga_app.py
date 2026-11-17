@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.324"
+APP_VER = "1.14.325"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1305,23 +1305,31 @@ def _ensure_webview() -> bool:
 
 # ————— v1.14.323 — مرورگرِ داخلی برای سایت‌های کپچادار (دسکتاپ) —————
 # این JS بعد از هر بارِ لودِ صفحه، در پنجرهٔ دومِ pywebview تزریق
-# میشود: دکمهٔ شناورِ «استخراج عکس» + شمارشِ زنده — همان تجربهٔ اپِ
-# گوشی، ولی داخلِ خودِ برنامهٔ پی‌سی/لینوکس.
+# میشود: نوارِ پایینِ تمام-عرض (استایلِ کروم) با فیلدِ آدرس + «برو» +
+# شمارشِ زنده + «استخراج عکس» — همان تجربهٔ اپِ گوشی، ولی داخلِ
+# خودِ برنامهٔ پی‌سی/لینوکس.
 _MT_BROWSER_WIN_JS = """
 (function(){
   if (window.__mtBwBtn) return; window.__mtBwBtn = 1;
   function css(){
     try{
       var s=document.createElement('style');
-      s.textContent='#mtbw{position:fixed;left:14px;bottom:14px;z-index:2147483647;'
-        +'direction:rtl;font-family:Tahoma,Arial,sans-serif;display:flex;'
-        +'align-items:center;gap:10px;background:rgba(13,13,16,.93);'
-        +'border:1px solid #1f1f24;border-radius:16px;padding:8px 10px;'
-        +'box-shadow:0 8px 28px rgba(0,0,0,.55)}'
+      s.textContent='#mtbw{position:fixed;left:0;right:0;bottom:0;'
+        +'z-index:2147483647;direction:rtl;font-family:Tahoma,Arial,sans-serif;'
+        +'display:flex;align-items:center;gap:8px;background:rgba(13,13,16,.97);'
+        +'border-top:1px solid #1f1f24;padding:8px 10px;box-sizing:border-box;'
+        +'box-shadow:0 -8px 28px rgba(0,0,0,.55)}'
+        +'#mtbw .mturl{flex:1;min-width:110px;direction:ltr;text-align:left;'
+        +'background:#1a1f2b;color:#e7ebf3;border:1px solid #273043;'
+        +'border-radius:20px;padding:9px 14px;font-size:13px;outline:none;'
+        +'font-family:inherit}'
+        +'#mtbw .mturl:focus{border-color:#e8590c}'
         +'#mtbw button{border:0;cursor:pointer;font-weight:700;font-size:13px;'
         +'color:#fff;background:linear-gradient(135deg,#ff4a3d,#c9271c);'
-        +'border-radius:12px;padding:9px 14px;font-family:inherit}'
-        +'#mtbw span{color:#97948c;font-size:11.5px;max-width:220px;'
+        +'border-radius:12px;padding:9px 14px;font-family:inherit;'
+        +'white-space:nowrap}'
+        +'#mtbw .mtgo{background:#2d3649}'
+        +'#mtbw .mtcnt{color:#97948c;font-size:11.5px;max-width:170px;'
         +'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
       (document.head||document.documentElement).appendChild(s);
     }catch(e){}
@@ -1372,22 +1380,41 @@ _MT_BROWSER_WIN_JS = """
   }
   css();
   var box=document.createElement('div');box.id='mtbw';
-  var cnt=document.createElement('span');cnt.textContent='…';
+  var url=document.createElement('input');url.type='text';
+  url.className='mturl';url.placeholder='https://…';
+  try{url.value=location.href}catch(e){}
+  function go(){
+    try{
+      var u=String(url.value||'').trim();
+      if(!u)return;
+      if(!/^https?:/i.test(u))u='https://'+u;
+      if(u===location.href)return;
+      location.href=u;
+    }catch(e){}
+  }
+  url.addEventListener('keydown',function(ev){
+    if(ev.key==='Enter'||ev.keyCode===13){ev.preventDefault();go()}
+  });
+  var goBtn=document.createElement('button');
+  goBtn.type='button';goBtn.className='mtgo';goBtn.textContent='\\u0628\\u0631\\u0648';
+  goBtn.onclick=go;
+  var cnt=document.createElement('span');cnt.className='mtcnt';cnt.textContent='\\u2026';
   var btn=document.createElement('button');
-  btn.type='button';btn.textContent='\\ud83d\\uddbc استخراج عکس';
+  btn.type='button';btn.textContent='\\ud83d\\uddbc \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u0642 \\u0639\\u06a9\\u0633';
   btn.onclick=function(){
     try{
       var out=collect();
       if(!out.length){
-        alert('عکسی پیدا نشد — اول فصل را باز کن و تا آخرِ صفحه اسکرول کن تا عکس‌های تنبل لود بشن');
+        alert('\\u0639\\u06a9\\u0633\\u06cc \\u067e\\u06cc\\u062f\\u0627 \\u0646\\u0634\\u062f \\u2014 \\u0627\\u0648\\u0644 \\u0641\\u0635\\u0644 \\u0631\\u0627 \\u0628\\u0627\\u0632 \\u06a9\\u0646 \\u0648 \\u062a\\u0627 \\u0622\\u062e\\u0631\\u0650 \\u0635\\u0641\\u062d\\u0647 \\u0627\\u0633\\u06a9\\u0631\\u0648\\u0644 \\u06a9\\u0646 \\u062a\\u0627 \\u0639\\u06a9\\u0633\\u200c\\u0647\\u0627\\u06cc \\u062a\\u0646\\u0628\\u0644 \\u0644\\u0648\\u062f \\u0628\\u0634\\u0646');
         return;
       }
-      cnt.textContent=out.length+' عکس — در حال انتقال…';
+      cnt.textContent=out.length+' \\u0639\\u06a9\\u0633 \\u2014 \\u062f\\u0631 \\u062d\\u0627\\u0644 \\u0627\\u0646\\u062a\\u0642\\u0627\\u0644\\u2026';
       try{window.pywebview.api.onExtract(JSON.stringify(out));}
-      catch(e){alert('خطا در ارسال به اپ: '+e)}
-    }catch(e){alert('خطا در استخراج: '+e)}
+      catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0631\\u0633\\u0627\\u0644 \\u0628\\u0647 \\u0627\\u067e: '+e)}
+    }catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u062c: '+e)}
   };
-  box.appendChild(cnt);box.appendChild(btn);
+  box.appendChild(cnt);box.appendChild(url);box.appendChild(goBtn);
+  box.appendChild(btn);
   function mount(){
     try{
       if(!document.getElementById('mtbw'))
@@ -1395,7 +1422,7 @@ _MT_BROWSER_WIN_JS = """
     }catch(e){}
   }
   mount();setTimeout(mount,600);setTimeout(mount,2000);
-  function upd(){try{cnt.textContent=collect().length+' عکس آماده'}catch(e){}}
+  function upd(){try{cnt.textContent=collect().length+' \\u0639\\u06a9\\u0633 \\u0622\\u0645\\u0627\\u062f\\u0647'}catch(e){}}
   setTimeout(upd,400);setTimeout(upd,1600);setInterval(upd,5000);
 })();
 """
@@ -1417,8 +1444,9 @@ class _DesktopApi:
         try:
             import webview
             u = str(url or "").strip()
+            # v1.14.325 — مثلِ گوشی: بدونِ لینک = گوگل (خودت سرچ کن)
             if not u:
-                return
+                u = "https://www.google.com"
             if not u.lower().startswith(("http://", "https://")):
                 u = "https://" + u
             try:
@@ -6267,19 +6295,14 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                    "داخلِ خودِ اپ مرورگرِ داخلی دارد.") + '</div>'
                 '</div></details>')
             _pc_local = not _web_host()
-            # v1.14.323 — مرورگرِ داخلی (pywebview) به‌جایِ دکمهٔ الکیِ
-            # «باز کردن در مرورگرِ سیستم». فقط وقتی دیده میشود که اپ داخلِ
-            # پنجرهٔ دسکتاپ (pywebview) باشد — با خودِ صفحه تشخیص داده
-            # میشود (window.pywebview). در حالتِ وب همین ردیف مخفی و
-            # نشانک بالا می‌ماند.
+            # v1.14.325 — مثلِ گوشی: فیلدِ لینک حذف شد — فقط دکمه.
+            # مرورگرِ داخلی با آدرسِ فیلدِ ورودیِ بالا باز میشود و اگر
+            # خالی بود با گوگل (خودت سرچ کن) — بعد «استخراج عکس».
             with gr.Row(visible=_pc_local, elem_id="mt_browser_row") as browser_row:
-                mt_browser_url = gr.Textbox(
-                    label=TX("app.br_open_label2",
-                             "آدرس سایت مانهوا (کپچادار) — در پنجرهٔ داخلیِ خودِ اپ باز میشود"),
-                    placeholder="https://mgread.io/manga/...",
-                    elem_id="mt_browser_url", scale=4)
                 mt_ibtn = gr.Button(
-                    TX("app.br_open2", "🌐 مرورگرِ داخلی"), scale=1,
+                    TX("app.br_open2",
+                       "🌐 باز کردن مرورگر داخلی — سایت‌های کپچادار "
+                       "(مثل گوشی: سرچ کن، عکس‌ها را استخراج کن)"),
                     elem_id="mt_ibtn")
 
         with gr.Group(elem_classes=["stepcard"]):
@@ -8383,30 +8406,40 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             pass
 
         try:
-            # v1.14.323 — دکمهٔ مرورگرِ داخلی: کاملاً سمتِ کلاینت — بدون
-            # رفت‌وبرگشت به سرور. در پنجرهٔ pywebview دسکتاپ، آدرس در
-            # پنجرهٔ دومِ داخلِ خودِ اپ باز میشود (مثلِ اپِ گوشی) و با
-            # «استخراج عکس» لینکها در فیلدِ ورودی همین صفحه مینشیند.
+            # v1.14.325 — دکمهٔ مرورگرِ داخلی: کاملاً سمتِ کلاینت —
+            # بدونِ رفت‌وبرگشت به سرور. مثلِ دکمهٔ شناورِ گوشی: آدرسِ
+            # فعلیِ فیلدِ ورودی خوانده میشود (اگر خالی = گوگل — خودت
+            # سرچ کن) و در پنجرهٔ دومِ داخلِ خودِ اپ باز میشود؛ با
+            # «🖼 استخراج عکس» لینکها در فیلدِ ورودی همین صفحه مینشیند.
             mt_ibtn.click(
                 fn=None,
-                inputs=[mt_browser_url],
+                inputs=None,
                 outputs=None,
                 queue=False,
-                js="""(u) => {
+                js="""() => {
   try {
-    const url = String(u || '').trim();
-    if (!url) {
-      alert('__MT_NOURL__');
-      return;
-    }
-    let uu = url;
-    if (!/^https?:\\/\\//i.test(uu)) uu = 'https://' + uu;
+    let initUrl = '';
+    try {
+      const el = document.querySelector('#manga_inp_path textarea')
+              || document.querySelector('[id*="manga_inp_path"] textarea')
+              || document.querySelector('#manga_inp_path input');
+      if (el) {
+        const parts = String(el.value || '').split(/[\\n,]/);
+        for (const p of parts) {
+          const t = p.trim();
+          if (t.startsWith('http://') || t.startsWith('https://')) {
+            initUrl = t;
+            break;
+          }
+        }
+      }
+    } catch (e) {}
     if (window.pywebview && window.pywebview.api
         && window.pywebview.api.openBrowser) {
-      try { window.pywebview.api.openBrowser(uu); } catch (e) {}
+      try { window.pywebview.api.openBrowser(initUrl); } catch (e) {}
       return;
     }
-    window.open(uu, '_blank');
+    window.open(initUrl || 'https://www.google.com', '_blank');
   } catch (e) {
     try { alert(String(e)); } catch (e2) {}
   }
