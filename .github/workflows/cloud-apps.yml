@@ -212,7 +212,7 @@ jobs:
               Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
               exit 1
             }
-            if (-not (Select-String -Path $log -Pattern "br webview created" -Quiet) {
+            if (-not (Select-String -Path $log -Pattern "br webview created" -Quiet)) {
               echo "!! browser webview was never created — lazy controller path broken"
               Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
               exit 1
