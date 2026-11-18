@@ -1,0 +1,31 @@
+﻿2026-11-18T02:30:53.8429927Z ##[group]Run set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+2026-11-18T02:30:53.8430579Z [36;1mset "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"[0m
+2026-11-18T02:30:53.8431305Z [36;1mfor /f "usebackq delims=" %%i in (`"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSPATH=%%i"[0m
+2026-11-18T02:30:53.8431913Z [36;1mcall "%VSPATH%\VC\Auxiliary\Build\vcvarsall.bat" x86[0m
+2026-11-18T02:30:53.8432164Z [36;1mwhere cl || exit /b 1[0m
+2026-11-18T02:30:53.8432354Z [36;1mdel /q MangaCloud.exe 2>nul[0m
+2026-11-18T02:30:53.8432592Z [36;1mrc /nologo /fo app86.res app.rc || exit /b 1[0m
+2026-11-18T02:30:53.8433659Z [36;1mcl /nologo /std:c++17 /EHsc /O2 /Zi /MT /W3 /D_CRT_SECURE_NO_WARNINGS /DUNICODE /D_UNICODE /I"%GITHUB_WORKSPACE%\wv2sdk\build\native\include" app.cpp app86.res /Fe:MangaCloud.exe /Fo:app86.obj /link /SUBSYSTEM:WINDOWS /MANIFEST:NO /DEBUG /LIBPATH:"%GITHUB_WORKSPACE%\wv2sdk\build\native\x86" WebView2LoaderStatic.lib user32.lib gdi32.lib ole32.lib shell32.lib advapi32.lib uuid.lib[0m
+2026-11-18T02:30:53.8435465Z [36;1mif not exist MangaCloud.exe exit /b 1[0m
+2026-11-18T02:30:53.8435692Z [36;1mmkdir pkg86 2>nul[0m
+2026-11-18T02:30:53.8435892Z [36;1mcopy /y MangaCloud.exe pkg86\ >nul[0m
+2026-11-18T02:30:53.8436110Z [36;1mdir pkg86[0m
+2026-11-18T02:30:53.8458277Z shell: C:\Windows\system32\cmd.EXE /D /E:ON /V:OFF /S /C "CALL "{0}""
+2026-11-18T02:30:53.8458571Z ##[endgroup]
+2026-11-18T02:30:54.0456863Z **********************************************************************
+2026-11-18T02:30:54.0457451Z ** Visual Studio 2026 Developer Command Prompt v18.11.3
+2026-11-18T02:30:54.0457850Z ** Copyright (c) 2026 Microsoft Corporation
+2026-11-18T02:30:54.0458201Z **********************************************************************
+2026-11-18T02:30:56.9313977Z [vcvarsall.bat] Environment initialized for: 'x86'
+2026-11-18T02:30:57.1651689Z C:\Program Files\Microsoft Visual Studio\18\Enterprise\VC\Tools\MSVC\14.51.36231\bin\Hostx86\x86\cl.exe
+2026-11-18T02:31:06.8895744Z app.cpp
+2026-11-18T02:31:18.9235996Z  Volume in drive D is Temp
+2026-11-18T02:31:18.9236365Z  Volume Serial Number is A266-089A
+2026-11-18T02:31:18.9236915Z 
+2026-11-18T02:31:18.9237198Z  Directory of D:\a\Manga-AutoTranslate\Manga-AutoTranslate\cloud-apps\desktop\win32\pkg86
+2026-11-18T02:31:18.9237785Z 
+2026-11-18T02:31:18.9237965Z 11/18/2026  02:31 AM    <DIR>          .
+2026-11-18T02:31:18.9238331Z 11/18/2026  02:31 AM    <DIR>          ..
+2026-11-18T02:31:18.9238899Z 11/18/2026  02:31 AM         1,779,200 MangaCloud.exe
+2026-11-18T02:31:18.9239144Z                1 File(s)      1,779,200 bytes
+2026-11-18T02:31:18.9239362Z                2 Dir(s)  235,946,426,368 bytes free

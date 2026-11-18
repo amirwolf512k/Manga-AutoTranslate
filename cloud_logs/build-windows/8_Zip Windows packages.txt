@@ -1,0 +1,15 @@
+﻿2026-11-18T02:31:18.9403730Z ##[group]Run New-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\dist" | Out-Null
+2026-11-18T02:31:18.9404358Z [36;1mNew-Item -ItemType Directory -Force -Path "$env:GITHUB_WORKSPACE\dist" | Out-Null[0m
+2026-11-18T02:31:18.9404930Z [36;1mCompress-Archive -Path pkg64\* -DestinationPath "$env:GITHUB_WORKSPACE\dist\MangaCloud-Windows-x64.zip" -Force[0m
+2026-11-18T02:31:18.9405529Z [36;1mCompress-Archive -Path pkg86\* -DestinationPath "$env:GITHUB_WORKSPACE\dist\MangaCloud-Windows-x86.zip" -Force[0m
+2026-11-18T02:31:18.9405952Z [36;1mGet-ChildItem "$env:GITHUB_WORKSPACE\dist"[0m
+2026-11-18T02:31:18.9462742Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-11-18T02:31:18.9463029Z ##[endgroup]
+2026-11-18T02:31:19.5701379Z 
+2026-11-18T02:31:19.5706824Z     Directory: D:\a\Manga-AutoTranslate\Manga-AutoTranslate\dist
+2026-11-18T02:31:19.5707407Z 
+2026-11-18T02:31:19.5709940Z [32;1mMode   [0m[32;1m              LastWriteTime[0m[32;1m         Length[0m[32;1m Name[0m
+2026-11-18T02:31:19.5710610Z [32;1m----   [0m [32;1m             -------------[0m [32;1m        ------[0m [32;1m----[0m
+2026-11-18T02:31:19.5823809Z -a---          11/18/2026  2:31 AM         543460 [31;1mMangaCloud-Windows-x64.zip[0m
+2026-11-18T02:31:19.5827764Z -a---          11/18/2026  2:31 AM         464261 [31;1mMangaCloud-Windows-x86.zip[0m
+2026-11-18T02:31:19.5831903Z 

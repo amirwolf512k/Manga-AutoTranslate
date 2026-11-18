@@ -1,0 +1,20 @@
+﻿2026-11-18T02:31:25.4829138Z ##[group]Run # pwsh: باید $LASTEXITCODE را چک کنیم — «if (cmd > $null)»
+2026-11-18T02:31:25.4829610Z [36;1m# pwsh: باید $LASTEXITCODE را چک کنیم — «if (cmd > $null)»[0m
+2026-11-18T02:31:25.4829916Z [36;1m# خروجیِ (خالی‌شده) را میسنجد نه کدِ خروج را (باگِ ترجمه از بش!)[0m
+2026-11-18T02:31:25.4830268Z [36;1mgh release view apks --repo amirwolf5122/Manga-AutoTranslate *> $null[0m
+2026-11-18T02:31:25.4830576Z [36;1mif ($LASTEXITCODE -eq 0) {[0m
+2026-11-18T02:31:25.4830977Z [36;1m  gh release upload clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --clobber 2>$null[0m
+2026-11-18T02:31:25.4831378Z [36;1m  if ($LASTEXITCODE -ne 0) {[0m
+2026-11-18T02:31:25.4831893Z [36;1m    gh release create clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --title "clouds" --target main --notes "Windows" 2>$null[0m
+2026-11-18T02:31:25.4832395Z [36;1m    if ($LASTEXITCODE -ne 0) {[0m
+2026-11-18T02:31:25.4832602Z [36;1m      Start-Sleep -Seconds 5[0m
+2026-11-18T02:31:25.4833054Z [36;1m      gh release upload clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --clobber[0m
+2026-11-18T02:31:25.4833429Z [36;1m    }[0m
+2026-11-18T02:31:25.4833576Z [36;1m  }[0m
+2026-11-18T02:31:25.4833718Z [36;1m} else {[0m
+2026-11-18T02:31:25.4834247Z [36;1m  echo "apks release not ready on 5122 yet - skipping win upload (will retry next run)"[0m
+2026-11-18T02:31:25.4834574Z [36;1m}[0m
+2026-11-18T02:31:25.4887175Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-11-18T02:31:25.4887446Z env:
+2026-11-18T02:31:25.4887839Z   GH_TOKEN: ***
+2026-11-18T02:31:25.4888018Z ##[endgroup]

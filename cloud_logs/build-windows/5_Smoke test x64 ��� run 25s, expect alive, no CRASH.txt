@@ -1,0 +1,42 @@
+﻿2026-11-18T02:29:34.0288757Z ##[group]Run $env:MANGA_SMOKE = "1"
+2026-11-18T02:29:34.0289093Z [36;1m$env:MANGA_SMOKE = "1"[0m
+2026-11-18T02:29:34.0289360Z [36;1m$exe = Join-Path (Get-Location) "MangaCloud.exe"[0m
+2026-11-18T02:29:34.0289682Z [36;1mif (-not (Test-Path $exe)) { throw "MangaCloud.exe missing" }[0m
+2026-11-18T02:29:34.0290082Z [36;1m$p = Start-Process -FilePath $exe -PassThru -WorkingDirectory (Get-Location)[0m
+2026-11-18T02:29:34.0290412Z [36;1mStart-Sleep -Seconds 25[0m
+2026-11-18T02:29:34.0290605Z [36;1m$alive = -not $p.HasExited[0m
+2026-11-18T02:29:34.0290829Z [36;1m$log = Join-Path (Get-Location) "run.log"[0m
+2026-11-18T02:29:34.0291047Z [36;1mif (Test-Path $log) {[0m
+2026-11-18T02:29:34.0291230Z [36;1m  echo "=== run.log ==="[0m
+2026-11-18T02:29:34.0291410Z [36;1m  Get-Content $log[0m
+2026-11-18T02:29:34.0291644Z [36;1m  if (Select-String -Path $log -Pattern "CRASH" -Quiet) {[0m
+2026-11-18T02:29:34.0291915Z [36;1m    echo "!! CRASH detected in run.log"[0m
+2026-11-18T02:29:34.0292417Z [36;1m    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue[0m
+2026-11-18T02:29:34.0292672Z [36;1m    exit 1[0m
+2026-11-18T02:29:34.0292818Z [36;1m  }[0m
+2026-11-18T02:29:34.0292957Z [36;1m} else {[0m
+2026-11-18T02:29:34.0293111Z [36;1m  echo "no run.log produced"[0m
+2026-11-18T02:29:34.0293288Z [36;1m}[0m
+2026-11-18T02:29:34.0293432Z [36;1mif (-not $alive) {[0m
+2026-11-18T02:29:34.0293647Z [36;1m  echo "!! APP EXITED EARLY with code $($p.ExitCode)"[0m
+2026-11-18T02:29:34.0293873Z [36;1m  exit 1[0m
+2026-11-18T02:29:34.0294014Z [36;1m}[0m
+2026-11-18T02:29:34.0294183Z [36;1mecho "APP ALIVE after 25s — smoke OK"[0m
+2026-11-18T02:29:34.0294467Z [36;1mStop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue[0m
+2026-11-18T02:29:34.0294804Z [36;1mStart-Sleep -Seconds 2[0m
+2026-11-18T02:29:34.0295113Z [36;1mStop-Process -Name "msedgewebview2" -Force -ErrorAction SilentlyContinue[0m
+2026-11-18T02:29:34.0295458Z [36;1mRemove-Item $log -ErrorAction SilentlyContinue[0m
+2026-11-18T02:29:34.0295807Z [36;1mGet-ChildItem -Filter "*.dmp" | Remove-Item -ErrorAction SilentlyContinue[0m
+2026-11-18T02:29:34.0351543Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-11-18T02:29:34.0351832Z ##[endgroup]
+2026-11-18T02:29:59.3745164Z === run.log ===
+2026-11-18T02:29:59.3783796Z 2026-11-18 02:29:34 WinMain — MangaCloud v1.14.339 (loaded-images extract + upload-to-server download)
+2026-11-18T02:29:59.3784827Z 2026-11-18 02:29:34 wv2 runtime: 156.0.4314.58
+2026-11-18T02:29:59.3786019Z 2026-11-18 02:29:34 environment created
+2026-11-18T02:29:59.3787087Z 2026-11-18 02:29:34 createEnv hr=00000000
+2026-11-18T02:29:59.3788519Z 2026-11-18 02:29:34 createEnv accepted
+2026-11-18T02:29:59.3789837Z 2026-11-18 02:29:34 creating app controller (on main window)
+2026-11-18T02:29:59.3791192Z 2026-11-18 02:29:35 create ctl(app) hr=00000000
+2026-11-18T02:29:59.3793730Z 2026-11-18 02:29:37 app: get_CoreWebView2 hr=00000000
+2026-11-18T02:29:59.3795446Z 2026-11-18 02:29:37 app webview created — navigating
+2026-11-18T02:29:59.3848165Z APP ALIVE after 25s — smoke OK

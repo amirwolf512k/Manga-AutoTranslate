@@ -508,8 +508,9 @@ public class MainActivity extends Activity {
                 "در حال آپلودِ " + count + " عکس به سرور…",
                 Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            java.io.File[] fs = dir.listFiles();
-            if (fs == null) fs = new java.io.File[0];
+            java.io.File[] fs0 = dir.listFiles();
+            final java.io.File[] fs =
+                    (fs0 == null) ? new java.io.File[0] : fs0;
             java.util.Arrays.sort(fs, (a, b) ->
                     a.getName().compareToIgnoreCase(b.getName()));
             final String[] paths = new String[fs.length];
