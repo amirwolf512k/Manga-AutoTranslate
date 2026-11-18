@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.345"
+APP_VER = "1.14.346"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -517,9 +517,8 @@ def _cm_info_html(models: list, name: str) -> str:
 
 def _ai_choices(models: list) -> list:
     names = [n for n in _cm_names(models)
-             if n not in ("auto", "gemini", "coarena", "custom")]
+             if n not in ("auto", "gemini", "custom")]
     out = (["auto"] if names else []) + ["gemini"]
-    out.append("coarena")
     out.extend(names)
     out.append("custom")
     return out
@@ -1198,7 +1197,6 @@ def run_cli_interactive():
     print("\nارائه‌دهندهٔ AI را انتخاب کنید:")
     prov_menu = [
         ("gemini", "Google Gemini - رایگان با سهمیه"),
-        ("coarena", "Coarena — gpt-6-luna (OpenAI-سازگار)"),
         ("custom", "سرویس دلخواه — ۴ فرمت: OpenAI / Responses / Anthropic / Google (دامنه + توکن + مدل)"),
     ]
     for i, (pid, desc) in enumerate(prov_menu, 1):
@@ -8988,12 +8986,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                           "به «لیست مدل‌ها» اضافه کنید.")
                 prov_s, api_base_v, api_keys_v, model_v = _ap, _ab, _ak, _am
                 provider_v = prov_s
-            elif prov_s and prov_s not in ("gemini", "coarena", "custom"):
+            elif prov_s and prov_s not in ("gemini", "custom"):
                 prov_s, provider_v = "gemini", "gemini"
-            if prov_s == "coarena":
-                api_base_v = "https://coarena.ai/api/v1"
-                if not _model_str(model_v).strip():
-                    model_v = "gpt-6-luna"
             if prov_s == "custom":
                 _ab = normalize_api_base(str(api_base_v or ""))
                 if not _ab:
@@ -9160,8 +9154,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                    "--reading-order", str(readord_v)]
             if prov_s == "custom" and str(api_base_v or "").strip():
                 cmd += ["--api-base", str(api_base_v).strip()]
-            if prov_s == "coarena":
-                cmd += ["--api-base", "https://coarena.ai/api/v1"]
             cmd += font_args()
             active_tones = ["normal"]
             for si, slot in enumerate(tone_slots):
@@ -9383,10 +9375,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             if v == "gemini":
                 mdl_upd = gr.update(visible=True,
                                     value=(nm or _gemini_default_models_str()),
-                                    label="مدل (ها)")
-            elif v == "coarena":
-                mdl_upd = gr.update(visible=True,
-                                    value=(nm or "gpt-6-luna"),
                                     label="مدل (ها)")
             else:
                 mdl_upd = gr.update(visible=row_vis, value=nm,
