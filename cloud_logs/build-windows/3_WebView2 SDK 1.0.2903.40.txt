@@ -1,8 +1,0 @@
-﻿2026-11-18T02:29:18.0417630Z ##[group]Run curl.exe -sL -o wv2.nupkg "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2903.40"
-2026-11-18T02:29:18.0418506Z [36;1mcurl.exe -sL -o wv2.nupkg "https://www.nuget.org/api/v2/package/Microsoft.Web.WebView2/1.0.2903.40"[0m
-2026-11-18T02:29:18.0418988Z [36;1mExpand-Archive wv2.nupkg -DestinationPath wv2sdk[0m
-2026-11-18T02:29:18.0419426Z [36;1mif (-not (Test-Path wv2sdk/build/native/include/WebView2.h)) { throw "WebView2.h missing" }[0m
-2026-11-18T02:29:18.0419968Z [36;1mif (-not (Test-Path wv2sdk/build/native/x64/WebView2LoaderStatic.lib)) { throw "x64 static lib missing" }[0m
-2026-11-18T02:29:18.0420517Z [36;1mif (-not (Test-Path wv2sdk/build/native/x86/WebView2LoaderStatic.lib)) { throw "x86 static lib missing" }[0m
-2026-11-18T02:29:18.1050220Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
-2026-11-18T02:29:18.1050576Z ##[endgroup]
