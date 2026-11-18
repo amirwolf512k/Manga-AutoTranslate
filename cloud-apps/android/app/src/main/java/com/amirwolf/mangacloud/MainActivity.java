@@ -39,10 +39,19 @@ public class MainActivity extends Activity {
 
     private WebView web;
     private LinearLayout splash;
+    private TextView fab;
     private ValueCallback<Uri[]> filePathCallback;
     private static final int FILE_CHOOSER_CODE = 1001;
     private static final int REQ_BROWSER = 1004;
     private boolean pageStarted = false;
+    private boolean readerMode = false;
+    private final android.os.Handler uiTick = new android.os.Handler();
+    private final Runnable readerWatch = new Runnable() {
+        @Override public void run() {
+            try { watchReader(); } catch (Exception ignored) {}
+            uiTick.postDelayed(this, 900);
+        }
+    };
 
     @SuppressLint("SetJavaScriptEnabled")
     @Override
@@ -69,8 +78,12 @@ public class MainActivity extends Activity {
         fab.setBackground(fabBg);
         fab.setElevation(dp(6));
         fab.setContentDescription("باز کردن مرورگر + استخراج عکس");
+        this.fab = fab;
         fab.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { openInAppBrowser(); }
+            @Override public void onClick(View v) {
+                if (readerMode) refreshReader();
+                else openInAppBrowser();
+            }
         });
         FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(
                 dp(48), dp(48));
@@ -99,6 +112,40 @@ public class MainActivity extends Activity {
             web.restoreState(savedInstanceState);
         } else {
             web.loadUrl(HOME_URL);
+        }
+        uiTick.postDelayed(readerWatch, 900);
+    }
+
+    private void watchReader() {
+        if (web == null) return;
+        try {
+            web.evaluateJavascript(
+                "(function(){try{return document.getElementById('mangaReaderOverlay')?'1':'0'}catch(e){return '0'}})()",
+                v -> {
+                    boolean on = "\"1\"".equals(String.valueOf(v == null ? "" : v));
+                    if (on != readerMode) {
+                        readerMode = on;
+                        if (fab != null) {
+                            fab.setText(readerMode ? "↻" : "🌐");
+                            fab.setTextSize(readerMode ? 24f : 20f);
+                            fab.setContentDescription(readerMode
+                                    ? "رفرش نمایش" : "باز کردن مرورگر + استخراج عکس");
+                        }
+                    }
+                });
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void refreshReader() {
+        try {
+            web.evaluateJavascript(
+                "(function(){try{var o=document.getElementById('mangaReaderOverlay');"
+                + "if(!o)return;var f=o.querySelector('iframe');if(!f)return;"
+                + "try{if(f.contentWindow&&f.contentWindow.location)"
+                + "f.contentWindow.location.reload()}catch(e){f.src=f.src}}catch(e){}})()",
+                null);
+        } catch (Exception ignored) {
         }
     }
 
@@ -404,6 +451,47 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void streamDataUrls(java.io.File dir, int count) {
+        Toast.makeText(this, "در حال نشاندن " + count + " عکس در فیلدِ ورودی…",
+                Toast.LENGTH_SHORT).show();
+        new Thread(() -> {
+            int ok = 0;
+            for (int i = 0; i < count; i++) {
+                java.io.File f = new java.io.File(dir, "mt_dl_" + i + ".txt");
+                if (!f.isFile()) continue;
+                try {
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    try (java.io.FileInputStream fi = new java.io.FileInputStream(f)) {
+                        byte[] buf = new byte[16384];
+                        int n;
+                        while ((n = fi.read(buf)) > 0) bo.write(buf, 0, n);
+                    }
+                    f.delete();
+                    String line = new String(bo.toByteArray(), "UTF-8").trim();
+                    if (line.isEmpty()) continue;
+                    final String payload = org.json.JSONObject.quote(line);
+                    runOnUiThread(() -> {
+                        try {
+                            web.evaluateJavascript(
+                                "window.__mtAppendLinks && window.__mtAppendLinks("
+                                + payload + ");", null);
+                        } catch (Exception ignored) {
+                        }
+                    });
+                    ok++;
+                } catch (Exception ignored) {
+                }
+            }
+            final int n = ok;
+            runOnUiThread(() -> Toast.makeText(this,
+                    n > 0 ? "✅ " + n + " عکس (base64) در فیلدِ ورودی نشست — «شروع ترجمه» را بزن"
+                            : "هیچ عکسی دانلود نشد",
+                    Toast.LENGTH_LONG).show());
+            try { dir.delete(); } catch (Exception ignored) {
+            }
+        }).start();
+    }
+
     private void injectLinksToPage(String links) {
         try {
             String payload = org.json.JSONObject.quote(links);
@@ -445,6 +533,12 @@ public class MainActivity extends Activity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         if (requestCode == REQ_BROWSER && resultCode == RESULT_OK && data != null) {
+            String dlDir = data.getStringExtra(BrowserActivity.EXTRA_DL_DIR);
+            int dlCount = data.getIntExtra(BrowserActivity.EXTRA_DL_COUNT, 0);
+            if (dlDir != null && dlCount > 0) {
+                streamDataUrls(new java.io.File(dlDir), dlCount);
+                return;
+            }
             String links = data.getStringExtra(BrowserActivity.EXTRA_LINKS);
             if (links != null && !links.trim().isEmpty()) {
                 injectLinksToPage(links.trim());
@@ -504,5 +598,15 @@ public class MainActivity extends Activity {
         if (!pageStarted) {
             web.loadUrl(HOME_URL);
         }
+    }
+
+    @Override
+    protected void onDestroy() {
+        uiTick.removeCallbacks(readerWatch);
+        try {
+            web.destroy();
+        } catch (Exception ignored) {
+        }
+        super.onDestroy();
     }
 }

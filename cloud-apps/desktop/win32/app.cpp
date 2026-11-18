@@ -32,6 +32,7 @@ static const WCHAR APP_TITLE[] =
 #define ID_BTN_SYSBR   110
 #define ID_BTN_RETRY   111
 #define ID_BTN_RELOAD  112
+#define ID_BTN_DL       113
 
 #define WM_APP_CREATCTL (WM_APP + 1)
 #define WM_APP_BRREADY  (WM_APP + 2)
@@ -43,6 +44,7 @@ static const WCHAR APP_TITLE[] =
 #define TIMER_PROGRESS 1
 #define TIMER_RECOUNT  2
 #define TIMER_SMOKE_BR 3
+#define TIMER_READER   4
 
 static HWND g_hwnd = NULL;
 static HWND g_hwndBr = NULL;
@@ -75,7 +77,12 @@ static HWND g_btnWv2Dl = NULL;
 static HWND g_btnSysBr = NULL;
 static HWND g_btnRetry = NULL;
 static HWND g_btnReload = NULL;
+static HWND g_btnDl = NULL;
 static BOOL g_failMode = FALSE;
+static BOOL g_readerMode = FALSE;
+static std::vector<std::wstring> g_dlUrls;
+static int g_dlOk = 0;
+static int g_dlBad = 0;
 static HBRUSH g_barBrush = NULL;
 static HBRUSH g_urlBrush = NULL;
 static RECT g_urlRing = {0, 0, 0, 0};
@@ -218,6 +225,63 @@ static std::wstring g_logNear;
 static std::wstring g_logMain;
 static std::wstring g_dirNear;
 static std::wstring g_dirMain;
+
+static const wchar_t MT_READER_WATCH_JS[] =
+    L"(function(){try{return document.getElementById('mangaReaderOverlay')"
+    L"?'1':'0'}catch(e){return '0'}})()";
+
+static const wchar_t MT_READER_REFRESH_JS[] =
+    L"(function(){try{var o=document.getElementById('mangaReaderOverlay');"
+    L"if(!o)return '0';var f=o.querySelector('iframe');if(!f)return '0';"
+    L"try{if(f.contentWindow&&f.contentWindow.location)"
+    L"f.contentWindow.location.reload();return '1'}"
+    L"catch(e){f.src=f.src;return '1'}}catch(e){return '0'}})()";
+
+static const wchar_t MT_CLEAR_FIELD_JS[] =
+    L"(function(){try{"
+    L"var el=document.querySelector('#manga_inp_path textarea')"
+    L"||document.querySelector('[id*=\"manga_inp_path\"] textarea')"
+    L"||document.querySelector('#manga_inp_path input');"
+    L"if(!el)return 0;"
+    L"var pr=el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype"
+    L":window.HTMLInputElement.prototype;"
+    L"var d=Object.getOwnPropertyDescriptor(pr,'value');"
+    L"if(d&&d.set)d.set.call(el,'');else el.value='';"
+    L"el.dispatchEvent(new Event('input',{bubbles:true}));"
+    L"el.dispatchEvent(new Event('change',{bubbles:true}));return 1}"
+    L"catch(e){return 0}})()";
+
+static std::wstring MtDlOneJs(const std::wstring &quotedUrl) {
+    return std::wstring(L"(function(){try{var u=") + quotedUrl
+        + L";if(!u)return '';"
+          L"return fetch(u,{credentials:'include'})"
+          L".then(function(r){if(!r.ok)return '';return r.blob()})"
+          L".then(function(b){if(!b)return '';"
+          L"return new Promise(function(res){try{"
+          L"var f=new FileReader();"
+          L"f.onload=function(){res(String(f.result||''))};"
+          L"f.onerror=function(){res('')};f.readAsDataURL(b)}"
+          L"catch(e){res('')}})})"
+          L".catch(function(){return ''})}catch(e){return ''}})()";
+}
+
+static std::wstring MtAppendLineJs(const std::wstring &quotedLine) {
+    return std::wstring(L"(function(){try{"
+        L"var el=document.querySelector('#manga_inp_path textarea')"
+        L"||document.querySelector('[id*=\"manga_inp_path\"] textarea')"
+        L"||document.querySelector('#manga_inp_path input');"
+        L"if(!el)return 0;var line=") + quotedLine
+        + L";if(!line)return 0;"
+          L"var cur=String(el.value||'');"
+          L"var nv=cur?cur+'\\n'+line:line;"
+          L"var pr=el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype"
+          L":window.HTMLInputElement.prototype;"
+          L"var d=Object.getOwnPropertyDescriptor(pr,'value');"
+          L"if(d&&d.set)d.set.call(el,nv);else el.value=nv;"
+          L"el.dispatchEvent(new Event('input',{bubbles:true}));"
+          L"el.dispatchEvent(new Event('change',{bubbles:true}));return 1}"
+          L"catch(e){return 0}})()";
+}
 
 static void MtWriteLog(const std::wstring &path, const char *line) {
     if (path.empty() || line == NULL)
@@ -730,6 +794,10 @@ static MtExecHandler g_execExtract(0);
 static MtExecHandler g_execCount(2);
 static MtExecHandler g_execGetUrl(3);
 static MtExecHandler g_execFill(4);
+static MtExecHandler g_execReaderWatch(5);
+static MtExecHandler g_execDlList(9);
+static MtExecHandler g_execDlStep(10);
+static MtExecHandler g_execNoop(11);
 
 struct MtNoopScriptHandler
         : MtHandlerBase<
@@ -1158,8 +1226,9 @@ static void LayoutBrowser(void) {
     int m = 10, gap = 8;
     int bh = 34, by = (BR_BAR_H - bh) / 2;
     int bwNav = 42, bwGo = 64;
-    int bwExt = (w < 700) ? 96 : 150;
-    int bwCnt = (w < 900) ? 0 : 110;
+    int bwExt = (w < 700) ? 92 : 118;
+    int bwDl = (w < 700) ? 92 : 124;
+    int bwCnt = (w < 1000) ? 0 : 110;
 
     MoveWindow(g_btnFwd, w - m - bwNav, by, bwNav, bh, TRUE);
     MoveWindow(g_btnBack, w - m - bwNav - gap - bwNav, by, bwNav, bh, TRUE);
@@ -1179,6 +1248,8 @@ static void LayoutBrowser(void) {
     }
     MoveWindow(g_btnExtract, xL, by, bwExt, bh, TRUE);
     xL += bwExt + gap;
+    MoveWindow(g_btnDl, xL, by, bwDl, bh, TRUE);
+    xL += bwDl + gap;
     MoveWindow(g_btnGo, xL, by, bwGo, bh, TRUE);
     xL += bwGo + gap;
     int urlL = xL + 2;
@@ -1293,6 +1364,30 @@ static void MtDrawGlobe(HDC hdc, const RECT &rc, BOOL pressed) {
     DeleteObject(gp);
 }
 
+static void MtDrawRefresh(HDC hdc, const RECT &rc, BOOL pressed) {
+    int cx = (rc.left + rc.right) / 2;
+    int cy = (rc.top + rc.bottom) / 2;
+    int r = (rc.right - rc.left) / 2 - 2;
+    if (r < 8)
+        return;
+    HBRUSH bg = CreateSolidBrush(pressed ? CLR_FAB_DN : CLR_FAB);
+    HPEN ring = CreatePen(PS_SOLID, 3, CLR_ACC);
+    HGDIOBJ ob = SelectObject(hdc, ring);
+    HGDIOBJ obb = SelectObject(hdc, bg);
+    Ellipse(hdc, cx - r, cy - r, cx + r, cy + r);
+    SelectObject(hdc, ob);
+    SelectObject(hdc, obb);
+    DeleteObject(ring);
+    DeleteObject(bg);
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, RGB(255, 255, 255));
+    HGDIOBJ of = SelectObject(hdc, g_fontFail);
+    RECT tr = rc;
+    DrawTextW(hdc, L"\u21BB", -1, &tr,
+              DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    SelectObject(hdc, of);
+}
+
 static const wchar_t MT_FAIL_BODY[] =
     L"\u0645\u0648\u062A\u0648\u0631\u0650 \u0648\u0628\u0650 \u0648\u06CC\u0646\u062F\u0648\u0632 (WebView2) \u0631\u0648\u06CC \u0627\u06CC\u0646 \u0633\u06CC\u0633\u062A\u0645 \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u06CC\u0627 \u0627\u062C\u0631\u0627 \u0646\u0634\u062F \u2014 \u0628\u062F\u0648\u0646\u0650 \u0622\u0646 \u0635\u0641\u062D\u0647\u0650 \u0627\u067E \u0628\u0627\u0632 \u0646\u0645\u06CC\u0634\u0648\u062F.\n\n"
     L"1) \u00AB\u062F\u0627\u0646\u0644\u0648\u062F WebView2\u00BB \u0631\u0627 \u0628\u0632\u0646 \u2014 \u0635\u0641\u062D\u0647\u0654 \u0631\u0633\u0645\u06CC\u0650 \u0645\u0627\u06CC\u06A9\u0631\u0648\u0633\u0627\u0641\u062A \u062F\u0631 \u0645\u0631\u0648\u0631\u06AF\u0631 \u0628\u0627\u0632 \u0645\u06CC\u0634\u0648\u062F\u061B \u0646\u0635\u0628\u200C\u06A9\u0646\u0646\u062F\u0647 \u0631\u0627 \u062F\u0627\u0646\u0644\u0648\u062F \u0648 \u0627\u062C\u0631\u0627 \u06A9\u0646 (\u0627\u06CC\u0646\u062A\u0631\u0646\u062A \u0644\u0627\u0632\u0645 \u0627\u0633\u062A).\n"
@@ -1337,8 +1432,12 @@ static LRESULT MtOnDrawItem(WPARAM wp, LPARAM lp) {
     if (d == NULL || d->CtlType != ODT_BUTTON)
         return 0;
     if (d->CtlID == ID_BTN_GLOBE) {
-        MtDrawGlobe(d->hDC, d->rcItem,
-                    (d->itemState & ODS_SELECTED) != 0);
+        if (g_readerMode)
+            MtDrawRefresh(d->hDC, d->rcItem,
+                          (d->itemState & ODS_SELECTED) != 0);
+        else
+            MtDrawGlobe(d->hDC, d->rcItem,
+                        (d->itemState & ODS_SELECTED) != 0);
         return TRUE;
     }
     BOOL down = (d->itemState & ODS_SELECTED) != 0;
@@ -1348,7 +1447,8 @@ static LRESULT MtOnDrawItem(WPARAM wp, LPARAM lp) {
     } else if (d->CtlID == ID_BTN_WV2DL) {
         bg = down ? CLR_ACC_DN : CLR_ACC;
     } else if (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_BACK
-               || d->CtlID == ID_BTN_FWD || d->CtlID == ID_BTN_RELOAD) {
+               || d->CtlID == ID_BTN_FWD || d->CtlID == ID_BTN_RELOAD
+               || d->CtlID == ID_BTN_DL) {
         bg = down ? CLR_NAV_DN : CLR_NAV;
     } else {
         bg = down ? CLR_BTN_DN : CLR_BTN;
@@ -1381,9 +1481,13 @@ static void MtBrCreateControls(HWND hwnd) {
         WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_ENDELLIPSIS,
         0, 0, 110, 34, hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS, hInst, NULL);
     g_btnExtract = CreateWindowExW(0, L"BUTTON",
-        L"\U0001F5BC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0639\u06A9\u0633",
+        L"\U0001F5BC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0644\u06CC\u0646\u06A9",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 150, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
+    g_btnDl = CreateWindowExW(0, L"BUTTON",
+        L"\u2B07 \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062F\u0627\u0646\u0644\u0648\u062F",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 132, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_DL, hInst, NULL);
     g_btnReload = CreateWindowExW(0, L"BUTTON", L"\u21BB",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 42, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_RELOAD, hInst, NULL);
@@ -1395,6 +1499,7 @@ static void MtBrCreateControls(HWND hwnd) {
     SendMessageW(g_btnFwd, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnBack, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnDl, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnReload, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
     MtLog("br controls created");
@@ -1429,6 +1534,11 @@ static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (id == ID_BTN_EXTRACT) {
                 if (g_webBr != NULL)
                     g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
+                return 0;
+            }
+            if (id == ID_BTN_DL) {
+                if (g_webBr != NULL)
+                    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execDlList);
                 return 0;
             }
             if (id == ID_BTN_RELOAD) {
@@ -1556,7 +1666,13 @@ static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int code = HIWORD(wp);
         if (code == 0) {
             if (id == ID_BTN_GLOBE) {
-                MtOpenBrowserUi();
+                if (g_readerMode) {
+                    if (g_webApp != NULL)
+                        g_webApp->ExecuteScript(MT_READER_REFRESH_JS,
+                                                &g_execNoop);
+                } else {
+                    MtOpenBrowserUi();
+                }
                 return 0;
             }
             if (id == ID_BTN_WV2DL) {
@@ -1623,6 +1739,12 @@ static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             MtOpenBrowserUi();
             return 0;
         }
+        if (wp == TIMER_READER) {
+            if (!g_failMode && g_webApp != NULL)
+                g_webApp->ExecuteScript(MT_READER_WATCH_JS,
+                                        &g_execReaderWatch);
+            return 0;
+        }
         break;
     }
     case WM_MOVE:
@@ -1652,6 +1774,7 @@ static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DESTROY:
         KillTimer(hwnd, TIMER_PROGRESS);
         KillTimer(hwnd, TIMER_RECOUNT);
+        KillTimer(hwnd, TIMER_READER);
         if (g_hwndBr != NULL) {
             DestroyWindow(g_hwndBr);
             g_hwndBr = NULL;
@@ -1725,6 +1848,74 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         }
         return S_OK;
     }
+    if (mode == 5) {
+        const wchar_t *s = resultObjectAsJson ? resultObjectAsJson : L"";
+        BOOL on = (wcsstr(s, L"1") != NULL);
+        if (on != g_readerMode) {
+            g_readerMode = on;
+            if (g_btnGlobe != NULL)
+                InvalidateRect(g_btnGlobe, NULL, TRUE);
+        }
+        return S_OK;
+    }
+    if (mode == 9) {
+        std::vector<std::wstring> links;
+        if (!MtParseMaybeWrapped(resultObjectAsJson, links)
+                || links.empty()) {
+            MessageBoxW(g_hwnd,
+                L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 "
+                L"\u0646\u0634\u062F \u2014 \u0627\u0648\u0644 \u0641\u0635\u0644 "
+                L"\u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646 \u0648 \u062A\u0627 "
+                L"\u0622\u062E\u0631\u0650 \u0635\u0641\u062D\u0647 \u0627\u0633"
+                L"\u06A9\u0631\u0648\u0644 \u06A9\u0646",
+                L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+                MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+            return S_OK;
+        }
+        if (links.size() > 80)
+            links.resize(80);
+        g_dlUrls = links;
+        g_dlOk = 0;
+        g_dlBad = 0;
+        if (g_webApp != NULL)
+            g_webApp->ExecuteScript(MT_CLEAR_FIELD_JS, &g_execNoop);
+        if (g_webBr != NULL)
+            g_webBr->ExecuteScript(
+                MtDlOneJs(MtJsQuote(g_dlUrls[0])).c_str(), &g_execDlStep);
+        return S_OK;
+    }
+    if (mode == 10) {
+        std::wstring d = MtParseJsonString(
+            resultObjectAsJson ? resultObjectAsJson : L"");
+        if (d.size() > 32 && d.compare(0, 5, L"data:") == 0) {
+            g_dlOk++;
+            if (g_webApp != NULL)
+                g_webApp->ExecuteScript(
+                    MtAppendLineJs(MtJsQuote(d)).c_str(), &g_execNoop);
+        } else {
+            g_dlBad++;
+        }
+        int done = g_dlOk + g_dlBad;
+        wchar_t sb[64];
+        swprintf(sb, 64, L"\u2B07 %d/%d", done, (int)g_dlUrls.size());
+        SetWindowTextW(g_lblStatus, sb);
+        if ((size_t)done < g_dlUrls.size()) {
+            if (g_webBr != NULL)
+                g_webBr->ExecuteScript(
+                    MtDlOneJs(MtJsQuote(g_dlUrls[done])).c_str(),
+                    &g_execDlStep);
+        } else {
+            if (g_webApp != NULL) {
+                std::wstring js = std::wstring(
+                    L"(function(){try{alert('__MT_FILLED__")")
+                    + std::to_wstring(g_dlOk)
+                    + L"__MT_FILLED2__');return 1}catch(e){return 0}})()";
+                g_webApp->ExecuteScript(js.c_str(), &g_execNoop);
+            }
+            MtHideBrowser();
+        }
+        return S_OK;
+    }
     if (mode != 0 || g_webApp == NULL)
         return S_OK;
     std::vector<std::wstring> links;
@@ -1765,7 +1956,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.336 (browser bar like the real PC version + ROOT-CAUSE AddRef fix + SEH armor)");
+    MtLog("WinMain — MangaCloud v1.14.338 (reader-mode FAB + download-extract)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
@@ -1886,6 +2077,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     UpdateWindow(g_hwnd);
     LayoutApp();
     SetTimer(g_hwnd, TIMER_RECOUNT, 3000, NULL);
+    SetTimer(g_hwnd, TIMER_READER, 900, NULL);
 
     TryStartEnv();
 

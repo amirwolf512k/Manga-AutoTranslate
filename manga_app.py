@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.337"
+APP_VER = "1.14.338"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1440,25 +1440,65 @@ _MT_BROWSER_WIN_JS = """
   goBtn.onclick=go;
   var cnt=document.createElement('span');cnt.className='mtcnt';cnt.textContent='\\u2026';
   var btn=document.createElement('button');
-  /* v1.14.327 — «استخراج» با جیم (قبلاً با ق اشتباه نوشته شده بود) */
-  btn.type='button';btn.textContent='\\ud83d\\uddbc \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u062c \\u0639\\u06a9\\u0633';
+  btn.type='button';btn.textContent='🖼 استخراج لینک';
   btn.onclick=function(){
     try{
       var out=collect();
       if(!out.length){
-        alert('\\u0639\\u06a9\\u0633\\u06cc \\u067e\\u06cc\\u062f\\u0627 \\u0646\\u0634\\u062f \\u2014 \\u0627\\u0648\\u0644 \\u0641\\u0635\\u0644 \\u0631\\u0627 \\u0628\\u0627\\u0632 \\u06a9\\u0646 \\u0648 \\u062a\\u0627 \\u0622\\u062e\\u0631\\u0650 \\u0635\\u0641\\u062d\\u0647 \\u0627\\u0633\\u06a9\\u0631\\u0648\\u0644 \\u06a9\\u0646 \\u062a\\u0627 \\u0639\\u06a9\\u0633\\u200c\\u0647\\u0627\\u06cc \\u062a\\u0646\\u0628\\u0644 \\u0644\\u0648\\u062f \\u0628\\u0634\\u0646');
+        alert('عکسی پیدا نشد — اول فصل را باز کن و تا آخرِ صفحه اسکرول کن تا عکس‌های تنبل لود بشن');
         return;
       }
-      cnt.textContent=out.length+' \\u0639\\u06a9\\u0633 \\u2014 \\u062f\\u0631 \\u062d\\u0627\\u0644 \\u0627\\u0646\\u062a\\u0642\\u0627\\u0644\\u2026';
+      cnt.textContent=out.length+' عکس — در حال انتقال…';
       try{window.pywebview.api.onExtract(JSON.stringify(out));}
-      catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0631\\u0633\\u0627\\u0644 \\u0628\\u0647 \\u0627\\u067e: '+e)}
-    }catch(e){alert('\\u062e\\u0637\\u0627 \\u062f\\u0631 \\u0627\\u0633\\u062a\\u062e\\u0631\\u0627\\u062c: '+e)}
+      catch(e){alert('خطا در ارسال به اپ: '+e)}
+    }catch(e){alert('خطا در استخراج: '+e)}
   };
-  /* v1.14.327 — جابه‌جایی: نوارِ RTL است؛ برای اینکه چشمِ کاربر
-     «< >» ببیند (عقب چپ، جلو راست — مثلِ مرورگرها) باید جلو
-     اول بشیند تا سمتِ راستِ نوار بیفتد و عقبِ چپِ آن. */
+  var btn2=document.createElement('button');
+  btn2.type='button';btn2.textContent='⬇ استخراج دانلود';
+  btn2.onclick=function(){
+    try{
+      var out=collect();
+      if(!out.length){
+        alert('عکسی پیدا نشد — اول فصل را باز کن و تا آخرِ صفحه اسکرول کن تا عکس‌های تنبل لود بشن');
+        return;
+      }
+      if(out.length>80)out=out.slice(0,80);
+      cnt.textContent='⬇ 0/'+out.length;
+      var i=0;
+      function step(){
+        if(i>=out.length)return;
+        var u=out[i];var idx=i;i++;
+        try{
+          fetch(u,{credentials:'include'}).then(function(r){
+            if(!r.ok)return '';
+            return r.blob()
+          }).then(function(b){
+            if(!b)return '';
+            return new Promise(function(res){
+              try{
+                var f=new FileReader();
+                f.onload=function(){res(String(f.result||''))};
+                f.onerror=function(){res('')};
+                f.readAsDataURL(b)
+              }catch(e){res('')}
+            })
+          }).then(function(d){
+            try{window.pywebview.api.onDlOne(idx,out.length,d||'')}catch(e){}
+            cnt.textContent='⬇ '+(idx+1)+'/'+out.length;
+            setTimeout(step,30)
+          }).catch(function(){
+            try{window.pywebview.api.onDlOne(idx,out.length,'')}catch(e){}
+            cnt.textContent='⬇ '+(idx+1)+'/'+out.length;
+            setTimeout(step,30)
+          })
+        }catch(e){setTimeout(step,30)}
+      }
+      step();
+    }catch(e){alert('خطا در دانلود: '+e)}
+  };
   box.appendChild(fwd);box.appendChild(back);box.appendChild(url);
-  box.appendChild(goBtn);box.appendChild(btn);box.appendChild(cnt);
+  box.appendChild(goBtn);box.appendChild(btn);box.appendChild(btn2);
+  box.appendChild(cnt);
   /* v1.14.328 — نصب روی documentElement (نه body — سایتها body را
      میپاکند) + استایل + خودترمیمی */
   function mount(){
@@ -1612,6 +1652,70 @@ class _DesktopApi:
             self._br_win = None
         except Exception as e:
             print(f"[!] استخراجِ مرورگرِ داخلی: خطا — {e}")
+
+    def onDlOne(self, idx, total, data_url):
+        try:
+            import base64 as _b64
+            import json as _j
+            idx = int(idx or 0)
+            total = int(total or 0)
+            if idx <= 0:
+                try:
+                    shutil.rmtree(os.path.join(WORK_DIR, "browser_dl"),
+                                  ignore_errors=True)
+                except Exception:
+                    pass
+            s = str(data_url or "").strip()
+            if not s.lower().startswith("data:image/"):
+                return
+            head, _, b64 = s.partition(",")
+            try:
+                content = _b64.b64decode(b64)
+            except Exception:
+                return
+            if not content:
+                return
+            ext = ".jpg"
+            m = re.search(r"data:image/(jpe?g|png|webp|bmp)", head.lower())
+            if m:
+                ext = "." + ("jpg" if m.group(1) in ("jpg", "jpeg")
+                             else m.group(1))
+            d = os.path.join(WORK_DIR, "browser_dl")
+            os.makedirs(d, exist_ok=True)
+            fp = os.path.join(d, "page_%03d%s" % (idx + 1, ext))
+            with open(fp, "wb") as f:
+                f.write(content)
+            if total > 0 and idx >= total - 1:
+                try:
+                    files = sorted(
+                        os.path.join(d, x) for x in os.listdir(d)
+                        if os.path.isfile(os.path.join(d, x)))
+                except Exception:
+                    files = []
+                if files and self._main_win is not None:
+                    text = "\n".join(files)
+                    try:
+                        self._main_win.evaluate_js(
+                            "window.__mtFillLinks && (window.__mtFillLinks(%s),"
+                            " alert('%d عکس دانلود شد و مسیرشان در فیلدِ"
+                            " ورودی نشست — «شروع ترجمه» را بزن'));"
+                            % (_j.dumps(text), len(files)))
+                    except Exception as e:
+                        print(f"[!] پرکردنِ فیلدِ دانلود ناموفق: {e}")
+                elif not files and self._main_win is not None:
+                    try:
+                        self._main_win.evaluate_js(
+                            "alert('هیچ عکسی دانلود نشد');")
+                    except Exception:
+                        pass
+                try:
+                    if self._br_win is not None:
+                        self._br_win.destroy()
+                except Exception:
+                    pass
+                self._br_win = None
+        except Exception as e:
+            print(f"[!] دانلودِ مرورگرِ داخلی: خطا — {e}")
 
 
 def run_desktop():
@@ -2452,6 +2556,18 @@ def _browser_extract_js() -> str:
         } catch (e) { return false; }
       };
 
+      window.__mtAppendLinks = (text) => {
+        try {
+          const el = findLinksEl();
+          if (!el) return false;
+          const s = String(text == null ? "" : text).trim();
+          if (!s) return false;
+          const cur = String(el.value || "");
+          setVal(el, cur ? cur + "\\n" + s : s);
+          return true;
+        } catch (e) { return false; }
+      };
+
       const applyHash = () => {
         try {
           const m = (location.hash || "").match(/^#imgs=(.+)$/);
@@ -2641,14 +2757,16 @@ def _browser_extract_js() -> str:
             url.placeholder = "جستجو یا آدرس سایت…";
             url.value = start;
             const goBtn = mk("", "برو");
-            const extBtn = mk("ext", "🖼 استخراج عکس");
+            const extBtn = mk("ext", "🖼 استخراج لینک");
+            const dlBtn = mk("ext", "⬇ استخراج دانلود");
             const cnt = document.createElement("span");
             cnt.className = "cnt";
             cnt.textContent = "…";
             const clsBtn = mk("cls", "\u2715", "بازگشت به اپ");
             bar.appendChild(fwd); bar.appendChild(back);
             bar.appendChild(url); bar.appendChild(goBtn);
-            bar.appendChild(extBtn); bar.appendChild(cnt);
+            bar.appendChild(extBtn); bar.appendChild(dlBtn);
+            bar.appendChild(cnt);
             bar.appendChild(clsBtn);
             const fr = document.createElement("iframe");
             fr.id = "mtWbrFr";
@@ -2812,18 +2930,7 @@ def _browser_extract_js() -> str:
               } catch (e) { return null; }
             };
 
-            extBtn.addEventListener("click", () => {
-              const out = readFrame();
-              if (out && out.length) {
-                if (window.__mtFillLinks
-                    && window.__mtFillLinks(out.join("\\n"))) {
-                  close();
-                  try { alert(out.length
-                    + " لینک عکس در فیلدِ ورودی نشست — «شروع ترجمه» را بزن"); }
-                  catch (e) {}
-                }
-                return;
-              }
+            const showBlocked = () => {
               const cur = String(url.value || "");
               fr.style.display = "none";
               fb.style.display = "";
@@ -2869,6 +2976,63 @@ def _browser_extract_js() -> str:
                 });
                 fb.querySelector(".u2").textContent = cur;
               } catch (e) {}
+            };
+
+            extBtn.addEventListener("click", () => {
+              const out = readFrame();
+              if (out && out.length) {
+                if (window.__mtFillLinks
+                    && window.__mtFillLinks(out.join("\\n"))) {
+                  close();
+                  try { alert(out.length
+                    + " لینک عکس در فیلدِ ورودی نشست — «شروع ترجمه» را بزن"); }
+                  catch (e) {}
+                }
+                return;
+              }
+              showBlocked();
+            });
+
+            dlBtn.addEventListener("click", async () => {
+              const out = readFrame();
+              if (!out || !out.length) { showBlocked(); return; }
+              const list = out.slice(0, 80);
+              dlBtn.disabled = true;
+              let ok = 0, bad = 0;
+              const lines = [];
+              for (let k = 0; k < list.length; k++) {
+                const u = list[k];
+                try {
+                  const r = await fetch(u, { credentials: "include" });
+                  if (!r.ok) throw 0;
+                  const b = await r.blob();
+                  const d = await new Promise((res) => {
+                    try {
+                      const rd = new FileReader();
+                      rd.onload = () => res(String(rd.result || ""));
+                      rd.onerror = () => res("");
+                      rd.readAsDataURL(b);
+                    } catch (e) { res(""); }
+                  });
+                  if (d && d.indexOf("data:image/") === 0) {
+                    lines.push(d); ok++;
+                  } else { throw 0; }
+                } catch (e) { bad++; }
+                try { cnt.textContent = "⬇ " + (ok + bad) + "/" + list.length; }
+                catch (e) {}
+              }
+              dlBtn.disabled = false;
+              if (lines.length && window.__mtFillLinks
+                  && window.__mtFillLinks(lines.join("\\n"))) {
+                close();
+                try { alert(lines.length
+                  + " عکس به‌صورت base64 در فیلدِ ورودی نشست — «شروع ترجمه» را بزن"
+                  + (bad ? " — " + bad + " دانلود نشد" : "")); } catch (e) {}
+              } else {
+                try { alert("هیچ عکسی دانلود نشد — این سایت اجازهٔ دانلودِ"
+                  + " مستقیم به اپِ وب نمی‌دهد؛ از «استخراج لینک» یا"
+                  + " نسخهٔ ویندوز/اندروید استفاده کن"); } catch (e) {}
+              }
             });
 
             const tick = () => {
@@ -3122,6 +3286,17 @@ _REFRESH_FAB_JS = """
         if (ov) {
           var fr = document.getElementById('mtWbrFr');
           if (fr) { var u = fr.src; fr.src = u; }
+          return;
+        }
+        var rd = document.getElementById('mangaReaderOverlay');
+        if (rd) {
+          var rf = rd.querySelector('iframe');
+          if (rf) {
+            try {
+              if (rf.contentWindow && rf.contentWindow.location)
+                rf.contentWindow.location.reload();
+            } catch (e) { rf.src = rf.src; }
+          }
           return;
         }
         var vw = document.getElementById('reader_wrap');
@@ -10612,8 +10787,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   const ov = document.createElement('div');
   ov.id = 'mangaReaderOverlay';
   ov.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;'
-    + 'width:100vw;height:100vh;margin:0;padding:0;z-index:2147483647;'
-    + 'background:#000;';
+    + 'width:100vw;height:100vh;margin:0;padding:0;z-index:2147483630;'
+    + 'background:#000;';;
   const fr = document.createElement('iframe');
   fr.title = 'نمایش';
   fr.allow = 'fullscreen';

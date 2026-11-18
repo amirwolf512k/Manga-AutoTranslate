@@ -527,6 +527,14 @@ class _MangaTranslatorBody_95:
                 }
                 for i, u in enumerate(urls, 1):
                     try:
+                        if u.lower().startswith("data:image/"):
+                            _dp = MangaTranslator._save_data_image(u, src_dir, i)
+                            if _dp:
+                                image_files.append(_dp)
+                                print(f"    [+] {i}/{len(urls)} base64 ذخیره شد")
+                            else:
+                                print(f"    [!] base64 نامعتبر ({i}/{len(urls)})")
+                            continue
                         _lp = u[7:] if u.lower().startswith("file://") else u
                         if (os.path.isfile(_lp)
                                 and os.path.splitext(_lp)[1].lower() in IMAGE_EXTS):

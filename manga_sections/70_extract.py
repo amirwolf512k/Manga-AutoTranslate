@@ -4490,7 +4490,9 @@ class _MangaTranslatorBody_70:
 
     @staticmethod
     def _is_url(s: str) -> bool:
-        return s.lower().startswith("http://") or s.lower().startswith("https://")
+        low = s.lower()
+        return (low.startswith("http://") or low.startswith("https://")
+                or low.startswith("data:image/"))
 
     @staticmethod
     def _cluster_widths(widths: List[int], abs_tol: int = 180, rel_tol: float = 0.18) -> Dict[int, int]:

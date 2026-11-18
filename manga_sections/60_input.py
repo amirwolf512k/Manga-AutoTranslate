@@ -35,6 +35,8 @@ class _MangaTranslatorBody_60:
     def _is_direct_image_url(url: str) -> bool:
         u = (url or "").strip()
         low = u.lower()
+        if low.startswith("data:image/"):
+            return True
         path = low.split("?")[0]
         exts = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
         if any(path.endswith(e) for e in exts):
@@ -94,10 +96,68 @@ class _MangaTranslatorBody_60:
                 + u1[len(u1) - s:] for n in nums]
 
     @staticmethod
+    def _save_data_image(u: str, dest_dir: str, index: int) -> Optional[str]:
+        import base64
+        try:
+            s = str(u or "").strip()
+            head, _, b64 = s.partition(",")
+            if not b64 or "base64" not in head.lower():
+                return None
+            ext = ".jpg"
+            m = re.search(r"data:image/(jpe?g|png|webp|bmp)", head.lower())
+            if m:
+                ext = "." + ("jpg" if m.group(1) in ("jpg", "jpeg") else m.group(1))
+            try:
+                content = base64.b64decode(b64)
+            except Exception:
+                return None
+            if not content:
+                return None
+            img, _reblob = MangaTranslator._decode_image_bytes(content)
+            if img is None:
+                return None
+            if _reblob is not None:
+                content, ext = _reblob, ".jpg"
+            h, w = img.shape[:2]
+            if min(h, w) < 80 or max(h, w) < 200:
+                return None
+            os.makedirs(dest_dir, exist_ok=True)
+            out_file = os.path.join(dest_dir, f"data_{index:03d}{ext}")
+            _n = 1
+            while os.path.isfile(out_file):
+                out_file = os.path.join(dest_dir, f"data_{index:03d}-{_n}{ext}")
+                _n += 1
+            with open(out_file, "wb") as f:
+                f.write(content)
+            return out_file
+        except Exception:
+            return None
+
+    @staticmethod
     def _expand_input_urls(input_str: str) -> List[str]:
         import requests
 
-        parts = [p.strip() for p in re.split(r"[,\n\r\t]+", input_str) if p.strip()]
+        _data_stash: List[str] = []
+
+        def _stash(m):
+            _data_stash.append(m.group(0))
+            return "\x00%d\x00" % (len(_data_stash) - 1)
+
+        _work = re.sub(
+            r"data:image/[a-zA-Z0-9.+-]+;base64,[A-Za-z0-9+/=]+",
+            _stash, str(input_str or ""))
+        parts = [p.strip() for p in re.split(r"[,\n\r\t]+", _work) if p.strip()]
+        if _data_stash:
+            _restored = []
+            for p in parts:
+                m = re.match(r"^\x00(\d+)\x00$", p)
+                if m:
+                    _i = int(m.group(1))
+                    if 0 <= _i < len(_data_stash):
+                        _restored.append(_data_stash[_i])
+                        continue
+                _restored.append(p)
+            parts = _restored
         if not parts:
             return []
 
@@ -659,6 +719,10 @@ class _MangaTranslatorBody_60:
             "Referer": url,
         }
         url = MangaTranslator._normalize_image_url(url)
+
+        if url.lower().startswith("data:image/"):
+            _p = MangaTranslator._save_data_image(url, dest_dir, 1)
+            return [_p] if _p else []
 
         if "mangaplus.shueisha.co.jp/viewer/" in url:
             try:

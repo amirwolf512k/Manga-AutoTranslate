@@ -130,10 +130,14 @@ return res;
     private lateinit var web: WebView
     private lateinit var urlBox: EditText
     private lateinit var extractBtn: TextView
+    private lateinit var dlBtn: TextView
     private lateinit var countLbl: TextView
     private lateinit var progress: ProgressBar
 
     private var lastCount = 0
+    private var dlDir: java.io.File? = null
+    private var dlDone = 0
+    private var dlOk = 0
 
     private val recountHandler = Handler()
     private val recountTick = object : Runnable {
@@ -254,7 +258,7 @@ return res;
             setPadding(4, 0, 4, 0)
         }
         extractBtn = TextView(this).apply {
-            text = "🖼 استخراج عکس"
+            text = "🖼 استخراج لینک"
             setTextColor(Color.WHITE)
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
@@ -265,11 +269,29 @@ return res;
             }
             setOnClickListener { extractImages() }
         }
+        dlBtn = TextView(this).apply {
+            text = "⬇ استخراج دانلود"
+            setTextColor(Color.WHITE)
+            textSize = 14f
+            typeface = Typeface.DEFAULT_BOLD
+            setPadding(22, 14, 22, 14)
+            background = GradientDrawable().apply {
+                setColor(Color.parseColor("#2d3649"))
+                setStroke(1, ACC)
+                cornerRadius = 24f
+            }
+            setOnClickListener { downloadImages() }
+        }
         bottom.addView(countLbl, LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bottom.addView(extractBtn, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT))
+        val dlLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+        dlLp.setMargins(8, 0, 0, 0)
+        bottom.addView(dlBtn, dlLp)
         root.addView(bottom, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -354,6 +376,19 @@ return res;
                 return true
             }
         }
+        try {
+            web.addJavascriptInterface(object {
+                @android.webkit.JavascriptInterface
+                fun recv(idx: Int, total: Int, dataUrl: String?, srcUrl: String?) {
+                    onDlItem(idx, total, dataUrl ?: "", srcUrl ?: "")
+                }
+
+                @android.webkit.JavascriptInterface
+                fun done(total: Int) {
+                    onDlDone(total)
+                }
+            }, "MtDl")
+        } catch (_: Exception) {}
     }
 
     private fun smartUrl(input: String?): String? {
@@ -400,6 +435,201 @@ return res;
                 } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
+    }
+
+    private fun httpFetch(u: String): ByteArray? {
+        return try {
+            val c = java.net.URL(u).openConnection() as java.net.HttpURLConnection
+            c.connectTimeout = 15000
+            c.readTimeout = 40000
+            c.setRequestProperty("User-Agent",
+                "Mozilla/5.0 (Linux; Android 10; Pixel 7) " +
+                "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                "Chrome/120.0.0.0 Mobile Safari/537.36")
+            try {
+                val ck = CookieManager.getInstance().getCookie(u)
+                if (!ck.isNullOrEmpty()) c.setRequestProperty("Cookie", ck)
+            } catch (_: Exception) {}
+            try {
+                val ref = web.url
+                if (ref != null && ref.startsWith("http"))
+                    c.setRequestProperty("Referer", ref)
+            } catch (_: Exception) {}
+            val code = c.responseCode
+            if (code < 200 || code >= 300) {
+                c.disconnect()
+                return null
+            }
+            val bo = java.io.ByteArrayOutputStream()
+            c.inputStream.use { ins ->
+                val buf = ByteArray(16384)
+                while (true) {
+                    val n = ins.read(buf)
+                    if (n <= 0) break
+                    bo.write(buf, 0, n)
+                }
+            }
+            c.disconnect()
+            if (bo.size() == 0) null else bo.toByteArray()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    private fun extOf(head: String, data: ByteArray): String {
+        val m = Regex("data:image/(jpe?g|png|webp|bmp)").find(head.lowercase())
+        if (m != null) {
+            val g = m.groupValues[1]
+            return if (g == "jpeg") ".jpg" else "." + g
+        }
+        if (data.size >= 3 && (data[0].toInt() and 0xFF) == 0xFF
+                && (data[1].toInt() and 0xFF) == 0xD8) return ".jpg"
+        if (data.size >= 4 && (data[0].toInt() and 0xFF) == 0x89
+                && data[1] == 0x50.toByte()) return ".png"
+        if (data.size >= 12 && data[0] == 'R'.code.toByte()
+                && data[1] == 'I'.code.toByte()
+                && data[8] == 'W'.code.toByte()) return ".webp"
+        return ".jpg"
+    }
+
+    private fun onDlItem(idx: Int, total: Int, dataUrlIn: String, srcUrl: String) {
+        try {
+            val dir = dlDir ?: return
+            var dataUrl = dataUrlIn.trim()
+            if (dataUrl.isEmpty() || !dataUrl.startsWith("data:image/")) {
+                val bytes = httpFetch(srcUrl)
+                if (bytes != null) {
+                    dataUrl = "data:image/jpeg;base64," +
+                            android.util.Base64.encodeToString(bytes,
+                                android.util.Base64.NO_WRAP)
+                }
+            }
+            if (dataUrl.startsWith("data:image/")) {
+                val head = dataUrl.substringBefore(",", "")
+                val b64 = dataUrl.substringAfter(",", "")
+                val bytes = try {
+                    android.util.Base64.decode(b64, android.util.Base64.DEFAULT)
+                } catch (_: Exception) {
+                    null
+                }
+                if (bytes != null && bytes.isNotEmpty()) {
+                    val f = java.io.File(dir, "page_%03d%s".format(idx + 1,
+                            extOf(head, bytes)))
+                    java.io.FileOutputStream(f).use { it.write(bytes) }
+                    dlOk++
+                }
+            }
+            dlDone++
+            val done = dlDone
+            val ok = dlOk
+            runOnUiThread {
+                countLbl.text = "⬇ $done/$total" + (if (ok > 0) " — $ok ✓" else "")
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun onDlDone(total: Int) {
+        runOnUiThread {
+            try {
+                val dir = dlDir
+                val files = dir?.listFiles()?.sortedBy { it.name } ?: emptyList()
+                if (files.isNotEmpty()) {
+                    val out = android.content.Intent()
+                    out.putExtra(EXTRA_LINKS, files.joinToString("\n") { it.absolutePath })
+                    setResult(RESULT_OK, out)
+                    Toast.makeText(this, "✅ ${files.size} عکس دانلود شد",
+                        Toast.LENGTH_SHORT).show()
+                } else {
+                    Toast.makeText(this, "هیچ عکسی دانلود نشد",
+                        Toast.LENGTH_LONG).show()
+                }
+                finish()
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun startDownloadAll(urls: List<String>) {
+        try {
+            val base = getExternalFilesDir(null) ?: filesDir
+            dlDir = java.io.File(base, "manga_dl_" + System.currentTimeMillis())
+            dlDir?.mkdirs()
+            dlDone = 0
+            dlOk = 0
+        } catch (e: Exception) {
+            Toast.makeText(this, "خطا در آماده‌سازی دانلود: ${e.message}",
+                Toast.LENGTH_LONG).show()
+            return
+        }
+        val arr = JSONArray(urls)
+        val js = buildString {
+            append("(function(){try{var urls=").append(arr.toString()).append(";")
+            append("function toData(u){return fetch(u,{credentials:'include'})")
+            append(".then(function(r){if(!r.ok)return '';return r.blob()})")
+            append(".then(function(b){if(!b)return '';return new Promise(function(res){")
+            append("try{var f=new FileReader();")
+            append("f.onload=function(){res(String(f.result||''))};")
+            append("f.onerror=function(){res('')};f.readAsDataURL(b)}")
+            append("catch(e){res('')}})})}")
+            append("var i=0;function step(){")
+            append("if(i>=urls.length){try{window.MtDl.done(urls.length)}catch(e){}return}")
+            append("var idx=i;var u=urls[i];i++;")
+            append("toData(u).then(function(d){")
+            append("try{window.MtDl.recv(idx,urls.length,d||'',u)}catch(e){}step()})")
+            append(".catch(function(){")
+            append("try{window.MtDl.recv(idx,urls.length,'',u)}catch(e){}step()})}")
+            append("step()}catch(e){try{window.MtDl.done(0)}catch(e2){}}})()")
+        }
+        try {
+            web.evaluateJavascript(js, null)
+        } catch (e: Exception) {
+            Toast.makeText(this, "خطا در شروع دانلود: ${e.message}",
+                Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun downloadImages() {
+        val cur = try { web.url ?: "" } catch (_: Exception) { "" }
+        if (cur.isEmpty() || cur == "about:blank") {
+            Toast.makeText(this, "اول یک سایت را باز کن",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        dlBtn.text = "… در حال دانلود"
+        try {
+            web.evaluateJavascript(EXTRACT_JS) { raw ->
+                runOnUiThread {
+                    dlBtn.text = "⬇ استخراج دانلود"
+                    try {
+                        val arr = parseLinksRaw(raw)
+                        if (arr == null || arr.length() == 0) {
+                            countLbl.text = "عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن"
+                            Toast.makeText(this@BrowserActivity,
+                                "هیچ عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن",
+                                Toast.LENGTH_LONG).show()
+                            return@runOnUiThread
+                        }
+                        val n = minOf(arr.length(), 80)
+                        val urls = ArrayList<String>(n)
+                        for (i in 0 until n) urls.add(arr.getString(i))
+                        if (arr.length() > 80) {
+                            Toast.makeText(this@BrowserActivity,
+                                "فقط ۸۰ عکسِ اول دانلود می‌شود",
+                                Toast.LENGTH_LONG).show()
+                        }
+                        countLbl.text = "⬇ 0/$n"
+                        startDownloadAll(urls)
+                    } catch (e: Exception) {
+                        Toast.makeText(this@BrowserActivity,
+                            "خطا در دانلود: ${e.message}",
+                            Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            dlBtn.text = "⬇ استخراج دانلود"
+            Toast.makeText(this, "خطا: ${e.message}",
+                Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun extractImages() {

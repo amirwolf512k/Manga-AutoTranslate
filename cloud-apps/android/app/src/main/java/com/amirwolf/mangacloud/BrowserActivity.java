@@ -32,8 +32,15 @@ public class BrowserActivity extends Activity {
 
     public static final String EXTRA_URL = "url";
     public static final String EXTRA_LINKS = "links";
+    public static final String EXTRA_DL_DIR = "dl_dir";
+    public static final String EXTRA_DL_COUNT = "dl_count";
 
     public static String lastSite = "";
+
+    private static final String UA_STR =
+            "Mozilla/5.0 (Linux; Android 10; Pixel 7) " +
+            "AppleWebKit/537.36 (KHTML, like Gecko) " +
+            "Chrome/120.0.0.0 Mobile Safari/537.36";
 
     private static final String EXTRACT_JS =
         "(function(){" +
@@ -120,8 +127,12 @@ public class BrowserActivity extends Activity {
     private WebView web;
     private EditText urlBox;
     private TextView extractBtn;
+    private TextView dlBtn;
     private TextView countLbl;
     private ProgressBar progress;
+    private java.io.File dlDir = null;
+    private int dlDone = 0;
+    private int dlOk = 0;
 
     private final Handler recountHandler = new Handler();
     private final Runnable recountTick = new Runnable() {
@@ -262,7 +273,7 @@ public class BrowserActivity extends Activity {
         countLbl.setPadding(dp(4), 0, dp(4), 0);
 
         extractBtn = new TextView(this);
-        extractBtn.setText("🖼 استخراج عکس");
+        extractBtn.setText("🖼 استخراج لینک");
         extractBtn.setTextColor(Color.WHITE);
         extractBtn.setTextSize(14);
         extractBtn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -275,11 +286,31 @@ public class BrowserActivity extends Activity {
             @Override public void onClick(View v) { extractImages(); }
         });
 
+        dlBtn = new TextView(this);
+        dlBtn.setText("⬇ استخراج دانلود");
+        dlBtn.setTextColor(Color.WHITE);
+        dlBtn.setTextSize(14);
+        dlBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        dlBtn.setPadding(dp(20), dp(12), dp(20), dp(12));
+        GradientDrawable dlBg = new GradientDrawable();
+        dlBg.setColor(Color.parseColor("#2d3649"));
+        dlBg.setStroke(dp(1), Color.parseColor("#e8590c"));
+        dlBg.setCornerRadius(dp(22));
+        dlBtn.setBackground(dlBg);
+        dlBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) { downloadImages(); }
+        });
+
         bottom.addView(countLbl, new LinearLayout.LayoutParams(
                 0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
         bottom.addView(extractBtn, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams dlLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        dlLp.setMargins(dp(8), 0, 0, 0);
+        bottom.addView(dlBtn, dlLp);
         root.addView(bottom, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -311,10 +342,7 @@ public class BrowserActivity extends Activity {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
             s.setMixedContentMode(WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE);
         }
-        s.setUserAgentString(
-                "Mozilla/5.0 (Linux; Android 10; Pixel 7) " +
-                "AppleWebKit/537.36 (KHTML, like Gecko) " +
-                "Chrome/120.0.0.0 Mobile Safari/537.36");
+        s.setUserAgentString(UA_STR);
         try {
             CookieManager cm = CookieManager.getInstance();
             cm.setAcceptCookie(true);
@@ -367,6 +395,21 @@ public class BrowserActivity extends Activity {
                 return true;
             }
         });
+        try {
+            web.addJavascriptInterface(new Object() {
+                @android.webkit.JavascriptInterface
+                public void recv(final int idx, final int total,
+                                 final String dataUrl, final String srcUrl) {
+                    onDlItem(idx, total, dataUrl, srcUrl);
+                }
+
+                @android.webkit.JavascriptInterface
+                public void done(final int total) {
+                    onDlDone(total);
+                }
+            }, "MtDl");
+        } catch (Exception ignored) {
+        }
     }
 
     private static String smartUrl(String input) {
@@ -457,6 +500,193 @@ public class BrowserActivity extends Activity {
             }));
         } catch (Exception e) {
             extractBtn.setText("🖼 استخراج عکس");
+            Toast.makeText(this, "خطا: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private static String sniffMime(byte[] d) {
+        if (d == null || d.length < 12) return null;
+        if ((d[0] & 0xFF) == 0xFF && (d[1] & 0xFF) == 0xD8) return "image/jpeg";
+        if ((d[0] & 0xFF) == 0x89 && d[1] == 0x50) return "image/png";
+        if (d[0] == 'R' && d[1] == 'I' && d[2] == 'F' && d[8] == 'W') return "image/webp";
+        if (d[0] == 'G' && d[1] == 'I' && d[2] == 'F') return "image/gif";
+        return null;
+    }
+
+    private String httpFetchDataUrl(String u) {
+        try {
+            java.net.HttpURLConnection c =
+                    (java.net.HttpURLConnection) new java.net.URL(u).openConnection();
+            c.setConnectTimeout(15000);
+            c.setReadTimeout(40000);
+            c.setRequestProperty("User-Agent", UA_STR);
+            try {
+                String ck = CookieManager.getInstance().getCookie(u);
+                if (ck != null && !ck.isEmpty()) c.setRequestProperty("Cookie", ck);
+            } catch (Exception ignored) {
+            }
+            try {
+                String ref = web.getUrl();
+                if (ref != null && ref.startsWith("http"))
+                    c.setRequestProperty("Referer", ref);
+            } catch (Exception ignored) {
+            }
+            int code = c.getResponseCode();
+            if (code < 200 || code >= 300) {
+                c.disconnect();
+                return "";
+            }
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            try (java.io.InputStream in = c.getInputStream()) {
+                byte[] buf = new byte[16384];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            }
+            byte[] data = bo.toByteArray();
+            String mime = c.getContentType();
+            c.disconnect();
+            if (data.length == 0) return "";
+            if (mime == null || !mime.toLowerCase().startsWith("image/"))
+                mime = sniffMime(data);
+            if (mime == null) return "";
+            if (mime.contains(";")) mime = mime.split(";")[0].trim();
+            return "data:" + mime + ";base64,"
+                    + android.util.Base64.encodeToString(data,
+                            android.util.Base64.NO_WRAP);
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private void onDlItem(final int idx, final int total, String dataUrl,
+                          final String srcUrl) {
+        try {
+            if (dlDir == null) return;
+            String d = dataUrl == null ? "" : dataUrl.trim();
+            if (d.isEmpty() || !d.startsWith("data:image/"))
+                d = httpFetchDataUrl(srcUrl);
+            if (!d.isEmpty() && d.startsWith("data:image/")) {
+                java.io.File f = new java.io.File(dlDir, "mt_dl_" + idx + ".txt");
+                try (java.io.FileOutputStream fo = new java.io.FileOutputStream(f)) {
+                    fo.write(d.getBytes("UTF-8"));
+                }
+                dlOk++;
+            }
+            dlDone++;
+            final int done = dlDone;
+            final int ok = dlOk;
+            runOnUiThread(() -> countLbl.setText(
+                    "⬇ " + done + "/" + total + (ok > 0 ? " — " + ok + " ✓" : "")));
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void onDlDone(final int total) {
+        runOnUiThread(() -> {
+            try {
+                int cnt = 0;
+                if (dlDir != null && dlDir.isDirectory()) {
+                    java.io.File[] fs = dlDir.listFiles();
+                    cnt = fs == null ? 0 : fs.length;
+                }
+                if (cnt > 0) {
+                    Intent out = new Intent();
+                    out.putExtra(EXTRA_DL_DIR, dlDir.getAbsolutePath());
+                    out.putExtra(EXTRA_DL_COUNT, cnt);
+                    setResult(RESULT_OK, out);
+                    Toast.makeText(BrowserActivity.this,
+                            "✅ " + cnt + " عکس دانلود شد",
+                            Toast.LENGTH_SHORT).show();
+                } else {
+                    Toast.makeText(BrowserActivity.this,
+                            "هیچ عکسی دانلود نشد", Toast.LENGTH_LONG).show();
+                }
+                finish();
+            } catch (Exception ignored) {
+            }
+        });
+    }
+
+    private void startDownloadAll(java.util.List<String> urls) {
+        try {
+            dlDir = new java.io.File(getCacheDir(),
+                    "mt_dl_" + System.currentTimeMillis());
+            dlDir.mkdirs();
+            dlDone = 0;
+            dlOk = 0;
+        } catch (Exception e) {
+            Toast.makeText(this, "خطا در آماده‌سازی دانلود: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+            return;
+        }
+        org.json.JSONArray arr = new org.json.JSONArray(urls);
+        StringBuilder js = new StringBuilder();
+        js.append("(function(){try{var urls=").append(arr.toString()).append(";");
+        js.append("function toData(u){return fetch(u,{credentials:'include'})")
+           .append(".then(function(r){if(!r.ok)return '';return r.blob()})")
+           .append(".then(function(b){if(!b)return '';return new Promise(function(res){")
+           .append("try{var f=new FileReader();")
+           .append("f.onload=function(){res(String(f.result||''))};")
+           .append("f.onerror=function(){res('')};f.readAsDataURL(b)}")
+           .append("catch(e){res('')}})})}");
+        js.append("var i=0;function step(){")
+           .append("if(i>=urls.length){try{window.MtDl.done(urls.length)}catch(e){}return}")
+           .append("var idx=i;var u=urls[i];i++;")
+           .append("toData(u).then(function(d){")
+           .append("try{window.MtDl.recv(idx,urls.length,d||'',u)}catch(e){}step()})")
+           .append(".catch(function(){")
+           .append("try{window.MtDl.recv(idx,urls.length,'',u)}catch(e){}step()})}");
+        js.append("step()}catch(e){try{window.MtDl.done(0)}catch(e2){}}})()");
+        try {
+            web.evaluateJavascript(js.toString(), null);
+        } catch (Exception e) {
+            Toast.makeText(this, "خطا در شروع دانلود: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void downloadImages() {
+        String cur;
+        try { cur = web.getUrl() != null ? web.getUrl() : ""; }
+        catch (Exception e) { cur = ""; }
+        if (cur.isEmpty() || cur.equals("about:blank")) {
+            Toast.makeText(this, "اول یک سایت را باز کن",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        dlBtn.setText("… در حال دانلود");
+        try {
+            web.evaluateJavascript(EXTRACT_JS, value -> runOnUiThread(() -> {
+                dlBtn.setText("⬇ استخراج دانلود");
+                try {
+                    JSONArray arr = parseLinksRaw(value);
+                    if (arr == null || arr.length() == 0) {
+                        countLbl.setText("عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن");
+                        Toast.makeText(BrowserActivity.this,
+                                "هیچ عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن " +
+                                "تا عکس‌های تنبل لود بشن",
+                                Toast.LENGTH_LONG).show();
+                        return;
+                    }
+                    int n = Math.min(arr.length(), 80);
+                    java.util.ArrayList<String> urls = new java.util.ArrayList<>();
+                    for (int i = 0; i < n; i++) urls.add(arr.getString(i));
+                    if (arr.length() > 80) {
+                        Toast.makeText(BrowserActivity.this,
+                                "فقط ۸۰ عکسِ اول دانلود می‌شود",
+                                Toast.LENGTH_LONG).show();
+                    }
+                    countLbl.setText("⬇ 0/" + n);
+                    startDownloadAll(urls);
+                } catch (final Exception e) {
+                    Toast.makeText(BrowserActivity.this,
+                            "خطا در دانلود: " + e.getMessage(),
+                            Toast.LENGTH_LONG).show();
+                }
+            }));
+        } catch (Exception e) {
+            dlBtn.setText("⬇ استخراج دانلود");
             Toast.makeText(this, "خطا: " + e.getMessage(),
                     Toast.LENGTH_LONG).show();
         }
