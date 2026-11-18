@@ -726,9 +726,14 @@ class MangaTranslator:
             "fr": "french", "de": "german", "es": "spanish", "it": "italian",
             "pt": "portuguese", "ru": "russian", "ar": "arabic",
         }
+        _langs_n = [str(x).lower().strip() for x in self.ocr_langs if str(x).strip()]
+        _prio = [x for x in _langs_n if x not in ("en", "latin", "english")] \
+            + [x for x in _langs_n if x in ("en", "latin", "english")]
+        if not _prio:
+            _prio = ["en"]
         main_lang = "en"
-        for lang in self.ocr_langs:
-            if str(lang).lower().strip() == "multi":
+        for lang in _prio:
+            if lang == "multi":
                 main_lang = "multi" if _on_android() else "korean"
                 break
             if lang in lang_map:
