@@ -1710,8 +1710,7 @@ class _MangaTranslatorBody_95:
             regs = [r for r in regions
                     if r.kind == "dialogue"
                     and (((r.source_text or "").strip()
-                          or (r.translated_text or "").strip())
-                         or getattr(r, "ocr_empty", False))]
+                          or (r.translated_text or "").strip()))]
             if _android_gate("MANGA_CLEAN_TEXTFREE"):
                 regs = regs + [r for r in regions if r.kind == "text_free"]
             if getattr(self, "clean_only", False):
@@ -1950,7 +1949,6 @@ class _MangaTranslatorBody_95:
                 try:
                     if image is not None and regions:
                         try:
-                            self._rescue_empty_ocr(image, regions)
                             with _qd_lock:
                                 _queue_dialogues(regions, page_i)
                         except GeminiQuotaExhausted as e:
@@ -2147,8 +2145,6 @@ class _MangaTranslatorBody_95:
                     if getattr(_r, "kind", "") != "dialogue":
                         continue
                     if not (_r.source_text or "").strip():
-                        continue
-                    if getattr(_r, "ocr_empty", False):
                         continue
                     if not source_has_letters(_r.source_text):
                         continue

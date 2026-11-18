@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.344"
+APP_VER = "1.14.345"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -517,8 +517,9 @@ def _cm_info_html(models: list, name: str) -> str:
 
 def _ai_choices(models: list) -> list:
     names = [n for n in _cm_names(models)
-             if n not in ("auto", "gemini", "custom")]
+             if n not in ("auto", "gemini", "coarena", "custom")]
     out = (["auto"] if names else []) + ["gemini"]
+    out.append("coarena")
     out.extend(names)
     out.append("custom")
     return out
@@ -1197,6 +1198,7 @@ def run_cli_interactive():
     print("\nارائه‌دهندهٔ AI را انتخاب کنید:")
     prov_menu = [
         ("gemini", "Google Gemini - رایگان با سهمیه"),
+        ("coarena", "Coarena — gpt-6-luna (OpenAI-سازگار)"),
         ("custom", "سرویس دلخواه — ۴ فرمت: OpenAI / Responses / Anthropic / Google (دامنه + توکن + مدل)"),
     ]
     for i, (pid, desc) in enumerate(prov_menu, 1):
@@ -1354,7 +1356,17 @@ _MT_BROWSER_WIN_JS = """
         +'#mtbw .mtnav{background:#2d3649;width:42px;flex:0 0 42px;'
         +'padding:9px 0;text-align:center;font-size:16px;line-height:1}'
         +'#mtbw .mtcnt{color:#97948c;font-size:11.5px;max-width:170px;'
-        +'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
+        +'overflow:hidden;text-overflow:ellipsis;white-space:nowrap}'
+        +'.mtmenu{position:fixed;z-index:2147483647;direction:rtl;'
+        +'background:rgba(20,22,28,.98);border:1px solid #273043;'
+        +'border-radius:14px;padding:8px;box-shadow:0 14px 38px rgba(0,0,0,.6);'
+        +'display:flex;flex-direction:column;gap:6px;'
+        +'font-family:Tahoma,Arial,sans-serif}'
+        +'.mtmenu .mtmi{background:#1a1f2b;color:#e7ebf3;border:0;'
+        +'cursor:pointer;font-weight:700;font-size:13px;border-radius:10px;'
+        +'padding:11px 18px;text-align:right;font-family:inherit;'
+        +'white-space:nowrap}'
+        +'.mtmenu .mtmi:hover{background:#2d3649}';
       (document.head||document.documentElement).appendChild(st);
     }catch(e){}
   }
@@ -1521,30 +1533,26 @@ _MT_BROWSER_WIN_JS = """
   goBtn.type='button';goBtn.className='mtgo';goBtn.textContent='\\u0628\\u0631\\u0648';
   goBtn.onclick=go;
   var cnt=document.createElement('span');cnt.className='mtcnt';cnt.textContent='\\u2026';
-  var btn=document.createElement('button');
-  btn.type='button';btn.textContent='🖼 استخراج لینک';
-  btn.onclick=function(){
+  function doLinks(){
     try{
       var out=collect();
       if(!out.length){
         alert('عکسی پیدا نشد — اول فصل را باز کن و تا آخرِ صفحه اسکرول کن تا عکس‌های تنبل لود بشن');
         return;
       }
-      cnt.textContent=out.length+' عکس — در حال انتقال…';
+      cnt.textContent=out.length+' عکس — در حالِ انتقال…';
       try{window.pywebview.api.onExtract(JSON.stringify(out));}
       catch(e){alert('خطا در ارسال به اپ: '+e)}
     }catch(e){alert('خطا در استخراج: '+e)}
-  };
-  var btn2=document.createElement('button');
-  btn2.type='button';btn2.textContent='⬇ استخراج دانلود';
-  btn2.onclick=function(){
+  }
+  function doDl(){
     try{
       var out=collect();
       if(!out.length){
         alert('عکسی پیدا نشد — اول فصل را باز کن و تا آخرِ صفحه اسکرول کن تا عکس‌های تنبل لود بشن');
         return;
       }
-      cnt.textContent='⬇ 0/'+out.length;
+      cnt.textContent='\u2B07 0/'+out.length;
       var i=0;
       function step(){
         if(i>=out.length)return;
@@ -1565,20 +1573,56 @@ _MT_BROWSER_WIN_JS = """
             })
           }).then(function(d){
             try{window.pywebview.api.onDlOne(idx,out.length,d||'')}catch(e){}
-            cnt.textContent='⬇ '+(idx+1)+'/'+out.length;
+            cnt.textContent='\u2B07 '+(idx+1)+'/'+out.length;
             setTimeout(step,30)
           }).catch(function(){
             try{window.pywebview.api.onDlOne(idx,out.length,'')}catch(e){}
-            cnt.textContent='⬇ '+(idx+1)+'/'+out.length;
+            cnt.textContent='\u2B07 '+(idx+1)+'/'+out.length;
             setTimeout(step,30)
           })
         }catch(e){setTimeout(step,30)}
       }
       step();
     }catch(e){alert('خطا در دانلود: '+e)}
+  }
+  var btn=document.createElement('button');
+  btn.type='button';btn.textContent='🖼 استخراج';
+  var menu=document.createElement('div');menu.className='mtmenu';
+  var mi1=document.createElement('button');
+  mi1.type='button';mi1.className='mtmi';
+  mi1.textContent='استخراج با لینک';
+  mi1.onclick=function(ev){
+    ev.stopPropagation();closeMenu();doLinks()
   };
+  var mi2=document.createElement('button');
+  mi2.type='button';mi2.className='mtmi';
+  mi2.textContent='استخراج با دانلود';
+  mi2.onclick=function(ev){
+    ev.stopPropagation();closeMenu();doDl()
+  };
+  menu.appendChild(mi2);menu.appendChild(mi1);
+  function closeMenu(){
+    try{if(menu.parentNode)menu.parentNode.removeChild(menu)}catch(e){}
+  }
+  function openMenu(){
+    try{
+      closeMenu();
+      var r=btn.getBoundingClientRect();
+      menu.style.top=(r.bottom+6)+'px';
+      menu.style.right=Math.max(6,(window.innerWidth-r.right))+'px';
+      (document.documentElement||document.body).appendChild(menu);
+      setTimeout(function(){
+        function off(e){
+          try{if(!menu.contains(e.target))closeMenu()}catch(e2){}
+          document.removeEventListener('mousedown',off,true)
+        }
+        document.addEventListener('mousedown',off,true)
+      },0)
+    }catch(e){}
+  }
+  btn.onclick=openMenu;
   box.appendChild(fwd);box.appendChild(back);box.appendChild(url);
-  box.appendChild(goBtn);box.appendChild(btn);box.appendChild(btn2);
+  box.appendChild(goBtn);box.appendChild(btn);
   box.appendChild(cnt);
   function mount(){
     try{
@@ -8944,8 +8988,12 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                           "به «لیست مدل‌ها» اضافه کنید.")
                 prov_s, api_base_v, api_keys_v, model_v = _ap, _ab, _ak, _am
                 provider_v = prov_s
-            elif prov_s and prov_s not in ("gemini", "custom"):
+            elif prov_s and prov_s not in ("gemini", "coarena", "custom"):
                 prov_s, provider_v = "gemini", "gemini"
+            if prov_s == "coarena":
+                api_base_v = "https://coarena.ai/api/v1"
+                if not _model_str(model_v).strip():
+                    model_v = "gpt-6-luna"
             if prov_s == "custom":
                 _ab = normalize_api_base(str(api_base_v or ""))
                 if not _ab:
@@ -9112,6 +9160,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                    "--reading-order", str(readord_v)]
             if prov_s == "custom" and str(api_base_v or "").strip():
                 cmd += ["--api-base", str(api_base_v).strip()]
+            if prov_s == "coarena":
+                cmd += ["--api-base", "https://coarena.ai/api/v1"]
             cmd += font_args()
             active_tones = ["normal"]
             for si, slot in enumerate(tone_slots):
@@ -9333,6 +9383,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             if v == "gemini":
                 mdl_upd = gr.update(visible=True,
                                     value=(nm or _gemini_default_models_str()),
+                                    label="مدل (ها)")
+            elif v == "coarena":
+                mdl_upd = gr.update(visible=True,
+                                    value=(nm or "gpt-6-luna"),
                                     label="مدل (ها)")
             else:
                 mdl_upd = gr.update(visible=row_vis, value=nm,

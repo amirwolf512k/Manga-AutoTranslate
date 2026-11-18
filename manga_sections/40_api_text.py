@@ -66,6 +66,12 @@ PROVIDER_PRESETS = {
         "default_model": "llama3.2",
         "env_key": "OLLAMA_API_KEY",
     },
+    "coarena": {
+        "type": "openai",
+        "base_url": "https://coarena.ai/api/v1",
+        "default_model": "gpt-6-luna",
+        "env_key": "COARENA_API_KEY",
+    },
     "custom": {
         "type": "openai",
         "base_url": "",

@@ -32,7 +32,8 @@ static const WCHAR APP_TITLE[] =
 #define ID_BTN_WV2DL   109
 #define ID_BTN_SYSBR   110
 #define ID_BTN_RETRY   111
-#define ID_BTN_DL       113
+#define ID_MITEM_LINK  201
+#define ID_MITEM_DL    202
 
 #define WM_APP_CREATCTL (WM_APP + 1)
 #define WM_APP_BRREADY  (WM_APP + 2)
@@ -67,6 +68,7 @@ static HWND g_btnBack = NULL;
 static HWND g_btnFwd = NULL;
 static HWND g_btnExtract = NULL;
 static HWND g_lblStatus = NULL;
+static HWND g_hwndMenu = NULL;
 static HWND g_btnGlobe = NULL;
 static HFONT g_font = NULL;
 static HFONT g_fontBold = NULL;
@@ -76,7 +78,6 @@ static HWND g_lblFailBody = NULL;
 static HWND g_btnWv2Dl = NULL;
 static HWND g_btnSysBr = NULL;
 static HWND g_btnRetry = NULL;
-static HWND g_btnDl = NULL;
 static BOOL g_failMode = FALSE;
 static BOOL g_readerMode = FALSE;
 static std::vector<std::wstring> g_dlUrls;
@@ -91,6 +92,7 @@ static int g_upFired = 0;
 static int g_upNextIdx = 0;
 static HBRUSH g_barBrush = NULL;
 static HBRUSH g_urlBrush = NULL;
+static HBRUSH g_brBarBrush = NULL;
 static RECT g_urlRing = {0, 0, 0, 0};
 
 static int g_progress = 0;
@@ -816,6 +818,7 @@ static std::wstring MtSearchOrUrl(const std::wstring &s) {
 
 static void LayoutApp(void);
 static void LayoutBrowser(void);
+static void MtCloseExtractMenu(void);
 static void Wv2Recount(void);
 static void MtOpenBrowserUi(void);
 static void MtShowBrowser(void);
@@ -1170,6 +1173,7 @@ static void MtShowBrowser(void) {
 }
 
 static void MtHideBrowser(void) {
+    MtCloseExtractMenu();
     if (g_hwndBr == NULL)
         return;
     ShowWindow(g_hwndBr, SW_HIDE);
@@ -1319,8 +1323,7 @@ static void LayoutBrowser(void) {
     int m = 10, gap = 8;
     int bh = 34, by = (BR_BAR_H - bh) / 2;
     int bwNav = 42, bwGo = 64;
-    int bwExt = (w < 700) ? 100 : 126;
-    int bwDl = (w < 700) ? 100 : 134;
+    int bwExt = (w < 700) ? 84 : 104;
     int bwCnt = (w < 1000) ? 0 : 110;
 
     int xR = w - m;
@@ -1337,8 +1340,6 @@ static void LayoutBrowser(void) {
     } else {
         MoveWindow(g_lblStatus, xL, by, 0, 0, TRUE);
     }
-    MoveWindow(g_btnDl, xL, by, bwDl, bh, TRUE);
-    xL += bwDl + gap;
     MoveWindow(g_btnExtract, xL, by, bwExt, bh, TRUE);
     xL += bwExt + gap;
     MoveWindow(g_btnGo, xL, by, bwGo, bh, TRUE);
@@ -1607,6 +1608,15 @@ static LRESULT MtOnCtlColor(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         SetBkColor(hdc, CLR_URLBG);
         return (LRESULT)g_urlBrush;
     }
+    if (msg == WM_CTLCOLORBTN) {
+        HDC hdc = (HDC)wp;
+        if (hwnd == g_hwndBr || hwnd == g_hwndMenu) {
+            SetBkColor(hdc, CLR_BRBAR);
+            return (LRESULT)g_brBarBrush;
+        }
+        SetBkColor(hdc, CLR_BAR);
+        return (LRESULT)g_barBrush;
+    }
     if (msg == WM_CTLCOLORSTATIC) {
         HDC hdc = (HDC)wp;
         HWND h = (HWND)lp;
@@ -1640,6 +1650,15 @@ static LRESULT MtOnDrawItem(WPARAM wp, LPARAM lp) {
         return TRUE;
     }
     BOOL down = (d->itemState & ODS_SELECTED) != 0;
+    if (d->CtlID == ID_MITEM_LINK || d->CtlID == ID_MITEM_DL) {
+        wchar_t txt[128];
+        GetWindowTextW(d->hwndItem, txt, 127);
+        HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
+        COLORREF bg = down ? CLR_NAV_DN : CLR_URLBG;
+        MtDrawBtn(d->hDC, d->rcItem, bg, bg, txt, f,
+                  d->CtlID == ID_MITEM_LINK ? 1 : 2);
+        return TRUE;
+    }
     if (d->CtlID == ID_BTN_BACK || d->CtlID == ID_BTN_FWD) {
         wchar_t txt[8];
         GetWindowTextW(d->hwndItem, txt, 7);
@@ -1655,13 +1674,12 @@ static LRESULT MtOnDrawItem(WPARAM wp, LPARAM lp) {
         MtDrawBtn(d->hDC, d->rcItem, bg, bg, txt, f, 0);
         return TRUE;
     }
-    if (d->CtlID == ID_BTN_EXTRACT || d->CtlID == ID_BTN_DL) {
+    if (d->CtlID == ID_BTN_EXTRACT) {
         wchar_t txt[128];
         GetWindowTextW(d->hwndItem, txt, 127);
         HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
         COLORREF bg = down ? CLR_EXTR_DN : CLR_EXTR;
-        MtDrawBtn(d->hDC, d->rcItem, bg, bg, txt, f,
-                  d->CtlID == ID_BTN_EXTRACT ? 1 : 2);
+        MtDrawBtn(d->hDC, d->rcItem, bg, bg, txt, f, 1);
         return TRUE;
     }
     COLORREF bg;
@@ -1697,6 +1715,133 @@ static LRESULT CALLBACK MtBrBtnProc(HWND h, UINT m, WPARAM w, LPARAM l) {
 #endif
 }
 
+static LRESULT MenuWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
+    switch (msg) {
+    case WM_CREATE: {
+        HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(hwnd,
+                                                       GWLP_HINSTANCE);
+        HWND b1 = CreateWindowExW(0, L"BUTTON",
+            L"\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u0627 \u0644\u06CC\u0646\u06A9",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            10, 10, 226, 40, hwnd, (HMENU)(INT_PTR)ID_MITEM_LINK,
+            hInst, NULL);
+        HWND b2 = CreateWindowExW(0, L"BUTTON",
+            L"\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0628\u0627 \u062F\u0627\u0646\u0644\u0648\u062F",
+            WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            10, 56, 226, 40, hwnd, (HMENU)(INT_PTR)ID_MITEM_DL,
+            hInst, NULL);
+        SendMessageW(b1, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+        SendMessageW(b2, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+        return 0;
+    }
+    case WM_COMMAND: {
+        int id = LOWORD(wp);
+        if (HIWORD(wp) == 0
+                && (id == ID_MITEM_LINK || id == ID_MITEM_DL)) {
+            DestroyWindow(hwnd);
+            if (g_webBr != NULL) {
+                if (id == ID_MITEM_LINK)
+                    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
+                else
+                    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execDlList);
+            }
+            return 0;
+        }
+        break;
+    }
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
+        return MtOnCtlColor(hwnd, msg, wp, lp);
+    case WM_DRAWITEM:
+        return MtOnDrawItem(wp, lp);
+    case WM_KILLFOCUS:
+        DestroyWindow(hwnd);
+        return 0;
+    case WM_ACTIVATE:
+        if (LOWORD(wp) == WA_INACTIVE) {
+            DestroyWindow(hwnd);
+            return 0;
+        }
+        break;
+    case WM_PAINT: {
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        RECT rc;
+        GetClientRect(hwnd, &rc);
+        HBRUSH bb = CreateSolidBrush(CLR_BRBAR);
+        FillRect(hdc, &rc, bb);
+        DeleteObject(bb);
+        HPEN bp = CreatePen(PS_SOLID, 1, CLR_URLBR);
+        HGDIOBJ obp = SelectObject(hdc, bp);
+        HGDIOBJ onb = SelectObject(hdc, GetStockObject(NULL_BRUSH));
+        RECT fr = {0, 0, rc.right - 1, rc.bottom - 1};
+        RoundRect(hdc, fr.left, fr.top, fr.right, fr.bottom, 16, 16);
+        SelectObject(hdc, obp);
+        SelectObject(hdc, onb);
+        DeleteObject(bp);
+        EndPaint(hwnd, &ps);
+        return 0;
+    }
+    case WM_DESTROY:
+        if (g_hwndMenu == hwnd)
+            g_hwndMenu = NULL;
+        return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+static LRESULT CALLBACK MenuWndProc(HWND hwnd, UINT msg, WPARAM wp,
+                                    LPARAM lp) {
+#if MT_HAS_SEH
+    __try {
+        return MenuWndProcInner(hwnd, msg, wp, lp);
+    } __except (MtSehLog("menuWnd", GetExceptionInformation())) {
+        return 0;
+    }
+#else
+    return MenuWndProcInner(hwnd, msg, wp, lp);
+#endif
+}
+
+static void MtCloseExtractMenu(void) {
+    if (g_hwndMenu != NULL && IsWindow(g_hwndMenu)) {
+        HWND m = g_hwndMenu;
+        g_hwndMenu = NULL;
+        DestroyWindow(m);
+    }
+}
+
+static void MtShowExtractMenu(void) {
+    if (g_hwndMenu != NULL && IsWindow(g_hwndMenu)) {
+        MtCloseExtractMenu();
+        return;
+    }
+    if (g_btnExtract == NULL || g_hwndBr == NULL)
+        return;
+    RECT rc;
+    GetWindowRect(g_btnExtract, &rc);
+    int mw = 246, mh = 106;
+    int x = rc.right - mw;
+    int y = rc.bottom + 6;
+    RECT dr;
+    SystemParametersInfoW(SPI_GETWORKAREA, 0, &dr, 0);
+    if (x < dr.left)
+        x = dr.left;
+    if (x + mw > dr.right)
+        x = dr.right - mw;
+    if (y + mh > dr.bottom)
+        y = rc.top - mh - 6;
+    g_hwndMenu = CreateWindowExW(WS_EX_TOOLWINDOW,
+        L"MangaCloudMenuWnd", L"", WS_POPUP,
+        x, y, mw, mh, g_hwndBr, NULL, g_hInst, NULL);
+    if (g_hwndMenu == NULL)
+        return;
+    ShowWindow(g_hwndMenu, SW_SHOW);
+    SetForegroundWindow(g_hwndMenu);
+    SetFocus(g_hwndMenu);
+}
+
 static void MtBrCreateControls(HWND hwnd) {
     HINSTANCE hInst = (HINSTANCE)GetWindowLongPtrW(hwnd, GWLP_HINSTANCE);
     g_editUrl = CreateWindowExW(0, L"EDIT", L"",
@@ -1718,13 +1863,9 @@ static void MtBrCreateControls(HWND hwnd) {
         WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_ENDELLIPSIS,
         0, 0, 110, 34, hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS, hInst, NULL);
     g_btnExtract = CreateWindowExW(0, L"BUTTON",
-        L"\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0644\u06CC\u0646\u06A9",
+        L"\u0627\u0633\u062A\u062E\u0631\u0627\u062C",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 150, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
-    g_btnDl = CreateWindowExW(0, L"BUTTON",
-        L"\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062F\u0627\u0646\u0644\u0648\u062F",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 132, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_DL, hInst, NULL);
+        0, 0, 104, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
 
     SendMessageW(g_editUrl, WM_SETFONT, (WPARAM)g_font, TRUE);
     g_editProc = (WNDPROC)SetWindowLongPtrW(g_editUrl, GWLP_WNDPROC,
@@ -1733,11 +1874,9 @@ static void MtBrCreateControls(HWND hwnd) {
     SendMessageW(g_btnFwd, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnBack, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_btnDl, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
-    HWND brBtns[5] = {g_btnGo, g_btnFwd, g_btnBack, g_btnExtract,
-                      g_btnDl};
-    for (int i = 0; i < 5; i++) {
+    HWND brBtns[4] = {g_btnGo, g_btnFwd, g_btnBack, g_btnExtract};
+    for (int i = 0; i < 4; i++) {
         if (brBtns[i] == NULL)
             continue;
         if (g_brBtnProc == NULL)
@@ -1776,13 +1915,7 @@ static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (id == ID_BTN_EXTRACT) {
-                if (g_webBr != NULL)
-                    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
-                return 0;
-            }
-            if (id == ID_BTN_DL) {
-                if (g_webBr != NULL)
-                    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execDlList);
+                MtShowExtractMenu();
                 return 0;
             }
         }
@@ -1790,6 +1923,7 @@ static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
         return MtOnCtlColor(hwnd, msg, wp, lp);
     case WM_DRAWITEM:
         return MtOnDrawItem(wp, lp);
@@ -1942,6 +2076,7 @@ static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORSTATIC:
+    case WM_CTLCOLORBTN:
         return MtOnCtlColor(hwnd, msg, wp, lp);
     case WM_DRAWITEM:
         return MtOnDrawItem(wp, lp);
@@ -2313,7 +2448,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.344 (main-style flat browser bar: rtl arrow order, no reload button, fab hides while browser open)");
+    MtLog("WinMain — MangaCloud v1.14.345 (flat toolbar, dark button corners via WM_CTLCOLORBTN, single extract button with choice menu)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
@@ -2334,6 +2469,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     g_barBrush = CreateSolidBrush(CLR_BAR);
     g_urlBrush = CreateSolidBrush(CLR_URLBG);
+    g_brBarBrush = CreateSolidBrush(CLR_BRBAR);
     g_font = CreateFontW(-15, 0, 0, 0, FW_NORMAL, 0, 0, 0,
                          DEFAULT_CHARSET, OUT_DEFAULT_PRECIS,
                          CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY,
@@ -2372,6 +2508,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
     bc.hbrBackground = g_barBrush;
     bc.lpszClassName = L"MangaCloudBrWnd";
     RegisterClassExW(&bc);
+
+    WNDCLASSEXW mc;
+    ZeroMemory(&mc, sizeof(mc));
+    mc.cbSize = sizeof(mc);
+    mc.style = CS_HREDRAW | CS_VREDRAW;
+    mc.lpfnWndProc = MenuWndProc;
+    mc.hInstance = hInst;
+    mc.hCursor = LoadCursorW(NULL, (LPCWSTR)IDC_ARROW);
+    mc.hbrBackground = g_brBarBrush;
+    mc.lpszClassName = L"MangaCloudMenuWnd";
+    RegisterClassExW(&mc);
 
     int sw = GetSystemMetrics(SM_CXSCREEN);
     int sh = GetSystemMetrics(SM_CYSCREEN);

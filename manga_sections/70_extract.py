@@ -2608,105 +2608,6 @@ class _MangaTranslatorBody_70:
                                              line_texts, line_blks) in zip(
                 cand, ocr_results):
             if not text:
-                _gink = 0.0
-                try:
-                    _gx1, _gy1 = max(0, int(x1)), max(0, int(y1))
-                    _gx2 = min(image.shape[1], int(x2))
-                    _gy2 = min(image.shape[0], int(y2))
-                    if _gx2 - _gx1 >= 12 and _gy2 - _gy1 >= 12:
-                        _gcrop = image[_gy1:_gy2, _gx1:_gx2]
-                        _gg = cv2.cvtColor(_gcrop, cv2.COLOR_BGR2GRAY)
-                        _gmed = float(np.median(_gg))
-                        _gink = float((_gg < max(60.0, _gmed - 45.0)).mean())
-                except Exception:
-                    _gink = 0.0
-                if line_polys and 0.008 <= _gink <= 0.50:
-                    try:
-                        _dupe = None
-                        for _j in range(len(cand)):
-                            if _j == i:
-                                continue
-                            _jt = ""
-                            if _j < len(ocr_results):
-                                _jt = str(
-                                    (ocr_results[_j][0] if ocr_results[_j]
-                                     else "") or "").strip()
-                            if not _jt:
-                                continue
-                            _jc = cand[_j]
-                            _jx1, _jy1 = float(_jc[2]), float(_jc[3])
-                            _jx2, _jy2 = float(_jc[4]), float(_jc[5])
-                            _ix3 = max(0.0, min(x2, _jx2) - max(x1, _jx1))
-                            _iy3 = max(0.0, min(y2, _jy2) - max(y1, _jy1))
-                            _inter = _ix3 * _iy3
-                            if _inter <= 0:
-                                continue
-                            _aA = max(1e-6, float((x2 - x1) * (y2 - y1)))
-                            _aB = max(1e-6, (_jx2 - _jx1) * (_jy2 - _jy1))
-                            _iom = _inter / min(_aA, _aB)
-                            if _iom >= 0.28:
-                                _dupe = (_j, _iom)
-                                break
-                        if _dupe is not None:
-                            if self.debug:
-                                print(f"    [*] Region [{i}] باکسِ تکراریِ "
-                                      f"حبابِ متن‌دار (هم‌پوشانیِ "
-                                      f"{_dupe[1]*100:.0f}% با کاندیدِ "
-                                      f"{_dupe[0]}) → حذف شد")
-                            continue
-                    except Exception:
-                        pass
-                    _dots = False
-                    try:
-                        _gx1, _gy1 = max(0, int(x1)), max(0, int(y1))
-                        _gx2 = min(image.shape[1], int(x2))
-                        _gy2 = min(image.shape[0], int(y2))
-                        _gc2 = image[_gy1:_gy2, _gx1:_gx2]
-                        _gg2 = cv2.cvtColor(_gc2, cv2.COLOR_BGR2GRAY)
-                        _gm2 = float(np.median(_gg2))
-                        _mk2 = ((_gg2 < max(60.0, _gm2 - 45.0))
-                                .astype(np.uint8))
-                        _nl2, _l2, _st2, _c2 = cv2.connectedComponentsWithStats(
-                            _mk2, connectivity=8)
-                        _ncomp2 = 0
-                        _maxh2 = 0.0
-                        for _ci2 in range(1, _nl2):
-                            _a2 = float(_st2[_ci2, cv2.CC_STAT_AREA])
-                            if _a2 < 6:
-                                continue
-                            _w2 = float(_st2[_ci2, cv2.CC_STAT_WIDTH])
-                            _h2 = float(_st2[_ci2, cv2.CC_STAT_HEIGHT])
-                            if _w2 * _h2 > 0 and \
-                                    _a2 / (_w2 * _h2) < 0.22:
-                                continue
-                            _ncomp2 += 1
-                            _maxh2 = max(_maxh2, _h2)
-                        if _ncomp2 <= 10 and \
-                                _maxh2 < 0.18 * max(1, _gy2 - _gy1):
-                            _dots = True
-                    except Exception:
-                        _dots = False
-                    if _dots:
-                        if self.debug:
-                            print(f"    [*] Region [{i}] جوهرِ نقطه/نمادِ "
-                                  f"ریز است → دست‌نخورده")
-                        continue
-                    _epoly = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]],
-                                      dtype=np.int32)
-                    regions.append(TextRegion(
-                        id=i,
-                        boxes=[_epoly],
-                        source_text="",
-                        rect=(x1, y1, bw, bh),
-                        angle=0.0,
-                        kind="dialogue",
-                        ocr_polys=[],
-                        det_class=b.get("class_name", "") or "",
-                    ))
-                    regions[-1].ocr_empty = True
-                    if self.debug:
-                        print(f"    [!] Region [{i}] had no OCR text but has "
-                              f"text-like ink → cleaning only")
                 continue
 
             if self._is_non_english_script(text):
@@ -4100,7 +4001,7 @@ class _MangaTranslatorBody_70:
                 unique_regions = _kept
 
         for _r in unique_regions:
-            if getattr(_r, "sys_split", False) or getattr(_r, "ocr_empty", False):
+            if getattr(_r, "sys_split", False):
                 continue
             _pl = getattr(_r, "ocr_polys", None) or []
             if len(_pl) != 1 or _r.kind != "dialogue":
@@ -4240,10 +4141,6 @@ class _MangaTranslatorBody_70:
                 final_image = precleaned.copy() if precleaned is not None else image.copy()
             return final_image, page_debug
 
-        if (not skip_translate and dialogue_regions
-                and not getattr(self, "clean_only", False)):
-            self._rescue_empty_ocr(image, dialogue_regions)
-
         if skip_translate:
             pass
         elif dialogue_regions:
@@ -4259,8 +4156,7 @@ class _MangaTranslatorBody_70:
                 _g_missing = [r for r in dialogue_regions
                               if not (r.translated_text or "").strip()
                               and (r.source_text or "").strip()
-                              and source_has_letters(r.source_text)
-                              and not getattr(r, "ocr_empty", False)]
+                              and source_has_letters(r.source_text)]
                 if not _g_missing:
                     break
                 print(f"دورِ {_g_round}/۳: {_g_missing.__len__()} حباب هنوز ترجمه نشده — "
@@ -4279,8 +4175,7 @@ class _MangaTranslatorBody_70:
             for _r2 in dialogue_regions:
                 if (_r2.translated_text or "").strip() \
                         or not (_r2.source_text or "").strip() \
-                        or not source_has_letters(_r2.source_text) \
-                        or getattr(_r2, "ocr_empty", False):
+                        or not source_has_letters(_r2.source_text):
                     continue
                 _c = copy.copy(_r2)
                 _c.translated_text = _r2.source_text
@@ -4296,17 +4191,7 @@ class _MangaTranslatorBody_70:
                                   f"متنِ مبدأ: {(_c.translated_text or '')[:60]}")
                         except Exception:
                             pass
-        _oe = [r for r in dialogue_regions
-                  if not r.translated_text
-                  and getattr(r, "ocr_empty", False)]
-        _ocr_empty_regions = _oe
-        if _oe:
-            for _r in _oe:
-                try:
-                    print(f"  [!] ناحیهٔ {_r.id} بدونِ متنِ OCR → فقط پاکسازی (rect={tuple(int(v) for v in _r.rect)}) — متنِ قبلی نمیماند")
-                except Exception:
-                    pass
-        _clean_regions = (translated_regions + _ocr_empty_regions)
+        _clean_regions = translated_regions
         if getattr(self, "clean_sfx", False) and sfx_regions:
             _clean_regions = _clean_regions + sfx_regions
         if _android_gate("MANGA_CLEAN_TEXTFREE"):
@@ -4315,7 +4200,6 @@ class _MangaTranslatorBody_70:
                 _clean_regions = _clean_regions + _tf_free
         missing_n = sum(1 for r in dialogue_regions
                         if not r.translated_text
-                        and not getattr(r, "ocr_empty", False)
                         and (r.source_text or "").strip()
                         and source_has_letters(r.source_text))
         if missing_n and final:
@@ -4357,7 +4241,6 @@ class _MangaTranslatorBody_70:
                 and not getattr(self, "clean_only", False)):
             _wait_regions = [r for r in dialogue_regions
                              if not (r.translated_text or "").strip()
-                             and not getattr(r, "ocr_empty", False)
                              and (r.source_text or "").strip()]
             if _wait_regions:
                 try:

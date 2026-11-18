@@ -11745,7 +11745,7 @@ class _MangaTranslatorBody_85:
                         pass
             except Exception:
                 pass
-            if r.kind == "dialogue" and not getattr(r, "ocr_empty", False):
+            if r.kind == "dialogue":
                 try:
                     _bx, _by = max(0, x0 - 34), max(0, y0 - 34)
                     _bx2 = min(w, x1 + 34)

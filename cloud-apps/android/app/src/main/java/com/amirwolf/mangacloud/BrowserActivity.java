@@ -172,7 +172,6 @@ public class BrowserActivity extends Activity {
     private WebView web;
     private EditText urlBox;
     private TextView extractBtn;
-    private TextView dlBtn;
     private TextView countLbl;
     private ProgressBar progress;
     private java.io.File dlDir = null;
@@ -319,7 +318,7 @@ public class BrowserActivity extends Activity {
         countLbl.setPadding(dp(4), 0, dp(4), 0);
 
         extractBtn = new TextView(this);
-        extractBtn.setText("🖼 استخراج لینک");
+        extractBtn.setText("🖼 استخراج");
         extractBtn.setTextColor(Color.WHITE);
         extractBtn.setTextSize(14);
         extractBtn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -329,22 +328,7 @@ public class BrowserActivity extends Activity {
         exBg.setCornerRadius(dp(22));
         extractBtn.setBackground(exBg);
         extractBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { extractImages(); }
-        });
-
-        dlBtn = new TextView(this);
-        dlBtn.setText("⬇ استخراج دانلود");
-        dlBtn.setTextColor(Color.WHITE);
-        dlBtn.setTextSize(14);
-        dlBtn.setTypeface(Typeface.DEFAULT_BOLD);
-        dlBtn.setPadding(dp(20), dp(12), dp(20), dp(12));
-        GradientDrawable dlBg = new GradientDrawable();
-        dlBg.setColor(Color.parseColor("#2d3649"));
-        dlBg.setStroke(dp(1), Color.parseColor("#e8590c"));
-        dlBg.setCornerRadius(dp(22));
-        dlBtn.setBackground(dlBg);
-        dlBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { downloadImages(); }
+            @Override public void onClick(View v) { showExtractChoice(); }
         });
 
         bottom.addView(countLbl, new LinearLayout.LayoutParams(
@@ -352,11 +336,6 @@ public class BrowserActivity extends Activity {
         bottom.addView(extractBtn, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
-        LinearLayout.LayoutParams dlLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.WRAP_CONTENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        dlLp.setMargins(dp(8), 0, 0, 0);
-        bottom.addView(dlBtn, dlLp);
         root.addView(bottom, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
@@ -729,6 +708,17 @@ public class BrowserActivity extends Activity {
         }
     }
 
+    private void showExtractChoice() {
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this);
+        b.setTitle("روش استخراج");
+        b.setItems(new String[]{"استخراج با لینک", "استخراج با دانلود"},
+                (dialog, which) -> {
+                    if (which == 0) extractImages(); else downloadImages();
+                });
+        b.setNegativeButton("انصراف", null);
+        b.show();
+    }
+
     private void downloadImages() {
         String cur;
         try { cur = web.getUrl() != null ? web.getUrl() : ""; }
@@ -738,10 +728,10 @@ public class BrowserActivity extends Activity {
                     Toast.LENGTH_SHORT).show();
             return;
         }
-        dlBtn.setText("… در حال دانلود");
+        extractBtn.setText("… در حال دانلود");
         try {
             web.evaluateJavascript(EXTRACT_JS, value -> runOnUiThread(() -> {
-                dlBtn.setText("⬇ استخراج دانلود");
+                extractBtn.setText("🖼 استخراج");
                 try {
                     JSONArray arr = parseLinksRaw(value);
                     if (arr == null || arr.length() == 0) {
@@ -776,7 +766,7 @@ public class BrowserActivity extends Activity {
                 }
             }));
         } catch (Exception e) {
-            dlBtn.setText("⬇ استخراج دانلود");
+            extractBtn.setText("🖼 استخراج");
             Toast.makeText(this, "خطا: " + e.getMessage(),
                     Toast.LENGTH_LONG).show();
         }
