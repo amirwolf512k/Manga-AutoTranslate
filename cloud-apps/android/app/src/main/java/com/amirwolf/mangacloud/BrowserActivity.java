@@ -718,8 +718,8 @@ public class BrowserActivity extends Activity {
            .append("pending--;step()})")
            .append(".catch(function(){")
            .append("try{window.MtDl.recv(idx,urls.length,'',u)}catch(e){}")
-           .append("pending--;step()})};")
-        js.append("step();step();step();")
+           .append("pending--;step()})};");
+        js.append("step();step();step();");
         js.append("}catch(e){try{window.MtDl.done(0)}catch(e2){}}})()");
         try {
             web.evaluateJavascript(js.toString(), null);
