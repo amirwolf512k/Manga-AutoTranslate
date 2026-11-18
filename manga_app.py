@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.346"
+APP_VER = "1.14.347"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -7622,12 +7622,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 label="", show_label=False, interactive=False, visible=False,
                 elem_id="manga_backup_status")
 
-        SESSION_TTL = 30 * 60
         JOB_TTL = 12 * 3600
-        _perm_js = (
-            "const PERM = (new URLSearchParams(location.search)).get('desktop') === '1' "
-            "|| !!(window.pywebview) || /MangaTranslatorApp/i.test(navigator.userAgent || '');"
-        )
         live_jobs = {}
 
         def _get_job(sid: str) -> dict:
@@ -8469,26 +8464,23 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       return [""];
     }}
     const d = JSON.parse(raw);
-    {_perm_js}
-    if (!d || !d.ts || (!PERM && (Date.now() - d.ts) > {SESSION_TTL * 1000})) {{
+    if (!d) {{
       if (bestSid) {{
         return [JSON.stringify({{
           sid: bestSid,
           ts: Date.now(),
           _jobLog: job.log || "",
           _jobBtn: job.btn || "",
-          _jobRunning: !!job.running,
-          keys: d && d.keys ? d.keys : undefined,
-          prov: d && d.prov ? d.prov : undefined,
+          _jobRunning: !!job.running
         }})];
       }}
-      try {{ localStorage.removeItem("{LS_KEY}"); }} catch (e) {{}}
       try {{
         const pk = JSON.parse(localStorage.getItem("manga_keys_v1") || "null");
         if (pk && pk.k) return [JSON.stringify({{ keys: pk.k }})];
       }} catch (e) {{}}
       return [""];
     }}
+    try {{ d.ts = Date.now(); localStorage.setItem("{LS_KEY}", JSON.stringify(d)); }} catch (e) {{}}
     if (bestSid) d.sid = bestSid;
     d._jobLog = job.log || "";
     d._jobBtn = job.btn || "";
@@ -8504,7 +8496,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 () => {{
   const KEY = "{LS_KEY}";
   const JOB = "{JOB_KEY}";
-  const TTL = {SESSION_TTL * 1000};
 
   if (!window.__mangaInputGuard) {{
     window.__mangaInputGuard = true;
@@ -8593,10 +8584,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       }}
 
       let raw = localStorage.getItem(KEY) || localStorage.getItem("manga_autotranslate_form_v1");
-      {_perm_js}
       if (raw) {{
         const d = JSON.parse(raw);
-        if (d && (!d.ts || PERM || (Date.now() - d.ts) <= TTL)) {{
+        if (d) {{
           let curProv = "";
           try {{
             const pe = document.querySelector("#manga_provider_row input, #manga_provider_row select, #manga_provider_row textarea");
