@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.336"
+APP_VER = "1.14.337"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1324,16 +1324,34 @@ _MT_BROWSER_WIN_JS = """
   }
   function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}
     catch(e){return null}}
+  function qsz(u){
+    var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i);
+    if(!m)return 0;
+    var a=parseInt(m[2],10)||0;
+    var b=parseInt(m[3]||'0',10)||0;
+    if(a>0&&b>0)return Math.max(a,b);
+    if(m[1]&&a>0)return a;
+    return 0}
   function junk(u){
     if(!u)return 1;
     if(u.indexOf('data:')===0)return 1;
     if(!/^https?:/i.test(u))return 1;
-    if(/\\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;
-    if(/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;
-    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;
+    var b=String(u).split(/[?#]/)[0];
+    if(/\\.(svg|ico|gif)$/i.test(b))return 1;
+    if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)$/i.test(b))return 1;
+    var q=qsz(u);
+    if(q>0&&q<=400)return 1;
+    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;
+    if(/(?:^|[^a-z0-9])ads?[._/-]/i.test(b))return 1;
     return 0}
+  function keyOf(u){
+    var b=String(u).split(/[?#]/)[0];
+    return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}
   function collect(){
-    var seen={},out=[];
+    try{
+      if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];
+    }catch(e){}
+    var all=[],good=[],idx=0;
     var els=document.querySelectorAll('img,source');
     for(var i=0;i<els.length;i++){
       var el=els[i],cs=null;
@@ -1344,27 +1362,44 @@ _MT_BROWSER_WIN_JS = """
              el.getAttribute('data-url'),el.getAttribute('data-image'),
              el.getAttribute('data-echo')];
       var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');
-      if(ss){var p=ss.split(',');
-        if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}
+      if(ss){var p=ss.split(','),best='',bw=0;
+        for(var k=0;k<p.length;k++){
+          var tk=p[k].trim().split(/\\s+/);
+          var u0=tk[0]||'';
+          var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;
+          if(u0&&w0>=bw){bw=w0;best=u0}}
+        if(best)c.push(best)}
       if(el.tagName==='SOURCE'&&el.parentNode){
         var pp=el.parentNode.querySelector('img');
         if(pp&&pp.src)c.push(pp.src)}
+      var pick=null,pj=1;
       for(var j=0;j<c.length;j++){
         var u=c[j];if(!u)continue;
         u=abs(String(u).trim());
-        if(!u||junk(u)||seen[u])continue;
-        var w=el.naturalWidth||el.width||0,h=el.naturalHeight||el.height||0;
-        if(w&&h&&(w<120||h<120))continue;
-        seen[u]=1;out.push(u);break}}
-    function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];
-      for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}
-    function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}
-    out.sort(function(a,b){var x=ln(a),y=ln(b);
-    if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);
-    var p=nk(a),q=nk(b);
-    for(var i=0;i<Math.min(p.length,q.length);i++){
-    if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});
-    return out;
+        if(!u||u.indexOf('data:')===0)continue;
+        try{if(u===location.href)continue}catch(e2){}
+        if(!pick)pick=u;
+        if(!junk(u)){pick=u;pj=0;break}}
+      if(!pick)continue;
+      var w=el.naturalWidth||0,h=el.naturalHeight||0;
+      if(w&&h&&Math.max(w,h)<300)continue;
+      all.push([pick,idx]);
+      if(!pj)good.push([pick,idx]);
+      idx++}
+    function dd(list){
+      var by={},order=[];
+      for(var i=0;i<list.length;i++){
+        var it=list[i],k=keyOf(it[0]);
+        if(Object.prototype.hasOwnProperty.call(by,k)){
+          var o=by[k];
+          if(qsz(it[0])>qsz(o[0]))by[k]=it}
+        else{by[k]=it;order.push(k)}}
+      var out=[];
+      for(var j=0;j<order.length;j++)out.push(by[order[j]][0]);
+      return out}
+    var res=dd(good);
+    if(!res.length)res=dd(all);
+    return res;
   }
   css();
   var box=document.createElement('div');box.id='mtbw';
@@ -2277,46 +2312,79 @@ _MT_BM_CODE = (
     "var seen={},out=[];"
     "function abs(u){try{var a=document.createElement('a');a.href=u;"
     "return a.href}catch(e){return null}}"
+    "function qsz(u){"
+    "var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i);"
+    "if(!m)return 0;"
+    "var a=parseInt(m[2],10)||0;"
+    "var b=parseInt(m[3]||'0',10)||0;"
+    "if(a>0&&b>0)return Math.max(a,b);"
+    "if(m[1]&&a>0)return a;"
+    "return 0}"
     "function junk(u){"
     "if(!u)return 1;"
     "if(u.indexOf('data:')===0)return 1;"
     "if(!/^https?:/i.test(u))return 1;"
-    "if(/\\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;"
-    "if(/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;"
-    "if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|"
-    "(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;"
+    "var b=String(u).split(/[?#]/)[0];"
+    "if(/\\.(svg|ico|gif)$/i.test(b))return 1;"
+    "if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)$/i.test(b))return 1;"
+    "var q=qsz(u);"
+    "if(q>0&&q<=400)return 1;"
+    "if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;"
+    "if(/(?:^|[^a-z0-9])ads?[._/-]/i.test(b))return 1;"
     "return 0}"
+    "function keyOf(u){"
+    "var b=String(u).split(/[?#]/)[0];"
+    "return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}"
+    "var all=[],good=[],idx=0;"
     "var els=document.querySelectorAll('img,source');"
     "for(var i=0;i<els.length;i++){"
     "var el=els[i],cs=null;"
     "try{cs=el.currentSrc||el.src||null}catch(e){}"
-    "var c=[cs,el.getAttribute('data-src'),"
-    "el.getAttribute('data-lazy-src'),el.getAttribute('data-original'),"
-    "el.getAttribute('data-original-src'),el.getAttribute('data-orig-src'),"
-    "el.getAttribute('data-lazy'),el.getAttribute('data-url'),"
-    "el.getAttribute('data-image'),el.getAttribute('data-echo')];"
+    "var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),"
+    "el.getAttribute('data-original'),el.getAttribute('data-original-src'),"
+    "el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),"
+    "el.getAttribute('data-url'),el.getAttribute('data-image'),"
+    "el.getAttribute('data-echo')];"
     "var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');"
-    "if(ss){var p=ss.split(',');"
-    "if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}"
+    "if(ss){var p=ss.split(','),best='',bw=0;"
+    "for(var k=0;k<p.length;k++){"
+    "var tk=p[k].trim().split(/\\s+/);"
+    "var u0=tk[0]||'';"
+    "var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;"
+    "if(u0&&w0>=bw){bw=w0;best=u0}}"
+    "if(best)c.push(best)}"
     "if(el.tagName==='SOURCE'&&el.parentNode){"
     "var pp=el.parentNode.querySelector('img');"
     "if(pp&&pp.src)c.push(pp.src)}"
+    "var pick=null,pj=1;"
     "for(var j=0;j<c.length;j++){"
     "var u=c[j];if(!u)continue;"
     "u=abs(String(u).trim());"
-    "if(!u||junk(u)||seen[u])continue;"
-    "var w=el.naturalWidth||el.width||0,h=el.naturalHeight||el.height||0;"
-    "if(w&&h&&(w<120||h<120))continue;"
-    "seen[u]=1;out.push(u);break}}"
-    "if(!out.length){alert('__MT_NOLINKS__');return}"
-    "function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),"
-    "r=[];for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}"
-    "function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}"
-    "out.sort(function(a,b){var x=ln(a),y=ln(b);"
-    "if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);"
-    "var p=nk(a),q=nk(b);"
-    "for(var i=0;i<Math.min(p.length,q.length);i++){"
-    "if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});"
+    "if(!u||u.indexOf('data:')===0)continue;"
+    "try{if(u===location.href)continue}catch(e2){}"
+    "if(!pick)pick=u;"
+    "if(!junk(u)){pick=u;pj=0;break}}"
+    "if(!pick)continue;"
+    "var w=el.naturalWidth||0,h=el.naturalHeight||0;"
+    "if(w&&h&&Math.max(w,h)<300)continue;"
+    "all.push([pick,idx]);"
+    "if(!pj)good.push([pick,idx]);"
+    "idx++}"
+    "function dd(list){"
+    "var by={},order=[];"
+    "for(var i=0;i<list.length;i++){"
+    "var it=list[i],k=keyOf(it[0]);"
+    "if(Object.prototype.hasOwnProperty.call(by,k)){"
+    "var o=by[k];"
+    "if(qsz(it[0])>qsz(o[0]))by[k]=it}"
+    "else{by[k]=it;order.push(k)}}"
+    "var r=[];"
+    "for(var j=0;j<order.length;j++)r.push(by[order[j]][0]);"
+    "return r}"
+    "var res=dd(good);"
+    "if(!res.length)res=dd(all);"
+    "if(!res.length){alert('__MT_NOLINKS__');return}"
+    "for(var q3=0;q3<res.length;q3++)out.push(res[q3]);"
     "var payload=out.join('\\n');"
     "var app='__MTAPP__';"
     "try{var url=app+'#imgs='+encodeURIComponent(payload);"
@@ -2635,20 +2703,39 @@ def _browser_extract_js() -> str:
             clsBtn.addEventListener("click", close);
 
             const collectDoc = (d) => {
-              const seen = {}, out = [];
               const abs = (u) => {
-                try { const a = d.createElement("a"); a.href = u; return a.href; }
-                catch (e) { return null; }
+                try {
+                  const a = d.createElement("a");
+                  a.href = u;
+                  return a.href;
+                } catch (e) { return null; }
+              };
+              const qsz = (u) => {
+                const m = String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i);
+                if (!m) return 0;
+                const a = parseInt(m[2], 10) || 0;
+                const b = parseInt(m[3] || "0", 10) || 0;
+                if (a > 0 && b > 0) return Math.max(a, b);
+                if (m[1] && a > 0) return a;
+                return 0;
               };
               const junk = (u) => {
                 if (!u) return 1;
                 if (u.indexOf("data:") === 0) return 1;
                 if (!/^https?:/i.test(u)) return 1;
-                if (/\\.(svg|ico|gif)([?#]|$)/i.test(u)) return 1;
-                if (/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u)) return 1;
-                if (/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u)) return 1;
+                const b = String(u).split(/[?#]/)[0];
+                if (/\\.(svg|ico|gif)$/i.test(b)) return 1;
+                if (/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)$/i.test(b)) return 1;
+                const q = qsz(u);
+                if (q > 0 && q <= 400) return 1;
+                if (/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b)) return 1;
+                if (/(?:^|[^a-z0-9])ads?[._/-]/i.test(b)) return 1;
                 return 0;
               };
+              const keyOf = (u) => String(u).split(/[?#]/)[0]
+                .replace(/[-_]\\d{2,4}x\\d{2,4}\\./i, ".");
+              const all = [], good = [];
+              let idx = 0;
               const els = d.querySelectorAll("img,source");
               for (let i = 0; i < els.length; i++) {
                 const el = els[i];
@@ -2667,45 +2754,53 @@ def _browser_extract_js() -> str:
                   || el.getAttribute("data-srcset");
                 if (ss) {
                   const p = ss.split(",");
-                  if (p.length)
-                    c.push(p[p.length - 1].trim().split(/\\s+/)[0]);
+                  let best = "", bw = 0;
+                  for (let k = 0; k < p.length; k++) {
+                    const tk = p[k].trim().split(/\\s+/);
+                    const u0 = tk[0] || "";
+                    const w0 = parseInt(String(tk[1] || "")
+                      .replace(/[^0-9]/g, ""), 10) || 0;
+                    if (u0 && w0 >= bw) { bw = w0; best = u0; }
+                  }
+                  if (best) c.push(best);
                 }
                 if (el.tagName === "SOURCE" && el.parentNode) {
                   const pp = el.parentNode.querySelector("img");
                   if (pp && pp.src) c.push(pp.src);
                 }
+                let pick = null, pj = 1;
                 for (let j = 0; j < c.length; j++) {
                   let u = c[j];
                   if (!u) continue;
                   u = abs(String(u).trim());
-                  if (!u || junk(u) || seen[u]) continue;
-                  const w = el.naturalWidth || el.width || 0;
-                  const h = el.naturalHeight || el.height || 0;
-                  if (w && h && (w < 120 || h < 120)) continue;
-                  seen[u] = 1; out.push(u); break;
+                  if (!u || u.indexOf("data:") === 0) continue;
+                  try { if (u === d.location.href) continue; } catch (e) {}
+                  if (!pick) pick = u;
+                  if (!junk(u)) { pick = u; pj = 0; break; }
                 }
+                if (!pick) continue;
+                const w = el.naturalWidth || 0, h = el.naturalHeight || 0;
+                if (w && h && Math.max(w, h) < 300) continue;
+                all.push([pick, idx]);
+                if (!pj) good.push([pick, idx]);
+                idx++;
               }
-              const nk = (s) => {
-                const t = String(s).split(/[^0-9]+/).filter(Boolean), r = [];
-                for (let i = 0; i < t.length; i++) r.push(parseInt(t[i], 10));
-                return r;
-              };
-              const ln = (s) => {
-                try {
-                  const m = String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);
-                  return m ? parseInt(m[1], 10) : null;
-                } catch (e) { return null; }
-              };
-              out.sort((a, b) => {
-                const x = ln(a), y = ln(b);
-                if (x !== y && (x != null || y != null))
-                  return x == null ? 1 : (y == null ? -1 : x - y);
-                const p = nk(a), q = nk(b);
-                for (let i = 0; i < Math.min(p.length, q.length); i++) {
-                  if (p[i] !== q[i]) return p[i] - q[i];
+              const dd = (list) => {
+                const by = {}, order = [];
+                for (let i = 0; i < list.length; i++) {
+                  const it = list[i], k = keyOf(it[0]);
+                  if (Object.prototype.hasOwnProperty.call(by, k)) {
+                    const o = by[k];
+                    if (qsz(it[0]) > qsz(o[0])) by[k] = it;
+                  } else { by[k] = it; order.push(k); }
                 }
-                return a < b ? -1 : 1;
-              });
+                const res = [];
+                for (let j = 0; j < order.length; j++)
+                  res.push(by[order[j]][0]);
+                return res;
+              };
+              let out = dd(good);
+              if (!out.length) out = dd(all);
               return out;
             };
 
@@ -2994,6 +3089,60 @@ def _no_proxy_localhost():
             pass
     except Exception:
         pass
+
+
+_REFRESH_FAB_JS = """
+() => {
+  try {
+    if (document.getElementById('mtRefreshFab')) return [];
+    var css = document.createElement('style');
+    css.textContent = ""
+      + "#mtRefreshFab{position:fixed;left:16px;bottom:80px;width:46px;"
+      + "height:46px;border-radius:50%;background:rgba(13,13,16,.97);"
+      + "border:2px solid #e8590c;cursor:pointer;z-index:2147483640;"
+      + "display:flex;align-items:center;justify-content:center;"
+      + "box-shadow:0 6px 18px rgba(0,0,0,.55);padding:0;"
+      + "transition:transform .15s}"
+      + "#mtRefreshFab:hover{transform:scale(1.08)}"
+      + "#mtRefreshFab:active{transform:scale(.95)}"
+      + "#mtRefreshFab svg{pointer-events:none}";
+    (document.head || document.documentElement).appendChild(css);
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.id = 'mtRefreshFab';
+    b.title = '\u0631\u0641\u0631\u0634 \u0635\u0641\u062d\u0647';
+    b.setAttribute('aria-label', '\u0631\u0641\u0631\u0634');
+    b.innerHTML = "<svg viewBox='0 0 24 24' width='22' height='22' "
+      + "fill='none' stroke='#fff' stroke-width='2' stroke-linecap='round'>"
+      + "<path d='M21 12a9 9 0 1 1-2.64-6.36'/>"
+      + "<path d='M21 3v6h-6'/></svg>";
+    b.onclick = function() {
+      try {
+        var ov = document.getElementById('mtWbrOv');
+        if (ov) {
+          var fr = document.getElementById('mtWbrFr');
+          if (fr) { var u = fr.src; fr.src = u; }
+          return;
+        }
+        var vw = document.getElementById('reader_wrap');
+        if (vw && vw.offsetWidth > 0) {
+          var imgs = vw.querySelectorAll('img');
+          var n = 0;
+          for (var i = 0; i < imgs.length; i++) {
+            var im = imgs[i];
+            var src = im.getAttribute('src') || '';
+            if (src) { im.src = src; n++; }
+          }
+          if (n > 0) return;
+        }
+        location.reload();
+      } catch (e) { location.reload(); }
+    };
+    (document.body || document.documentElement).appendChild(b);
+  } catch (e) {}
+  return [];
+}
+"""
 
 
 def run_web():
@@ -9821,6 +9970,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 demo.load(fn=None, inputs=None, outputs=None, js=client_restore_js)
             except Exception:
                 pass
+        try:
+            demo.load(None, None, None, js=_REFRESH_FAB_JS)
+        except Exception:
+            pass
 
         try:
             def _on_load_fallback(sid, sid_box_v):

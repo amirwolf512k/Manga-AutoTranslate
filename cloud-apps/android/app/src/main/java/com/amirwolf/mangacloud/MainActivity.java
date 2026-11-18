@@ -13,7 +13,10 @@ import android.os.Environment;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.content.ContentValues;
+import android.provider.MediaStore;
 import android.webkit.CookieManager;
+import android.webkit.JavascriptInterface;
 import android.webkit.DownloadListener;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
@@ -72,7 +75,7 @@ public class MainActivity extends Activity {
         FrameLayout.LayoutParams fabLp = new FrameLayout.LayoutParams(
                 dp(48), dp(48));
         fabLp.gravity = Gravity.BOTTOM | Gravity.START;
-        fabLp.setMargins(dp(14), dp(14), dp(14), dp(88));
+        fabLp.setMargins(dp(14), dp(14), dp(14), dp(14));
         root.addView(fab, fabLp);
 
         splash = buildSplash();
@@ -82,6 +85,15 @@ public class MainActivity extends Activity {
 
         setContentView(root);
         setupWebView();
+        try {
+            web.addJavascriptInterface(new Object() {
+                @android.webkit.JavascriptInterface
+                public void saveNamed(String dataUrl, String name) {
+                    saveNamedFile(dataUrl, name);
+                }
+            }, "MangaCloud");
+        } catch (Exception ignored) {
+        }
 
         if (savedInstanceState != null) {
             web.restoreState(savedInstanceState);
@@ -206,6 +218,25 @@ public class MainActivity extends Activity {
                     saveDataUrl(url);
                     return;
                 }
+                if (url.startsWith("blob:")) {
+                    String nm = fileNameFrom(contentDisposition, url);
+                    if ("manga_download".equals(nm)) {
+                        nm = "manga_backup_" + System.currentTimeMillis() + ".json";
+                    }
+                    final String fname = nm;
+                    final String furl = url;
+                    try {
+                        web.evaluateJavascript(
+                                "(function(u,n){try{fetch(u).then(function(r){return r.blob()})"
+                                        + ".then(function(b){var f=new FileReader();f.onload=function(){"
+                                        + "try{window.MangaCloud&&window.MangaCloud.saveNamed(f.result,n)}"
+                                        + "catch(e){}};f.readAsDataURL(b)}).catch(function(){})}catch(e){}})('"
+                                        + furl.replace("'", "\'") + "','" + fname.replace("'", "") + "')",
+                                null);
+                    } catch (Exception ignored) {
+                    }
+                    return;
+                }
                 try {
                     DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
                     req.setMimeType(mimetype);
@@ -269,6 +300,50 @@ public class MainActivity extends Activity {
             }
             fos.close();
         } catch (Exception ignored) {
+        }
+    }
+
+    private void saveNamedFile(String dataUrl, String name) {
+        try {
+            String[] parts = dataUrl.split(",", 2);
+            if (parts.length < 2) return;
+            boolean b64 = parts[0].contains(";base64");
+            byte[] data;
+            if (b64) {
+                data = android.util.Base64.decode(parts[1],
+                        android.util.Base64.DEFAULT);
+            } else {
+                data = android.net.Uri.decode(parts[1]).getBytes("UTF-8");
+            }
+            String safe = name.replaceAll("[\\/:*?\"<>|]", "_");
+            if (android.os.Build.VERSION.SDK_INT >= 29) {
+                ContentValues cv = new ContentValues();
+                cv.put(MediaStore.Downloads.DISPLAY_NAME, safe);
+                cv.put(MediaStore.Downloads.MIME_TYPE, "application/json");
+                Uri uri = getContentResolver().insert(
+                        MediaStore.Downloads.EXTERNAL_CONTENT_URI, cv);
+                if (uri != null) {
+                    try (java.io.OutputStream os =
+                                 getContentResolver().openOutputStream(uri)) {
+                        os.write(data);
+                    }
+                }
+            } else {
+                java.io.File dir = Environment.getExternalStoragePublicDirectory(
+                        Environment.DIRECTORY_DOWNLOADS);
+                if (!dir.exists()) dir.mkdirs();
+                try (java.io.FileOutputStream fos =
+                             new java.io.FileOutputStream(new java.io.File(dir, safe))) {
+                    fos.write(data);
+                }
+            }
+            runOnUiThread(() -> Toast.makeText(this,
+                    "✅ ذخیره شد: Download/" + safe,
+                    Toast.LENGTH_LONG).show());
+        } catch (final Exception e) {
+            runOnUiThread(() -> Toast.makeText(this,
+                    "خطا در ذخیرهٔ فایل: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show());
         }
     }
 

@@ -1299,9 +1299,6 @@ class MainActivity : AppCompatActivity() {
         return box
     }
 
-    /** v1.14.322 — سومین روشِ ورودی: مرورگرِ داخلی برای سایت‌های کپچادار.
-     *  کاربر داخلِ WebView وارد سایت میشود، کپچا را رد میکند و با
-     *  «استخراج عکس» لینکِ عکس‌ها را به فیلدِ ورودی برمی‌گرداند. */
     private fun addBrowserLauncher(box: LinearLayout) {
         try {
             val row = LinearLayout(this).apply {
@@ -1320,9 +1317,7 @@ class MainActivity : AppCompatActivity() {
                     cornerRadius = dp(14).toFloat()
                 }
                 setOnClickListener {
-                    // v1.14.329 — مثلِ پی‌سی: اگر فیلد پر از خروجیِ استخراج
-                    // است (چند لینک یا لینکِ عکس)، مرورگر رویِ سایتِ قبلی
-                    // باز میشود، نه رویِ اولین لینکِ عکسِ قبلی
+
                     val cur = linkFieldText()
                     val parts = cur.split("\n", ",")
                         .map { it.trim() }
@@ -2836,8 +2831,7 @@ class MainActivity : AppCompatActivity() {
                 fieldViews[id] = sw
             }
             "checks" -> {
-                // v1.14.323 — گروهِ تیک (مثلِ زبانهای OCR): چند انتخابِ
-                // همزمان؛ مقدار به‌صورتِ «ja ko zh en» ذخیره میشود.
+
                 val choices = f.optJSONArray("choices")
                 if (choices == null) return
                 val dfltSet = HashSet<String>()
@@ -3053,7 +3047,7 @@ class MainActivity : AppCompatActivity() {
         map.put("src", urlVal
             ?: pickedFiles["inp_upload"] ?: "")
         map.put("file", pickedFiles["inp_upload"] ?: "")
-        map.put("provider", firstNonEmpty(o, "provider") ?: "gemini")
+        map.put("provider", firstNonEmpty(o, "provider", "manga_provider") ?: "gemini")
         map.put("custom_models", cmJson())
         map.put("keys", firstNonEmpty(o, "manga_api_keys", "api_keys", "keys") ?: "")
         map.put("model", firstNonEmpty(o, "manga_model", "model") ?: "")
@@ -4328,7 +4322,6 @@ class MainActivity : AppCompatActivity() {
         if (normMangaLogName(s) != null) return true
         return false
     }
-
 
     private fun autoSaveOutputs(images: List<String>, outFile: String) {
         if (outFile.isBlank() && images.isEmpty()) return

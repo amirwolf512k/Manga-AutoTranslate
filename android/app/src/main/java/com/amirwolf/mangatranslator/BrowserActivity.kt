@@ -27,68 +27,97 @@ import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
 
-/**
- * v1.14.322 — مرورگرِ داخلی برای سایت‌هایی که کپچا دارند.
- * کاربر خودش وارد سایتِ مانهوا میشود (کپچا را رد میکند)، فصل را باز
- * میکند و با دکمهٔ «🖼 استخراج عکس» لینکِ همهٔ عکس‌های صفحه را
- * میگیرد و به فرمِ ورودیِ برنامه برمی‌گرداند.
- */
 class BrowserActivity : Activity() {
 
     companion object {
         const val EXTRA_URL = "url"
         const val EXTRA_LINKS = "links"
 
-        /** v1.14.329 — آخرین سایتی که کاربر دیده؛ بعد از استخراج،
-         *  دوباره‌گشتنِ مرورگر همان‌جا باز میشود (مثلِ پی‌سی). */
         var lastSite: String = ""
 
-        /** همان فیلترهای نشانکِ وب — img/source + لودِ تنبل + حذفِ آیکون‌ها */
         private const val EXTRACT_JS = """
 (function(){
-  var seen={},out=[];
-  function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}
-  function junk(u){
-    if(!u)return 1;
-    if(u.indexOf('data:')===0)return 1;
-    if(!/^https?:/i.test(u))return 1;
-    if(/\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;
-    if(/-\d{2,4}x\d{2,4}\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;
-    if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;
-    return 0}
-  var els=document.querySelectorAll('img,source');
-  for(var i=0;i<els.length;i++){
-    var el=els[i],cs=null;
-    try{cs=el.currentSrc||el.src||null}catch(e){}
-    var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),
-           el.getAttribute('data-original'),el.getAttribute('data-original-src'),
-           el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),
-           el.getAttribute('data-url'),el.getAttribute('data-image'),
-           el.getAttribute('data-echo')];
-    var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');
-    if(ss){var p=ss.split(',');
-      if(p.length)c.push(p[p.length-1].trim().split(/\s+/)[0])}
-    if(el.tagName==='SOURCE'&&el.parentNode){
-      var pp=el.parentNode.querySelector('img');
-      if(pp&&pp.src)c.push(pp.src)}
-    for(var j=0;j<c.length;j++){
-      var u=c[j];if(!u)continue;
-      u=abs(String(u).trim());
-      if(!u||junk(u)||seen[u])continue;
-      var w=el.naturalWidth||el.width||0,h=el.naturalHeight||el.height||0;
-      if(w&&h&&(w<120||h<120))continue;
-      seen[u]=1;out.push(u);break}}
-  function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];
-    for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}
-  function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\d+)(?!.*\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}
-  out.sort(function(a,b){var x=ln(a),y=ln(b);
-  if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);
-  var p=nk(a),q=nk(b);
-  for(var i=0;i<Math.min(p.length,q.length);i++){
-  if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});
-  return out;
+try{
+if(/(^|\.)mangaplus\.shueisha\.co\.jp${'$'}/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];
+}catch(e){}
+function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}
+function qsz(u){
+var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\d{1,4})(?:[_x](\d{1,4}))?/i);
+if(!m)return 0;
+var a=parseInt(m[2],10)||0;
+var b=parseInt(m[3]||'0',10)||0;
+if(a>0&&b>0)return Math.max(a,b);
+if(m[1]&&a>0)return a;
+return 0}
+function junk(u){
+if(!u)return 1;
+if(u.indexOf('data:')===0)return 1;
+if(!/^https?:/i.test(u))return 1;
+var b=String(u).split(/[?#]/)[0];
+if(/\.(svg|ico|gif)${'$'}/i.test(b))return 1;
+if(/[-_]\d{2,4}x\d{2,4}\.(jpe?g|png|webp)${'$'}/i.test(b))return 1;
+var q=qsz(u);
+if(q>0&&q<=400)return 1;
+if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;
+if(/(?:^|[^a-z0-9])ads?[._\/-]/i.test(b))return 1;
+return 0}
+var all=[],good=[],idx=0;
+var els=document.querySelectorAll('img,source');
+for(var i=0;i<els.length;i++){
+var el=els[i];
+var cs=null;
+try{cs=el.currentSrc||el.src||null}catch(e){}
+var cands=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),el.getAttribute('data-original'),el.getAttribute('data-original-src'),el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),el.getAttribute('data-url'),el.getAttribute('data-image'),el.getAttribute('data-echo')];
+var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');
+if(ss){
+var parts=ss.split(','),best='',bw=0;
+for(var k=0;k<parts.length;k++){
+var tk=parts[k].trim().split(/\s+/);
+var u0=tk[0]||'';
+var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;
+if(u0&&w0>=bw){bw=w0;best=u0}}
+if(best)cands.push(best)}
+if(el.tagName==='SOURCE'&&el.parentNode){
+var pe=el.parentNode.querySelector('img');
+if(pe&&pe.src)cands.push(pe.src)}
+var pick=null,pj=1;
+for(var j=0;j<cands.length;j++){
+var u=cands[j];
+if(!u)continue;
+u=abs(String(u).trim());
+if(!u||u.indexOf('data:')===0)continue;
+try{if(u===location.href)continue}catch(e){}
+if(!pick)pick=u;
+if(!junk(u)){pick=u;pj=0;break}
+}
+if(!pick)continue;
+var nw=0,nh=0;
+try{nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}
+if(nw&&nh&&Math.max(nw,nh)<300)continue;
+all.push([pick,idx]);
+if(!pj)good.push([pick,idx]);
+idx++
+}
+function keyOf(u){
+var b=String(u).split(/[?#]/)[0];
+return b.replace(/[-_]\d{2,4}x\d{2,4}\./i,'.')}
+function dedupe(list){
+var by={},order=[];
+for(var i=0;i<list.length;i++){
+var it=list[i],k=keyOf(it[0]);
+if(Object.prototype.hasOwnProperty.call(by,k)){
+var o=by[k];
+if(qsz(it[0])>qsz(o[0]))by[k]=it
+}else{by[k]=it;order.push(k)}}
+var out=[];
+for(var j=0;j<order.length;j++)out.push(by[order[j]][0]);
+return out}
+var res=dedupe(good);
+if(!res.length)res=dedupe(all);
+return res;
 })()
-"""
+        """
+
     }
 
     private val BG = Color.parseColor("#060607")
@@ -106,8 +135,6 @@ class BrowserActivity : Activity() {
 
     private var lastCount = 0
 
-    /** v1.14.329 — شمارشِ زنده هر ۳ ثانیه (سایتهای مانهوا فصل را با
-     *  آجاکس عوض میکنند و onPageFinished صدا نمیخورد — مثلِ تایمرِ پی‌سی) */
     private val recountHandler = Handler()
     private val recountTick = object : Runnable {
         override fun run() {
@@ -116,9 +143,6 @@ class BrowserActivity : Activity() {
         }
     }
 
-    /** v1.14.323 — evaluateJavascript نتیجه را JSON-انکود می‌دهد؛ اگر
-     *  JS آرایه برگرداند raw خودِ آرایه است، ولی اگر (نسخه‌های قدیمی)
-     *  رشتهٔ JSON-stringify شده برگرداند، باید یک لایه باز شود. */
     private fun parseLinksRaw(raw: String?): JSONArray? {
         var s = (raw ?: "").trim()
         if (s.isEmpty()) return null
@@ -146,7 +170,6 @@ class BrowserActivity : Activity() {
             setBackgroundColor(BG)
         }
 
-        // ——— نوارِ بالا: آدرس + بستن ———
         val top = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -213,13 +236,11 @@ class BrowserActivity : Activity() {
         root.addView(progress, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, dp(3)))
 
-        // ——— وب‌ویو ———
         web = WebView(this)
         setupWebView()
         root.addView(web, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        // ——— نوارِ پایین: استخراج ———
         val bottom = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
@@ -261,7 +282,7 @@ class BrowserActivity : Activity() {
             web.loadUrl(startUrl)
             recountAsync()
         } else {
-            // v1.14.329 — سایتِ قبلی یا گوگل (فیلد پر از لینکهای استخراج بود)
+
             val home = if (lastSite.startsWith("http")) lastSite
                 else "https://www.google.com"
             web.loadUrl(home)
@@ -307,8 +328,7 @@ class BrowserActivity : Activity() {
             override fun doUpdateVisitedHistory(view: WebView?, url: String?,
                                                 isReload: Boolean) {
                 super.doUpdateVisitedHistory(view, url, isReload)
-                // v1.14.329 — سایتهای تک‌صفحه‌ای (مانهوا) فصل را با pushState
-                // عوض میکنند؛ اینجا هم آدرس و شمارش تازه میشود
+
                 try {
                     if (url != null && url.startsWith("http")) lastSite = url
                     urlBox.setText(url ?: "")
@@ -336,8 +356,6 @@ class BrowserActivity : Activity() {
         }
     }
 
-    /** v1.14.329 — مثلِ پی‌سی: متنِ آزاد = سرچِ گوگل («hi» دیگر
-     *  https://hi/ نمیشود)، دامنه = https، لینکِ کامل = خودش. */
     private fun smartUrl(input: String?): String? {
         val u = input?.trim() ?: ""
         if (u.isEmpty()) return null
@@ -365,7 +383,6 @@ class BrowserActivity : Activity() {
         web.loadUrl(u)
     }
 
-    /** شمارشِ زندهٔ عکسهای صفحه (بدون برگرداندنِ نتیجه) */
     private fun recountAsync() {
         try {
             web.evaluateJavascript(EXTRACT_JS) { raw ->

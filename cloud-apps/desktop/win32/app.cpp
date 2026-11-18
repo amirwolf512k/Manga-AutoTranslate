@@ -31,6 +31,7 @@ static const WCHAR APP_TITLE[] =
 #define ID_BTN_WV2DL   109
 #define ID_BTN_SYSBR   110
 #define ID_BTN_RETRY   111
+#define ID_BTN_RELOAD  112
 
 #define WM_APP_CREATCTL (WM_APP + 1)
 #define WM_APP_BRREADY  (WM_APP + 2)
@@ -73,6 +74,7 @@ static HWND g_lblFailBody = NULL;
 static HWND g_btnWv2Dl = NULL;
 static HWND g_btnSysBr = NULL;
 static HWND g_btnRetry = NULL;
+static HWND g_btnReload = NULL;
 static BOOL g_failMode = FALSE;
 static HBRUSH g_barBrush = NULL;
 static HBRUSH g_urlBrush = NULL;
@@ -103,50 +105,85 @@ static const COLORREF CLR_CNT    = RGB(151, 148, 140);
 
 static const wchar_t *MT_COLLECT_JS =
 L"(function(){"
-L"try{if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)"
-L"&&location.pathname.indexOf('/viewer/')===0)"
-L"return [location.href];}catch(e){}"
-L"var seen={},out=[];"
+L"try{"
+L"if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];"
+L"}catch(e){}"
 L"function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}"
+L"function qsz(u){"
+L"var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i);"
+L"if(!m)return 0;"
+L"var a=parseInt(m[2],10)||0;"
+L"var b=parseInt(m[3]||'0',10)||0;"
+L"if(a>0&&b>0)return Math.max(a,b);"
+L"if(m[1]&&a>0)return a;"
+L"return 0}"
 L"function junk(u){"
 L"if(!u)return 1;"
 L"if(u.indexOf('data:')===0)return 1;"
 L"if(!/^https?:/i.test(u))return 1;"
-L"if(/\\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;"
-L"if(/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;"
-L"if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;"
+L"var b=String(u).split(/[?#]/)[0];"
+L"if(/\\.(svg|ico|gif)$/i.test(b))return 1;"
+L"if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)$/i.test(b))return 1;"
+L"var q=qsz(u);"
+L"if(q>0&&q<=400)return 1;"
+L"if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;"
+L"if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1;"
 L"return 0}"
+L"var all=[],good=[],idx=0;"
 L"var els=document.querySelectorAll('img,source');"
 L"for(var i=0;i<els.length;i++){"
-L"var el=els[i],cs=null;"
+L"var el=els[i];"
+L"var cs=null;"
 L"try{cs=el.currentSrc||el.src||null}catch(e){}"
-L"var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),"
-L"el.getAttribute('data-original'),el.getAttribute('data-original-src'),"
-L"el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),"
-L"el.getAttribute('data-url'),el.getAttribute('data-image'),"
-L"el.getAttribute('data-echo')];"
+L"var cands=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),el.getAttribute('data-original'),el.getAttribute('data-original-src'),el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),el.getAttribute('data-url'),el.getAttribute('data-image'),el.getAttribute('data-echo')];"
 L"var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');"
-L"if(ss){var p=ss.split(',');"
-L"if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}"
+L"if(ss){"
+L"var parts=ss.split(','),best='',bw=0;"
+L"for(var k=0;k<parts.length;k++){"
+L"var tk=parts[k].trim().split(/\\s+/);"
+L"var u0=tk[0]||'';"
+L"var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;"
+L"if(u0&&w0>=bw){bw=w0;best=u0}}"
+L"if(best)cands.push(best)}"
 L"if(el.tagName==='SOURCE'&&el.parentNode){"
-L"var pp=el.parentNode.querySelector('img');"
-L"if(pp&&pp.src)c.push(pp.src)}"
-L"for(var j=0;j<c.length;j++){"
-L"var u=c[j];if(!u)continue;"
+L"var pe=el.parentNode.querySelector('img');"
+L"if(pe&&pe.src)cands.push(pe.src)}"
+L"var pick=null,pj=1;"
+L"for(var j=0;j<cands.length;j++){"
+L"var u=cands[j];"
+L"if(!u)continue;"
 L"u=abs(String(u).trim());"
-L"if(!u||junk(u)||seen[u])continue;"
-L"var w=el.naturalWidth||el.width||0,h=el.naturalHeight||el.height||0;"
-L"if(w&&h&&(w<120||h<120))continue;"
-L"seen[u]=1;out.push(u);break}}"
-L"function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];"
-L"for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}"
-L"function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}"
-L"out.sort(function(a,b){var x=ln(a),y=ln(b);"
-L"if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);"
-L"var p=nk(a),q=nk(b);"
-L"for(var i=0;i<Math.min(p.length,q.length);i++){"
-L"if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});"
-L"return out;})()";
+L"if(!u||u.indexOf('data:')===0)continue;"
+L"try{if(u===location.href)continue}catch(e){}"
+L"if(!pick)pick=u;"
+L"if(!junk(u)){pick=u;pj=0;break}"
+L"}"
+L"if(!pick)continue;"
+L"var nw=0,nh=0;"
+L"try{nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}"
+L"if(nw&&nh&&Math.max(nw,nh)<300)continue;"
+L"all.push([pick,idx]);"
+L"if(!pj)good.push([pick,idx]);"
+L"idx++"
+L"}"
+L"function keyOf(u){"
+L"var b=String(u).split(/[?#]/)[0];"
+L"return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}"
+L"function dedupe(list){"
+L"var by={},order=[];"
+L"for(var i=0;i<list.length;i++){"
+L"var it=list[i],k=keyOf(it[0]);"
+L"if(Object.prototype.hasOwnProperty.call(by,k)){"
+L"var o=by[k];"
+L"if(qsz(it[0])>qsz(o[0]))by[k]=it"
+L"}else{by[k]=it;order.push(k)}}"
+L"var out=[];"
+L"for(var j=0;j<order.length;j++)out.push(by[order[j]][0]);"
+L"return out}"
+L"var res=dedupe(good);"
+L"if(!res.length)res=dedupe(all);"
+L"return res;"
+L"})()";
 
 static const wchar_t *MT_PRELOAD_JS =
 L"(function(){try{var _a=window.alert;window.alert=function(m){"
@@ -1129,6 +1166,13 @@ static void LayoutBrowser(void) {
     int urlR = w - m - 2 * bwNav - 2 * gap - 2;
 
     int xL = m;
+    int bwRl = (w < 560) ? 0 : 42;
+    if (bwRl > 0) {
+        MoveWindow(g_btnReload, xL, by, bwRl, bh, TRUE);
+        xL += bwRl + gap;
+    } else {
+        MoveWindow(g_btnReload, xL, by, 0, 0, TRUE);
+    }
     if (bwCnt > 0) {
         MoveWindow(g_lblStatus, xL, by, bwCnt, bh, TRUE);
         xL += bwCnt + gap;
@@ -1304,7 +1348,7 @@ static LRESULT MtOnDrawItem(WPARAM wp, LPARAM lp) {
     } else if (d->CtlID == ID_BTN_WV2DL) {
         bg = down ? CLR_ACC_DN : CLR_ACC;
     } else if (d->CtlID == ID_BTN_GO || d->CtlID == ID_BTN_BACK
-               || d->CtlID == ID_BTN_FWD) {
+               || d->CtlID == ID_BTN_FWD || d->CtlID == ID_BTN_RELOAD) {
         bg = down ? CLR_NAV_DN : CLR_NAV;
     } else {
         bg = down ? CLR_BTN_DN : CLR_BTN;
@@ -1340,6 +1384,9 @@ static void MtBrCreateControls(HWND hwnd) {
         L"\U0001F5BC \u0627\u0633\u062A\u062E\u0631\u0627\u062C \u0639\u06A9\u0633",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 150, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
+    g_btnReload = CreateWindowExW(0, L"BUTTON", L"\u21BB",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        0, 0, 42, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_RELOAD, hInst, NULL);
 
     SendMessageW(g_editUrl, WM_SETFONT, (WPARAM)g_font, TRUE);
     g_editProc = (WNDPROC)SetWindowLongPtrW(g_editUrl, GWLP_WNDPROC,
@@ -1348,6 +1395,7 @@ static void MtBrCreateControls(HWND hwnd) {
     SendMessageW(g_btnFwd, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnBack, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
+    SendMessageW(g_btnReload, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
     MtLog("br controls created");
 }
@@ -1381,6 +1429,11 @@ static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (id == ID_BTN_EXTRACT) {
                 if (g_webBr != NULL)
                     g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
+                return 0;
+            }
+            if (id == ID_BTN_RELOAD) {
+                if (g_webBr != NULL)
+                    g_webBr->Reload();
                 return 0;
             }
         }

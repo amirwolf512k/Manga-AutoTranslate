@@ -376,13 +376,27 @@ class _MangaTranslatorBody_70:
             return None
         txt = str(rr[0]).strip()
         cf = float(rr[1])
-        if not txt or cf < 0.85:
+        if not txt:
             return None
-        _lt = sum(1 for _c in txt if _c.isascii() and _c.isalpha())
-        if _lt < 2:
-            return None
-        if _lt * 2 < len(txt.replace(" ", "")):
-            return None
+        if _latin_lang(self):
+            if cf < 0.85:
+                return None
+            _lt = sum(1 for _c in txt if _c.isascii() and _c.isalpha())
+            if _lt < 2:
+                return None
+            if _lt * 2 < len(txt.replace(" ", "")):
+                return None
+        else:
+            if cf < 0.80:
+                return None
+            _cs = sum(1 for _c in txt
+                      if (0x3040 <= ord(_c) <= 0x30FF)
+                      or (0x3400 <= ord(_c) <= 0x9FFF)
+                      or (0xAC00 <= ord(_c) <= 0xD7AF))
+            if _cs < 2:
+                return None
+            if _cs * 2 < len(txt.replace(" ", "")):
+                return None
         _bb = (float(ox + rx1), float(oy + ry1),
                float(ox + rx2), float(oy + ry2))
         try:
@@ -500,7 +514,7 @@ class _MangaTranslatorBody_70:
             avg_conf = float(np.mean(confs)) if confs else 0.0
             return joined, polys, avg_conf, entries
 
-        _sc_cjk = _on_android()
+        _sc_cjk = _on_android() or not _latin_lang(self)
 
         def _score(txt: str, conf: float) -> float:
             if not txt:
@@ -2137,69 +2151,6 @@ class _MangaTranslatorBody_70:
             }
         except Exception:
             return None
-
-    @staticmethod
-    def _add_watermark_regions(image, regions):
-        try:
-            import re as _re
-            ocr_engine = None
-            try:
-                from rapidocr_onnxruntime import RapidOCR as _R
-                ocr_engine = _R()
-            except Exception:
-                return regions
-            res, _ = ocr_engine(image)
-            if not res:
-                return regions
-            _wm_pat = _re.compile(
-                r"(www\.|https?://|[a-z0-9-]+\.(?:com|net|org|io|xyz)"
-                r"(?:/[A-Za-z0-9._/-]*)?|patreon\b|chapter\s*\d+\s*"
-                r".{0,30}?page\s*\d+)", _re.I)
-            existing = []
-            for _r in (regions or []):
-                try:
-                    existing.append(tuple(int(v) for v in _r.rect[:4]))
-                except Exception:
-                    pass
-            out = list(regions or [])
-            for box, txt, conf in res:
-                try:
-                    t = str(txt or "").strip()
-                    if not t or float(conf) < 0.60:
-                        continue
-                    if not _wm_pat.search(t):
-                        continue
-                    xs = [p[0] for p in box]
-                    ys = [p[1] for p in box]
-                    x0, y0 = int(min(xs)), int(min(ys))
-                    x1, y1 = int(max(xs)), int(max(ys))
-                    if (x1 - x0) < 12 or (y1 - y0) < 6:
-                        continue
-                    _ov = False
-                    for (_ex, _ey, _ew, _eh) in existing:
-                        if not (x1 < _ex or x0 > _ex + _ew
-                                or y1 < _ey or y0 > _ey + _eh):
-                            _ov = True
-                            break
-                    if _ov:
-                        continue
-                    _nr = TextRegion(
-                        id=-1,
-                        boxes=[np.asarray(box, dtype=np.int32)],
-                        source_text=t,
-                        translated_text="",
-                        rect=(x0, y0,
-                              max(1, x1 - x0), max(1, y1 - y0)),
-                        det_class="text",
-                        kind="promo",
-                        bubble_style="free_text",
-                        ocr_polys=[np.asarray(box, dtype=np.int32)])
-                    out.append(_nr)
-                except Exception:
-                    continue
-            return out
-        except Exception:
-            return regions
 
     @staticmethod
     def _polys_dense(polys) -> bool:
@@ -3972,7 +3923,7 @@ class _MangaTranslatorBody_70:
                     _qa = max(1e-6, (_qx2 - _qx1) * (_qy2 - _qy1))
                     _ix = max(0.0, min(_qx2, float(x2)) - max(_qx1, float(x1)))
                     _iy = max(0.0, min(_qy2, float(y2)) - max(_qy1, float(y1)))
-                    if (_ix * _iy) / _qa < 0.5:
+                    if (_ix * _iy) / _qa < 0.85:
                         continue
                     _foreign = False
                     for _r in (block_rects or []):
@@ -4090,11 +4041,6 @@ class _MangaTranslatorBody_70:
         _raise_if_stop()
 
         _raise_if_stop()
-        try:
-            unique_regions = MangaTranslator._add_watermark_regions(
-                image, unique_regions)
-        except Exception:
-            pass
 
         _nt_n = 0
         for _r in unique_regions:
@@ -4116,6 +4062,60 @@ class _MangaTranslatorBody_70:
                     unique_regions.extend(_sfx)
             except Exception:
                 pass
+
+        if len(unique_regions) > 1:
+            def _norm_t(t):
+                return re.sub(r"\s+", " ", str(t or "")).strip()
+            _kept: List[TextRegion] = []
+            for _r in unique_regions:
+                _rx, _ry, _rw, _rh = [int(v) for v in _r.rect[:4]]
+                _rt = _norm_t(_r.source_text)
+                _dup = False
+                for _k in _kept:
+                    _kx, _ky, _kw, _kh = [int(v) for v in _k.rect[:4]]
+                    _ix = max(0, min(_rx + _rw, _kx + _kw) - max(_rx, _kx))
+                    _iy = max(0, min(_ry + _rh, _ky + _kh) - max(_ry, _ky))
+                    _inter = _ix * _iy
+                    if _inter <= 0:
+                        continue
+                    _a1 = max(1, _rw * _rh)
+                    _a2 = max(1, _kw * _kh)
+                    _iom = _inter / min(_a1, _a2)
+                    if _iom < 0.55:
+                        continue
+                    _kt = _norm_t(_k.source_text)
+                    _same = bool(_rt and _kt and _rt == _kt
+                                 and len(_rt.replace(" ", "")) >= 2)
+                    _sub = bool(_rt and _kt and _iom >= 0.75
+                                and (len(_kt) >= 8 and _rt in _kt
+                                     or len(_rt) >= 8 and _kt in _rt))
+                    if _same or _sub:
+                        _dup = True
+                        break
+                if not _dup:
+                    _kept.append(_r)
+            if len(_kept) < len(unique_regions):
+                print(f"[*] {len(unique_regions) - len(_kept)} ناحیهٔ تکراری "
+                      f"حذف شد (متنِ یکسان)")
+                unique_regions = _kept
+
+        for _r in unique_regions:
+            if getattr(_r, "sys_split", False) or getattr(_r, "ocr_empty", False):
+                continue
+            _pl = getattr(_r, "ocr_polys", None) or []
+            if len(_pl) != 1 or _r.kind != "dialogue":
+                continue
+            try:
+                _pp = np.asarray(_pl[0], dtype=np.float32).reshape(-1, 2)
+                _tx = int(_pp[:, 0].min()) - 3
+                _ty = int(_pp[:, 1].min()) - 3
+                _tX = int(_pp[:, 0].max()) + 4
+                _tY = int(_pp[:, 1].max()) + 4
+                if _tX - _tx >= 12 and _tY - _ty >= 8:
+                    _r.rect = (_tx, _ty, _tX - _tx, _tY - _ty)
+            except Exception:
+                continue
+
         _raise_if_stop()
         if unique_regions:
             self._verify_angle_signs(image, unique_regions)
@@ -4171,14 +4171,6 @@ class _MangaTranslatorBody_70:
             except Exception:
                 pass
 
-        try:
-            _ads = self._scan_watermark_banners(image, unique_regions)
-            if _ads:
-                print(f"[*] {len(_ads)} بنرِ تبلیغ شناسایی شد")
-                unique_regions = list(unique_regions) + _ads
-        except Exception:
-            pass
-
         _ob2 = getattr(self, "_ocr_backend_name", "") or "?"
         _dt = time.time() - _t_ext
         if unique_regions:
@@ -4188,312 +4180,6 @@ class _MangaTranslatorBody_70:
             print("[!] هیچ متن/حبابی یافت نشد.")
         page_ctx = {"boxes": page_boxes, "quads": det_quads}
         return unique_regions, dbg, page_ctx
-
-    def _scan_watermark_banners(self, image: np.ndarray,
-                                regions: List[TextRegion]) -> List[TextRegion]:
-        found: List[TextRegion] = []
-        try:
-            h, w = image.shape[:2]
-        except Exception:
-            return found
-        if getattr(self, "ocr", None) is None:
-            return found
-        try:
-            _tile = 2200
-            _ovl = 120
-            _exist = []
-            for r in (regions or []):
-                try:
-                    _exist.append([int(v) for v in r.rect])
-                except Exception:
-                    continue
-            _kb = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 5))
-            _kd = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 5))
-            _found_rects: list = []
-            _cands: list = []
-            _cand_n = 0
-            _ty0 = 0
-            while _ty0 < h:
-                _y1 = min(h, _ty0 + _tile)
-                tile = image[_ty0:_y1]
-                _tnext = _y1 if _y1 >= h else _y1 - _ovl
-                g = cv2.cvtColor(tile, cv2.COLOR_BGR2GRAY)
-                _med = cv2.medianBlur(g, 21)
-                _stk = (np.abs(g.astype(np.int16)
-                               - _med.astype(np.int16)) > 42)
-                _blob = cv2.morphologyEx((_stk * 255).astype(np.uint8),
-                                         cv2.MORPH_CLOSE, _kb)
-                _blob = cv2.dilate(_blob, _kd)
-                n, lab, st, _ = cv2.connectedComponentsWithStats(_blob, 8)
-                for i in range(1, n):
-                    bx = int(st[i, cv2.CC_STAT_LEFT])
-                    by = int(st[i, cv2.CC_STAT_TOP])
-                    bw_ = int(st[i, cv2.CC_STAT_WIDTH])
-                    bh_ = int(st[i, cv2.CC_STAT_HEIGHT])
-                    if bw_ < 60 or bh_ < 12 or bh_ > 170 or bw_ > 1000:
-                        continue
-                    if bw_ < 2.2 * bh_:
-                        continue
-                    _fill = float(st[i, cv2.CC_STAT_AREA]) / float(bw_ * bh_)
-                    if _fill < 0.06 or _fill > 0.95:
-                        continue
-                    if bw_ >= 60 and bh_ >= 12:
-                        _sub = _stk[by:by + bh_, bx:bx + bw_]
-                        _sr = float(_sub.mean()) if _sub.size else 0.0
-                        if _sr < 0.025 or _sr > 0.60:
-                            continue
-                    else:
-                        continue
-                    X0, X1 = bx, bx + bw_
-                    Y0, Y1 = by + _ty0, by + bh_ + _ty0
-                    _skip = False
-                    for (rx, ry, rw, rh) in _exist:
-                        if not (X1 < rx or X0 > rx + rw
-                                or Y1 < ry or Y0 > ry + rh):
-                            _skip = True
-                            break
-                    if _skip:
-                        continue
-                    _dup = False
-                    for (fx0, fy0, fx1, fy1) in _found_rects:
-                        ix0, iy0 = max(X0, fx0), max(Y0, fy0)
-                        ix1, iy1 = min(X1, fx1), min(Y1, fy1)
-                        if ix1 - ix0 > 0.5 * min(X1 - X0, fx1 - fx0) \
-                                and iy1 - iy0 > 0.5 * min(Y1 - Y0, fy1 - fy0):
-                            _dup = True
-                            break
-                    if _dup:
-                        continue
-                    cx0, cy0 = max(0, X0 - 8), max(0, Y0 - 8)
-                    cx1, cy1 = min(w, X1 + 8), min(h, Y1 + 8)
-                    if cx1 - cx0 < 30 or cy1 - cy0 < 12:
-                        continue
-                    _edge = 0 if min(int(X0), w - int(X1)) <= 40 else 1
-                    _cands.append((
-                        int(_ty0),
-                        _edge,
-                        -float(_sr),
-                        -float(_fill),
-                        cx0, cy0, cx1, cy1))
-                _ty0 = _tnext
-            try:
-                _max_calls = int(os.environ.get(
-                    "MANGA_BANNER_OCR_MAX", "0") or 0)
-            except Exception:
-                _max_calls = 0
-            if _max_calls <= 0:
-                _nt = max(1, int((h + _tile - 1) // max(1, _tile - _ovl)))
-                _max_calls = min(40, 24 + 6 * max(0, _nt - 2))
-            _buckets: dict = {}
-            for _c3 in _cands:
-                _buckets.setdefault(_c3[0], []).append(_c3)
-            for _b in _buckets.values():
-                _b.sort(key=lambda t: (t[1], t[2], t[3]))
-            _ordered: list = []
-            while any(_buckets.values()):
-                for _tk in sorted(_buckets):
-                    if _buckets[_tk]:
-                        _ordered.append(_buckets[_tk].pop(0))
-            if self.debug:
-                try:
-                    _top = ", ".join(
-                        f"({c[4]},{c[5]},edge{c[1]},s{-c[2]:.2f})"
-                        for c in _ordered[:12])
-                    print(f"  [🔍] جارویِ بنر: {len(_cands)} کاندید | "
-                          f"بودجه {_max_calls} | ترتیبِ گردشی: {_top}")
-                except Exception:
-                    pass
-            _ocr_calls = 0
-            _stop_all = False
-            try:
-                _empty_max = int(os.environ.get(
-                    "MANGA_BANNER_EARLY_STOP", "8") or 0)
-            except Exception:
-                _empty_max = 8
-            _empty_streak = 0
-            try:
-                _tlimit = float(os.environ.get(
-                    "MANGA_BANNER_TLIMIT", "0") or 0)
-            except Exception:
-                _tlimit = 0.0
-            if _tlimit <= 0:
-                try:
-                    if _on_android():
-                        _tlimit = 0.0
-                    else:
-                        _nt2 = max(1, int((h + _tile - 1)
-                                           // max(1, _tile - _ovl)))
-                        _tlimit = max(8.0, 3.0 * _nt2)
-                except Exception:
-                    _tlimit = 8.0
-            _t = time.time()
-            _wm_pw = self._ocr_pool_workers(len(_ordered))
-            _wm_i = 0
-
-            def _wm_scan_one(_c):
-                (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) = _c
-                out = {"calls": 0, "empty": 0, "nonempty": False,
-                       "txt": "", "found": False}
-                try:
-                    crop = image[cy0:cy1, cx0:cx1]
-                    if crop.size == 0:
-                        return out
-                    _pad_h = max(0, 48 - crop.shape[0])
-                    _pad_w = max(0, 160 - crop.shape[1])
-                    if _pad_h or _pad_w:
-                        crop = cv2.copyMakeBorder(
-                            crop, _pad_h // 2, _pad_h - _pad_h // 2,
-                            _pad_w // 2, _pad_w - _pad_w // 2,
-                            cv2.BORDER_REPLICATE)
-                    _txt = ""
-                    for _zm in (3, 2):
-                        _zm_empty = True
-                        _big = cv2.resize(
-                            crop, (crop.shape[1] * _zm,
-                                   crop.shape[0] * _zm),
-                            interpolation=cv2.INTER_CUBIC)
-                        for _var in (0, 1):
-                            _try = _big
-                            if _var == 1:
-                                try:
-                                    _lab2 = cv2.cvtColor(_big,
-                                                         cv2.COLOR_BGR2LAB)
-                                    _clahe = cv2.createCLAHE(
-                                        2.2, (8, 8))
-                                    _l2 = _clahe.apply(_lab2[..., 0])
-                                    _try = cv2.cvtColor(
-                                        cv2.merge([_l2, _l2, _l2]),
-                                        cv2.COLOR_BGR2GRAY)
-                                    _try = cv2.cvtColor(
-                                        _try, cv2.COLOR_GRAY2BGR)
-                                except Exception:
-                                    _try = _big
-                            try:
-                                _res = self.ocr.ocr(_try)
-                            except Exception:
-                                _res = None
-                            out["calls"] += 1
-                            _txts = []
-                            if _res:
-                                for _ln in (_res[0] or []):
-                                    try:
-                                        _tv = _ln[1]
-                                        if isinstance(_tv, (tuple, list)):
-                                            _tv = _tv[0]
-                                        if str(_tv).strip():
-                                            _txts.append(str(_tv).strip())
-                                    except Exception:
-                                        continue
-                            _txt = " ".join(_txts)
-                            if _txt:
-                                out["nonempty"] = True
-                                _zm_empty = False
-                            else:
-                                out["empty"] += 1
-                            if self._is_watermark_text(_txt):
-                                break
-                            if _txt:
-                                break
-                        if _zm_empty and _zm == 3:
-                            break
-                    if _txt and self._is_watermark_text(_txt):
-                        out["found"] = True
-                        out["txt"] = _txt
-                except Exception:
-                    pass
-                return out
-
-            _wm_results: list = []
-            while _wm_i < len(_ordered):
-                if _tlimit > 0 and time.time() - _t > _tlimit:
-                    if self.debug:
-                        try:
-                            print(f"  [🔍] جارویِ بنر: سقفِ زمانیِ "
-                                  f"{_tlimit:.0f}s — {_ocr_calls} "
-                                  f"فراخوانی از {len(_ordered)} کاندید",
-                                  flush=True)
-                        except Exception:
-                            pass
-                    break
-                if _stop_all:
-                    if self.debug:
-                        try:
-                            print("  [🔍] جارویِ بنر: توقفِ زودهنگام — "
-                                  f"{_empty_streak} فراخوانیِ خالیِ پیاپی "
-                                  f"(اکاندی‌هایِ بعدی هم بافتِ هنرند)",
-                                  flush=True)
-                        except Exception:
-                            pass
-                    break
-                if _ocr_calls >= _max_calls:
-                    if self.debug:
-                        try:
-                            print(f"  [🔍] جارویِ بنر: بودجهٔ OCR تمام شد "
-                                  f"({_max_calls} فراخوانی) — "
-                                  f"{len(_cands)} کاندید")
-                        except Exception:
-                            pass
-                    break
-                _batch = _ordered[_wm_i:_wm_i + max(1, _wm_pw)]
-                _wm_i += len(_batch)
-                if _wm_pw > 1:
-                    try:
-                        with ThreadPoolExecutor(max_workers=_wm_pw) as _wmx:
-                            _wm_res = list(_wmx.map(_wm_scan_one, _batch))
-                    except Exception:
-                        _wm_res = [_wm_scan_one(_c) for _c in _batch]
-                else:
-                    _wm_res = [_wm_scan_one(_c) for _c in _batch]
-                for (_c2, _r) in zip(_batch, _wm_res):
-                    (_s0, _s1, _s2, _s3, cx0, cy0, cx1, cy1) = _c2
-                    _ocr_calls += int(_r.get("calls", 0))
-                    _txt = str(_r.get("txt", "") or "")
-                    if _r.get("nonempty"):
-                        _empty_streak = 0
-                    else:
-                        _empty_streak += int(_r.get("empty", 0))
-                        if (_empty_max > 0
-                                and _empty_streak >= _empty_max):
-                            _stop_all = True
-                    if _r.get("found"):
-                        _tr = TextRegion(
-                            id=10000 + len(found),
-                            boxes=[np.array([[cx0, cy0], [cx1, cy0],
-                                             [cx1, cy1], [cx0, cy1]],
-                                            dtype=np.float32)],
-                            source_text=_txt,
-                            rect=(cx0, cy0, cx1 - cx0, cy1 - cy0),
-                            kind="promo")
-                        found.append(_tr)
-                        _found_rects.append((cx0, cy0, cx1, cy1))
-                        try:
-                            _max_calls = min(
-                                _max_calls,
-                                _ocr_calls + max(6,
-                                                 (_max_calls - _ocr_calls) // 3))
-                        except Exception:
-                            pass
-                        if self.debug:
-                            try:
-                                print(f"  [🔍] بنرِ تبلیغ: rect={_tr.rect} "
-                                      f"متن: {_txt[:60]}")
-                            except Exception:
-                                pass
-            if self.debug:
-                try:
-                    print(f"  [🔍] جارویِ بنر: {len(found)} تبلیغ شناسایی شد")
-                except Exception:
-                    pass
-        except Exception:
-            import traceback as _tb
-            if self.debug:
-                try:
-                    print("  [🔍] جارویِ بنر: خطا —")
-                    _tb.print_exc()
-                except Exception:
-                    pass
-            return found
-        return found
 
     def finish_page_phase(self, image: np.ndarray, regions: List[TextRegion],
                           skip_translate: bool = False,

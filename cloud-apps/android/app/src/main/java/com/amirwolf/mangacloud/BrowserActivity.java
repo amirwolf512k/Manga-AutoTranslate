@@ -37,50 +37,84 @@ public class BrowserActivity extends Activity {
 
     private static final String EXTRACT_JS =
         "(function(){" +
-        "try{if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)" +
-        "&&location.pathname.indexOf('/viewer/')===0)" +
-        "return [location.href];}catch(e){}" +
-        "var seen={},out=[];" +
+        "try{" +
+        "if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];" +
+        "}catch(e){}" +
         "function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}" +
+        "function qsz(u){" +
+        "var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i);" +
+        "if(!m)return 0;" +
+        "var a=parseInt(m[2],10)||0;" +
+        "var b=parseInt(m[3]||'0',10)||0;" +
+        "if(a>0&&b>0)return Math.max(a,b);" +
+        "if(m[1]&&a>0)return a;" +
+        "return 0}" +
         "function junk(u){" +
         "if(!u)return 1;" +
         "if(u.indexOf('data:')===0)return 1;" +
         "if(!/^https?:/i.test(u))return 1;" +
-        "if(/\\.(svg|ico|gif)([?#]|$)/i.test(u))return 1;" +
-        "if(/-\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)([?#]|$)/i.test(u))return 1;" +
-        "if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|(?:^|[^a-z0-9])ads?[._/-]|button|emoji|thumb(nail)?s?[._-])/i.test(u))return 1;" +
+        "var b=String(u).split(/[?#]/)[0];" +
+        "if(/\\.(svg|ico|gif)$/i.test(b))return 1;" +
+        "if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)$/i.test(b))return 1;" +
+        "var q=qsz(u);" +
+        "if(q>0&&q<=400)return 1;" +
+        "if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;" +
+        "if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1;" +
         "return 0}" +
+        "var all=[],good=[],idx=0;" +
         "var els=document.querySelectorAll('img,source');" +
         "for(var i=0;i<els.length;i++){" +
-        "var el=els[i],cs=null;" +
+        "var el=els[i];" +
+        "var cs=null;" +
         "try{cs=el.currentSrc||el.src||null}catch(e){}" +
-        "var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src')," +
-        "el.getAttribute('data-original'),el.getAttribute('data-original-src')," +
-        "el.getAttribute('data-orig-src'),el.getAttribute('data-lazy')," +
-        "el.getAttribute('data-url'),el.getAttribute('data-image')," +
-        "el.getAttribute('data-echo')];" +
+        "var cands=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),el.getAttribute('data-original'),el.getAttribute('data-original-src'),el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),el.getAttribute('data-url'),el.getAttribute('data-image'),el.getAttribute('data-echo')];" +
         "var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');" +
-        "if(ss){var p=ss.split(',');" +
-        "if(p.length)c.push(p[p.length-1].trim().split(/\\s+/)[0])}" +
+        "if(ss){" +
+        "var parts=ss.split(','),best='',bw=0;" +
+        "for(var k=0;k<parts.length;k++){" +
+        "var tk=parts[k].trim().split(/\\s+/);" +
+        "var u0=tk[0]||'';" +
+        "var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;" +
+        "if(u0&&w0>=bw){bw=w0;best=u0}}" +
+        "if(best)cands.push(best)}" +
         "if(el.tagName==='SOURCE'&&el.parentNode){" +
-        "var pp=el.parentNode.querySelector('img');" +
-        "if(pp&&pp.src)c.push(pp.src)}" +
-        "for(var j=0;j<c.length;j++){" +
-        "var u=c[j];if(!u)continue;" +
+        "var pe=el.parentNode.querySelector('img');" +
+        "if(pe&&pe.src)cands.push(pe.src)}" +
+        "var pick=null,pj=1;" +
+        "for(var j=0;j<cands.length;j++){" +
+        "var u=cands[j];" +
+        "if(!u)continue;" +
         "u=abs(String(u).trim());" +
-        "if(!u||junk(u)||seen[u])continue;" +
-        "var w=el.naturalWidth||el.width||0,h=el.naturalHeight||el.height||0;" +
-        "if(w&&h&&(w<120||h<120))continue;" +
-        "seen[u]=1;out.push(u);break}}" +
-        "function nk(s){var t=String(s).split(/[^0-9]+/).filter(Boolean),r=[];" +
-        "for(var i=0;i<t.length;i++)r.push(parseInt(t[i],10));return r}" +
-        "function ln(s){try{var m=String(s).split(/[?#]/)[0].match(/(\\d+)(?!.*\\d)/);return m?parseInt(m[1],10):null}catch(e){return null}}" +
-        "out.sort(function(a,b){var x=ln(a),y=ln(b);" +
-        "if(x!==y&&(x!=null||y!=null))return x==null?1:(y==null?-1:x-y);" +
-        "var p=nk(a),q=nk(b);" +
-        "for(var i=0;i<Math.min(p.length,q.length);i++){" +
-        "if(p[i]!==q[i])return p[i]-q[i]}return a<b?-1:1});" +
-        "return out;" +
+        "if(!u||u.indexOf('data:')===0)continue;" +
+        "try{if(u===location.href)continue}catch(e){}" +
+        "if(!pick)pick=u;" +
+        "if(!junk(u)){pick=u;pj=0;break}" +
+        "}" +
+        "if(!pick)continue;" +
+        "var nw=0,nh=0;" +
+        "try{nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}" +
+        "if(nw&&nh&&Math.max(nw,nh)<300)continue;" +
+        "all.push([pick,idx]);" +
+        "if(!pj)good.push([pick,idx]);" +
+        "idx++" +
+        "}" +
+        "function keyOf(u){" +
+        "var b=String(u).split(/[?#]/)[0];" +
+        "return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}" +
+        "function dedupe(list){" +
+        "var by={},order=[];" +
+        "for(var i=0;i<list.length;i++){" +
+        "var it=list[i],k=keyOf(it[0]);" +
+        "if(Object.prototype.hasOwnProperty.call(by,k)){" +
+        "var o=by[k];" +
+        "if(qsz(it[0])>qsz(o[0]))by[k]=it" +
+        "}else{by[k]=it;order.push(k)}}" +
+        "var out=[];" +
+        "for(var j=0;j<order.length;j++)out.push(by[order[j]][0]);" +
+        "return out}" +
+        "var res=dedupe(good);" +
+        "if(!res.length)res=dedupe(all);" +
+        "return res;" +
         "})()";
 
     private WebView web;
@@ -135,6 +169,21 @@ public class BrowserActivity extends Activity {
             @Override public void onClick(View v) { finish(); }
         });
 
+        TextView reloadBtn = new TextView(this);
+        reloadBtn.setText("↻");
+        reloadBtn.setTextColor(Color.parseColor("#e7ebf3"));
+        reloadBtn.setTextSize(17);
+        reloadBtn.setPadding(dp(12), dp(6), dp(12), dp(6));
+        GradientDrawable rlBg = new GradientDrawable();
+        rlBg.setColor(Color.parseColor("#2d3649"));
+        rlBg.setCornerRadius(dp(12));
+        reloadBtn.setBackground(rlBg);
+        reloadBtn.setOnClickListener(new View.OnClickListener() {
+            @Override public void onClick(View v) {
+                try { web.reload(); } catch (Exception ignored) {}
+            }
+        });
+
         urlBox = new EditText(this);
         urlBox.setTextColor(Color.parseColor("#e7ebf3"));
         urlBox.setHintTextColor(Color.parseColor("#67718a"));
@@ -168,6 +217,9 @@ public class BrowserActivity extends Activity {
         });
 
         top.addView(closeBtn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        top.addView(reloadBtn, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams urlLp = new LinearLayout.LayoutParams(
