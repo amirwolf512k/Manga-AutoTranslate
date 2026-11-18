@@ -1,9 +1,3 @@
-#!/usr/bin/env python3
-"""v1.14.69 — گیتِ «لاگ فقط دوتا».
-
-Download/manga/ باید برایِ هر kind از لاگ فقط یک فایل داشته باشد
-(manga.log.txt / manga_old.log.txt) و هیچ نسخهٔ شماره‌دارِ
-«manga.log (N).txt» ساخته نشده باشد."""
 import re
 import subprocess
 import sys

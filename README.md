@@ -341,7 +341,7 @@ git clone https://github.com/amirwolf5122/Manga-AutoTranslate.git
 cd Manga-AutoTranslate
 
 Manga.bat    # ویندوز — منو: App / Web / CLI
-./manga.sh   # لینوکس / مک
+bash manga.sh   # لینوکس / مک
 ```
 
 یا مستقیم:

@@ -246,7 +246,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # دوتا جابِ موازی — رقابت روی ساختِ ریلیز؛ با تلاشِ مجدد حل میشود
           gh release upload clouds dist/MangaCloud-Windows-* --repo $env:GITHUB_REPOSITORY --clobber 2>$null
           if ($LASTEXITCODE -ne 0) {
             gh release create clouds dist/MangaCloud-Windows-* --repo $env:GITHUB_REPOSITORY --title "clouds" --target main --notes "Windows x64 + x86" 2>$null
@@ -260,8 +259,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.PAT_5122 }}
         run: |
-          # pwsh: باید $LASTEXITCODE را چک کنیم — «if (cmd > $null)»
-          # خروجیِ (خالی‌شده) را میسنجد نه کدِ خروج را (باگِ ترجمه از بش!)
           gh release view apks --repo amirwolf5122/Manga-AutoTranslate *> $null
           if ($LASTEXITCODE -eq 0) {
             gh release upload clouds dist/MangaCloud-Windows-* --repo amirwolf5122/Manga-AutoTranslate --clobber 2>$null

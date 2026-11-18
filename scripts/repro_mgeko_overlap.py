@@ -1,24 +1,3 @@
-#!/usr/bin/env python3
-"""v1.14.321 — بازتولیدِ باگِ فصلِ هم‌پوشانِ mgeko (چکِ سبز/قرمز).
-
-سناریو (خواستهٔ کاربر):
-  ورودی ۱: ch102,ch103 → استخراج/ترجمه کامل میشود.
-  ورودی ۲: ch103,ch104 → موتور نباید بهخاطر فصلِ مشترکِ 103 یا کشِ مشترک
-            خراب شود؛ ch103 باید بدونِ دانلود/ترجمه از «انبارِ فصلها»
-            برگردد، فقط ch104 پردازش شود، و PDF نهایی دقیقاً ۸ صفحه
-            با ترتیبِ درست (ch103 سپس ch104) باشد.
-
-موتور با سرورِ محلیِ شبیهِ mgeko اجرا میشود (بدون اینترنت) با
---fake-translate (بدون کلید API) و پاکسازیِ opencv.
-
-اجرا (فازی تا در timeout جا شود):
-  python3 scripts/repro_mgeko_overlap.py --phase=A
-  python3 scripts/repro_mgeko_overlap.py --phase=B
-  python3 scripts/repro_mgeko_overlap.py --phase=C
-  python3 scripts/repro_mgeko_overlap.py            # همه با هم
-
-خروجی: exit 0 = همهٔ چکهای آن فاز سبز؛ exit 1 = رگرسیون.
-"""
 import http.server
 import io
 import json
@@ -33,7 +12,6 @@ HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ENGINE = os.path.join(HERE, "manga.py")
 WORK = "/tmp/repro_mgeko"
 STORE = os.path.join(WORK, "chapter_store")
-# مثل اندروید: هر سه اجرا «همان» مسیرِ خروجی را میگیرند (کشِ مشترک)
 OUT_A = os.path.join(WORK, "manga.pdf")
 OUT_B = os.path.join(WORK, "manga.pdf")
 OUT_C = os.path.join(WORK, "manga.pdf")
@@ -51,7 +29,6 @@ RESULTS = []
 
 
 def _make_page_png(ch: int, pg: int) -> bytes:
-    """صفحهٔ مانگای ساختگی: حباب بیضی + متنِ انگلیسی + نشانِ ترتیب."""
     from PIL import Image, ImageDraw, ImageFont
     W, H = 640, 900
     im = Image.new("RGB", (W, H), (252, 252, 250))
@@ -138,7 +115,6 @@ class MockHandler(http.server.BaseHTTPRequestHandler):
 
 
 def start_server():
-    # پورتِ ثابت — کلیدِ انبارِ فصل به URL (شامل پورت) وابسته است
     for port in (8765, 8766, 8767, 8768):
         try:
             srv = http.server.ThreadingHTTPServer(

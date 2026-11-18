@@ -1,14 +1,12 @@
-#!/usr/bin/env python3
-"""Pre-download engine models (detector + rapidocr) for offline QA runs."""
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import manga  # noqa: E402  (loader exec; downloads deps on import)
+import manga
 
-import numpy as np  # noqa: E402
-import cv2  # noqa: E402
+import numpy as np
+import cv2
 
 
 def main():
@@ -17,7 +15,6 @@ def main():
     cv2.putText(img, "HELLO", (185, 210), cv2.FONT_HERSHEY_SIMPLEX,
                 0.8, (0, 0, 0), 2)
 
-    # 1) detector model download + session warmup
     det_cls = getattr(manga, "RTDetrV2ONNXDetector", None)
     print("[warmup] detector class:", det_cls, flush=True)
     if det_cls is not None:
@@ -28,7 +25,6 @@ def main():
         except Exception as e:
             print("[warmup] detector call failed:", repr(e)[:300], flush=True)
 
-    # 2) rapidocr warmup
     try:
         from rapidocr import RapidOCR
         eng = RapidOCR()

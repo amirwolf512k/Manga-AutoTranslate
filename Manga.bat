@@ -1,13 +1,8 @@
 @echo off
-rem ============================================
-rem   Manga Translator - Windows launcher
-rem ============================================
 chcp 65001 >nul
-rem VER:1.14.33
 title Manga Translator
 cd /d "%~dp0"
 
-rem Prefer Python 3.12 (more stable wheels than 3.14)
 set "PY=python"
 where py >nul 2>nul
 if not errorlevel 1 (

@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Tap the app's run button (شروع ترجمه) via uiautomator.
-Handles stale dumps, off-screen buttons (scrolls to them), diagnostics."""
 import re
 import subprocess
 import sys
@@ -88,7 +85,6 @@ def main():
     def job_finished_fast():
         return manga_log().count("END — done=") > pre_end_count
 
-    # walk from the top of the form downward
     for _ in range(3):
         sh("adb", "shell", "input", "swipe", str(w // 2), str(int(h * 0.3)),
            str(w // 2), str(int(h * 0.8)), "300")
@@ -126,7 +122,6 @@ def main():
                         print("[tap-run] job ran and finished fast (cached) ✔ (retry)")
                         return 0
             else:
-                # off-screen → scroll toward it
                 swipe_up()
                 time.sleep(1)
         else:

@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""QA دسته‌ای ci_imgs: برای هر تصویر clean-only --debug اجرا میکند،
-تعداد ناحیهها و متنِ جاماندهٔ خروجیِ پاک را گزارش میدهد."""
 import json
 import os
 import subprocess
@@ -76,7 +73,6 @@ def main():
                 arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(
                     pix.height, pix.width, pix.n)[:, :, :3]
                 doc.close()
-                # OCR روی خروجیِ پاک: متنِ باقی‌مانده = جامانده
                 left = ocr_texts(cv2.cvtColor(arr, cv2.COLOR_RGB2BGR))
             except Exception as e:
                 left = [("?", f"pdf-err {e}", 0)]

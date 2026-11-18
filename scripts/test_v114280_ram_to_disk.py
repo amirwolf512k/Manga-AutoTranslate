@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import ast
 import importlib.util
 import os

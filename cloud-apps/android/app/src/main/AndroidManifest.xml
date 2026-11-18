@@ -23,7 +23,6 @@
             </intent-filter>
         </activity>
 
-        <!-- v1.14.322 — مرورگرِ داخلی برای سایت‌های کپچادار + استخراجِ عکس -->
         <activity
             android:name=".BrowserActivity"
             android:exported="false"

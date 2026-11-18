@@ -1,38 +1,17 @@
-#!/usr/bin/env python3
-"""Red-stain regression gate for the emulator/PC output.
-
-Usage: check_red.py <output.(pdf|jpg|png)> <original.webp|jpg>
-
-Calibrated (v1.14.67) on three ground-truth artifacts:
-  * PC direct clean output (img5.jpg)      → relief-ghost 0.00%   (PASS)
-  * phone GOOD pdf (rendered Persian text) → relief-ghost 1.09%   (PASS)
-  * phone BAD pdf (red extrusion ghost)    → relief-ghost 9.85%   (FAIL)
-
-Two metrics, both inside the title-card zone (neon frame excluded):
-  1. relief-edge ghost (primary): the original's dark-red extrusion EDGES
-     (Sobel gradient, orientation-aware) that are still present in the
-     output at the same location and direction. Untouched relief keeps
-     the same edge pattern; a cleaned card does not. Threshold 3.0%.
-  2. white-glyph leftover (secondary): original white glyph pixels that
-     are still bright and near-identical in the output — catches the
-     "snapshot restored, nothing happened" failure mode. Threshold 1.0%.
-Exit 0 = pass.
-"""
 import sys
 
 import cv2
 import numpy as np
 
-# title-card zone with margin, EXCLUDING the red neon frame (x<140 / x>780)
-ZONE = (140, 2820, 780, 3140)  # x0, y0, x1, y1
+ZONE = (140, 2820, 780, 3140)
 
-EDGE_THR_ORIG = 40   # Sobel magnitude for the original relief edges
-EDGE_THR_OUT = 20    # Sobel magnitude for the output edges (pdf-softened)
-EDGE_RING = 2        # tolerance ring (px) around an output edge
-ANGLE_TOL_DEG = 35   # gradient-direction tolerance
+EDGE_THR_ORIG = 40
+EDGE_THR_OUT = 20
+EDGE_RING = 2
+ANGLE_TOL_DEG = 35
 GHOST_FAIL_PCT = 3.0
 WHITE_FAIL_PCT = 3.0
-WHITE_SAME_SUM = 40  # sum-abs channel tolerance for "still identical"
+WHITE_SAME_SUM = 40
 
 
 def load_pdf(path):
@@ -52,7 +31,6 @@ def load_img(path):
 
 
 def relief_mask(orig):
-    """dark-red saturated text-relief pixels of the ORIGINAL (POCO F4 ghost)."""
     oz = orig.astype(int)
     r, gr, b = oz[..., 2], oz[..., 1], oz[..., 0]
     gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
@@ -121,7 +99,6 @@ def main():
               f"> {WHITE_FAIL_PCT:.1f}%")
         ok = False
 
-    # whole-page numbers are informational only (background dominates them)
     fp_edges = (extr & (mag_o > EDGE_THR_ORIG))
     fp_near = cv2.dilate(edge_c, k).astype(bool)
     fp_da = np.abs(ang_o - ang_c)
@@ -130,7 +107,6 @@ def main():
         ANGLE_TOL_DEG))).sum()) / max(1, int(fp_edges.sum()))
     print(f"[check] full-page relief-edge ghost (info): {fp_pct:.2f}%")
 
-    # diagnostic crops (next to the output file) for CI artifacts
     try:
         base = out_path.rsplit(".", 1)[0]
         cv2.imwrite(base + "_card_out.png", out[y0:y1, x0:x1])

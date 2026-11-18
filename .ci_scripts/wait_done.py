@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-"""Wait for the in-app engine to finish (files/manga.log === END done=True).
-Exits 0 on success, 1 on engine error/timeout. Prints the tail of the log."""
 import subprocess
 import sys
 import time

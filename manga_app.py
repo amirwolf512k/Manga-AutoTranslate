@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import json
 import os
 import re
@@ -14,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.340"
+APP_VER = "1.14.341"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1488,7 +1487,6 @@ _MT_BROWSER_WIN_JS = """
   }
   css();
   var box=document.createElement('div');box.id='mtbw';
-  /* v1.14.326 — \u0639\u0642\u0628/\u062c\u0644\u0648 \u0645\u062b\u0644\u0650 \u0645\u0631\u0648\u0631\u06af\u0631\u0650 \u06af\u0648\u0634\u06cc */
   var back=document.createElement('button');
   back.type='button';back.className='mtnav';
   back.textContent='\u2190';back.title='\u0639\u0642\u0628';
@@ -1501,7 +1499,6 @@ _MT_BROWSER_WIN_JS = """
   url.className='mturl';
   url.placeholder='\u062c\u0633\u062a\u062c\u0648 \u06cc\u0627 \u0622\u062f\u0631\u0633 \u0633\u0627\u06cc\u062a\u2026';
   try{url.value=location.href}catch(e){}
-  /* v1.14.326 — \u0645\u062b\u0644\u0650 \u06af\u0648\u0634\u06cc: \u0645\u062a\u0646\u0650 \u0622\u0632\u0627\u062f = \u0633\u0631\u0686\u0650 \u06af\u0648\u06af\u0644 */
   function isDomain(u){
     return !/\\s/.test(u)&&/^[A-Za-z0-9_-]+(\\.[A-Za-z0-9_-]+)+(:\\d+)?([\\/?#].*)?$/.test(u)
   }
@@ -1583,8 +1580,6 @@ _MT_BROWSER_WIN_JS = """
   box.appendChild(fwd);box.appendChild(back);box.appendChild(url);
   box.appendChild(goBtn);box.appendChild(btn);box.appendChild(btn2);
   box.appendChild(cnt);
-  /* v1.14.328 — نصب روی documentElement (نه body — سایتها body را
-     میپاکند) + استایل + خودترمیمی */
   function mount(){
     try{
       css();
@@ -1595,8 +1590,6 @@ _MT_BROWSER_WIN_JS = """
     }catch(e){}
   }
   mount();setTimeout(mount,300);setTimeout(mount,900);setTimeout(mount,2500);
-  /* v1.14.328 — نگهبان: اگر سایتی نوار یا استایل را برداشت،
-     بیدرنگ دوباره وصل میشود */
   try{
     var pend=0;
     var obs=new MutationObserver(function(ms){
@@ -1614,8 +1607,6 @@ _MT_BROWSER_WIN_JS = """
     });
     obs.observe(document.documentElement||document,{childList:true,subtree:true});
   }catch(e){}
-  /* v1.14.328 — تیکِ ۲ ثانیه: نوار سرِ جایش میماند و آدرسِ فیلد
-     با location.href همگام است (SPAها بدونِ لود آدرس عوض میکنند) */
   setInterval(function(){
     mount();
     try{
@@ -2636,9 +2627,6 @@ def _browser_extract_js() -> str:
     if (!window.__mtLinksInstalled) {
       window.__mtLinksInstalled = true;
 
-      // v1.14.323 — تشخیصِ میزبان: پنجرهٔ دسکتاپ (pywebview) یا
-      // وین۳۲ کلود (chrome.webview) یا مرورگرِ ساده. در دسکتاپِ واقعی
-      // «مرورگرِ داخلی» دیده میشود و نشانک مخفی؛ در وب برعکس.
       const hostToggle = () => {
         try {
           const pw = !!(window.pywebview && window.pywebview.api
@@ -2753,10 +2741,6 @@ def _browser_extract_js() -> str:
 
       window.addEventListener("hashchange", applyHash);
 
-      // ————— v1.14.336 — مرورگرِ داخلیِ وب (کلودِ لینوکس + مرورگر):
-      // کرهٔ شناورِ پایین-چپ + پوششِ تمام-صفحه با همان نوارِ تک-ردیفِ
-      // نسخهٔ اصلیِ پی‌سی (→ ← آدرس برو استخراج شمارش) + آیفریم؛
-      // سایت‌هایی که اجازه نمی‌دهند → راهنمای نشانک + مرورگرِ سیستم —————
       const installWebBrowser = () => {
         try {
           if (window.__mtWebFabInst) return;
@@ -9456,9 +9440,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 queue=False,
                 js="""() => {
   try {
-    /* v1.14.327 — متنِ کاملِ فیلد فرستاده میشود تا پایتون خودش
-       تصمیم بگیرد: لینکِ عکس/چندلینک = سایتِ قبلی (بعد از
-       استخراج)، متنِ آزاد = سرچِ گوگل، دامنه = https. */
     let fieldText = '';
     try {
       const el = document.querySelector('#manga_inp_path textarea')
