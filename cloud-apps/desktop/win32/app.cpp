@@ -1907,7 +1907,7 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         } else {
             if (g_webApp != NULL) {
                 std::wstring js = std::wstring(
-                    L"(function(){try{alert('__MT_FILLED__")")
+                    L"(function(){try{alert('__MT_FILLED__')")
                     + std::to_wstring(g_dlOk)
                     + L"__MT_FILLED2__');return 1}catch(e){return 0}})()";
                 g_webApp->ExecuteScript(js.c_str(), &g_execNoop);
