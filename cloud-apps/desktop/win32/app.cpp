@@ -83,6 +83,7 @@ static BOOL g_readerMode = FALSE;
 static std::vector<std::wstring> g_dlUrls;
 static int g_dlOk = 0;
 static int g_dlBad = 0;
+static int g_upPolls = 0;
 static HBRUSH g_barBrush = NULL;
 static HBRUSH g_urlBrush = NULL;
 static RECT g_urlRing = {0, 0, 0, 0};
@@ -127,6 +128,7 @@ L"return 0}"
 L"function junk(u){"
 L"if(!u)return 1;"
 L"if(u.indexOf('data:')===0)return 1;"
+L"if(u.indexOf('blob:')===0)return 1;"
 L"if(!/^https?:/i.test(u))return 1;"
 L"var b=String(u).split(/[?#]/)[0];"
 L"if(/\\.(svg|ico|gif)$/i.test(b))return 1;"
@@ -136,6 +138,53 @@ L"if(q>0&&q<=400)return 1;"
 L"if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;"
 L"if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1;"
 L"return 0}"
+L"var seen={},picked=[];"
+L"function add(u){"
+L"try{"
+L"if(!u)return;"
+L"u=abs(String(u).trim());"
+L"if(!u)return;"
+L"if(junk(u))return;"
+L"try{if(u===location.href)return}catch(e){}"
+L"var k=keyOf(u);"
+L"if(Object.prototype.hasOwnProperty.call(seen,k))return;"
+L"seen[k]=1;picked.push(u)"
+L"}catch(e){}}"
+L"function domPass(){"
+L"var els2=document.querySelectorAll('img');"
+L"for(var i=0;i<els2.length;i++){"
+L"var el=els2[i],ok=false,nw=0,nh=0;"
+L"try{ok=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}"
+L"if(!ok)continue;"
+L"if(nw&&nh&&Math.max(nw,nh)<300)continue;"
+L"var u='';"
+L"try{u=el.currentSrc||el.src||''}catch(e){}"
+L"if(u)add(u)"
+L"}"
+L"}"
+L"function resPass(){"
+L"var rs=[];"
+L"try{rs=performance.getEntriesByType('resource')}catch(e){}"
+L"for(var i=0;i<rs.length;i++){"
+L"var en=rs[i]||{};"
+L"var t=String(en.initiatorType||'');"
+L"if(t!=='img'&&t!=='css'&&t!=='link'&&t!=='other'&&t!=='svg'&&t!=='embed'&&t!=='fetch'&&t!=='xmlhttprequest')continue;"
+L"var n=String(en.name||'');"
+L"if(!n)continue;"
+L"var b=n.split(/[?#]/)[0];"
+L"var ext=/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b);"
+L"if(!ext){"
+L"if(t==='fetch'||t==='xmlhttprequest')continue;"
+L"if(!/(^|\\/)(pages?|images?|img|media|manga|manhwa|webtoon|chapters?|episodes?|comic|uploads|wp-content|cdn)(\\/|[_\\-.]|$)/i.test(b))continue"
+L"}"
+L"add(n)"
+L"}"
+L"}"
+L"var rsLen=0;"
+L"try{rsLen=performance.getEntriesByType('resource').length}catch(e){}"
+L"if(rsLen>=250){domPass();resPass()}"
+L"else{resPass();domPass()}"
+L"if(picked.length)return picked;"
 L"var all=[],good=[],idx=0;"
 L"var els=document.querySelectorAll('img,source');"
 L"for(var i=0;i<els.length;i++){"
@@ -237,20 +286,6 @@ static const wchar_t MT_READER_REFRESH_JS[] =
     L"f.contentWindow.location.reload();return '1'}"
     L"catch(e){f.src=f.src;return '1'}}catch(e){return '0'}})()";
 
-static const wchar_t MT_CLEAR_FIELD_JS[] =
-    L"(function(){try{"
-    L"var el=document.querySelector('#manga_inp_path textarea')"
-    L"||document.querySelector('[id*=\"manga_inp_path\"] textarea')"
-    L"||document.querySelector('#manga_inp_path input');"
-    L"if(!el)return 0;"
-    L"var pr=el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype"
-    L":window.HTMLInputElement.prototype;"
-    L"var d=Object.getOwnPropertyDescriptor(pr,'value');"
-    L"if(d&&d.set)d.set.call(el,'');else el.value='';"
-    L"el.dispatchEvent(new Event('input',{bubbles:true}));"
-    L"el.dispatchEvent(new Event('change',{bubbles:true}));return 1}"
-    L"catch(e){return 0}})()";
-
 static std::wstring MtDlOneJs(const std::wstring &quotedUrl) {
     return std::wstring(L"(function(){try{var u=") + quotedUrl
         + L";if(!u)return '';"
@@ -265,23 +300,54 @@ static std::wstring MtDlOneJs(const std::wstring &quotedUrl) {
           L".catch(function(){return ''})}catch(e){return ''}})()";
 }
 
-static std::wstring MtAppendLineJs(const std::wstring &quotedLine) {
-    return std::wstring(L"(function(){try{"
-        L"var el=document.querySelector('#manga_inp_path textarea')"
-        L"||document.querySelector('[id*=\"manga_inp_path\"] textarea')"
-        L"||document.querySelector('#manga_inp_path input');"
-        L"if(!el)return 0;var line=") + quotedLine
-        + L";if(!line)return 0;"
-          L"var cur=String(el.value||'');"
-          L"var nv=cur?cur+'\\n'+line:line;"
-          L"var pr=el.tagName==='TEXTAREA'?window.HTMLTextAreaElement.prototype"
-          L":window.HTMLInputElement.prototype;"
-          L"var d=Object.getOwnPropertyDescriptor(pr,'value');"
-          L"if(d&&d.set)d.set.call(el,nv);else el.value=nv;"
-          L"el.dispatchEvent(new Event('input',{bubbles:true}));"
-          L"el.dispatchEvent(new Event('change',{bubbles:true}));return 1}"
-          L"catch(e){return 0}})()";
+static std::wstring MtUpOneJs(int idx, const std::wstring &quotedDataUrl) {
+    wchar_t ib[32];
+    swprintf(ib, 32, L"%d", idx);
+    return std::wstring(
+        L"(function(){try{"
+        L"window.__mtUp=window.__mtUp||{ok:0,paths:[]};"
+        L"var i=") + std::wstring(ib)
+        + L";var d=" + quotedDataUrl + L";"
+          L"fetch(d).then(function(r){return r.blob()})"
+          L".then(function(b){"
+          L"var mt=String(d.slice(5,d.indexOf(';'))||'image/jpeg');"
+          L"var ex=mt.split('/')[1]||'jpg';if(ex==='jpeg')ex='jpg';"
+          L"if(!/^[a-z0-9]{2,5}$/.test(ex))ex='jpg';"
+          L"var fd=new FormData();"
+          L"fd.append('files',b,'page_'+(i+1)+'.'+ex);"
+          L"return fetch('gradio_api/upload',{method:'POST',body:fd})"
+          L".then(function(r){if(r.status===404)"
+          L"return fetch('upload',{method:'POST',body:fd});"
+          L"return r})})"
+          L".then(function(r){return r.ok?r.json():[]})"
+          L".then(function(a){if(a&&a[0])"
+          L"window.__mtUp.paths[i]=String(a[0])})"
+          L".catch(function(){})"
+          L".then(function(){window.__mtUp.ok++});"
+          L"return 1}catch(e){return 0}})()";
 }
+
+static std::wstring MtUpPollJs(int total) {
+    wchar_t tb[32];
+    swprintf(tb, 32, L"%d", total);
+    return std::wstring(
+        L"(function(){try{"
+        L"var u=window.__mtUp||{ok:0};"
+        L"var t=") + std::wstring(tb) + L";"
+        L"return new Promise(function(res){"
+        L"setTimeout(function(){res(u.ok+'/'+t)},400)})"
+        L"}catch(e){return '0/1'}})()";
+}
+
+static const wchar_t MT_UP_FILL_JS[] =
+    L"(function(){try{"
+    L"var u=window.__mtUp;if(!u)return 0;"
+    L"var p=(u.paths||[]).filter(Boolean);"
+    L"if(!p.length)return 0;"
+    L"if(window.__mtFillLinks){"
+    L"window.__mtFillLinks(p.join('\\n'));"
+    L"alert('__MT_FILLED__'+p.length+'__MT_FILLED2__')}"
+    L"return 1}catch(e){return 0}})()";
 
 static void MtWriteLog(const std::wstring &path, const char *line) {
     if (path.empty() || line == NULL)
@@ -797,6 +863,7 @@ static MtExecHandler g_execFill(4);
 static MtExecHandler g_execReaderWatch(5);
 static MtExecHandler g_execDlList(9);
 static MtExecHandler g_execDlStep(10);
+static MtExecHandler g_execUpPoll(12);
 static MtExecHandler g_execNoop(11);
 
 struct MtNoopScriptHandler
@@ -1872,13 +1939,9 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
                 MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
             return S_OK;
         }
-        if (links.size() > 80)
-            links.resize(80);
         g_dlUrls = links;
         g_dlOk = 0;
         g_dlBad = 0;
-        if (g_webApp != NULL)
-            g_webApp->ExecuteScript(MT_CLEAR_FIELD_JS, &g_execNoop);
         if (g_webBr != NULL)
             g_webBr->ExecuteScript(
                 MtDlOneJs(MtJsQuote(g_dlUrls[0])).c_str(), &g_execDlStep);
@@ -1888,10 +1951,10 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         std::wstring d = MtParseJsonString(
             resultObjectAsJson ? resultObjectAsJson : L"");
         if (d.size() > 32 && d.compare(0, 5, L"data:") == 0) {
-            g_dlOk++;
             if (g_webApp != NULL)
                 g_webApp->ExecuteScript(
-                    MtAppendLineJs(MtJsQuote(d)).c_str(), &g_execNoop);
+                    MtUpOneJs(g_dlOk, MtJsQuote(d)).c_str(), &g_execNoop);
+            g_dlOk++;
         } else {
             g_dlBad++;
         }
@@ -1904,14 +1967,47 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
                 g_webBr->ExecuteScript(
                     MtDlOneJs(MtJsQuote(g_dlUrls[done])).c_str(),
                     &g_execDlStep);
+        } else if (g_dlOk > 0 && g_webApp != NULL) {
+            g_upPolls = 0;
+            SetWindowTextW(g_lblStatus,
+                L"\u2B06 \u0622\u067E\u0644\u0648\u062F \u0628\u0647 "
+                L"\u0633\u0631\u0648\u0631\u2026");
+            g_webApp->ExecuteScript(MtUpPollJs(g_dlOk).c_str(),
+                                    &g_execUpPoll);
         } else {
-            if (g_webApp != NULL) {
-                std::wstring js = std::wstring(
-                    L"(function(){try{alert('__MT_FILLED__')")
-                    + std::to_wstring(g_dlOk)
-                    + L"__MT_FILLED2__');return 1}catch(e){return 0}})()";
-                g_webApp->ExecuteScript(js.c_str(), &g_execNoop);
-            }
+            MessageBoxW(g_hwnd,
+                L"\u0647\u06CC\u0686 \u0639\u06A9\u0633\u06CC \u062F\u0627"
+                L"\u0646\u0644\u0648\u062F \u0646\u0634\u062F",
+                L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+                MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+            MtHideBrowser();
+        }
+        return S_OK;
+    }
+    if (mode == 12) {
+        std::wstring s = MtParseJsonString(
+            resultObjectAsJson ? resultObjectAsJson : L"");
+        int ok = _wtoi(s.c_str());
+        size_t slash = s.find(L'/');
+        int total = (slash != std::wstring::npos)
+            ? _wtoi(s.c_str() + slash + 1) : 1;
+        if (total <= 0)
+            total = 1;
+        g_upPolls++;
+        wchar_t sb[64];
+        swprintf(sb, 64, L"\u2B06 %d/%d", ok, total);
+        SetWindowTextW(g_lblStatus, sb);
+        if (ok >= total) {
+            if (g_webApp != NULL)
+                g_webApp->ExecuteScript(MT_UP_FILL_JS, &g_execNoop);
+            MtHideBrowser();
+        } else if (g_upPolls < 900) {
+            if (g_webApp != NULL)
+                g_webApp->ExecuteScript(MtUpPollJs(total).c_str(),
+                                        &g_execUpPoll);
+        } else {
+            if (g_webApp != NULL)
+                g_webApp->ExecuteScript(MT_UP_FILL_JS, &g_execNoop);
             MtHideBrowser();
         }
         return S_OK;
@@ -1956,7 +2052,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.338 (reader-mode FAB + download-extract)");
+    MtLog("WinMain — MangaCloud v1.14.339 (loaded-images extract + upload-to-server download)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);

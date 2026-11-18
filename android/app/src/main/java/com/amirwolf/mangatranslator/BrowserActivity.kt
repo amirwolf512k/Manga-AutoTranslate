@@ -52,6 +52,7 @@ return 0}
 function junk(u){
 if(!u)return 1;
 if(u.indexOf('data:')===0)return 1;
+if(u.indexOf('blob:')===0)return 1;
 if(!/^https?:/i.test(u))return 1;
 var b=String(u).split(/[?#]/)[0];
 if(/\.(svg|ico|gif)${'$'}/i.test(b))return 1;
@@ -61,6 +62,53 @@ if(q>0&&q<=400)return 1;
 if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;
 if(/(?:^|[^a-z0-9])ads?[._\/-]/i.test(b))return 1;
 return 0}
+var seen={},picked=[];
+function add(u){
+try{
+if(!u)return;
+u=abs(String(u).trim());
+if(!u)return;
+if(junk(u))return;
+try{if(u===location.href)return}catch(e){}
+var k=keyOf(u);
+if(Object.prototype.hasOwnProperty.call(seen,k))return;
+seen[k]=1;picked.push(u)
+}catch(e){}}
+function domPass(){
+var els2=document.querySelectorAll('img');
+for(var i=0;i<els2.length;i++){
+var el=els2[i],ok=false,nw=0,nh=0;
+try{ok=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}
+if(!ok)continue;
+if(nw&&nh&&Math.max(nw,nh)<300)continue;
+var u='';
+try{u=el.currentSrc||el.src||''}catch(e){}
+if(u)add(u)
+}
+}
+function resPass(){
+var rs=[];
+try{rs=performance.getEntriesByType('resource')}catch(e){}
+for(var i=0;i<rs.length;i++){
+var en=rs[i]||{};
+var t=String(en.initiatorType||'');
+if(t!=='img'&&t!=='css'&&t!=='link'&&t!=='other'&&t!=='svg'&&t!=='embed'&&t!=='fetch'&&t!=='xmlhttprequest')continue;
+var n=String(en.name||'');
+if(!n)continue;
+var b=n.split(/[?#]/)[0];
+var ext=/\.(jpe?g|png|webp|avif|bmp|tiff?)${'$'}/i.test(b);
+if(!ext){
+if(t==='fetch'||t==='xmlhttprequest')continue;
+if(!/(^|\/)(pages?|images?|img|media|manga|manhwa|webtoon|chapters?|episodes?|comic|uploads|wp-content|cdn)(\/|[_\-.]|${'$'})/i.test(b))continue
+}
+add(n)
+}
+}
+var rsLen=0;
+try{rsLen=performance.getEntriesByType('resource').length}catch(e){}
+if(rsLen>=250){domPass();resPass()}
+else{resPass();domPass()}
+if(picked.length)return picked;
 var all=[],good=[],idx=0;
 var els=document.querySelectorAll('img,source');
 for(var i=0;i<els.length;i++){
@@ -608,14 +656,9 @@ return res;
                                 Toast.LENGTH_LONG).show()
                             return@runOnUiThread
                         }
-                        val n = minOf(arr.length(), 80)
+                        val n = arr.length()
                         val urls = ArrayList<String>(n)
                         for (i in 0 until n) urls.add(arr.getString(i))
-                        if (arr.length() > 80) {
-                            Toast.makeText(this@BrowserActivity,
-                                "فقط ۸۰ عکسِ اول دانلود می‌شود",
-                                Toast.LENGTH_LONG).show()
-                        }
                         countLbl.text = "⬇ 0/$n"
                         startDownloadAll(urls)
                     } catch (e: Exception) {

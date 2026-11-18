@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.338"
+APP_VER = "1.14.339"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1051,6 +1051,43 @@ def smart_output_base(input_path: str) -> str:
         base = base + "_fa"
     return base
 
+def _stage_data_urls(src_text: str, dest_dir: str) -> str:
+    raw = str(src_text or "")
+    try:
+        import base64 as _b64
+        lines = [x.strip() for x in re.split(r"[\n\r]+", raw)]
+        if not any(x.lower().startswith("data:image/") for x in lines):
+            return raw
+        os.makedirs(dest_dir, exist_ok=True)
+        out, n = [], 0
+        for ln in lines:
+            if not ln:
+                continue
+            if not ln.lower().startswith("data:image/"):
+                out.append(ln)
+                continue
+            head, _, b64 = ln.partition(",")
+            try:
+                content = _b64.b64decode(b64)
+            except Exception:
+                content = b""
+            if not content:
+                continue
+            ext = ".jpg"
+            m = re.search(r"data:image/(jpe?g|png|webp|bmp)",
+                          head.lower())
+            if m:
+                ext = "." + ("jpg" if m.group(1) in ("jpg", "jpeg")
+                             else m.group(1))
+            n += 1
+            fp = os.path.join(dest_dir, "page_%03d%s" % (n, ext))
+            with open(fp, "wb") as f:
+                f.write(content)
+            out.append(fp)
+        return "\n".join(out)
+    except Exception:
+        return raw
+
 _ASK_ANSWER = {}
 
 def _cache_dir_for(output_path) -> str:
@@ -1351,6 +1388,54 @@ _MT_BROWSER_WIN_JS = """
     try{
       if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];
     }catch(e){}
+    var seen={},picked=[];
+    function add(u){
+      try{
+        if(!u)return;
+        u=abs(String(u).trim());
+        if(!u)return;
+        if(junk(u))return;
+        try{if(u===location.href)return}catch(e){}
+        var k=keyOf(u);
+        if(Object.prototype.hasOwnProperty.call(seen,k))return;
+        seen[k]=1;picked.push(u)
+      }catch(e){}
+    }
+    function domPass(){
+      var els=document.querySelectorAll('img');
+      for(var i=0;i<els.length;i++){
+        var el=els[i],ok=false,nw=0,nh=0;
+        try{ok=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}
+        if(!ok)continue;
+        if(nw&&nh&&Math.max(nw,nh)<300)continue;
+        var u='';
+        try{u=el.currentSrc||el.src||''}catch(e){}
+        if(u)add(u)
+      }
+    }
+    function resPass(){
+      var rs=[];
+      try{rs=performance.getEntriesByType('resource')}catch(e){}
+      for(var i=0;i<rs.length;i++){
+        var en=rs[i]||{};
+        var t=String(en.initiatorType||'');
+        if(t!=='img'&&t!=='css'&&t!=='link'&&t!=='other'&&t!=='svg'&&t!=='embed'&&t!=='fetch'&&t!=='xmlhttprequest')continue;
+        var n=String(en.name||'');
+        if(!n)continue;
+        var b=n.split(/[?#]/)[0];
+        var ext=/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b);
+        if(!ext){
+          if(t==='fetch'||t==='xmlhttprequest')continue;
+          if(!/(^|\\/)(pages?|images?|img|media|manga|manhwa|webtoon|chapters?|episodes?|comic|uploads|wp-content|cdn)(\\/|[_\\-.]|$)/i.test(b))continue
+        }
+        add(n)
+      }
+    }
+    var rsLen=0;
+    try{rsLen=performance.getEntriesByType('resource').length}catch(e){}
+    if(rsLen>=250){domPass();resPass()}
+    else{resPass();domPass()}
+    if(picked.length)return picked;
     var all=[],good=[],idx=0;
     var els=document.querySelectorAll('img,source');
     for(var i=0;i<els.length;i++){
@@ -1462,7 +1547,6 @@ _MT_BROWSER_WIN_JS = """
         alert('عکسی پیدا نشد — اول فصل را باز کن و تا آخرِ صفحه اسکرول کن تا عکس‌های تنبل لود بشن');
         return;
       }
-      if(out.length>80)out=out.slice(0,80);
       cnt.textContent='⬇ 0/'+out.length;
       var i=0;
       function step(){
@@ -2413,7 +2497,7 @@ def _gradio_major() -> int:
 
 _MT_BM_CODE = (
     "(function(){"
-    "var seen={},out=[];"
+    "var seen={},picked=[];"
     "function abs(u){try{var a=document.createElement('a');a.href=u;"
     "return a.href}catch(e){return null}}"
     "function qsz(u){"
@@ -2427,6 +2511,7 @@ _MT_BM_CODE = (
     "function junk(u){"
     "if(!u)return 1;"
     "if(u.indexOf('data:')===0)return 1;"
+    "if(u.indexOf('blob:')===0)return 1;"
     "if(!/^https?:/i.test(u))return 1;"
     "var b=String(u).split(/[?#]/)[0];"
     "if(/\\.(svg|ico|gif)$/i.test(b))return 1;"
@@ -2434,21 +2519,68 @@ _MT_BM_CODE = (
     "var q=qsz(u);"
     "if(q>0&&q<=400)return 1;"
     "if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;"
-    "if(/(?:^|[^a-z0-9])ads?[._/-]/i.test(b))return 1;"
+    "if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1;"
     "return 0}"
     "function keyOf(u){"
     "var b=String(u).split(/[?#]/)[0];"
     "return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}"
+    "function add(u){"
+    "try{"
+    "if(!u)return;"
+    "u=abs(String(u).trim());"
+    "if(!u)return;"
+    "if(junk(u))return;"
+    "try{if(u===location.href)return}catch(e){}"
+    "var k=keyOf(u);"
+    "if(Object.prototype.hasOwnProperty.call(seen,k))return;"
+    "seen[k]=1;picked.push(u)"
+    "}catch(e){}}"
+    "function domPass(){"
+    "var els=document.querySelectorAll('img');"
+    "for(var i=0;i<els.length;i++){"
+    "var el=els[i],ok=false,nw=0,nh=0;"
+    "try{ok=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}"
+    "if(!ok)continue;"
+    "if(nw&&nh&&Math.max(nw,nh)<300)continue;"
+    "var u='';"
+    "try{u=el.currentSrc||el.src||''}catch(e){}"
+    "if(u)add(u)"
+    "}"
+    "}"
+    "function resPass(){"
+    "var rs=[];"
+    "try{rs=performance.getEntriesByType('resource')}catch(e){}"
+    "for(var i=0;i<rs.length;i++){"
+    "var en=rs[i]||{};"
+    "var t=String(en.initiatorType||'');"
+    "if(t!=='img'&&t!=='css'&&t!=='link'&&t!=='other'&&t!=='svg'&&t!=='embed'&&t!=='fetch'&&t!=='xmlhttprequest')continue;"
+    "var n=String(en.name||'');"
+    "if(!n)continue;"
+    "var b=n.split(/[?#]/)[0];"
+    "var ext=/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b);"
+    "if(!ext){"
+    "if(t==='fetch'||t==='xmlhttprequest')continue;"
+    "if(!/(^|\\/)(pages?|images?|img|media|manga|manhwa|webtoon|chapters?|episodes?|comic|uploads|wp-content|cdn)(\\/|[_\\-.]|$)/i.test(b))continue"
+    "}"
+    "add(n)"
+    "}"
+    "}"
+    "try{"
+    "if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)picked.push(location.href);"
+    "}catch(e){}"
+    "if(!picked.length){"
+    "var rsLen=0;"
+    "try{rsLen=performance.getEntriesByType('resource').length}catch(e){}"
+    "if(rsLen>=250){domPass();resPass()}"
+    "else{resPass();domPass()}"
+    "}"
+    "if(!picked.length){"
     "var all=[],good=[],idx=0;"
     "var els=document.querySelectorAll('img,source');"
     "for(var i=0;i<els.length;i++){"
     "var el=els[i],cs=null;"
     "try{cs=el.currentSrc||el.src||null}catch(e){}"
-    "var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),"
-    "el.getAttribute('data-original'),el.getAttribute('data-original-src'),"
-    "el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),"
-    "el.getAttribute('data-url'),el.getAttribute('data-image'),"
-    "el.getAttribute('data-echo')];"
+    "var c=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),el.getAttribute('data-original'),el.getAttribute('data-original-src'),el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),el.getAttribute('data-url'),el.getAttribute('data-image'),el.getAttribute('data-echo')];"
     "var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');"
     "if(ss){var p=ss.split(','),best='',bw=0;"
     "for(var k=0;k<p.length;k++){"
@@ -2471,30 +2603,31 @@ _MT_BM_CODE = (
     "if(!pick)continue;"
     "var w=el.naturalWidth||0,h=el.naturalHeight||0;"
     "if(w&&h&&Math.max(w,h)<300)continue;"
-    "all.push([pick,idx]);"
-    "if(!pj)good.push([pick,idx]);"
+    "all.push(pick);"
+    "if(!pj)good.push(pick);"
     "idx++}"
     "function dd(list){"
     "var by={},order=[];"
     "for(var i=0;i<list.length;i++){"
-    "var it=list[i],k=keyOf(it[0]);"
+    "var u=list[i],k=keyOf(u);"
     "if(Object.prototype.hasOwnProperty.call(by,k)){"
     "var o=by[k];"
-    "if(qsz(it[0])>qsz(o[0]))by[k]=it}"
-    "else{by[k]=it;order.push(k)}}"
+    "if(qsz(u)>qsz(o))by[k]=u}"
+    "else{by[k]=u;order.push(k)}}"
     "var r=[];"
-    "for(var j=0;j<order.length;j++)r.push(by[order[j]][0]);"
+    "for(var j=0;j<order.length;j++)r.push(by[order[j]]);"
     "return r}"
     "var res=dd(good);"
     "if(!res.length)res=dd(all);"
-    "if(!res.length){alert('__MT_NOLINKS__');return}"
-    "for(var q3=0;q3<res.length;q3++)out.push(res[q3]);"
-    "var payload=out.join('\\n');"
+    "for(var q3=0;q3<res.length;q3++)picked.push(res[q3]);"
+    "}"
+    "if(!picked.length){alert('__MT_NOLINKS__');return}"
+    "var payload=picked.join('\\n');"
     "var app='__MTAPP__';"
     "try{var url=app+'#imgs='+encodeURIComponent(payload);"
     "if(url.length<=1600000){window.open(url,'_blank');return}}catch(e){}"
     "try{navigator.clipboard.writeText(payload).then(function(){"
-    "alert('__MT_COPIED__'+out.length)},function(){prompt('__MT_COPY2__',payload)})"
+    "alert('__MT_COPIED__'+picked.length)},function(){prompt('__MT_COPY2__',payload)})"
     "}catch(e){prompt('__MT_COPY2__',payload)}})();"
 )
 
@@ -2840,6 +2973,7 @@ def _browser_extract_js() -> str:
               const junk = (u) => {
                 if (!u) return 1;
                 if (u.indexOf("data:") === 0) return 1;
+                if (u.indexOf("blob:") === 0) return 1;
                 if (!/^https?:/i.test(u)) return 1;
                 const b = String(u).split(/[?#]/)[0];
                 if (/\\.(svg|ico|gif)$/i.test(b)) return 1;
@@ -2852,6 +2986,67 @@ def _browser_extract_js() -> str:
               };
               const keyOf = (u) => String(u).split(/[?#]/)[0]
                 .replace(/[-_]\\d{2,4}x\\d{2,4}\\./i, ".");
+              const seen = {}, picked = [];
+              const add = (u) => {
+                try {
+                  if (!u) return;
+                  u = abs(String(u).trim());
+                  if (!u) return;
+                  if (junk(u)) return;
+                  try { if (u === d.location.href) return; } catch (e) {}
+                  const k = keyOf(u);
+                  if (Object.prototype.hasOwnProperty.call(seen, k)) return;
+                  seen[k] = 1; picked.push(u);
+                } catch (e) {}
+              };
+              const domPass = () => {
+                const im2 = d.querySelectorAll("img");
+                for (let i = 0; i < im2.length; i++) {
+                  const el = im2[i];
+                  let ok = false, nw = 0, nh = 0;
+                  try {
+                    ok = !!(el.complete && el.naturalWidth > 0);
+                    nw = el.naturalWidth || 0;
+                    nh = el.naturalHeight || 0;
+                  } catch (e) {}
+                  if (!ok) continue;
+                  if (nw && nh && Math.max(nw, nh) < 300) continue;
+                  let u = "";
+                  try { u = el.currentSrc || el.src || ""; } catch (e) {}
+                  if (u) add(u);
+                }
+              };
+              const resPass = () => {
+                let rs = [];
+                try {
+                  const pw = d.defaultView || window;
+                  rs = pw.performance.getEntriesByType("resource");
+                } catch (e) {}
+                for (let i = 0; i < rs.length; i++) {
+                  const en = rs[i] || {};
+                  const t = String(en.initiatorType || "");
+                  if (t !== "img" && t !== "css" && t !== "link"
+                      && t !== "other" && t !== "svg" && t !== "embed"
+                      && t !== "fetch" && t !== "xmlhttprequest") continue;
+                  const n = String(en.name || "");
+                  if (!n) continue;
+                  const b = n.split(/[?#]/)[0];
+                  const ext = /\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b);
+                  if (!ext) {
+                    if (t === "fetch" || t === "xmlhttprequest") continue;
+                    if (!/(^|\\/)(pages?|images?|img|media|manga|manhwa|webtoon|chapters?|episodes?|comic|uploads|wp-content|cdn)(\\/|[_\\-.]|$)/i.test(b)) continue;
+                  }
+                  add(n);
+                }
+              };
+              let rsLen = 0;
+              try {
+                rsLen = (d.defaultView || window)
+                  .performance.getEntriesByType("resource").length;
+              } catch (e) {}
+              if (rsLen >= 250) { domPass(); resPass(); }
+              else { resPass(); domPass(); }
+              if (picked.length) return picked;
               const all = [], good = [];
               let idx = 0;
               const els = d.querySelectorAll("img,source");
@@ -2996,42 +3191,52 @@ def _browser_extract_js() -> str:
             dlBtn.addEventListener("click", async () => {
               const out = readFrame();
               if (!out || !out.length) { showBlocked(); return; }
-              const list = out.slice(0, 80);
               dlBtn.disabled = true;
+              const items = new Array(out.length);
               let ok = 0, bad = 0;
-              const lines = [];
-              for (let k = 0; k < list.length; k++) {
-                const u = list[k];
+              const upOne = async (fd) => {
+                let r = await fetch("gradio_api/upload",
+                                    { method: "POST", body: fd });
+                if (r.status === 404)
+                  r = await fetch("upload", { method: "POST", body: fd });
+                return r;
+              };
+              for (let k = 0; k < out.length; k++) {
+                const u = out[k];
                 try {
                   const r = await fetch(u, { credentials: "include" });
                   if (!r.ok) throw 0;
                   const b = await r.blob();
-                  const d = await new Promise((res) => {
-                    try {
-                      const rd = new FileReader();
-                      rd.onload = () => res(String(rd.result || ""));
-                      rd.onerror = () => res("");
-                      rd.readAsDataURL(b);
-                    } catch (e) { res(""); }
-                  });
-                  if (d && d.indexOf("data:image/") === 0) {
-                    lines.push(d); ok++;
-                  } else { throw 0; }
+                  let ext = String((b && b.type) || "")
+                    .split("/")[1] || "";
+                  ext = ext === "jpeg" ? "jpg" : ext;
+                  if (!/^[a-z0-9]{2,5}$/.test(ext)) ext = "jpg";
+                  const fd = new FormData();
+                  fd.append("files", b, "page_" + (k + 1) + "." + ext);
+                  const ur = await upOne(fd);
+                  if (!ur.ok) throw 0;
+                  const a = await ur.json();
+                  if (a && a[0]) { items[k] = String(a[0]); ok++; }
+                  else throw 0;
                 } catch (e) { bad++; }
-                try { cnt.textContent = "⬇ " + (ok + bad) + "/" + list.length; }
+                try { cnt.textContent = "⬇ " + (ok + bad) + "/" + out.length; }
                 catch (e) {}
               }
               dlBtn.disabled = false;
-              if (lines.length && window.__mtFillLinks
-                  && window.__mtFillLinks(lines.join("\\n"))) {
+              const lines = [];
+              for (let k = 0; k < out.length; k++)
+                lines.push(items[k] || out[k]);
+              const text = lines.join("\\n");
+              if (text && window.__mtFillLinks
+                  && window.__mtFillLinks(text)) {
                 close();
-                try { alert(lines.length
-                  + " عکس به‌صورت base64 در فیلدِ ورودی نشست — «شروع ترجمه» را بزن"
-                  + (bad ? " — " + bad + " دانلود نشد" : "")); } catch (e) {}
+                try { alert(ok
+                  + " عکس دانلود و روی سرور نشست — «شروع ترجمه» را بزن"
+                  + (bad ? " — " + bad + " تا فقط لینک شد"
+                    + " (سرور خودش میگیرد)" : "")); } catch (e) {}
               } else {
-                try { alert("هیچ عکسی دانلود نشد — این سایت اجازهٔ دانلودِ"
-                  + " مستقیم به اپِ وب نمی‌دهد؛ از «استخراج لینک» یا"
-                  + " نسخهٔ ویندوز/اندروید استفاده کن"); } catch (e) {}
+                try { alert("دانلودِ مستقیم ممکن نشد — از «استخراج لینک»"
+                  + " استفاده کن (سرور خودش دانلود میکند)"); } catch (e) {}
               }
             });
 
@@ -8650,6 +8855,13 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     _mb = smart_output_base(up_files[0]) or "batch"
                     multi_base = re.sub(r'[\\/:*?"<>|]+', "_", _mb)[:60] \
                         + f"_{len(up_files)}files"
+
+            if "data:image/" in src:
+                try:
+                    src = _stage_data_urls(
+                        src, os.path.join(OUT_DIR, sid[:12], "input_b64"))
+                except Exception:
+                    pass
 
             if not src:
                 return _pack("🚀  شروع ترجمه",

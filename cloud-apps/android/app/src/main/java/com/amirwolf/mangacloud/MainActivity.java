@@ -451,44 +451,140 @@ public class MainActivity extends Activity {
         }
     }
 
-    private void streamDataUrls(java.io.File dir, int count) {
-        Toast.makeText(this, "در حال نشاندن " + count + " عکس در فیلدِ ورودی…",
+    private static String sUpEndpoint = "";
+
+    private String upEndpoint() {
+        if (sUpEndpoint.isEmpty())
+            sUpEndpoint = HOME_URL + "gradio_api/upload";
+        return sUpEndpoint;
+    }
+
+    private String uploadFile(java.io.File f, String endpoint) throws Exception {
+        String boundary = "----mtb" + System.currentTimeMillis();
+        java.net.HttpURLConnection c =
+                (java.net.HttpURLConnection) new java.net.URL(endpoint)
+                        .openConnection();
+        c.setConnectTimeout(20000);
+        c.setReadTimeout(180000);
+        c.setRequestMethod("POST");
+        c.setDoOutput(true);
+        c.setRequestProperty("Content-Type",
+                "multipart/form-data; boundary=" + boundary);
+        java.io.OutputStream os = c.getOutputStream();
+        String head = "--" + boundary
+                + "\r\nContent-Disposition: form-data; name=\"files\"; filename=\""
+                + f.getName().replaceAll("[^A-Za-z0-9._-]", "_")
+                + "\"\r\nContent-Type: application/octet-stream\r\n\r\n";
+        os.write(head.getBytes("UTF-8"));
+        try (java.io.FileInputStream fi = new java.io.FileInputStream(f)) {
+            byte[] buf = new byte[16384];
+            int n;
+            while ((n = fi.read(buf)) > 0) os.write(buf, 0, n);
+        }
+        os.write(("\r\n--" + boundary + "--\r\n").getBytes("UTF-8"));
+        os.flush();
+        os.close();
+        int code = c.getResponseCode();
+        if (code == 404 || code == 405) {
+            c.disconnect();
+            return null;
+        }
+        if (code < 200 || code >= 300) {
+            c.disconnect();
+            throw new Exception("HTTP " + code);
+        }
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        try (java.io.InputStream in = c.getInputStream()) {
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+        }
+        c.disconnect();
+        return new String(bo.toByteArray(), "UTF-8");
+    }
+
+    private void uploadDlFiles(java.io.File dir, int count) {
+        Toast.makeText(this,
+                "در حال آپلودِ " + count + " عکس به سرور…",
                 Toast.LENGTH_SHORT).show();
         new Thread(() -> {
-            int ok = 0;
-            for (int i = 0; i < count; i++) {
-                java.io.File f = new java.io.File(dir, "mt_dl_" + i + ".txt");
-                if (!f.isFile()) continue;
-                try {
-                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
-                    try (java.io.FileInputStream fi = new java.io.FileInputStream(f)) {
-                        byte[] buf = new byte[16384];
-                        int n;
-                        while ((n = fi.read(buf)) > 0) bo.write(buf, 0, n);
-                    }
-                    f.delete();
-                    String line = new String(bo.toByteArray(), "UTF-8").trim();
-                    if (line.isEmpty()) continue;
-                    final String payload = org.json.JSONObject.quote(line);
-                    runOnUiThread(() -> {
-                        try {
-                            web.evaluateJavascript(
-                                "window.__mtAppendLinks && window.__mtAppendLinks("
-                                + payload + ");", null);
-                        } catch (Exception ignored) {
+            java.io.File[] fs = dir.listFiles();
+            if (fs == null) fs = new java.io.File[0];
+            java.util.Arrays.sort(fs, (a, b) ->
+                    a.getName().compareToIgnoreCase(b.getName()));
+            final String[] paths = new String[fs.length];
+            final java.util.concurrent.atomic.AtomicInteger done =
+                    new java.util.concurrent.atomic.AtomicInteger();
+            java.util.concurrent.ExecutorService ex =
+                    java.util.concurrent.Executors.newFixedThreadPool(3);
+            for (int i = 0; i < fs.length; i++) {
+                final int idx = i;
+                final java.io.File f = fs[i];
+                ex.submit(() -> {
+                    try {
+                        String resp = uploadFile(f, upEndpoint());
+                        if (resp == null) {
+                            sUpEndpoint = HOME_URL + "upload";
+                            resp = uploadFile(f, sUpEndpoint);
                         }
-                    });
-                    ok++;
+                        if (resp != null && !resp.isEmpty()) {
+                            Object v = new org.json.JSONTokener(resp)
+                                    .nextValue();
+                            if (v instanceof org.json.JSONArray
+                                    && ((org.json.JSONArray) v).length() > 0) {
+                                paths[idx] = ((org.json.JSONArray) v)
+                                        .getString(0);
+                            }
+                        }
+                    } catch (Exception ignored) {
+                    } finally {
+                        done.incrementAndGet();
+                    }
+                    return null;
+                });
+            }
+            ex.shutdown();
+            try {
+                ex.awaitTermination(30, java.util.concurrent.TimeUnit.MINUTES);
+            } catch (Exception ignored) {
+            }
+            StringBuilder sb = new StringBuilder();
+            int ok = 0;
+            for (String p : paths) {
+                if (p == null || p.isEmpty()) continue;
+                if (ok > 0) sb.append('\n');
+                sb.append(p);
+                ok++;
+            }
+            final String text = ok > 0 ? sb.toString() : "";
+            final int nOk = ok;
+            runOnUiThread(() -> {
+                if (!text.isEmpty()) {
+                    try {
+                        String payload = org.json.JSONObject.quote(text);
+                        web.evaluateJavascript(
+                                "window.__mtFillLinks && window.__mtFillLinks("
+                                        + payload + ");", null);
+                        Toast.makeText(MainActivity.this,
+                                "✅ " + nOk + " عکس روی سرور آماده شد — "
+                                        + "«شروع ترجمه» را بزن",
+                                Toast.LENGTH_LONG).show();
+                    } catch (Exception e) {
+                        Toast.makeText(MainActivity.this,
+                                "خطا در نشاندنِ مسیرها در فیلدِ ورودی",
+                                Toast.LENGTH_LONG).show();
+                    }
+                } else {
+                    Toast.makeText(MainActivity.this,
+                            "آپلود به سرور نشد — اینترنت یا سرور را چک کن",
+                            Toast.LENGTH_LONG).show();
+                }
+                try {
+                    for (java.io.File x : fs) x.delete();
+                    dir.delete();
                 } catch (Exception ignored) {
                 }
-            }
-            final int n = ok;
-            runOnUiThread(() -> Toast.makeText(this,
-                    n > 0 ? "✅ " + n + " عکس (base64) در فیلدِ ورودی نشست — «شروع ترجمه» را بزن"
-                            : "هیچ عکسی دانلود نشد",
-                    Toast.LENGTH_LONG).show());
-            try { dir.delete(); } catch (Exception ignored) {
-            }
+            });
         }).start();
     }
 
@@ -536,7 +632,7 @@ public class MainActivity extends Activity {
             String dlDir = data.getStringExtra(BrowserActivity.EXTRA_DL_DIR);
             int dlCount = data.getIntExtra(BrowserActivity.EXTRA_DL_COUNT, 0);
             if (dlDir != null && dlCount > 0) {
-                streamDataUrls(new java.io.File(dlDir), dlCount);
+                uploadDlFiles(new java.io.File(dlDir), dlCount);
                 return;
             }
             String links = data.getStringExtra(BrowserActivity.EXTRA_LINKS);
