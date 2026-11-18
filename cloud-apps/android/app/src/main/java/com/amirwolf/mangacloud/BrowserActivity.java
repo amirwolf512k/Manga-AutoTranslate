@@ -111,10 +111,7 @@ public class BrowserActivity extends Activity {
         "add(n)" +
         "}" +
         "}" +
-        "var rsLen=0;" +
-        "try{rsLen=performance.getEntriesByType('resource').length}catch(e){}" +
-        "if(rsLen>=250){domPass();resPass()}" +
-        "else{resPass();domPass()}" +
+        "domPass();resPass()" +
         "if(picked.length)return picked;" +
         "var all=[],good=[],idx=0;" +
         "var els=document.querySelectorAll('img,source');" +
@@ -506,6 +503,20 @@ public class BrowserActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    private static boolean isMangaPlusViewer(String u) {
+        if (u == null) return false;
+        try {
+            java.net.URL p = new java.net.URL(u);
+            String h = p.getHost() == null ? "" : p.getHost().toLowerCase();
+            if (!h.equals("mangaplus.shueisha.co.jp")
+                    && !h.equals("www.mangaplus.shueisha.co.jp"))
+                return false;
+            return p.getPath() != null && p.getPath().startsWith("/viewer/");
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     private void extractImages() {
         String cur;
         try { cur = web.getUrl() != null ? web.getUrl() : ""; }
@@ -699,14 +710,17 @@ public class BrowserActivity extends Activity {
            .append("f.onload=function(){res(String(f.result||''))};")
            .append("f.onerror=function(){res('')};f.readAsDataURL(b)}")
            .append("catch(e){res('')}})})}");
-        js.append("var i=0;function step(){")
-           .append("if(i>=urls.length){try{window.MtDl.done(urls.length)}catch(e){}return}")
-           .append("var idx=i;var u=urls[i];i++;")
+        js.append("var i=0,pending=0;function step(){")
+           .append("if(i>=urls.length){if(pending<=0){try{window.MtDl.done(urls.length)}catch(e){}}return}")
+           .append("var idx=i;var u=urls[i];i++;pending++;")
            .append("toData(u).then(function(d){")
-           .append("try{window.MtDl.recv(idx,urls.length,d||'',u)}catch(e){}step()})")
+           .append("try{window.MtDl.recv(idx,urls.length,d||'',u)}catch(e){}")
+           .append("pending--;step()})")
            .append(".catch(function(){")
-           .append("try{window.MtDl.recv(idx,urls.length,'',u)}catch(e){}step()})}");
-        js.append("step()}catch(e){try{window.MtDl.done(0)}catch(e2){}}})()");
+           .append("try{window.MtDl.recv(idx,urls.length,'',u)}catch(e){}")
+           .append("pending--;step()})};")
+        js.append("step();step();step();")
+        js.append("}catch(e){try{window.MtDl.done(0)}catch(e2){}}})()");
         try {
             web.evaluateJavascript(js.toString(), null);
         } catch (Exception e) {
@@ -739,6 +753,18 @@ public class BrowserActivity extends Activity {
                         return;
                     }
                     int n = arr.length();
+                    if (n == 1 && isMangaPlusViewer(arr.getString(0))) {
+                        Intent out = new Intent();
+                        out.putExtra(EXTRA_LINKS, arr.getString(0));
+                        setResult(RESULT_OK, out);
+                        Toast.makeText(BrowserActivity.this,
+                                "لینکِ فصلِ مانگاپلاس گرفته شد —"
+                                        + " موتور خودش عکس‌ها را از"
+                                        + " API رسمی می‌گیرد",
+                                Toast.LENGTH_LONG).show();
+                        finish();
+                        return;
+                    }
                     java.util.ArrayList<String> urls = new java.util.ArrayList<>();
                     for (int i = 0; i < n; i++) urls.add(arr.getString(i));
                     countLbl.setText("⬇ 0/" + n);

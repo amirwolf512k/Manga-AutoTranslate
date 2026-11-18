@@ -14,7 +14,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.339"
+APP_VER = "1.14.340"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -2569,10 +2569,7 @@ _MT_BM_CODE = (
     "if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)picked.push(location.href);"
     "}catch(e){}"
     "if(!picked.length){"
-    "var rsLen=0;"
-    "try{rsLen=performance.getEntriesByType('resource').length}catch(e){}"
-    "if(rsLen>=250){domPass();resPass()}"
-    "else{resPass();domPass()}"
+    "domPass();resPass()"
     "}"
     "if(!picked.length){"
     "var all=[],good=[],idx=0;"
@@ -3039,13 +3036,8 @@ def _browser_extract_js() -> str:
                   add(n);
                 }
               };
-              let rsLen = 0;
-              try {
-                rsLen = (d.defaultView || window)
-                  .performance.getEntriesByType("resource").length;
-              } catch (e) {}
-              if (rsLen >= 250) { domPass(); resPass(); }
-              else { resPass(); domPass(); }
+              domPass();
+              resPass();
               if (picked.length) return picked;
               const all = [], good = [];
               let idx = 0;
@@ -3173,7 +3165,37 @@ def _browser_extract_js() -> str:
               } catch (e) {}
             };
 
+            const curUrl = () => {
+              try {
+                const w2 = fr.contentWindow;
+                if (w2 && w2.location && w2.location.href)
+                  return String(w2.location.href);
+              } catch (e) {}
+              return String(url.value || "");
+            };
+            const mpViewer = () => {
+              try {
+                const u = curUrl().trim();
+                if (/^https?:\\/\\/([^\\/]+\\.)?mangaplus\\.shueisha\\.co\\.jp\\/viewer\\//i.test(u))
+                  return u;
+              } catch (e) {}
+              return "";
+            };
+            const fillMp = () => {
+              const mp = mpViewer();
+              if (!mp) return false;
+              if (window.__mtFillLinks && window.__mtFillLinks(mp)) {
+                close();
+                try { alert("لینکِ فصلِ مانگاپلاس در فیلدِ ورودی نشست —"
+                  + " موتور خودش عکس‌ها را از API رسمی می‌گیرد —"
+                  + " «شروع ترجمه» را بزن"); } catch (e) {}
+                return true;
+              }
+              return false;
+            };
+
             extBtn.addEventListener("click", () => {
+              if (fillMp()) return;
               const out = readFrame();
               if (out && out.length) {
                 if (window.__mtFillLinks
@@ -3189,11 +3211,13 @@ def _browser_extract_js() -> str:
             });
 
             dlBtn.addEventListener("click", async () => {
+              if (fillMp()) return;
               const out = readFrame();
               if (!out || !out.length) { showBlocked(); return; }
               dlBtn.disabled = true;
+              extBtn.disabled = true;
               const items = new Array(out.length);
-              let ok = 0, bad = 0;
+              let dn = 0, ok = 0, bad = 0;
               const upOne = async (fd) => {
                 let r = await fetch("gradio_api/upload",
                                     { method: "POST", body: fd });
@@ -3201,12 +3225,37 @@ def _browser_extract_js() -> str:
                   r = await fetch("upload", { method: "POST", body: fd });
                 return r;
               };
-              for (let k = 0; k < out.length; k++) {
+              const setCnt = (t) => {
+                try { cnt.textContent = t; } catch (e) {}
+              };
+              const pool = async (n, len, worker) => {
+                let next = 0;
+                const run = async () => {
+                  while (next < len) {
+                    const k = next++;
+                    await worker(k);
+                  }
+                };
+                const ws = [];
+                for (let w = 0; w < n && w < len; w++) ws.push(run());
+                await Promise.all(ws);
+              };
+              await pool(3, out.length, async (k) => {
                 const u = out[k];
                 try {
                   const r = await fetch(u, { credentials: "include" });
                   if (!r.ok) throw 0;
                   const b = await r.blob();
+                  items[k] = b;
+                } catch (e) { items[k] = null; }
+                dn++;
+                setCnt("⬇ " + dn + "/" + out.length);
+              });
+              let up = 0;
+              await pool(3, out.length, async (k) => {
+                const b = items[k];
+                if (!b) { bad++; return; }
+                try {
                   let ext = String((b && b.type) || "")
                     .split("/")[1] || "";
                   ext = ext === "jpeg" ? "jpg" : ext;
@@ -3218,14 +3267,21 @@ def _browser_extract_js() -> str:
                   const a = await ur.json();
                   if (a && a[0]) { items[k] = String(a[0]); ok++; }
                   else throw 0;
-                } catch (e) { bad++; }
-                try { cnt.textContent = "⬇ " + (ok + bad) + "/" + out.length; }
-                catch (e) {}
-              }
+                } catch (e) {
+                  items[k] = out[k];
+                  bad++;
+                }
+                up++;
+                setCnt("⬆ " + up + "/" + out.length
+                  + " — در حالِ آپلود");
+              });
               dlBtn.disabled = false;
+              extBtn.disabled = false;
               const lines = [];
-              for (let k = 0; k < out.length; k++)
-                lines.push(items[k] || out[k]);
+              for (let k = 0; k < out.length; k++) {
+                const it = items[k];
+                lines.push((typeof it === "string") ? it : out[k]);
+              }
               const text = lines.join("\\n");
               if (text && window.__mtFillLinks
                   && window.__mtFillLinks(text)) {
