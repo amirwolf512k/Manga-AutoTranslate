@@ -32,7 +32,6 @@ static const WCHAR APP_TITLE[] =
 #define ID_BTN_WV2DL   109
 #define ID_BTN_SYSBR   110
 #define ID_BTN_RETRY   111
-#define ID_BTN_RELOAD  112
 #define ID_BTN_DL       113
 
 #define WM_APP_CREATCTL (WM_APP + 1)
@@ -77,7 +76,6 @@ static HWND g_lblFailBody = NULL;
 static HWND g_btnWv2Dl = NULL;
 static HWND g_btnSysBr = NULL;
 static HWND g_btnRetry = NULL;
-static HWND g_btnReload = NULL;
 static HWND g_btnDl = NULL;
 static BOOL g_failMode = FALSE;
 static BOOL g_readerMode = FALSE;
@@ -117,9 +115,6 @@ static const COLORREF CLR_NAV_DN = RGB(60, 72, 97);
 static const COLORREF CLR_EXTR   = RGB(228, 60, 47);
 static const COLORREF CLR_EXTR_DN = RGB(178, 42, 33);
 static const COLORREF CLR_CNT    = RGB(151, 148, 140);
-static const COLORREF CLR_NAVB  = RGB(70, 82, 110);
-static const COLORREF CLR_BTNB  = RGB(52, 62, 84);
-static const COLORREF CLR_EXTRB = RGB(255, 110, 96);
 
 static const wchar_t *MT_COLLECT_JS =
 L"(function(){"
@@ -1157,6 +1152,8 @@ static void MtShowBrowser(void) {
     MtLog("brShow: begin");
     if (g_brCtl != NULL)
         g_brCtl->put_IsVisible(TRUE);
+    if (g_btnGlobe != NULL)
+        ShowWindow(g_btnGlobe, SW_HIDE);
     MtLog("brShow: ctl visible");
     g_inBrShow = TRUE;
     ShowWindow(g_hwndBr, SW_SHOW);
@@ -1178,6 +1175,8 @@ static void MtHideBrowser(void) {
     ShowWindow(g_hwndBr, SW_HIDE);
     if (g_brCtl != NULL)
         g_brCtl->put_IsVisible(FALSE);
+    if (!g_failMode && g_webApp != NULL && g_btnGlobe != NULL)
+        ShowWindow(g_btnGlobe, SW_SHOW);
     SetForegroundWindow(g_hwnd);
 }
 
@@ -1266,9 +1265,10 @@ static void LayoutApp(void) {
         return;
 
     BOOL fail = g_failMode;
+    BOOL brVis = (g_hwndBr != NULL && IsWindowVisible(g_hwndBr));
 
     ShowWindow(g_btnGlobe,
-               (!fail && g_webApp != NULL) ? SW_SHOW : SW_HIDE);
+               (!fail && g_webApp != NULL && !brVis) ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblFailTitle, fail ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblFailBody, fail ? SW_SHOW : SW_HIDE);
     ShowWindow(g_btnWv2Dl, fail ? SW_SHOW : SW_HIDE);
@@ -1323,16 +1323,12 @@ static void LayoutBrowser(void) {
     int bwDl = (w < 700) ? 100 : 134;
     int bwCnt = (w < 1000) ? 0 : 110;
 
-    MoveWindow(g_btnBack, w - m - bwNav, by, bwNav, bh, TRUE);
-    MoveWindow(g_btnFwd, w - m - bwNav - gap - bwNav, by, bwNav, bh, TRUE);
-    int xRl = (w < 560) ? 0 : 42;
-    if (xRl > 0) {
-        MoveWindow(g_btnReload,
-                   w - m - 2 * bwNav - 2 * gap - xRl, by, xRl, bh, TRUE);
-    } else {
-        MoveWindow(g_btnReload, 0, 0, 0, 0, TRUE);
-    }
-    int urlR = w - m - 2 * bwNav - gap - xRl - 2 * gap - 2;
+    int xR = w - m;
+    MoveWindow(g_btnFwd, xR - bwNav, by, bwNav, bh, TRUE);
+    xR -= bwNav + gap;
+    MoveWindow(g_btnBack, xR - bwNav, by, bwNav, bh, TRUE);
+    xR -= bwNav + gap;
+    int urlR = xR - 2;
 
     int xL = m;
     if (bwCnt > 0) {
@@ -1449,49 +1445,6 @@ static void MtDrawRounded(HDC hdc, const RECT &rc, COLORREF bg,
     DeleteObject(b);
 }
 
-static void MtDrawChevron(HDC hdc, const RECT &rc, BOOL left) {
-    int cx = (rc.left + rc.right) / 2;
-    int cy = (rc.top + rc.bottom) / 2;
-    HPEN pen = MtRoundPen(RGB(255, 255, 255), 3);
-    HGDIOBJ ob = SelectObject(hdc, pen);
-    MoveToEx(hdc, cx + (left ? 4 : -4), cy - 7, NULL);
-    LineTo(hdc, cx + (left ? -3 : 3), cy);
-    LineTo(hdc, cx + (left ? 4 : -4), cy + 7);
-    SelectObject(hdc, ob);
-    DeleteObject(pen);
-}
-
-static void MtDrawReloadIcon(HDC hdc, const RECT &rc) {
-    int cx = (rc.left + rc.right) / 2;
-    int cy = (rc.top + rc.bottom) / 2;
-    int r = 8;
-    double a0 = -30.0 * 3.14159265 / 180.0;
-    double a1 = -60.0 * 3.14159265 / 180.0;
-    int ax = cx + (int)(r * 1.15 * cos(a0));
-    int ay = cy + (int)(r * 1.15 * sin(a0));
-    int bx = cx + (int)(r * cos(a1));
-    int by = cy + (int)(r * sin(a1));
-    HPEN pen = MtRoundPen(RGB(255, 255, 255), 3);
-    HGDIOBJ ob = SelectObject(hdc, pen);
-    Arc(hdc, cx - r, cy - r, cx + r, cy + r, ax, ay, bx, by);
-    SelectObject(hdc, ob);
-    DeleteObject(pen);
-    double tx = -sin(a1), ty = cos(a1);
-    double ox = cos(a1), oy = sin(a1);
-    POINT tri[3];
-    tri[0].x = bx + (int)(7 * tx);
-    tri[0].y = by + (int)(7 * ty);
-    tri[1].x = bx + (int)(4.5 * ox + 2.5 * tx);
-    tri[1].y = by + (int)(4.5 * oy + 2.5 * ty);
-    tri[2].x = bx + (int)(-4.5 * ox + 2.5 * tx);
-    tri[2].y = by + (int)(-4.5 * oy + 2.5 * ty);
-    HBRUSH wb = CreateSolidBrush(RGB(255, 255, 255));
-    HGDIOBJ ow = SelectObject(hdc, wb);
-    Polygon(hdc, tri, 3);
-    SelectObject(hdc, ow);
-    DeleteObject(wb);
-}
-
 static void MtDrawImageIcon(HDC hdc, int x, int cy) {
     HPEN pen = MtRoundPen(RGB(255, 255, 255), 2);
     HGDIOBJ ob = SelectObject(hdc, pen);
@@ -1533,22 +1486,28 @@ static void MtDrawDlIcon(HDC hdc, int x, int cy) {
 static void MtDrawBtn(HDC hdc, const RECT &rc, COLORREF bg,
                       COLORREF border, const wchar_t *txt, HFONT f,
                       int iconKind) {
-    MtDrawRounded(hdc, rc, bg, border, 10);
+    if (bg == CLR_EXTR) {
+        HRGN rgn = CreateRoundRectRgn(rc.left, rc.top, rc.right + 1,
+                                      rc.bottom + 1, 24, 24);
+        SelectClipRgn(hdc, rgn);
+        int hgt = rc.bottom - rc.top;
+        for (int i = 0; i < hgt; i++) {
+            int t = hgt > 0 ? (i * 100) / hgt : 0;
+            HBRUSH sb = CreateSolidBrush(RGB(255 - 54 * t / 100,
+                                             74 - 35 * t / 100,
+                                             61 - 33 * t / 100));
+            RECT sr = {rc.left, rc.top + i, rc.right, rc.top + i + 1};
+            FillRect(hdc, &sr, sb);
+            DeleteObject(sb);
+        }
+        SelectClipRgn(hdc, NULL);
+        DeleteObject(rgn);
+    } else {
+        MtDrawRounded(hdc, rc, bg, border, 12);
+    }
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, RGB(255, 255, 255));
     int cy = (rc.top + rc.bottom) / 2;
-    if (iconKind == 3) {
-        MtDrawChevron(hdc, rc, TRUE);
-        return;
-    }
-    if (iconKind == 4) {
-        MtDrawChevron(hdc, rc, FALSE);
-        return;
-    }
-    if (iconKind == 5) {
-        MtDrawReloadIcon(hdc, rc);
-        return;
-    }
     if (iconKind == 0) {
         RECT r = rc;
         HGDIOBJ of = SelectObject(hdc, f ? f : g_font);
@@ -1681,35 +1640,27 @@ static LRESULT MtOnDrawItem(WPARAM wp, LPARAM lp) {
         return TRUE;
     }
     BOOL down = (d->itemState & ODS_SELECTED) != 0;
-    if (d->CtlID == ID_BTN_BACK) {
-        MtDrawBtn(d->hDC, d->rcItem, down ? CLR_NAV_DN : CLR_NAV,
-                  CLR_NAVB, L"", NULL, 3);
-        return TRUE;
-    }
-    if (d->CtlID == ID_BTN_FWD) {
-        MtDrawBtn(d->hDC, d->rcItem, down ? CLR_NAV_DN : CLR_NAV,
-                  CLR_NAVB, L"", NULL, 4);
-        return TRUE;
-    }
-    if (d->CtlID == ID_BTN_RELOAD) {
-        MtDrawBtn(d->hDC, d->rcItem, down ? CLR_NAV_DN : CLR_NAV,
-                  CLR_NAVB, L"", NULL, 5);
+    if (d->CtlID == ID_BTN_BACK || d->CtlID == ID_BTN_FWD) {
+        wchar_t txt[8];
+        GetWindowTextW(d->hwndItem, txt, 7);
+        COLORREF bg = down ? CLR_NAV_DN : CLR_NAV;
+        MtDrawBtn(d->hDC, d->rcItem, bg, bg, txt, g_fontBold, 0);
         return TRUE;
     }
     if (d->CtlID == ID_BTN_GO) {
         wchar_t txt[128];
         GetWindowTextW(d->hwndItem, txt, 127);
         HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
-        MtDrawBtn(d->hDC, d->rcItem, down ? CLR_BTN_DN : CLR_BTN,
-                  CLR_BTNB, txt, f, 0);
+        COLORREF bg = down ? CLR_NAV_DN : CLR_NAV;
+        MtDrawBtn(d->hDC, d->rcItem, bg, bg, txt, f, 0);
         return TRUE;
     }
     if (d->CtlID == ID_BTN_EXTRACT || d->CtlID == ID_BTN_DL) {
         wchar_t txt[128];
         GetWindowTextW(d->hwndItem, txt, 127);
         HFONT f = (HFONT)SendMessageW(d->hwndItem, WM_GETFONT, 0, 0);
-        MtDrawBtn(d->hDC, d->rcItem, down ? CLR_EXTR_DN : CLR_EXTR,
-                  CLR_EXTRB, txt, f,
+        COLORREF bg = down ? CLR_EXTR_DN : CLR_EXTR;
+        MtDrawBtn(d->hDC, d->rcItem, bg, bg, txt, f,
                   d->CtlID == ID_BTN_EXTRACT ? 1 : 2);
         return TRUE;
     }
@@ -1756,10 +1707,10 @@ static void MtBrCreateControls(HWND hwnd) {
         L"\u0628\u0631\u0648",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 64, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_GO, hInst, NULL);
-    g_btnFwd = CreateWindowExW(0, L"BUTTON", L"",
+    g_btnFwd = CreateWindowExW(0, L"BUTTON", L"\u2192",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 42, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_FWD, hInst, NULL);
-    g_btnBack = CreateWindowExW(0, L"BUTTON", L"",
+    g_btnBack = CreateWindowExW(0, L"BUTTON", L"\u2190",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 42, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_BACK, hInst, NULL);
     g_lblStatus = CreateWindowExW(0, L"STATIC",
@@ -1774,9 +1725,6 @@ static void MtBrCreateControls(HWND hwnd) {
         L"\u0627\u0633\u062A\u062E\u0631\u0627\u062C \u062F\u0627\u0646\u0644\u0648\u062F",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         0, 0, 132, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_DL, hInst, NULL);
-    g_btnReload = CreateWindowExW(0, L"BUTTON", L"",
-        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 42, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_RELOAD, hInst, NULL);
 
     SendMessageW(g_editUrl, WM_SETFONT, (WPARAM)g_font, TRUE);
     g_editProc = (WNDPROC)SetWindowLongPtrW(g_editUrl, GWLP_WNDPROC,
@@ -1786,11 +1734,10 @@ static void MtBrCreateControls(HWND hwnd) {
     SendMessageW(g_btnBack, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnExtract, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_btnDl, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
-    SendMessageW(g_btnReload, WM_SETFONT, (WPARAM)g_fontBold, TRUE);
     SendMessageW(g_lblStatus, WM_SETFONT, (WPARAM)g_font, TRUE);
-    HWND brBtns[6] = {g_btnGo, g_btnFwd, g_btnBack, g_btnExtract,
-                      g_btnDl, g_btnReload};
-    for (int i = 0; i < 6; i++) {
+    HWND brBtns[5] = {g_btnGo, g_btnFwd, g_btnBack, g_btnExtract,
+                      g_btnDl};
+    for (int i = 0; i < 5; i++) {
         if (brBtns[i] == NULL)
             continue;
         if (g_brBtnProc == NULL)
@@ -1836,11 +1783,6 @@ static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (id == ID_BTN_DL) {
                 if (g_webBr != NULL)
                     g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execDlList);
-                return 0;
-            }
-            if (id == ID_BTN_RELOAD) {
-                if (g_webBr != NULL)
-                    g_webBr->Reload();
                 return 0;
             }
         }
@@ -2371,7 +2313,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.340 (dom-order extract + parallel dl/upload + mangaplus + toolbar redesign)");
+    MtLog("WinMain — MangaCloud v1.14.344 (main-style flat browser bar: rtl arrow order, no reload button, fab hides while browser open)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
