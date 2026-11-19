@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.353"
+APP_VER = "1.14.354"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -2786,6 +2786,10 @@ def _browser_extract_js() -> str:
       const installWebBrowser = () => {
         try {
           if (window.__mtWebFabInst) return;
+          // وبِ میزبانی‌شده (هاست/HF): مرورگرِ داخلی فقط در اپِ کلود و
+          // اپِ واقعی است — در مرورگرِ کاربر گزینه‌ای نمایش داده نمیشود؛
+          // راهِ استخراجِ وب، بلوکِ نشانک (سایت‌های کپچادار) است.
+          if (__WEB_HOST__) return;
           const pw = !!(window.pywebview && window.pywebview.api
                        && window.pywebview.api.openBrowser);
           const wv2 = !!(window.chrome && window.chrome.webview
@@ -3372,7 +3376,10 @@ def _browser_extract_js() -> str:
   return [];
 }
 """
-    return tpl.replace("__BM_CODE__", _json.dumps(_MT_BM_CODE))
+    return (tpl
+            .replace("__BM_CODE__", _json.dumps(_MT_BM_CODE))
+            .replace("__WEB_HOST__",
+                     "true" if _web_host() else "false"))
 
 
 def _dark_js_src() -> str:

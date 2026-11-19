@@ -4893,6 +4893,9 @@ class _MangaTranslatorBody_70:
 
     def _stitch_pages_for_efficiency(self, image_files: List[str], work_dir: str) -> List[str]:
 
+        # نگاشتِ نوارِ خروجی → فایلهایِ منبعی که در آن هستند
+        # (برای بازسازیِ نگاشتِ فصل→نوار در ورودیِ چندفصلی)
+        self._stitch_src_map: Dict[str, List[str]] = {}
         if not image_files:
             return image_files
         if self.stitch_max_height <= 0:
@@ -4960,6 +4963,7 @@ class _MangaTranslatorBody_70:
             first_out = os.path.join(work_dir, f"strip_000_cover{ext_s}")
             shutil.copy2(image_files[0], first_out)
             result.append(first_out)
+            self._stitch_src_map[first_out] = [image_files[0]]
             start_idx = 1
             if start_idx >= len(image_files):
                 return result
@@ -5095,7 +5099,8 @@ class _MangaTranslatorBody_70:
         def _stack_pages(pages: List[np.ndarray]) -> np.ndarray:
             return np.vstack(pages) if len(pages) > 1 else pages[0]
 
-        def _emit_array(arr: np.ndarray, label: str = "") -> None:
+        def _emit_array(arr: np.ndarray, label: str = "",
+                        y_abs: Optional[Tuple[int, int]] = None) -> None:
             nonlocal strip_i
             if arr is None or arr.size == 0:
                 return
@@ -5113,6 +5118,18 @@ class _MangaTranslatorBody_70:
                                    "برای رعایت محدودیت فرمت از وسط متن برش زده نشد.")
             self._write_image(arr, out_path)
             result.append(out_path)
+            _srcs_out: List[str] = []
+            if y_abs is not None:
+                _ya0, _ya1 = y_abs
+                for _j in range(len(_page_spans)):
+                    _s0 = _page_spans[_j][1]
+                    _s1 = (_page_spans[_j + 1][1]
+                           if _j + 1 < len(_page_spans) else _life[0])
+                    if _s0 < _ya1 and _s1 > _ya0:
+                        _spth = image_files[_page_spans[_j][0]]
+                        if _spth not in _srcs_out:
+                            _srcs_out.append(_spth)
+            self._stitch_src_map[out_path] = _srcs_out
             print(f"    [+] نوار {strip_i + 1}: {label} ({arr.shape[0]}px)")
             strip_i += 1
 
@@ -5123,6 +5140,7 @@ class _MangaTranslatorBody_70:
 
             strip = _stack_pages(current_pages)
             ih = int(strip.shape[0])
+            _base_abs = _life[1]
             protected = list(current_protected)
             padding = max(14, int(round(target_w * 0.02)))
 
@@ -5242,7 +5260,8 @@ class _MangaTranslatorBody_70:
                         )
                 if cut_y is None:
                     break
-                _emit_array(strip[offset:cut_y], f"برش بررسی‌شده y={cut_y}")
+                _emit_array(strip[offset:cut_y], f"برش بررسی‌شده y={cut_y}",
+                            y_abs=(_base_abs + offset, _base_abs + cut_y))
                 offset = cut_y
 
             current_h = ih - offset
@@ -5255,7 +5274,8 @@ class _MangaTranslatorBody_70:
             if final:
                 label = ("پایان فصل" if current_h <= work_h + min_strip
                          else "بزرگ‌تر از هدف: محل برش امن پیدا نشد")
-                _emit_array(strip[offset:], label)
+                _emit_array(strip[offset:], label,
+                            y_abs=(_base_abs + offset, _base_abs + ih))
                 current_pages, current_h = [], 0
             else:
 

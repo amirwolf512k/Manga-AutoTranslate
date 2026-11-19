@@ -936,17 +936,19 @@ class _MangaTranslatorBody_95:
             and int(getattr(self, "stitch_max_height", 0) or 0) <= 0
             and not getattr(self, "stitch_explicit", False))
         if _ch_plan:
-            # ورودیِ چندفصلیِ واقعی (دو فصلِ چندصفحه‌ای یا بیشتر) → بدون
-            # چسباندن تا نگاشتِ فایل→فصل برای انبارِ فصلها معتبر بماند؛
-            # ولی وقتی فقط یک فصلِ چندصفحه‌ای هست و بقیه لینکها تک‌تصویری
-            # (کاور/تیتراژ) و در همان فصل ادغام شدهاند → چسباندن/برشِ امن
-            # مثلِ حالتِ تک‌لینک فعال می‌شود.
+            # ورودیِ چندفصلیِ واقعی (دو فصلِ چندصفحه‌ای یا بیشتر):
+            # با برشِ فعال (پیش‌فرضِ ۸۰۰۰ برای فصل) همهٔ صفحهها مثلِ
+            # تک‌لینک در یک جریانِ پیوسته چسبانده و با برشِ امن قطع
+            # میشوند (حتی مرزِ بین دو فصل)؛ نگاشتِ نوار→فصل بعد از
+            # چسباندن بازسازی میشود تا انبارِ فصلها و ترتیبِ خروجی
+            # درست بماند. بدونِ برش (۰) رفتارِ قدیمی: صفحات مستقل.
             _n_multi_ch = sum(
                 1 for _p in _ch_plan
                 if _p.get("kind") == "new" and len(_p.get("files") or []) > 1)
             _n_new_ch = sum(
                 1 for _p in _ch_plan if _p.get("kind") == "new")
-            if _n_multi_ch >= 2 or _n_new_ch >= 2:
+            if (_n_multi_ch >= 2 or _n_new_ch >= 2) and not (
+                    int(getattr(self, "stitch_max_height", 0) or 0) > 0):
                 _indep_no_stitch = True
         if _indep_no_stitch and len(image_files) > 1:
             print(f"[*] حالت صفحات مستقل: {len(image_files)} صفحه هرکدام جدا مثل حالت تکی "
@@ -957,6 +959,37 @@ class _MangaTranslatorBody_95:
             image_files = self._stitch_pages_for_efficiency(image_files, stitch_dir)
 
         if _ch_plan and image_files:
+            _strip_map = getattr(self, "_stitch_src_map", None) or {}
+            if _strip_map:
+                # نگاشتِ معکوس: فایلِ منبع → نوارهایی که آن را در خود دارند
+                _strips_of_src: Dict[str, List[str]] = {}
+                for _spth, _srcs in _strip_map.items():
+                    for _sf in _srcs:
+                        _strips_of_src.setdefault(_sf, []).append(_spth)
+                _strip_owners: Dict[str, int] = {}
+                for _pl in _ch_plan:
+                    if _pl.get("kind") != "new" or not _pl.get("files"):
+                        continue
+                    _nf_ch: List[str] = []
+                    for _fs_ch in _pl["files"]:
+                        for _st_ch in _strips_of_src.get(_fs_ch, []):
+                            if _st_ch not in _nf_ch:
+                                _nf_ch.append(_st_ch)
+                    if _nf_ch:
+                        _pl["files"] = _nf_ch
+                    for _st_ch in _nf_ch:
+                        _strip_owners[_st_ch] = _strip_owners.get(_st_ch, 0) + 1
+                _n_shared_ch = 0
+                for _pl in _ch_plan:
+                    if _pl.get("kind") == "new" and any(
+                            _strip_owners.get(_st_ch, 0) > 1
+                            for _st_ch in (_pl.get("files") or [])):
+                        _pl["no_store"] = True
+                        _n_shared_ch += 1
+                if _n_shared_ch:
+                    print(f"[*] {_n_shared_ch} فصل نوارِ مشترک با فصلِ مجاور "
+                          f"دارد → در انبارِ فصلها ذخیره نمیشوند "
+                          f"(خروجی و ترتیب درست است).")
             # وقتی فقط یک فصلِ «تازه» ماند، همهٔ نوارها/صفحه‌های خروجی
             # متعلق به همان فصل است → فایلهایِ پلن را به خروجیِ نهایی
             # نگاشت کن تا انبارِ فصلها و مونتاژِ نهایی درست کار کنند.
@@ -2466,6 +2499,16 @@ class _MangaTranslatorBody_95:
                         pass
                 _pgs_ch.sort(key=MangaTranslator._natural_sort_key)
                 _final_pages.extend(_pgs_ch)
+            # نوارِ مشترک بین دو فصل فقط یک‌بار در خروجی بیاید
+            _seen_fpg: set = set()
+            _dedup_fpg: List[str] = []
+            for _fpg in _final_pages:
+                if _fpg in _seen_fpg:
+                    continue
+                _seen_fpg.add(_fpg)
+                _dedup_fpg.append(_fpg)
+            if len(_dedup_fpg) != len(_final_pages):
+                _final_pages = _dedup_fpg
             if _final_pages:
                 processed_files = _final_pages
             elif not processed_files:
