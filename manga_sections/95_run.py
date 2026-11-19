@@ -2662,8 +2662,8 @@ class _MangaTranslatorBody_95:
             if _hs:
                 _orig_h = float(np.median(_hs))
                 if _orig_h >= 9.0:
-                    max_font = max(10, min(int(max_font),
-                                           int(round(_orig_h * 0.80))))
+                    max_font = max(14, min(int(max_font),
+                                           int(round(_orig_h * 1.05))))
         except Exception:
             pass
 
@@ -3154,8 +3154,8 @@ class _MangaTranslatorBody_95:
             fit_w = int(arc_len * (0.97 if _single_src else 0.94))
             fit_h = int(max(lh_src * 1.35, min(_rh * 1.05, lh_src * 5.0)))
             font = lines = sw = None
-            _ms = min(int(max_font or 48), max(10, int(round(lh_src * 0.95))))
-            while _ms >= 10:
+            _ms = min(int(max_font or 52), max(14, int(round(lh_src * 0.95))))
+            while _ms >= 12:
                 _f, _l, _s = self._wrap_and_fit(
                     draw, txt, fit_w, fit_h, style=style, max_size=_ms)
                 if _l:

@@ -140,7 +140,7 @@ class _MangaTranslatorBody_90:
         if h_line <= 2:
             return 48
 
-        return int(np.clip(round(h_line * 1.2), 12, 48))
+        return int(np.clip(round(h_line * 1.2), 14, 52))
 
     def _wrap_and_fit(
         self, draw: ImageDraw.ImageDraw, text: str, max_w: int, max_h: int,
@@ -197,8 +197,8 @@ class _MangaTranslatorBody_90:
 
         n_words = len(words)
         short_text = n_words <= 2 and sum(len(w) for w in words) <= 12
-        min_size = 14 if short_text else 11
-        max_size = max(min_size, min(48, int(max_size or 48)))
+        min_size = 18 if short_text else 15
+        max_size = max(min_size, min(52, int(max_size or 52)))
 
         smallest_attempt = None
 
@@ -209,15 +209,15 @@ class _MangaTranslatorBody_90:
                 if total_h <= max_h and widest <= max_w:
                     return font, lines, sw
 
-        for size in range(min_size - 1, 5, -1):
+        for size in range(min_size - 1, 11, -1):
             font, lines, sw, total_h, widest, line_h = wrap_at(size, 0)
             smallest_attempt = (font, lines, sw, line_h)
             if total_h <= max_h and widest <= max_w:
                 return font, lines, sw
 
         if smallest_attempt is None:
-            font = self._load_font(11, style=style)
-            sw = self._stroke_width_for(11)
+            font = self._load_font(14, style=style)
+            sw = self._stroke_width_for(14)
             return font, [" ".join(words)], sw
         return smallest_attempt[0], smallest_attempt[1], smallest_attempt[2]
 
@@ -347,7 +347,7 @@ class _MangaTranslatorBody_90:
         sw = 0
         try:
             font = self._load_font(
-                max(10, min(48, max(12, h // 3))),
+                max(14, min(52, max(14, h // 3))),
                 (getattr(region, "bubble_style", None) or ""))
         except Exception:
             font = self._load_font(18)

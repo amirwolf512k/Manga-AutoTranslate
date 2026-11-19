@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.355"
+APP_VER = "1.14.356"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -158,11 +158,9 @@ FONT_BUNDLES = [
         "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@master/fonts/ttf/Vazirmatn-Regular.ttf",
         "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Regular.ttf",
     ]),
-    ("shout",        "Lalezar-Fixed.ttf", "داد خشم", [
-        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Lalezar-Fixed.ttf",
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Lalezar-Fixed.ttf",
-        "https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@master/dist/Shabnam-Bold.ttf",
-        "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+    ("shout",        "Vazirmatn-Black.ttf", "داد خشم", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@master/fonts/ttf/Vazirmatn-Black.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Black.ttf",
     ]),
     ("comedy_shout", "Gandom.ttf", "داد کمدی", [
         "https://cdn.jsdelivr.net/gh/rastikerdar/gandom-font@master/dist/Gandom.ttf",
@@ -194,21 +192,21 @@ FONT_BUNDLES = [
         "https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@master/dist/Shabnam-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
     ]),
-    ("monster",      "Rakkas-Regular-Fixed.ttf", "صدای هیولا", [
-        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Rakkas-Regular-Fixed.ttf",
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Rakkas-Regular-Fixed.ttf",
+    ("monster",      "Sahel-Black.ttf", "صدای هیولا", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@master/dist/Sahel-Black.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Black.ttf",
     ]),
-    ("cry",          "BalooBhaijaan2-Fixed.ttf", "گریه", [
-        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/BalooBhaijaan2-Fixed.ttf",
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/BalooBhaijaan2-Fixed.ttf",
+    ("cry",          "NotoNaskhArabic-Regular.ttf", "گریه", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/NotoNaskhArabic-Regular.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/NotoNaskhArabic-Regular.ttf",
     ]),
-    ("fear",         "Katibeh-Regular-Fixed.ttf", "ترس", [
-        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Katibeh-Regular-Fixed.ttf",
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Katibeh-Regular-Fixed.ttf",
+    ("fear",         "Sahel-Light.ttf", "ترس", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/sahel-font@master/dist/Sahel-Light.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/sahel-font/master/dist/Sahel-Light.ttf",
     ]),
-    ("broadcast",    "Changa-Fixed.ttf", "بی‌سیم/موبایل/تلویزیون", [
-        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Changa-Fixed.ttf",
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Changa-Fixed.ttf",
+    ("broadcast",    "Vazirmatn-Medium.ttf", "بی‌سیم/موبایل/تلویزیون", [
+        "https://cdn.jsdelivr.net/gh/rastikerdar/vazirmatn@master/fonts/ttf/Vazirmatn-Medium.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Medium.ttf",
     ]),
     ("sun_thought",  "Parastoo.ttf", "تفکر خورشیدی", [
         "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Parastoo.ttf",
@@ -216,9 +214,9 @@ FONT_BUNDLES = [
         "https://cdn.jsdelivr.net/gh/rastikerdar/parastoo-font@master/dist/Parastoo.ttf",
         "https://raw.githubusercontent.com/rastikerdar/parastoo-font/master/dist/Parastoo.ttf",
     ]),
-    ("square_thought", "NotoKufiArabic.ttf", "فکر مربعی", [
-        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/NotoKufiArabic.ttf",
-        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/NotoKufiArabic.ttf",
+    ("square_thought", "NotoNaskhArabic-Bold.ttf", "فکر مربعی", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/NotoNaskhArabic-Bold.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/NotoNaskhArabic-Bold.ttf",
     ]),
     ("black",        "Tanha.ttf", "دارک تیره", [
         "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Tanha.ttf",
