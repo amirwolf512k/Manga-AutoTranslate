@@ -2999,47 +2999,30 @@ class _MangaTranslatorBody_70:
         except Exception:
             pass
         if _raw_det_dbg:
+            # مرزِ سبز در دیباگ = خروجیِ خامِ detector-v4 (همهٔ جعبهها،
+            # حتی جعبههایی که ناحیهٔ نهایی نساختهاند — مثل SFX کرههای
+            # یا حباب «!!!» که متنِ معتبر ندارند). قبلاً اینجا جعبهها
+            # از نواحیِ نهایی بازسازی میشد؛ در نتیجه جعبهٔ detector که
+            # ناحیه نساخته بود سبز رسم نمیشد و کوارِ آبیِ paddle det
+            # که داخلِ همان جعبه بود «بیرون از کادرِ سبز» به نظر میرسید.
             try:
-                _fd: list = []
-                _seen_fd: set = set()
-                for r in regions:
-                    _bx = None
-                    try:
-                        _cr = getattr(r, "cover_rect", None)
-                        if getattr(r, "sys_split", False) and _cr:
-                            _bx = [int(_cr[0]), int(_cr[1]),
-                                   int(_cr[2]), int(_cr[3])]
-                    except Exception:
-                        _bx = None
-                    if _bx is None:
-                        try:
-                            _bl = list(getattr(r, "boxes", None) or [])
-                            if _bl:
-                                _pts = np.concatenate(
-                                    [np.asarray(p).reshape(-1, 2) for p in _bl])
-                                _bx = [int(_pts[:, 0].min()), int(_pts[:, 1].min()),
-                                       int(_pts[:, 0].max()), int(_pts[:, 1].max())]
-                        except Exception:
-                            _bx = None
-                    if _bx is None:
-                        try:
-                            _x_, _y_, _w_, _h_ = [float(v) for v in r.rect]
-                            _bx = [int(_x_), int(_y_),
-                                   int(_x_ + _w_), int(_y_ + _h_)]
-                        except Exception:
-                            continue
-                    _cls = str(getattr(r, "det_class", "") or "")
-                    _k = (tuple(_bx), _cls)
-                    if _k in _seen_fd:
+                _raw_seen: set = set()
+                _raw_uniq: list = []
+                for _rb, _rc in _raw_det_dbg:
+                    _rk = (tuple(int(v) for v in _rb[:4]), str(_rc or ""))
+                    if _rk in _raw_seen:
                         continue
-                    _seen_fd.add(_k)
-                    _fd.append((_bx, _cls))
-                if _fd:
-                    _raw_det_dbg = _fd
-                    for r in regions:
-                        r.det_raw = _fd
+                    _raw_seen.add(_rk)
+                    _raw_uniq.append(([int(v) for v in _rb[:4]],
+                                      str(_rc or "")))
+                _raw_det_dbg = _raw_uniq or _raw_det_dbg
             except Exception:
                 pass
+            for r in regions:
+                try:
+                    r.det_raw = _raw_det_dbg
+                except Exception:
+                    pass
         if self.debug:
             print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
 
@@ -3982,13 +3965,13 @@ class _MangaTranslatorBody_70:
                             # کادرِ سبز رسم نمیشود).
                             _cx = float(np.mean(_qf[:, 0]))
                             _cy = float(np.mean(_qf[:, 1]))
-                            if not (float(_bx1) - 4 <= _cx <= float(_bx2) + 4
-                                    and float(_by1) - 4 <= _cy <= float(_by2) + 4):
+                            if not (float(_bx1) <= _cx <= float(_bx2)
+                                    and float(_by1) <= _cy <= float(_by2)):
                                 continue
                             _qf[:, 0] = np.clip(
-                                _qf[:, 0], float(_bx1) - 4, float(_bx2) + 4)
+                                _qf[:, 0], float(_bx1), float(_bx2))
                             _qf[:, 1] = np.clip(
-                                _qf[:, 1], float(_by1) - 4, float(_by2) + 4)
+                                _qf[:, 1], float(_by1), float(_by2))
                         except Exception:
                             continue
                         _out.append(_qf)
