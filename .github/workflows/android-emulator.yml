@@ -109,8 +109,8 @@ jobs:
       - name: Prepare test assets (01.jpg + img5 red-stain + models)
         run: |
           mkdir -p /tmp/mt/imgs /tmp/models
-          B1="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
-          B2="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/ci_imgs"
+          B1="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
+          B2="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/ci_imgs"
           curl -sL --max-time 120 -o /tmp/mt/imgs/01.jpg \
             "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/examples/01.jpg" || true
           curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/img5.webp "$B1/img5.webp" \
@@ -253,8 +253,8 @@ jobs:
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
           set -x
-          B1="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs/fixtures/page_mixed.png"
-          B2="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/ci_imgs/fixtures/page_mixed.png"
+          B1="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs/fixtures/page_mixed.png"
+          B2="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/ci_imgs/fixtures/page_mixed.png"
           curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/page_mixed.png "$B1" \
             || curl -fsSL --retry 2 --max-time 120 -o /tmp/mt/imgs/page_mixed.png "$B2"
           test -s /tmp/mt/imgs/page_mixed.png
@@ -280,8 +280,8 @@ jobs:
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           export PATH="$ANDROID_HOME/platform-tools:$PATH"
           set -x
-          B1="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
-          B2="https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/ci_imgs"
+          B1="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/${GITHUB_SHA}/ci_imgs"
+          B2="https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/ci_imgs"
           mkdir -p /tmp/mt/ext
           EXT_SET="img4.jpg:en up0929_zh.jpg:zh_en up0904_en.jpg:en up0822_en.jpg:en lang_ja_bw.jpg:ja_en lang_ja_color.jpg:ja_en lang_ko.jpg:ko_en lang_zh.jpg:zh_en img6.jpg:en"
           for tok in $EXT_SET; do
