@@ -741,6 +741,56 @@ class _MangaTranslatorBody_95:
                       + (f" + {_n_from_store} صفحه از انبارِ فصلها"
                          if _n_from_store else "")
                       + " → شروعِ استخراج/پاکسازی/ترجمه…")
+
+                # ادغامِ لینکهایِ تک‌تصویری (کاور/تیتراژ مثل credits) با فصلِ
+                # مجاور تا برشِ امن و چسباندنِ نوار مثلِ حالتِ تک‌لینک فعال بماند.
+                _merged_covers = 0
+                _merged_any = True
+                while _merged_any:
+                    _merged_any = False
+                    _i_m = 0
+                    while _i_m < len(_ch_plan):
+                        _p_m = _ch_plan[_i_m]
+                        if (_p_m.get("kind") == "new"
+                                and len(_p_m.get("files") or []) == 1
+                                and _i_m + 1 < len(_ch_plan)):
+                            _nxt_m = _ch_plan[_i_m + 1]
+                            if (_nxt_m.get("kind") == "new"
+                                    and len(_nxt_m.get("files") or []) > 1):
+                                _nxt_m["files"] = (list(_p_m["files"])
+                                                   + list(_nxt_m["files"]))
+                                _nxt_m["extra_head"] = (
+                                    list(_p_m["files"])
+                                    + list(_nxt_m.get("extra_head") or []))
+                                _nxt_m["no_store"] = True
+                                _ch_plan.pop(_i_m)
+                                _merged_covers += 1
+                                _merged_any = True
+                                continue
+                        _i_m += 1
+                    _i_m = len(_ch_plan) - 1
+                    while _i_m >= 0:
+                        _p_m = _ch_plan[_i_m]
+                        if (_p_m.get("kind") == "new"
+                                and len(_p_m.get("files") or []) == 1
+                                and _i_m > 0):
+                            _prv_m = _ch_plan[_i_m - 1]
+                            if (_prv_m.get("kind") == "new"
+                                    and len(_prv_m.get("files") or []) > 1):
+                                _prv_m["files"] = (
+                                    list(_prv_m["files"])
+                                    + list(_p_m["files"]))
+                                _prv_m.setdefault("extra_tail", []).extend(
+                                    _p_m["files"])
+                                _prv_m["no_store"] = True
+                                _ch_plan.pop(_i_m)
+                                _merged_covers += 1
+                                _merged_any = True
+                        _i_m -= 1
+                if _merged_covers:
+                    print(f"[*] {_merged_covers} لینکِ تک‌تصویری (کاور/تیتراژ) "
+                          f"به فصلِ مجاور چسبید → برشِ امن مثلِ حالتِ "
+                          f"تک‌لینک فعال می‌شود.")
         elif input_path.lower().endswith(".zip"):
             print(f"[*] استخراج فایل zip: {input_path}")
             image_files = self._extract_zip(input_path, src_dir)
@@ -886,7 +936,18 @@ class _MangaTranslatorBody_95:
             and int(getattr(self, "stitch_max_height", 0) or 0) <= 0
             and not getattr(self, "stitch_explicit", False))
         if _ch_plan:
-            _indep_no_stitch = True
+            # ورودیِ چندفصلیِ واقعی (دو فصلِ چندصفحه‌ای یا بیشتر) → بدون
+            # چسباندن تا نگاشتِ فایل→فصل برای انبارِ فصلها معتبر بماند؛
+            # ولی وقتی فقط یک فصلِ چندصفحه‌ای هست و بقیه لینکها تک‌تصویری
+            # (کاور/تیتراژ) و در همان فصل ادغام شدهاند → چسباندن/برشِ امن
+            # مثلِ حالتِ تک‌لینک فعال می‌شود.
+            _n_multi_ch = sum(
+                1 for _p in _ch_plan
+                if _p.get("kind") == "new" and len(_p.get("files") or []) > 1)
+            _n_new_ch = sum(
+                1 for _p in _ch_plan if _p.get("kind") == "new")
+            if _n_multi_ch >= 2 or _n_new_ch >= 2:
+                _indep_no_stitch = True
         if _indep_no_stitch and len(image_files) > 1:
             print(f"[*] حالت صفحات مستقل: {len(image_files)} صفحه هرکدام جدا مثل حالت تکی "
                   f"پردازش می‌شوند — بدون چسباندن/برشِ نوار (ریسایزِ گروهی هم نیست).")
@@ -894,6 +955,15 @@ class _MangaTranslatorBody_95:
                 and (self.stitch_max_height > 0 or getattr(self, "repair_page_seams", True))):
             stitch_dir = os.path.join(cache_dir, "stitched")
             image_files = self._stitch_pages_for_efficiency(image_files, stitch_dir)
+
+        if _ch_plan and image_files:
+            # وقتی فقط یک فصلِ «تازه» ماند، همهٔ نوارها/صفحه‌های خروجی
+            # متعلق به همان فصل است → فایلهایِ پلن را به خروجیِ نهایی
+            # نگاشت کن تا انبارِ فصلها و مونتاژِ نهایی درست کار کنند.
+            _new_ents = [_pl for _pl in _ch_plan
+                         if _pl.get("kind") == "new" and _pl.get("files")]
+            if len(_new_ents) == 1:
+                _new_ents[0]["files"] = list(image_files)
 
         try:
             _live_total_write(len(image_files))
@@ -2368,7 +2438,8 @@ class _MangaTranslatorBody_95:
                             _store_sts.append("done")
                         else:
                             _ch_complete = False
-                if _ch_complete and _store_files and _pl.get("sig"):
+                if (_ch_complete and _store_files and _pl.get("sig")
+                        and not _pl.get("no_store")):
                     try:
                         _ok_put = MangaTranslator._chapter_store_put(
                             _pl.get("url") or "", _pl["sig"],

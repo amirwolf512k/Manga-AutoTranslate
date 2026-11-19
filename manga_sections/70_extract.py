@@ -3042,11 +3042,11 @@ class _MangaTranslatorBody_70:
                 pass
         if self.debug:
             print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
-        try:
-            regions = self._rescue_orphan_lines(image, regions,
-                                                page_cache=page_cache)
-        except Exception:
-            pass
+
+        # مرزِ سخت: paddle det/rec فقط داخل جعبه‌های detector-v4 اجرا میشود.
+        # نجاتِ خطِ یتیم (OCR بیرون از جعبه‌ها) حذف شد: هم متنِ حبابها را
+        # دوباره میخواند (استخراجِ تکراری) و هم paddle det بیرون از کادرِ
+        # detector پیدا میشد و روی SFX/آثار هنری کوار آبی میساخت.
         return regions, page_boxes
 
     @staticmethod
@@ -3217,7 +3217,7 @@ class _MangaTranslatorBody_70:
     def _rescue_orphan_lines(self, image: np.ndarray,
                              regions: List["TextRegion"],
                              page_cache: Optional[dict] = None) -> List["TextRegion"]:
-        if os.environ.get("MANGA_ORPHAN_RESCUE", "1") == "0":
+        if os.environ.get("MANGA_ORPHAN_RESCUE", "0") != "1":
             return regions
         try:
             h_img, w_img = image.shape[:2]
@@ -4244,14 +4244,10 @@ class _MangaTranslatorBody_70:
             print(f"[*] {_nt_n} ناحیهٔ فقط عدد/نماد → دست‌نخورده "
                   f"(نه ترجمه، نه پاکسازی)")
 
-        if unique_regions and getattr(self, "clean_sfx", False):
-            _raise_if_stop()
-            try:
-                _sfx = self._discover_sfx_regions(image, unique_regions)
-                if _sfx:
-                    unique_regions.extend(_sfx)
-            except Exception:
-                pass
+        # مرزِ سخت: کشفِ SFX بیرون از جعبه‌های detector-v4 حذف شد.
+        # paddle det حق ندارد بیرون از کادرهای detector-v4 بگردد؛
+        # گزینهٔ «پاکسازی SFX» فقط برای نواحیِ داخلِ جعبه‌های detector
+        # که متنشان به‌عنوان sfx دسته‌بندی شده کار میکند.
 
         if len(unique_regions) > 1:
             def _norm_t(t):
