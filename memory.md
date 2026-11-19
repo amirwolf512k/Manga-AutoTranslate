@@ -71,6 +71,12 @@ dilate تا ۲۵px خطِ ۳px دیوار را میکُشد (protect در ترک
 
 ## تاریخچه (فقط تازه‌ها)
 
+- **v1.14.350** — مرزهای OCR سختگیرانه: F1-final روی best (نه فقط merged)،
+  تخصیص خط به بهترین مالک در clamp (رفع دوبارخوانی)، زندهسازی
+  _rec_fast_single_line (NameError)، promo/sfx بدون متن هرگز پاک نمیشود
+  (سه نقطهٔ مسیر پاکسازی). تست ۱۵ صفحهٔ mgeko فصل 46 سبز.
+  ریلیزهای 5122 (models/apk/clouds) که با ریستِ repo خالی شده بودند دوباره
+  از 512k پر شدند (۲۷ مدل + ۳ APK + ۶ cloud).
 - **v1.14.349** — قانونِ ثابتِ id/اسامی فقط در HIDDEN_ID_RULE_TEXT:
   متنِ کاملِ «اسامی خاص… برای هر id دقیقاً یک fa بده.» از FLASH_PROMPT و
   FLASH_LITE_PROMPT حذف و به HIDDEN_ID_RULE_TEXT منتقل شد؛

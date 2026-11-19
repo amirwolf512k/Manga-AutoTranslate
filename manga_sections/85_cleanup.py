@@ -2395,6 +2395,19 @@ class _MangaTranslatorBody_85:
                 except Exception:
                     pass
             if getattr(region, "kind", "") in ("promo", "sfx"):
+                _has_txt = bool(
+                    str(getattr(region, "source_text", "") or "").strip()
+                    or str(getattr(region, "translated_text", "") or "").strip())
+                if not _has_txt:
+                    n_skip += 1
+                    if self.debug:
+                        try:
+                            print(f"  [🚫خالی] {getattr(region, 'kind', '')} "
+                                  f"بدونِ متن پاک نشد "
+                                  f"rect={tuple(int(v) for v in region.rect)}")
+                        except Exception:
+                            pass
+                    continue
                 try:
                     _px0, _py0, _pw, _ph = [int(v) for v in region.rect]
                     _px1, _py1 = _px0 + _pw, _py0 + _ph

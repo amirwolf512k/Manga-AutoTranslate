@@ -2457,7 +2457,7 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
                 _qa = max(1e-6, (_qx2 - _qx1) * (_qy2 - _qy1))
                 ix = max(0.0, min(_qx2, bx2 + tol) - max(_qx1, bx1 - tol))
                 iy = max(0.0, min(_qy2, by2 + tol) - max(_qy1, by1 - tol))
-                if (ix * iy) / _qa < 0.5:
+                if (ix * iy) / _qa < 0.45:
                     keep.append(False)
                     continue
             except Exception:
@@ -2469,17 +2469,31 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
             except Exception:
                 keep.append(True)
                 continue
+            # تخصیص خط به بهترین مالک: خودی در تساوی برنده میماند؛
+            # باکسِ همسایه فقط وقتی خط را بهطورِ قاطع بیشتر میپوشاند
+            # (≥۱۰٪ بیشتر از خودی) و مرکزِ خط هم درونِ آن است، خط را
+            # میگیرد — بزرگ/کوچک بودنِ باکس دیگر نقشی ندارد (رفعِ
+            # دوبارخوانیِ متنِ مرزی بینِ دو کادرِ detector).
+            _own_cov = 0.0
+            try:
+                _oix = max(0.0, min(_qx2, bx2) - max(_qx1, bx1))
+                _oiy = max(0.0, min(_qy2, by2) - max(_qy1, by1))
+                _own_cov = (_oix * _oiy) / max(1e-6, _qa)
+            except Exception:
+                _own_cov = 0.0
             _stolen = False
             for (ox1, oy1, ox2, oy2, oa) in _others:
-                if oa >= own_area:
-                    continue
                 iox = max(0.0, min(_qx2, ox2) - max(_qx1, ox1))
                 ioy = max(0.0, min(_qy2, oy2) - max(_qy1, oy1))
-                if (iox * ioy) / max(1e-6, _qa) >= 0.6:
+                _ocov = (iox * ioy) / max(1e-6, _qa)
+                if _ocov <= 0.45:
+                    continue
+                if _ocov > _own_cov + 0.15:
                     _stolen = True
                     break
-                if ((ox1 - tol) <= cx <= (ox2 + tol)
-                        and (oy1 - tol) <= cy <= (oy2 + tol)):
+                if (ox1 - tol) <= cx <= (ox2 + tol) \
+                        and (oy1 - tol) <= cy <= (oy2 + tol) \
+                        and _ocov > _own_cov + 0.05:
                     _stolen = True
                     break
             keep.append(not _stolen)

@@ -293,7 +293,8 @@ class _MangaTranslatorBody_70:
         return _rv
 
     def _rec_fast_single_line(self, crop0: np.ndarray, base_scale: float,
-                              ox: int, oy: int, block_rects, own_area: float):
+                              ox: int, oy: int, block_rects, own_area: float,
+                              det_rect=None):
         _rf = getattr(self.ocr, "rec_only", None)
         if not callable(_rf):
             return None
@@ -405,10 +406,23 @@ class _MangaTranslatorBody_70:
         except Exception:
             return None
         try:
+            _dx1 = float(det_rect[0]) if det_rect is not None \
+                else float(ox)
+            _dy1 = float(det_rect[1]) if det_rect is not None \
+                else float(oy)
+            _dx2 = float(det_rect[2]) if det_rect is not None \
+                else float(ox + cw)
+            _dy2 = float(det_rect[3]) if det_rect is not None \
+                else float(oy + ch)
             _ba = max(1e-6, (_bb[2] - _bb[0]) * (_bb[3] - _bb[1]))
-            _bin = max(0.0, min(_bb[2], float(x2)) - max(_bb[0], float(x1))) \
-                * max(0.0, min(_bb[3], float(y2)) - max(_bb[1], float(y1)))
+            _bin = max(0.0, min(_bb[2], _dx2) - max(_bb[0], _dx1)) \
+                * max(0.0, min(_bb[3], _dy2) - max(_bb[1], _dy1))
             if _bin / _ba < 0.85:
+                return None
+            _bcx = (_bb[0] + _bb[2]) * 0.5
+            _bcy = (_bb[1] + _bb[3]) * 0.5
+            if not (_dx1 - 3.0 <= _bcx <= _dx2 + 3.0
+                    and _dy1 - 3.0 <= _bcy <= _dy2 + 3.0):
                 return None
         except Exception:
             return None
@@ -561,7 +575,7 @@ class _MangaTranslatorBody_70:
             try:
                 _fast = self._rec_fast_single_line(
                     crop0, base_scale, x1, y1, block_rects,
-                    (x2 - x1) * (y2 - y1))
+                    (x2 - x1) * (y2 - y1), det_rect=rect)
                 if _fast is not None:
                     return _fast
             except Exception:
@@ -1297,6 +1311,63 @@ class _MangaTranslatorBody_70:
                             break
                     except Exception:
                         continue
+        except Exception:
+            pass
+
+        # F1-final: قرنطینهٔ مرز روی خروجِ نهایی — مسیرهای variants/
+        # halves/r90/deskew/rotate همگی در best جمع میشوند؛ هر خطِ
+        # بیرون از کادرِ اصلیِ detector (بدونِ pad) حذف میشود.
+        try:
+            _bx1f, _by1f = float(rect[0]), float(rect[1])
+            _bx2f, _by2f = float(rect[2]), float(rect[3])
+            _bp = list(best[1] or [])
+            if _bp:
+                _ba_f = list(best[4] or [])
+                _bn_f = list(best[3] or [])
+                _bk_f = list(best[5] or [])
+                if len(_ba_f) != len(_bp):
+                    _ba_f = [best[0] or ""] * len(_bp)
+                    _bn_f = [0.0] * len(_bp)
+                    _bk_f = [-1] * len(_bp)
+                _keepB = []
+                for _iF, _pF in enumerate(_bp):
+                    try:
+                        _ppF = np.asarray(_pF, dtype=np.float32).reshape(-1, 2)
+                        _qx1F = float(_ppF[:, 0].min())
+                        _qy1F = float(_ppF[:, 1].min())
+                        _qx2F = float(_ppF[:, 0].max())
+                        _qy2F = float(_ppF[:, 1].max())
+                        _qaF = max(1e-6, (_qx2F - _qx1F) * (_qy2F - _qy1F))
+                        _ixF = max(0.0, min(_qx2F, _bx2f) - max(_qx1F, _bx1f))
+                        _iyF = max(0.0, min(_qy2F, _by2f) - max(_qy1F, _by1f))
+                        if (_ixF * _iyF) / _qaF < 0.35:
+                            continue
+                        _cxF = (_qx1F + _qx2F) * 0.5
+                        _cyF = (_qy1F + _qy2F) * 0.5
+                        if not (_bx1f - 4.0 <= _cxF <= _bx2f + 4.0
+                                and _by1f - 4.0 <= _cyF <= _by2f + 4.0):
+                            continue
+                        _keepB.append(_iF)
+                    except Exception:
+                        _keepB.append(_iF)
+                if 0 < len(_keepB) < len(_bp):
+                    _nbest = (
+                        " ".join(str(_ba_f[_j] or "").strip()
+                                 for _j in _keepB).strip(),
+                        [_bp[_j] for _j in _keepB],
+                        best[2],
+                        [_bn_f[_j] for _j in _keepB],
+                        [_ba_f[_j] for _j in _keepB],
+                        [_bk_f[_j] for _j in _keepB],
+                    )
+                    if self.debug:
+                        try:
+                            print(f"    [🚧مرز] {len(_bp) - len(_keepB)} خطِ "
+                                  f"بیرون از detector از نتیجهٔ نهایی حذف شد",
+                                  flush=True)
+                        except Exception:
+                            pass
+                    best = _nbest
         except Exception:
             pass
 
@@ -4320,8 +4391,12 @@ class _MangaTranslatorBody_70:
         raw_image_copy = image.copy()
 
         if getattr(self, "clean_only", False):
+            _txt_ok = lambda r: bool(
+                str(getattr(r, "source_text", "") or "").strip()
+                or str(getattr(r, "translated_text", "") or "").strip())
             clean_targets = [r for r in regions
-                             if r.kind in ("dialogue", "junk", "promo")]
+                             if r.kind in ("dialogue", "junk", "promo")
+                             and _txt_ok(r)]
             if _android_gate("MANGA_CLEAN_TEXTFREE"):
                 _tf = [r for r in regions if r.kind == "text_free"]
                 if _tf:
@@ -4411,7 +4486,9 @@ class _MangaTranslatorBody_70:
                             pass
         _clean_regions = translated_regions
         if getattr(self, "clean_sfx", False) and sfx_regions:
-            _clean_regions = _clean_regions + sfx_regions
+            _clean_regions = _clean_regions + [
+                r for r in sfx_regions
+                if (r.translated_text or "").strip()]
         if _android_gate("MANGA_CLEAN_TEXTFREE"):
             _tf_free = [r for r in regions if r.kind == "text_free"]
             if _tf_free:
