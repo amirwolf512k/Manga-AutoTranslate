@@ -182,7 +182,8 @@ class MainActivity : AppCompatActivity() {
 
     private val modeGridIds = listOf(
         "manga_cb_twopass", "manga_cb_thinking", "manga_cb_safety",
-        "manga_cb_faketest", "manga_cb_cleanup", "manga_cb_debug")
+        "manga_cb_faketest", "manga_cb_cleanup", "manga_cb_debug",
+        "manga_cb_brief")
 
     private val modeTips = mapOf(
         "manga_cb_twopass" to "پاسِ اول بلوکها را مییابد، پاسِ دوم متنِ داخلشان را دقیق بازمیخواند — پیش‌فرض روشن",
@@ -191,6 +192,8 @@ class MainActivity : AppCompatActivity() {
         "manga_cb_cleanup" to "فقط پاکسازی متن (inpaint) بدون ترجمه — کلید API لازم نیست",
         "manga_cb_debug" to "مربعِ رنگی دور هر بلوک + خروجیِ دیباگ جدا (مثلاً PDF → *_debug.pdf)",
         "manga_cb_safety" to "فیلترهای گوگل BLOCK_NONE میشوند (ضدِ سانسور) — پیش‌فرض خاموش",
+        "manga_cb_brief" to "قبل از ترجمه یک درخواست اضافه: خلاصهٔ داستان و لحن شخصیتها ساخته میشود تا لحنها ثابت بمانند — پیش‌فرض خاموش",
+        "manga_glossary_text" to "معادلهای قفلشده (هر خط: English=فارسی) — همیشه با همین شکل ترجمه میشوند؛ اسمهای جدید خودکار یادگرفته و ذخیره میشوند",
         "manga_max_tokens" to "خودکار = سرویس‌دهنده خودش مدیریت میکند؛ چپترِ طولانیِ ناتمام؟ عدد را بالا ببرید")
 
     private var activeTip: TextView? = null
@@ -281,6 +284,7 @@ class MainActivity : AppCompatActivity() {
                 "manga_cb_faketest" -> listOf(id, "fake_test", "manga_fake_test")
                 "manga_cb_cleanup" -> listOf(id, "clean_only", "manga_clean_only")
                 "manga_cb_debug" -> listOf(id, "web_debug", "manga_web_debug")
+                "manga_cb_brief" -> listOf(id, "story_brief", "brief", "manga_story_brief")
                 else -> listOf(id)
             }
             val svB = aliases.firstNotNullOfOrNull { a ->
@@ -2056,6 +2060,8 @@ class MainActivity : AppCompatActivity() {
         "fake_test" -> listOf("manga_cb_faketest", "fake_test", "manga_fake_test")
         "clean_only" -> listOf("manga_cb_cleanup", "clean_only", "manga_clean_only")
         "web_debug" -> listOf("manga_cb_debug", "web_debug", "manga_web_debug")
+        "story_brief", "brief" -> listOf("manga_cb_brief", "story_brief", "brief", "manga_story_brief")
+        "glossary_text" -> listOf("manga_glossary_text", "glossary_text")
         "max_tokens" -> listOf("manga_max_tokens", "max_tokens")
         "max_tokens_custom" -> listOf("manga_max_tokens_custom", "max_tokens_custom")
         else -> listOf(k, "manga_$k")
@@ -3075,6 +3081,8 @@ class MainActivity : AppCompatActivity() {
             ?: "professional")
         map.put("prompt_body", firstNonEmpty(o, "manga_prompt_body", "prompt_preview_body",
             "prompt_body") ?: "")
+        map.put("glossary_text", firstNonEmpty(o, "manga_glossary_text", "glossary_text") ?: "")
+        map.put("brief", optBoolD(o, false, "manga_cb_brief", "story_brief", "brief"))
 
         val sliderMap = mapOf(
             "workers" to "manga_sl_workers", "bubbles" to "manga_sl_bubbles",

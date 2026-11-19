@@ -116,6 +116,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
                    help="با عوض‌شدنِ مدل/پرامپت: ترجمه‌ها از نو ساخته شوند "
                         "(پیش‌فرض: ادامه — حباب‌های ترجمه‌شده از کش می‌مانند؛ "
                         "استخراج/پاکسازی در هر دو حالت از کش می‌مانند)")
+    p.add_argument("--glossary", default=None,
+                   help="فایل واژه‌نامهٔ اسامی/اصطلاحات: هر خط «English=فارسی». "
+                        "معادل‌ها قفل می‌شوند و اسم‌های جدید خودکار به glossary.json "
+                        "خروجی اضافه و فصل بعد خودکار خوانده می‌شوند")
+    p.add_argument("--brief", action="store_true",
+                   help="بریف داستان قبل از ترجمه ساخته شود (یک درخواست اضافه در "
+                        "هر فصل برای حفظ لحن شخصیت‌ها — پیش‌فرض خاموش)")
     p.add_argument("--no-brief", action="store_true",
                    help=argparse.SUPPRESS)
     p.add_argument("--clean-sfx", action="store_true",
@@ -325,7 +332,18 @@ def main():
         max_tokens_mode=str(getattr(args, "max_tokens", "auto") or "auto"),
         max_tokens_custom=int(getattr(args, "max_tokens_custom", 4096) or 4096),
         device_pref=_dev_arg,
+        glossary_path=getattr(args, "glossary", None),
+        story_brief=(bool(getattr(args, "brief", False))
+                     and not bool(getattr(args, "no_brief", False))),
     )
+    try:
+        _gp = getattr(args, "glossary", None)
+        _gdir = (os.path.dirname(os.path.abspath(_gp))
+                 if _gp and os.path.isfile(_gp)
+                 else (os.path.dirname(os.path.abspath(output_path)) or "."))
+        translator.set_glossary_output_dir(_gdir)
+    except Exception:
+        pass
     if getattr(args, "lama", False):
         translator.use_lama = True
         print("[*] --lama → پاک‌سازی باکیفیت LaMa ONNX فعال (کندتر از OpenCV).")

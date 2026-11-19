@@ -437,9 +437,20 @@ class MangaTranslator:
         clean_sfx: bool = False,
         repair_page_seams: bool = True,
         device_pref: str = "auto",
+        glossary_path: Optional[str] = None,
+        story_brief: bool = False,
     ):
         self.fake_translate = bool(fake_translate)
         self.clean_only = bool(clean_only)
+        self._name_glossary: Dict[str, str] = {}
+        self.glossary_path = glossary_path
+        self._glossary_out_dir = ""
+        self._glossary_dirty = False
+        self.story_brief_enabled = bool(story_brief)
+        self._chapter_brief: str = ""
+        self._brief_corpus: List[str] = []
+        if glossary_path and os.path.isfile(glossary_path):
+            self._load_glossary_file(glossary_path)
         _dev_pref = str(device_pref or "auto").strip().lower()
         if _dev_pref not in ("auto", "cpu", "gpu"):
             _dev_pref = "auto"

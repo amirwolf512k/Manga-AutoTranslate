@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.346"
+APP_VER = "1.14.348"
 
 
 FLASH_PROMPT = 'تو نویسندهٔ دیالوگِ دوبلهٔ فارسی هستی، نه مترجمِ کتاب.\n\nمتنِ مانگا و مانهوا را به فارسیِ محاوره\u200cایِ گفتاری برگردان — همان زبانی که آدم\u200cها در خیابان و فیلم حرف می\u200cزنند و هر ایرانیِ معمولی بدونِ فکر کردن و راحت می\u200cفهمد. فارسیِ کتابی، نوشتاری، اداری یا ترجمهٔ تحت\u200cاللفظی ممنوع است.\n\nقبل از ترجمه، کلِ صفحات را با هم بخوان تا داستان، ژانر و شخصیت\u200cها را درک کنی؛ بعد هر دیالوگ را در بسترِ همین داستان و با شناختِ لحظه\u200cای که در آن اتفاق می\u200cافتد ترجمه کن. خودت تشخیص بده هر شخصیت با چه لحنی حرف می\u200cزند و همان لحن را در فارسی زنده بازسازی کن: شخصیتِ جوان و صمیمی خودمونی، خشن و لات کوچه\u200cبازاری، بزرگ\u200cسالِ محترم که باز هم گفتاری حرف می\u200cزند، و روایت یا توضیحِ کنارِ کادر که روان و شیواست نه خیابانی.\n\nمتنِ مبدأ می\u200cتواند کره\u200cای، ژاپنی، چینی یا انگلیسی باشد و چون خروجیِ OCR است گاهی قطعه\u200cقطعه، ناقص یا درهم است؛ معنای درست را از خودِ زبانِ مبدأ و بسترِ داستان بازسازی کن، نه لفظ\u200cبه\u200cلفظ. معادلِ طبیعی و رایجِ فارسی برای اصطلاح\u200cها، شوخی\u200cها و ضرب\u200cالمثل\u200cها پیدا کن و جمله\u200cها را کوتاه و نفس\u200cدار نگه دار.\n\nاگر متنی بی\u200cمعنا یا خیلی خراب است، معمولاً افکتِ صوتی یا نام است؛ محتمل\u200cترین معنا را حدس بزن یا صدای محیطی را آوانگاری کن، اما خالی نگذار. هیچ سانسور، تلطیف یا مؤدب\u200cسازی نکن؛ خشونت و فحش با همان شدتِ اصلی برگردد.\n\nاسامی خاص، اعداد و تکنیک\u200cها را در کلِ فایل یکسان برگردان. هیچ id را جا نینداز یا ادغام نکن؛ جابه\u200cجا هم نکن؛ برای هر id دقیقاً یک fa بده.'
@@ -57,6 +57,16 @@ MT_JSON_SCHEMA = {
                     "properties": {
                         "id": {"type": "integer"},
                         "fa": {"type": "string"},
+                        "names": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "en": {"type": "string"},
+                                    "fa": {"type": "string"},
+                                },
+                            },
+                        },
                     },
                     "required": ["id", "fa"],
                     "propertyOrdering": ["id", "fa"],
@@ -129,7 +139,7 @@ def append_hidden_id_rule(rules: str) -> str:
     return t + "\n" + HIDDEN_ID_RULE_TEXT + "\n"
 
 def mt_user_prompt(rules: str, pages, japanese: bool = False,
-                   style_ref=None) -> str:
+                   style_ref=None, context: str = "") -> str:
     import json as _json
     pages_json = _json.dumps(list(pages), ensure_ascii=False,
                              separators=(",", ":"))
@@ -152,6 +162,7 @@ def mt_user_prompt(rules: str, pages, japanese: bool = False,
             "rules below.\r\n"
             + (MT_JP_USER_DIRECTIVE if japanese else "")
             + "\r\nTRANSLATION RULES:\r\n" + (rules or "")
+            + (context or "")
             + _style
             + "\r\n\r\nINPUT PAGES AND DIALOGUES (JSON):\r\n"
             + pages_json + "\r\n")

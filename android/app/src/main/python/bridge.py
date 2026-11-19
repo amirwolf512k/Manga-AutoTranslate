@@ -384,6 +384,10 @@ _FIELD_TIPS = {
                     "حرفه‌ای = فرآیند تفکر سه‌گانه برای Flash و Pro | سبک = برای Flash Lite و مدلهای سبکِ غیر Gemini"),
     "prompt_body": ("app.prompt_info",
                     "همین متن بهعنوان قوانین ترجمه به مدل فرستاده میشود — خالی = پرامپت خودکارِ بر اساس سبک و مدل"),
+    "glossary_text": ("app.glossary_info",
+                      "معادلهای قفلشده — همیشه با همین شکل ترجمه میشوند؛ اسمهای جدیدی که AI پیدا کند خودکار یادش میماند و دفعهٔ بعد خودش خوانده میشود"),
+    "cb_brief": ("app.brief_info",
+                 "قبل از ترجمه یک درخواست اضافه: خلاصهٔ داستان و لحن شخصیتها ساخته میشود تا لحنها ثابت بمانند — پیش‌فرض خاموش"),
 }
 
 def _field_tip(fid, base):
@@ -1218,7 +1222,56 @@ def _run(job):
                         mf = {}
                 font_by_style, active = _resolve_tones(job, mf)
                 _pmode, _instr = _prompt_params(p)
+                _glos_path = None
+                try:
+                    _files_dir = str(job.get("files_dir")
+                                     or os.environ.get("MANGA_FILES_DIR")
+                                     or os.getcwd())
+                    _glos_dir = os.path.join(_files_dir, "glossary")
+                    os.makedirs(_glos_dir, exist_ok=True)
+                    _guser = os.path.join(_glos_dir, "glossary_user.txt")
+                    _learned = os.path.join(_glos_dir, "glossary.json")
+                    _merged = {}
+                    try:
+                        if os.path.isfile(_learned):
+                            with open(_learned, encoding="utf-8") as _lf:
+                                _ld = json.load(_lf) or {}
+                            for _k, _v in _ld.items():
+                                _k2, _v2 = str(_k).strip(), str(_v).strip()
+                                if _k2 and _v2:
+                                    _merged[_k2] = _v2
+                    except Exception:
+                        _merged = {}
+                    _gtxt = str(p.get("glossary_text") or "").strip()
+                    for _ln in _gtxt.splitlines():
+                        _ln = _ln.strip()
+                        if not _ln or _ln.startswith("#"):
+                            continue
+                        for _sep in ("=", ":", "\t"):
+                            if _sep in _ln:
+                                _ks, _vs = _ln.split(_sep, 1)
+                                _ks, _vs = _ks.strip(), _vs.strip()
+                                if _ks and _vs:
+                                    _merged[_ks] = _vs
+                                break
+                    if _merged:
+                        with open(_guser, "w", encoding="utf-8") as _gf:
+                            for _k in sorted(_merged):
+                                _gf.write("%s=%s\n" % (_k, _merged[_k]))
+                        _glos_path = _guser
+                        _log(job, "واژه‌نامه: %d معادل فعال" % len(_merged))
+                    else:
+                        try:
+                            if os.path.isfile(_guser):
+                                os.remove(_guser)
+                        except Exception:
+                            pass
+                except Exception as _ge:
+                    _log(job, "[!] واژه‌نامه آماده نشد (%s)" % _ge)
+                _brief_on = bool(p.get("brief") or p.get("story_brief"))
                 tr = _manga().MangaTranslator(
+                    glossary_path=_glos_path,
+                    story_brief=_brief_on,
                     api_key=keys or ["placeholder"],
                     provider=str(p.get("provider") or "gemini"),
                     model_name=(str(p.get("model") or "").strip() or None),
@@ -1260,6 +1313,12 @@ def _run(job):
                     tr.stitch_max_height = 4000
                     tr.stitch_explicit = True
                 tr.batch_workers = _i("batchw", 3)
+                if _glos_path:
+                    try:
+                        tr.set_glossary_output_dir(
+                            os.path.dirname(_glos_path))
+                    except Exception:
+                        pass
 
                 _cm_log = str(getattr(tr, "clean_method", "") or "")
                 if _cm_log == "opencv":

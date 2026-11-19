@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.347"
+APP_VER = "1.14.348"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -7587,6 +7587,25 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                         inputs=[max_tokens], outputs=[max_tokens_custom])
                 except Exception:
                     pass
+            glossary_text = gr.Textbox(
+                label=TX("app.glossary", "واژه‌نامهٔ اسامی و اصطلاحات (هر خط: English=فارسی)"),
+                placeholder=TX("app.glossary_ph",
+                               "Raphdonia=رافدونیا\nBarbarian=بربرین\nGuild Master=استاد گیلد"),
+                lines=3, max_lines=10, interactive=True,
+                info=TX("app.glossary_info",
+                        "معادل‌های قفل‌شده — همیشه با همین شکل ترجمه می‌شوند؛ "
+                        "اسم‌های جدیدی که AI پیدا کند خودکار یادش می‌ماند (glossary.json) "
+                        "و دفعهٔ بعد خودش خوانده می‌شود"),
+                value=str(cfg.get("glossary_text", "") or ""),
+                elem_id="manga_glossary_text")
+            story_brief = gr.Checkbox(
+                label=TX("app.brief", "بریف داستان (AI اول کل فصل را می‌خواند)"),
+                info=TX("app.brief_info",
+                        "قبل از ترجمه یک درخواست اضافه: خلاصهٔ داستان و لحن "
+                        "شخصیت‌ها ساخته می‌شود تا لحن‌ها ثابت بمانند — "
+                        "پیش‌فرض خاموش"),
+                value=bool(cfg.get("story_brief", False)),
+                elem_id="manga_cb_brief")
             prompt_mode = gr.Dropdown(
                 choices=["professional", "lite"],
                 value=PROMPT_MODE_DEFAULT,
@@ -8251,7 +8270,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         LS_KEY = "manga_autotranslate_form_v2"
         JOB_KEY = "manga_job_v1"
         save_form_js = f"""
-(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, device, twopass, fake, cleano, think, safety, mtmode, mtcust) => {{
+(sid, sidBox, inp, prov, keys, model, fmt, qual, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, topp, readord, cleanm, device, twopass, fake, cleano, think, safety, mtmode, mtcust, glos, brief) => {{
   try {{
     const realSid = (sid || sidBox || "").toString().trim();
     const clean = (v) => {{
@@ -8284,6 +8303,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       safety_settings: !!safety,
       max_tokens: clean(mtmode) || "auto",
       max_tokens_custom: (mtcust === null || mtcust === undefined) ? 4096 : Number(mtcust),
+      glossary_text: clean(glos),
+      story_brief: brief === null || brief === undefined ? false : !!brief,
       ts: Date.now()
     }};
     localStorage.setItem("{LS_KEY}", JSON.stringify(data));
@@ -8844,6 +8865,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                             api_base_v,
                             thinking_v, safety_v, max_tokens_v, max_tokens_custom_v,
                             models_v,
+                            glossary_text_v, story_brief_v,
                             *tone_args):
             _t_prep = time.time()
             if not str(api_keys_v or "").strip():
@@ -9215,6 +9237,50 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     _inf.write(instr_text + "\n")
                 cmd += ["--instruction", instr_path]
             cmd += ["--prompt-mode", sanitize_prompt_mode(prompt_mode_v)]
+            _glos_txt = str(glossary_text_v or "").strip()
+            try:
+                _glos_dir = os.path.join(WORK_DIR, "glossary")
+                os.makedirs(_glos_dir, exist_ok=True)
+                _glos_path = os.path.join(_glos_dir, "glossary_user.txt")
+                _learned = os.path.join(_glos_dir, "glossary.json")
+                _merged: dict = {}
+                try:
+                    if os.path.isfile(_learned):
+                        with open(_learned, encoding="utf-8") as _lf:
+                            _ld = json.load(_lf) or {}
+                        for _k, _v in _ld.items():
+                            _k2, _v2 = str(_k).strip(), str(_v).strip()
+                            if _k2 and _v2:
+                                _merged[_k2] = _v2
+                except Exception:
+                    _merged = {}
+                for _ln in _glos_txt.splitlines():
+                    _ln = _ln.strip()
+                    if not _ln or _ln.startswith("#"):
+                        continue
+                    for _sep in ("=", ":", "\t"):
+                        if _sep in _ln:
+                            _ks, _vs = _ln.split(_sep, 1)
+                            _ks, _vs = _ks.strip(), _vs.strip()
+                            if _ks and _vs:
+                                _merged[_ks] = _vs
+                            break
+                if _merged:
+                    with open(_glos_path, "w", encoding="utf-8") as _gf:
+                        for _k in sorted(_merged):
+                            _gf.write(f"{_k}={_merged[_k]}\n")
+                    cmd += ["--glossary", _glos_path]
+                    print(f"[*] واژه‌نامه: {len(_merged)} معادل فعال")
+                else:
+                    try:
+                        if os.path.isfile(_glos_path):
+                            os.remove(_glos_path)
+                    except Exception:
+                        pass
+            except Exception as _ge:
+                print(f"[!] واژه‌نامه آماده نشد ({_ge})")
+            if story_brief_v:
+                cmd += ["--brief"]
             t0 = time.time()
             try:
                 print(f"[TIME] app-prep={time.time() - _t_prep:.1f}s",
@@ -10091,6 +10157,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     api_base,
                     deep_thinking, safety_settings, max_tokens, max_tokens_custom,
                     custom_models_state,
+                    glossary_text, story_brief,
                 ] + tone_uploads + tone_enables,
             outputs=[session_id, sid_box, run_btn, log_box, dl_btn, btn_view, result_group, viewer_html, html_state,
                      dl_btn_debug, btn_view_debug, debug_row, html_debug_state,
@@ -10172,6 +10239,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
             clean_method, device, two_pass, fake_test, clean_only,
             deep_thinking, safety_settings, max_tokens, max_tokens_custom,
+            glossary_text, story_brief,
         ]
 
         try:
@@ -10193,7 +10261,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             pass
 
-        for _comp in (api_keys, provider, model, out_fmt, inp_path):
+        for _comp in (api_keys, provider, model, out_fmt, inp_path, glossary_text):
             try:
                 _comp.change(fn=None, inputs=_save_inputs, outputs=[], js=save_form_js)
             except Exception:
@@ -10203,7 +10271,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     pass
         for _comp in (quality, workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
                       clean_method, device, two_pass, fake_test, clean_only,
-                      deep_thinking, safety_settings, max_tokens, max_tokens_custom):
+                      deep_thinking, safety_settings, max_tokens, max_tokens_custom,
+                      story_brief):
             try:
                 _comp.change(fn=None, inputs=_save_inputs, outputs=[], js=save_form_js)
             except Exception:
@@ -10226,10 +10295,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             if not sid:
                 _ks = str(data.get("keys") or "").strip()
                 if _ks:
-                    _outs = [gr.update()] * 33
+                    _outs = [gr.update()] * 35
                     _outs[12] = gr.update(value=_ks)
                     return tuple(_outs)
-                return (gr.update(),) * 33
+                return (gr.update(),) * 35
             job = _get_job(sid)
             meta = _load_job_meta(sid) if sid else {}
             
@@ -10390,6 +10459,8 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 u_bool("safety_settings"),
                 u_max_tokens(),
                 u_max_tokens_custom(),
+                u_str("glossary_text"),
+                u_bool("story_brief"),
             )
 
         _restore_outputs = [
@@ -10398,6 +10469,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             workers, bubbles, timeout, batchw, maxre, reqdelay, temp, top_p, readord,
             clean_method, device, two_pass, fake_test, clean_only,
             deep_thinking, safety_settings, max_tokens, max_tokens_custom,
+            glossary_text, story_brief,
         ]
 
         hidden_restore_tb = gr.Textbox(visible=False, elem_id="manga_hidden_restore", container=False)

@@ -380,6 +380,10 @@ class _MangaTranslatorBody_80:
             fname = str(pg.get("filename") or "")
             trans = [it for it in (pg.get("translations") or [])
                      if isinstance(it, dict)]
+            if self._name_glossary or self._glossary_dirty:
+                self._glossary_note_names(pg)
+                for it in trans:
+                    self._glossary_note_names(it)
             page_regions = [r for r in regions
                             if id(r) not in done
                             and (not region_page
@@ -1236,6 +1240,126 @@ class _MangaTranslatorBody_80:
               f"دوباره با لنگرِ محاوره‌ای پرسیده میشوند.")
         return True
 
+    def _load_glossary_file(self, path: str) -> None:
+        try:
+            with open(path, encoding="utf-8-sig") as f:
+                for ln in f:
+                    ln = ln.strip()
+                    if not ln or ln.startswith("#"):
+                        continue
+                    for sep in ("=", ":", "\t"):
+                        if sep in ln:
+                            src, per = ln.split(sep, 1)
+                            src, per = src.strip(), per.strip()
+                            if src and per:
+                                self._name_glossary[src] = per
+                            break
+            print(f"[*] واژه‌نامه بارگذاری شد: {len(self._name_glossary)} مورد از {path}")
+        except Exception as e:
+            print(f"[!] خواندن واژه‌نامه ناموفق ({e})")
+
+    def set_glossary_output_dir(self, out_dir: str) -> None:
+        self._glossary_out_dir = out_dir or ""
+        auto = os.path.join(self._glossary_out_dir, "glossary.json")
+        if not (self.glossary_path and os.path.isfile(self.glossary_path)) \
+                and os.path.isfile(auto):
+            try:
+                with open(auto, encoding="utf-8") as f:
+                    d = json.load(f)
+                for k, v in d.items():
+                    k, v = str(k).strip(), str(v).strip()
+                    if k and v and k not in self._name_glossary:
+                        self._name_glossary[k] = v
+                if d:
+                    print(f"[*] glossary.json قبلی بارگذاری شد: {len(d)} مورد")
+            except Exception:
+                pass
+
+    def save_glossary(self) -> None:
+        if not self._glossary_dirty or not self._name_glossary:
+            return
+        out_dir = self._glossary_out_dir or os.getcwd()
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+            path = os.path.join(out_dir, "glossary.json")
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(self._name_glossary, f, ensure_ascii=False, indent=2)
+            print(f"[*] واژه‌نامه ذخیره شد: {path} ({len(self._name_glossary)} مورد)")
+            self._glossary_dirty = False
+        except Exception as e:
+            print(f"[!] ذخیرهٔ واژه‌نامه ناموفق ({e})")
+
+    def _glossary_prompt_block(self) -> str:
+        if not self._name_glossary:
+            return ""
+        lines = "\n".join(
+            f"  {src} → {per}" for src, per in sorted(self._name_glossary.items())
+        )
+        return (
+            "\r\n\r\nقفل واژه‌نامه (الزامی):\r\n"
+            "این معادل‌ها قطعی‌اند؛ در همهٔ ترجمه‌ها دقیقاً همین شکل را به‌کار ببر "
+            "و املای فارسی آن‌ها را عوض نکن:\r\n"
+            f"{lines}\r\n"
+            "اسم خاص جدیدی که در واژه‌نامه نیست را طبیعی نویسه‌گردانی کن و در فیلد "
+            "اختیاری names هر آیتم گزارش بده "
+            '("names": [{"en": "SOURCE", "fa": "فارسی"}]).\r\n'
+        )
+
+    def _brief_prompt_block(self) -> str:
+        if not self._chapter_brief:
+            return ""
+        return (
+            "\r\n\r\nخلاصهٔ داستان و لحن شخصیت‌ها:\r\n"
+            f"{self._chapter_brief.strip()}\r\n"
+            "لحن هر شخصیت را مطابق همین خلاصه حفظ کن.\r\n"
+        )
+
+    def _build_chapter_brief(self, corpus: List[str]) -> None:
+        if not getattr(self, "story_brief_enabled", False) or self._chapter_brief:
+            return
+        texts = [t for t in corpus if t and len(t.strip()) > 2][:400]
+        if len(texts) < 3:
+            return
+        joined = "\n".join("- " + t.strip()[:300] for t in texts)[:14000]
+        prompt = (
+            "متن‌های زیر همهٔ دیالوگ‌ها و متن‌های یک فصل مانهوا به‌ترتیب است.\n"
+            "یک‌بار کل داستان را بخوان و یک بریف فشرده برای مترجم بده شامل:\n"
+            "۱) اتفاق اصلی این فصل در ۲-۳ جمله\n"
+            "۲) شخصیت‌های حاضر و لحن گفتار هرکدام در یک خط "
+            "(رسمی/عامی/خشن/شیطان‌صفت/...)\n"
+            "۳) اصطلاحات خاص دنیای داستان (سطح، کلاس، مکان، سازمان) با ترجمهٔ پیشنهادی فارسی\n"
+            "۴) روابط بین شخصیت‌ها (دوست/دشمن/استاد-شاگرد)\n"
+            "حداکثر ۲۵ خط، فقط خود بریف را بنویس.\n\n"
+            f"{joined}"
+        )
+        try:
+            print("[بریف داستان] یک‌بار کل فصل خوانده می‌شود…")
+            if self.provider_type == "gemini":
+                raw = self._translate_with_gemini(
+                    prompt, "تو دستیار تحلیل داستان هستی.", structured=False)
+            else:
+                raw = self._translate_via_provider(
+                    prompt, "تو دستیار تحلیل داستان هستی.", structured=False)
+            brief = (raw or "").strip()
+            if 60 < len(brief) < 6000:
+                self._chapter_brief = brief
+                print(f"[+] بریف داستان آماده شد ({len(brief)} نویسه)")
+        except Exception as e:
+            print(f"[!] ساخت بریف داستان ناموفق ({e}) — بدون بریف ادامه می‌دهیم")
+
+    def _glossary_note_names(self, item: dict) -> None:
+        try:
+            for nm in (item.get("names") or []):
+                if not isinstance(nm, dict):
+                    continue
+                src = str(nm.get("en") or nm.get("source") or "").strip()
+                per = str(nm.get("fa") or nm.get("persian") or "").strip()
+                if src and per and src not in self._name_glossary:
+                    self._name_glossary[src] = per
+                    self._glossary_dirty = True
+        except Exception:
+            pass
+
     def translate_regions(self, regions: List[TextRegion]) -> None:
         _raise_if_stop()
         if not regions:
@@ -1311,6 +1435,10 @@ class _MangaTranslatorBody_80:
 
         for r in regions:
             r.source_text = self._fix_ocr_text(uncensor_swears(r.source_text or ""))
+            if r.source_text and len(self._brief_corpus) < 400:
+                self._brief_corpus.append(r.source_text)
+        if getattr(self, "story_brief_enabled", False):
+            self._build_chapter_brief(self._brief_corpus)
 
         try:
             _n_fo0 = MangaTranslator._fanout_duplicate_translations(regions)
@@ -1443,6 +1571,10 @@ class _MangaTranslatorBody_80:
         still = sum(1 for r in regions if not (r.translated_text or "").strip())
         if still:
             print(f"    [!] در نهایت {still} دیالوگ بدون ترجمه ماند.")
+        try:
+            self.save_glossary()
+        except Exception:
+            pass
 
     def _translate_regions_batch(self, regions: List[TextRegion]) -> None:
         if not regions:
@@ -1474,7 +1606,9 @@ class _MangaTranslatorBody_80:
             except Exception:
                 _jp = False
             _sref = self._style_ref_samples()
-            _out = mt_user_prompt(rules, pages, _jp, style_ref=_sref)
+            _ctx = (self._glossary_prompt_block() + self._brief_prompt_block())
+            _out = mt_user_prompt(rules, pages, _jp, style_ref=_sref,
+                                  context=_ctx)
             if _attempt_cell[0] > 1:
                 _out += self._CENSOR_RETRY_NOTE
             if getattr(self, "_style_retry_mode", False):
