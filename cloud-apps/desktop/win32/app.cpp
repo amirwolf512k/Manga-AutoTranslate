@@ -1179,7 +1179,8 @@ static void MtHideBrowser(void) {
     ShowWindow(g_hwndBr, SW_HIDE);
     if (g_brCtl != NULL)
         g_brCtl->put_IsVisible(FALSE);
-    if (!g_failMode && g_webApp != NULL && g_btnGlobe != NULL)
+    if (!g_failMode && g_webApp != NULL && g_btnGlobe != NULL
+            && !g_readerMode)
         ShowWindow(g_btnGlobe, SW_SHOW);
     SetForegroundWindow(g_hwnd);
 }
@@ -1272,7 +1273,8 @@ static void LayoutApp(void) {
     BOOL brVis = (g_hwndBr != NULL && IsWindowVisible(g_hwndBr));
 
     ShowWindow(g_btnGlobe,
-               (!fail && g_webApp != NULL && !brVis) ? SW_SHOW : SW_HIDE);
+               (!fail && g_webApp != NULL && !brVis && !g_readerMode)
+               ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblFailTitle, fail ? SW_SHOW : SW_HIDE);
     ShowWindow(g_lblFailBody, fail ? SW_SHOW : SW_HIDE);
     ShowWindow(g_btnWv2Dl, fail ? SW_SHOW : SW_HIDE);
@@ -2293,8 +2295,15 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         BOOL on = (wcsstr(s, L"1") != NULL);
         if (on != g_readerMode) {
             g_readerMode = on;
-            if (g_btnGlobe != NULL)
-                InvalidateRect(g_btnGlobe, NULL, TRUE);
+            // مرورگر داخلِ «نمایش» نمیآید: در حالتِ نمایش دکمهٔ
+            // مرورگر کلاً پنهان میشود (رفرشِ نمایش را دکمهٔ رفرشِ
+            // خودِ وب انجام میدهد — دیگر دو دکمهٔ رفرش دیده نمیشود).
+            if (g_btnGlobe != NULL) {
+                BOOL brVis0 = (g_hwndBr != NULL && IsWindowVisible(g_hwndBr));
+                ShowWindow(g_btnGlobe,
+                           (!on && !g_failMode && g_webApp != NULL && !brVis0)
+                           ? SW_SHOW : SW_HIDE);
+            }
         }
         return S_OK;
     }

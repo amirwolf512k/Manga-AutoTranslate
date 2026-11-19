@@ -2445,11 +2445,13 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
             except Exception:
                 continue
         keep = []
+        clamped: List = []
         for p in polys:
             try:
                 pp = np.asarray(p, dtype=np.float32).reshape(-1, 2)
             except Exception:
                 keep.append(True)
+                clamped.append(p)
                 continue
             try:
                 _qx1 = float(pp[:, 0].min()); _qy1 = float(pp[:, 1].min())
@@ -2459,15 +2461,26 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
                 iy = max(0.0, min(_qy2, by2 + tol) - max(_qy1, by1 - tol))
                 if (ix * iy) / _qa < 0.45:
                     keep.append(False)
+                    clamped.append(None)
                     continue
             except Exception:
                 keep.append(True)
+                clamped.append(p)
                 continue
             try:
                 cx = float(pp[:, 0].mean())
                 cy = float(pp[:, 1].mean())
             except Exception:
                 keep.append(True)
+                clamped.append(p)
+                continue
+            # مرزِ مطلقِ detector-v4: خطی که مرکزش بیرون از جعبهٔ
+            # detector افتاده متعلق به این ناحیه نیست — paddle det
+            # حق ندارد بیرون از کادرِ detector خطی ثبت کند.
+            if not ((bx1 - tol) <= cx <= (bx2 + tol)
+                    and (by1 - tol) <= cy <= (by2 + tol)):
+                keep.append(False)
+                clamped.append(None)
                 continue
             # تخصیص خط به بهترین مالک: خودی در تساوی برنده میماند؛
             # باکسِ همسایه فقط وقتی خط را بهطورِ قاطع بیشتر میپوشاند
@@ -2497,12 +2510,28 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
                     _stolen = True
                     break
             keep.append(not _stolen)
-        if all(keep):
+            if not _stolen:
+                # کلمپِ نقاطِ کوار به داخلِ جعبهٔ detector (با تلورانس):
+                # کوارِ آبی (paddle det) هرگز بیرون از کادرِ سبز
+                # (detector-v4) رسم/ذخیره نمیشود.
+                try:
+                    _cp = pp.copy()
+                    _cp[:, 0] = np.clip(_cp[:, 0], bx1 - tol, bx2 + tol)
+                    _cp[:, 1] = np.clip(_cp[:, 1], by1 - tol, by2 + tol)
+                    clamped.append(_cp.astype(np.int32))
+                except Exception:
+                    clamped.append(p)
+            else:
+                clamped.append(None)
+        _new_polys = [clamped[i] for i in range(len(polys)) if keep[i]]
+        _changed = (len(_new_polys) != len(polys)) or any(
+            _new_polys[i] is not polys[i] for i in range(len(_new_polys)))
+        if not _changed:
             return res
         _txt = " ".join(str(texts[i] or "").strip()
                         for i in range(len(polys)) if keep[i]).strip()
         return (_txt,
-                [polys[i] for i in range(len(polys)) if keep[i]],
+                _new_polys,
                 [angs[i] for i in range(len(angs)) if keep[i]],
                 [texts[i] for i in range(len(texts)) if keep[i]],
                 [blks[i] for i in range(len(blks)) if keep[i]])

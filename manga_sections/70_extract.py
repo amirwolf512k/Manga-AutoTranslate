@@ -3976,6 +3976,19 @@ class _MangaTranslatorBody_70:
                                       - max(_qy1, float(_by1)))
                             if (_ix * _iy) / _qa < 0.5:
                                 continue
+                            # مرزِ مطلق: مرکزِ کوار باید داخلِ جعبهٔ
+                            # detector باشد؛ سپس کوار به داخلِ جعبه
+                            # کلمپ میشود (کوارِ آبی هرگز بیرون از
+                            # کادرِ سبز رسم نمیشود).
+                            _cx = float(np.mean(_qf[:, 0]))
+                            _cy = float(np.mean(_qf[:, 1]))
+                            if not (float(_bx1) - 4 <= _cx <= float(_bx2) + 4
+                                    and float(_by1) - 4 <= _cy <= float(_by2) + 4):
+                                continue
+                            _qf[:, 0] = np.clip(
+                                _qf[:, 0], float(_bx1) - 4, float(_bx2) + 4)
+                            _qf[:, 1] = np.clip(
+                                _qf[:, 1], float(_by1) - 4, float(_by2) + 4)
                         except Exception:
                             continue
                         _out.append(_qf)

@@ -1145,6 +1145,18 @@ class _MangaTranslatorBody_95:
         if page_ext == ".jpeg":
             page_ext = ".jpg"
 
+        # فایلِ دیباگِ هر صفحه — اگر حالتِ دیباگ روشن باشد و فایلِ
+        # دیباگِ صفحه هنوز ساخته نشده باشد، صفحه از کشِ رندر رد
+        # نمیشود تا تصویرِ دیباگش هم ساخته شود (استخراج/ترجمه/
+        # پاکسازی همچنان از کش میمانند — فقط رندر تکرار میشود).
+        _dbg_pages_dir = os.path.join(cache_dir, "debug" + cache_tag)
+
+        def _dbg_file_of(_of: str) -> str:
+            return os.path.join(
+                _dbg_pages_dir,
+                os.path.splitext(os.path.basename(_of))[0]
+                + "_debug" + page_ext)
+
         pending = []
         _src_of_page: Dict[int, str] = {}
         _page_of_src: Dict[str, int] = {}
@@ -1153,7 +1165,9 @@ class _MangaTranslatorBody_95:
             _src_of_page[page_i] = f
             _page_of_src[f] = page_i
             out_file = os.path.join(out_dir, os.path.splitext(os.path.basename(f))[0] + page_ext)
-            if resume and os.path.isfile(out_file):
+            _dbg_pending = (bool(getattr(self, "debug", False))
+                            and not os.path.isfile(_dbg_file_of(out_file)))
+            if resume and os.path.isfile(out_file) and not _dbg_pending:
                 processed_files.append(out_file)
                 _page_status[page_i] = "done"
                 skipped += 1
