@@ -404,6 +404,14 @@ class _MangaTranslatorBody_70:
                 return None
         except Exception:
             return None
+        try:
+            _ba = max(1e-6, (_bb[2] - _bb[0]) * (_bb[3] - _bb[1]))
+            _bin = max(0.0, min(_bb[2], float(x2)) - max(_bb[0], float(x1))) \
+                * max(0.0, min(_bb[3], float(y2)) - max(_bb[1], float(y1)))
+            if _bin / _ba < 0.85:
+                return None
+        except Exception:
+            return None
         _p = np.array(
             [[ox + bx1, oy + by1], [ox + bx2 + 1, oy + by1],
              [ox + bx2 + 1, oy + by2 + 1], [ox + bx1, oy + by2 + 1]],
@@ -832,6 +840,13 @@ class _MangaTranslatorBody_70:
                                             _hit2 = _m
                                             break
                                     if _hit2 is None:
+                                        _gbx = _bb_of(_e3[2])
+                                        if _gbx is not None:
+                                            _gix2 = max(0.0, min(_gbx[2], float(x2)) - max(_gbx[0], float(x1)))
+                                            _giy2 = max(0.0, min(_gbx[3], float(y2)) - max(_gbx[1], float(y1)))
+                                            _gq2 = max(1e-6, (_gbx[2] - _gbx[0]) * (_gbx[3] - _gbx[1]))
+                                            if (_gix2 * _giy2) / _gq2 < 0.85:
+                                                continue
                                         merged.append(
                                             [_e3[0], float(_e3[1]), _e3[2],
                                              float(_e3[3]) if len(_e3) > 3 else 0.0,
@@ -937,6 +952,13 @@ class _MangaTranslatorBody_70:
                                 _hitE = _m3
                                 break
                         if _hitE is None:
+                            _gix = max(0.0, min(_bE[2], float(x2)) - max(_bE[0], float(x1)))
+                            _giy = max(0.0, min(_bE[3], float(y2)) - max(_bE[1], float(y1)))
+                            _gq = max(1e-6, (_bE[2] - _bE[0]) * (_bE[3] - _bE[1]))
+                            if (_gix * _giy) / _gq < 0.85:
+                                if _dbg:
+                                    print(f"    [r90]   x «{_tE}» بیرون از مرز detector", flush=True)
+                                continue
                             merged.append([_tE, float(_e6[1]), _pE,
                                            float(_e6[3]) if len(_e6) > 3 else 0.0,
                                            (int(_e6[4]) if len(_e6) > 4 else -1)])
@@ -1097,6 +1119,34 @@ class _MangaTranslatorBody_70:
             scv = _score(u_txt, u_conf)
             if scv >= best[2]:
                 best = (u_txt, u_polys, scv, u_angs, u_texts, u_blks)
+
+
+        # F1: قرنطینهٔ مرز — خطِ بیرون از مرزِ detector حذف میشود
+        try:
+            if merged and not _tilted0:
+                _bx1o, _by1o = float(rect[0]), float(rect[1])
+                _bx2o, _by2o = float(rect[2]), float(rect[3])
+                _keepF1 = []
+                for _mF1 in merged:
+                    _bF1 = _bb_of(_mF1[2]) if _mF1[2] is not None else None
+                    if _bF1 is None:
+                        _keepF1.append(_mF1)
+                        continue
+                    _ixF1 = max(0.0, min(_bF1[2], _bx2o) - max(_bF1[0], _bx1o))
+                    _iyF1 = max(0.0, min(_bF1[3], _by2o) - max(_bF1[1], _by1o))
+                    _qaF1 = max(1e-6, (_bF1[2] - _bF1[0]) * (_bF1[3] - _bF1[1]))
+                    if (_ixF1 * _iyF1) / _qaF1 >= 0.85:
+                        _keepF1.append(_mF1)
+                    elif self.debug:
+                        try:
+                            print(f"    [🚧مرز] خطِ بیرون از detector حذف شد: "
+                                  f"{str(_mF1[0])[:40]!r}", flush=True)
+                        except Exception:
+                            pass
+                if len(_keepF1) != len(merged):
+                    merged = _keepF1
+        except Exception:
+            pass
 
         best_txt = best[0] or ""
         latin_n = len(re.sub(r"[^A-Za-z]", "", best_txt))
@@ -2589,6 +2639,21 @@ class _MangaTranslatorBody_70:
                     if not _hits:
                         continue
                     _txt, _polys, _angs, _lts, _blks = ocr_results[_k]
+                    _kept_hits = []
+                    for _ht, _hp, _hc in _hits:
+                        try:
+                            _hpp = np.asarray(_hp, dtype=np.float32).reshape(-1, 2)
+                            _hx1 = float(_hpp[:, 0].min()); _hy1 = float(_hpp[:, 1].min())
+                            _hx2 = float(_hpp[:, 0].max()); _hy2 = float(_hpp[:, 1].max())
+                            _ha = max(1e-6, (_hx2 - _hx1) * (_hy2 - _hy1))
+                            _hix = max(0.0, min(_hx2, float(_tk[4])) - max(_hx1, float(_tk[2])))
+                            _hiy = max(0.0, min(_hy2, float(_tk[5])) - max(_hy1, float(_tk[3])))
+                            if (_hix * _hiy) / _ha < 0.85:
+                                continue
+                        except Exception:
+                            continue
+                        _kept_hits.append((_ht, _hp, _hc))
+                    _hits = _kept_hits
                     for _ht, _hp, _hc in _hits:
                         _polys = list(_polys or []) + [_hp]
                         _lts = list(_lts or []) + [_ht]
@@ -2597,7 +2662,9 @@ class _MangaTranslatorBody_70:
                             float(MangaTranslator._poly_long_side_angle(_hp))]
                     _nt = " ".join(str(_t or "").strip()
                                    for _t in _lts if str(_t or "").strip())
-                    ocr_results[_k] = (_nt, _polys, _angs, _lts, _blks)
+                    ocr_results[_k] = _clamp_lines_to_det(
+                        (_nt, _polys, _angs, _lts, _blks),
+                        (_tk[2], _tk[3], _tk[4], _tk[5]), _blk)
                     print(f"    [✓] نجاتِ rec: ناحیهٔ {_tk[0]} — "
                           f"{len(_hits)} کوار دوباره خوانده شد "
                           f"→ «{_nt[:60]}»")
@@ -3055,7 +3122,7 @@ class _MangaTranslatorBody_70:
                     n_sub += 1
                 if _kill is None and min(len(na), len(nb)) >= 5 \
                         and abs(len(na) - len(nb)) >= 2 \
-                        and _axis_near(ba, bb):
+                        and (ov_min >= 0.18 or _axis_near(ba, bb)):
                     short_i, long_i = (i, j) if len(na) <= len(nb) else (j, i)
                     ns = infos[short_i][1]
                     nl = infos[long_i][1]
@@ -3240,6 +3307,15 @@ class _MangaTranslatorBody_70:
                                * (min(gy1, c[3]) - max(gy0, c[1]))
                                >= 0.70 * _ga
                            for c in covered):
+                        continue
+                    _in_coverF5 = False
+                    for _rc in covered:
+                        _rix = max(0.0, min(gx1, _rc[2]) - max(gx0, _rc[0]))
+                        _riy = max(0.0, min(gy1, _rc[3]) - max(gy0, _rc[1]))
+                        if (_rix * _riy) / _ga >= 0.70:
+                            _in_coverF5 = True
+                            break
+                    if _in_coverF5:
                         continue
                     if any(not (gx1 < s[0] or gx0 > s[2]
                                 or gy1 < s[1] or gy0 > s[3])
@@ -3534,6 +3610,148 @@ class _MangaTranslatorBody_70:
                     r.angle_flat_veto = True
             except Exception:
                 continue
+
+    def _discover_free_text_regions(self, image: np.ndarray,
+                                   regions: List["TextRegion"],
+                                   relaxed: bool = False) -> List["TextRegion"]:
+        """نویسه‌های آزادِ بیرون از حبابها را می‌یابد (SFX/تبلیغِ خاموش) —
+        فقط وقتی مرزِ detector-v4 بیرونشان باشد. متنِ داخل حباب هرگز اینجا نمی‌آید."""
+        try:
+            h_img, w_img = image.shape[:2]
+        except Exception:
+            return []
+        if self.ocr is None:
+            return []
+        try:
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        except Exception:
+            return []
+        _covered: List[Tuple[int, int, int, int]] = []
+        for r in regions:
+            try:
+                rx, ry, rw_, rh_ = [int(v) for v in r.rect]
+                _pad_cov = 10 if not relaxed else 4
+                _covered.append((rx - _pad_cov, ry - _pad_cov,
+                                rx + rw_ + _pad_cov, ry + rh_ + _pad_cov))
+            except Exception:
+                continue
+        try:
+            med = float(np.median(gray))
+            if med >= 128.0:
+                ink = (gray < med - 60.0).astype(np.uint8)
+            else:
+                ink = (gray > med + 60.0).astype(np.uint8)
+        except Exception:
+            return []
+        try:
+            ink = cv2.morphologyEx(
+                ink, cv2.MORPH_CLOSE,
+                cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3)))
+        except Exception:
+            pass
+        try:
+            _nlab, _labs, _stat, _cent = cv2.connectedComponentsWithStats(
+                ink, connectivity=8)
+        except Exception:
+            return []
+        _cands: List[Tuple[int, int, int, int, float]] = []
+        for _li in range(1, _nlab):
+            _sx, _sy, _sw, _sh, _sa = _stat[_li]
+            if _sa < 140 or _sw < 14 or _sh < 6:
+                continue
+            if _sw > w_img * 0.9 or _sh > h_img * 0.9:
+                continue
+            _bx0, _by0 = int(_sx), int(_sy)
+            _bx1, _by1 = int(_sx + _sw), int(_sy + _sh)
+            _ga = float(max(1, _sw * _sh))
+            _inside = False
+            for _c in _covered:
+                _ix = max(0, min(_bx1, _c[2]) - max(_bx0, _c[0]))
+                _iy = max(0, min(_by1, _c[3]) - max(_by0, _c[1]))
+                if (_ix * _iy) / _ga >= 0.35:
+                    _inside = True
+                    break
+            if _inside:
+                continue
+            _dens = _sa / _ga
+            if _dens < 0.12:
+                continue
+            _cands.append((_bx0, _by0, _bx1, _by1, _dens))
+        if not _cands:
+            return []
+        _cands.sort(key=lambda _b: (_b[1], _b[0]))
+        _merged_bands: List[List[int]] = []
+        for _b in _cands:
+            _placed = False
+            for _m in _merged_bands:
+                if (_b[0] - 40 < _m[2] and _m[0] - 40 < _b[2]
+                        and _b[1] - 26 < _m[3] and _m[1] - 26 < _b[3]):
+                    _m[0] = min(_m[0], _b[0]); _m[1] = min(_m[1], _b[1])
+                    _m[2] = max(_m[2], _b[2]); _m[3] = max(_m[3], _b[3])
+                    _placed = True
+                    break
+            if not _placed:
+                _merged_bands.append([_b[0], _b[1], _b[2], _b[3]])
+        out: List[TextRegion] = []
+        _budget = 12
+        for _mb in _merged_bands:
+            if _budget <= 0:
+                break
+            _gx0, _gy0 = max(0, _mb[0] - 6), max(0, _mb[1] - 6)
+            _gx1 = min(w_img, _mb[2] + 6)
+            _gy1 = min(h_img, _mb[3] + 6)
+            if _gx1 - _gx0 < 24 or _gy1 - _gy0 < 10:
+                continue
+            try:
+                _oc = self._ocr_crop(image, (_gx0, _gy0, _gx1, _gy1))
+            except Exception:
+                continue
+            _txt = str(_oc[0] or "").strip() if _oc else ""
+            if not _txt or not source_has_letters(_txt):
+                continue
+            _polys = list(_oc[1] or []) if _oc and len(_oc) > 1 else []
+            _inany = 0.0
+            try:
+                _ptsF = None
+                for _p in _polys:
+                    _pp = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                    if _ptsF is None:
+                        _ptsF = _pp
+                    else:
+                        _ptsF = np.vstack([_ptsF, _pp])
+                if _ptsF is not None:
+                    _px0 = float(_ptsF[:, 0].min()); _py0 = float(_ptsF[:, 1].min())
+                    _px1 = float(_ptsF[:, 0].max()); _py1 = float(_ptsF[:, 1].max())
+                    _pa = max(1e-6, (_px1 - _px0) * (_py1 - _py0))
+                    for _c in _covered:
+                        _ix = max(0.0, min(_px1, _c[2]) - max(_px0, _c[0]))
+                        _iy = max(0.0, min(_py1, _c[3]) - max(_py0, _c[1]))
+                        _inany = max(_inany, (_ix * _iy) / _pa)
+            except Exception:
+                _inany = 0.9
+            if _inany >= 0.55:
+                continue
+            _kind = self._classify_text(_txt)
+            if _kind == "dialogue":
+                _kind = "sfx"
+            _boxes = [np.asarray(_p, dtype=np.int32) for _p in _polys] or [
+                np.array([[_gx0, _gy0], [_gx1, _gy0],
+                          [_gx1, _gy1], [_gx0, _gy1]], dtype=np.int32)]
+            out.append(TextRegion(
+                id=900100 + len(out),
+                boxes=_boxes,
+                source_text=_txt,
+                rect=(_gx0, _gy0, _gx1 - _gx0, _gy1 - _gy0),
+                kind=_kind,
+                det_class="text_free",
+                ocr_polys=_polys))
+            _budget -= 1
+        if out and self.debug:
+            try:
+                print(f"    [SFX] کشفِ متنِ آزاد: {len(out)} ناحیه بیرون از حبابها")
+            except Exception:
+                pass
+        return out
 
     def _discover_sfx_regions(self, image: np.ndarray,
                               regions: List["TextRegion"]) -> List["TextRegion"]:

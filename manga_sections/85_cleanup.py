@@ -241,6 +241,20 @@ class _MangaTranslatorBody_85:
         if len(stripped) <= 12 and SFX_WORD_RE.match(stripped):
             if core not in dialogue_short and alpha_only.lower() not in dialogue_short:
                 return "sfx"
+        if 4 <= len(stripped) <= 24:
+            _rep = re.search(r"([a-zA-Z])\1{2,}", stripped)
+            _vowrun = re.search(r"[aeiouAEIOU]{3,}", stripped)
+            _dvow = re.search(r"(?:aa|oo|uu|ee|ii|AA|OO|UU|EE|II)", stripped)
+            _vow = sum(1 for c in stripped if c in "AEIOUaeiou")
+            _has_space = re.search(r"[a-z]\s[a-z]", stripped.lower())
+            _allcaps = stripped.isupper() and stripped.isalpha()
+            if ((_rep or _vowrun or _vow == 0)
+                    or (_dvow and _allcaps and "!" in stripped)) \
+                    and not _has_space:
+                _core_w = core
+                if _core_w not in dialogue_short \
+                        and alpha_only.lower() not in dialogue_short:
+                    return "sfx"
 
         if (
             3 <= len(stripped) <= 12
@@ -2791,6 +2805,17 @@ class _MangaTranslatorBody_85:
                 n_ok += 1
             else:
                 try:
+                    if not str(getattr(region, "source_text", "") or "").strip() \
+                            and not source_has_letters(
+                                    str(getattr(region, "source_text", "") or "")):
+                        n_skip += 1
+                        if self.debug:
+                            try:
+                                print(f"  [🚫خالی] ناحیهٔ بدونِ متن پاک نشد "
+                                      f"rect={tuple(int(v) for v in region.rect)}")
+                            except Exception:
+                                pass
+                        continue
                     x, y, rw, rh = [int(v) for v in region.rect]
                     x0, y0 = max(0, x + 2), max(0, y + 2)
                     x1, y1 = min(w, x + rw - 2), min(h, y + rh - 2)
@@ -3572,6 +3597,9 @@ class _MangaTranslatorBody_85:
         for region in regions:
             x, y, rw, rh = region.rect
             polys = list(getattr(region, "ocr_polys", None) or [])
+            _txtF3 = str(getattr(region, "source_text", "") or "").strip()
+            if not polys and not _txtF3:
+                continue
             if polys:
                 pts = np.concatenate([np.asarray(p).reshape(-1, 2) for p in polys])
                 x, y = min(x, pts[:, 0].min()), min(y, pts[:, 1].min())

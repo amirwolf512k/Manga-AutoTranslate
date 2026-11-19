@@ -856,6 +856,8 @@ PROMO_RE = re.compile(
 SFX_WORD_RE = re.compile(
     r"(?i)^("
     r"sfx|효과음?|효과|의성어|의태어|"
+    r"[a-z]*(?:aaa+|ooo+|uuu+|eee+|iii+)[a-z]*|"
+    r"[a-z]*[aeiou]{4,}[a-z]*|"
     r"boom|bang|crash|whoosh|swish|thud|clang|zap|pow|bam|wham|crack|smash|"
     r"roar|growl|hiss|screech|beep|ding|click|tick|tock|splash|drip|"
     r"gasp|sigh|sniff|cough|hic|ugh|argh|kugh|keck|kahack|gorulz|"
