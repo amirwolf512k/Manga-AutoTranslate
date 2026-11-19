@@ -4309,6 +4309,13 @@ class _MangaTranslatorBody_70:
         for idx, r in enumerate(unique_regions):
             r.id = idx
 
+        _raise_if_stop()
+        if unique_regions:
+            try:
+                self._classify_balloon_tones(image, unique_regions)
+            except Exception:
+                pass
+
         dbg = None
         det_quads: list = []
         if self.debug:
@@ -4619,22 +4626,48 @@ class _MangaTranslatorBody_70:
             clf = BalloonToneClassifier()
             self._tone_clf = clf
         h, w = image.shape[:2]
+        _strong = ("shout", "comedy_shout", "monster", "black",
+                   "broadcast", "letter", "narrator", "square_thought")
         for r in regions:
             if getattr(r, "style_locked", False):
                 continue
             try:
-                x0, y0, x1, y1 = r.rect
-                x0, y0 = max(0, int(x0)), max(0, int(y0))
-                x1, y1 = min(w, int(x1)), min(h, int(y1))
+                _rx, _ry, _rw, _rh = r.rect
+                x0, y0 = max(0, int(_rx)), max(0, int(_ry))
+                x1, y1 = min(w, int(_rx + _rw)), min(h, int(_ry + _rh))
                 if x1 - x0 < 10 or y1 - y0 < 10:
                     continue
-                pad = 8
-                px0 = max(0, x0 - pad)
-                py0 = max(0, y0 - pad)
-                px1 = min(w, x1 + pad)
-                py1 = min(h, y1 + pad)
-                crop = image[py0:py1, px0:px1]
-                tone = clf.classify(crop)
+                tx0, ty0, tx1, ty1 = x0, y0, x1, y1
+                try:
+                    _pts = []
+                    for _p in (getattr(r, "ocr_polys", None) or []):
+                        _pa = np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                        if _pa.shape[0]:
+                            _pts.append(_pa)
+                    if _pts:
+                        _all = np.concatenate(_pts, axis=0)
+                        tx0 = int(_all[:, 0].min())
+                        ty0 = int(_all[:, 1].min())
+                        tx1 = int(_all[:, 0].max())
+                        ty1 = int(_all[:, 1].max())
+                except Exception:
+                    pass
+                ta = 20
+                ax0 = max(0, tx0 - ta)
+                ay0 = max(0, ty0 - ta)
+                ax1 = min(w, tx1 + ta)
+                ay1 = min(h, ty1 + ta)
+                acrop = image[ay0:ay1, ax0:ax1]
+                ainner = (tx0 - ax0, ty0 - ay0, tx1 - ax0, ty1 - ay0)
+                tone_a = clf.classify(acrop, inner=ainner)
+                padb = int(min(120, max(60, 0.30 * max(x1 - x0, y1 - y0))))
+                bx0 = max(0, x0 - padb)
+                by0 = max(0, y0 - padb)
+                bx1 = min(w, x1 + padb)
+                by1 = min(h, y1 + padb)
+                bcrop = image[by0:by1, bx0:bx1]
+                tone_b = clf.classify(bcrop)
+                tone = tone_b if tone_b in _strong else tone_a
                 if tone and tone in BalloonToneClassifier.TONES:
                     r.bubble_style = tone
             except Exception:

@@ -1407,7 +1407,9 @@ class _MangaTranslatorBody_80:
             for i, r in enumerate(regions):
                 r.source_text = self._fix_ocr_text(uncensor_swears(r.source_text or ""))
                 r.translated_text = samples[i % len(samples)]
-                r.bubble_style = styles[i % len(styles)]
+                _cur_st = (getattr(r, "bubble_style", "") or "").strip()
+                if _cur_st not in MangaTranslator.TONE_NAMES:
+                    r.bubble_style = styles[i % len(styles)]
             return
 
         self._pick_random_api_key(reason="ترجمه صفحه")

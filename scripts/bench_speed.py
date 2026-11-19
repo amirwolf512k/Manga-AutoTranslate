@@ -27,7 +27,7 @@ def run_cli(imgs, out_dir, workers=2, label="run"):
         sys.executable, "manga.py",
         "-i", inp,
         "-o", out_dir,
-        "--font", os.path.join("fonts", "Lalezar-Regular.ttf"),
+        "--font", os.path.join("fonts", "Lalezar-Fixed.ttf"),
         "--fake-translate",
         "--clean-method", "lama-manga",
         "--img-format", "jpg",

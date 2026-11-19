@@ -667,7 +667,7 @@ class BalloonToneClassifier:
     def __init__(self):
         pass
 
-    def classify(self, crop_bgr: np.ndarray) -> str:
+    def classify(self, crop_bgr: np.ndarray, inner=None) -> str:
         try:
             if crop_bgr is None or crop_bgr.size == 0:
                 return "normal"
@@ -687,6 +687,12 @@ class BalloonToneClassifier:
             if n_bg < bw.size * 0.02:
                 return "free_text"
             inv = 255 - bw
+            if inner is not None:
+                try:
+                    ix0, iy0, ix1, iy1 = [int(v) for v in inner]
+                    inv[max(0, iy0):max(0, iy1), max(0, ix0):max(0, ix1)] = 0
+                except Exception:
+                    pass
             cnts, _ = cv2.findContours(inv, cv2.RETR_EXTERNAL,
                                        cv2.CHAIN_APPROX_SIMPLE)
             if not cnts:

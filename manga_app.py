@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.354"
+APP_VER = "1.14.355"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -193,6 +193,38 @@ FONT_BUNDLES = [
     ("narrator",     "Shabnam-Bold.ttf", "راوی مستطیل", [
         "https://cdn.jsdelivr.net/gh/rastikerdar/shabnam-font@master/dist/Shabnam-Bold.ttf",
         "https://raw.githubusercontent.com/rastikerdar/shabnam-font/master/dist/Shabnam-Bold.ttf",
+    ]),
+    ("monster",      "Rakkas-Regular-Fixed.ttf", "صدای هیولا", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Rakkas-Regular-Fixed.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Rakkas-Regular-Fixed.ttf",
+    ]),
+    ("cry",          "BalooBhaijaan2-Fixed.ttf", "گریه", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/BalooBhaijaan2-Fixed.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/BalooBhaijaan2-Fixed.ttf",
+    ]),
+    ("fear",         "Katibeh-Regular-Fixed.ttf", "ترس", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Katibeh-Regular-Fixed.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Katibeh-Regular-Fixed.ttf",
+    ]),
+    ("broadcast",    "Changa-Fixed.ttf", "بی‌سیم/موبایل/تلویزیون", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Changa-Fixed.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Changa-Fixed.ttf",
+    ]),
+    ("sun_thought",  "Parastoo.ttf", "تفکر خورشیدی", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Parastoo.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Parastoo.ttf",
+        "https://cdn.jsdelivr.net/gh/rastikerdar/parastoo-font@master/dist/Parastoo.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/parastoo-font/master/dist/Parastoo.ttf",
+    ]),
+    ("square_thought", "NotoKufiArabic.ttf", "فکر مربعی", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/NotoKufiArabic.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/NotoKufiArabic.ttf",
+    ]),
+    ("black",        "Tanha.ttf", "دارک تیره", [
+        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/fonts/Tanha.ttf",
+        "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/fonts/Tanha.ttf",
+        "https://cdn.jsdelivr.net/gh/rastikerdar/tanha-font@master/dist/Tanha.ttf",
+        "https://raw.githubusercontent.com/rastikerdar/tanha-font@master/dist/Tanha.ttf",
     ]),
 ]
 
@@ -7453,6 +7485,10 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                 "comedy_shout": "کروش (کمدی)", "whisper": "زمزمه",
                 "thought": "تفکر", "system": "سیستم/تگ",
                 "letter": "نامه/طومار", "narrator": "راوی", "free_text": "متن آزاد",
+                "monster": "هیولا (رکاس)", "cry": "گریه (بالو)",
+                "fear": "ترس (کتیبه)", "broadcast": "بی‌سیم (چنگا)",
+                "sun_thought": "تفکر خورشیدی (پرستو)",
+                "square_thought": "فکر مربعی (کوفی)", "black": "دارک (تنها)",
             }
             tone_uploads = []
             tone_slots = []

@@ -1287,6 +1287,10 @@ class _MangaTranslatorBody_95:
                                         continue
                             _hit_note = (f" + {_n_hit} حباب از کشِ ترجمه"
                                          if _n_hit else "")
+                            try:
+                                self._classify_balloon_tones(image, regions)
+                            except Exception:
+                                pass
                             print(f"[*] {os.path.basename(f)} — از کشِ "
                                   f"استخراج (ادامه){_hit_note}")
                             return page_i, out_file, image, regions, _dbg
