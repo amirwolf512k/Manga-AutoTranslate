@@ -6277,6 +6277,30 @@ class _MangaTranslatorBody_85:
                 except Exception:
                     pass
                 n += 1
+            if failed.any():
+                # تایت‌کردنِ failed با جوهرِ واقعی: فقط جاهای poly که
+                # واقعاً متن دارند منتقل شود (نه کلِ poly به‌صورت مربع).
+                try:
+                    _fbx0 = int(min(float(p[:, 0].min()) for p in polys))
+                    _fby0 = int(min(float(p[:, 1].min()) for p in polys))
+                    _fbx1 = int(max(float(p[:, 0].max()) for p in polys)) + 1
+                    _fby1 = int(max(float(p[:, 1].max()) for p in polys)) + 1
+                    _fst = self._rect_ink_strips(
+                        image, (_fbx0, _fby0, _fbx1 - _fbx0, _fby1 - _fby0))
+                    if _fst:
+                        _inkm = np.zeros((h, w), dtype=np.uint8)
+                        for _sp in _fst:
+                            _sx0 = max(0, int(_sp[0]))
+                            _sy0 = max(0, int(_sp[1]))
+                            _sx1 = min(w, int(_sp[2]))
+                            _sy1 = min(h, int(_sp[3]))
+                            if _sx1 - _sx0 >= 6 and _sy1 - _sy0 >= 5:
+                                _inkm[_sy0:_sy1, _sx0:_sx1] = 255
+                        _fd = cv2.bitwise_and(failed, _inkm)
+                        if int(cv2.countNonZero(_fd)) >= 60:
+                            failed = _fd
+                except Exception:
+                    pass
             if n == 0:
                 return None, failed
             _pm = np.zeros((h, w), dtype=np.uint8)
@@ -6508,8 +6532,32 @@ class _MangaTranslatorBody_85:
                 _x1 = min(w, _rx + _rw2 + 7)
                 _y1 = min(h, _ry + _rh2 + 7)
                 if _x1 > _x0 and _y1 > _y0:
-                    out[_y0:_y1, _x0:_x1] |= _raw[_y0:_y1, _x0:_x1]
-                    _sweep[_y0:_y1, _x0:_x1] |= (out[_y0:_y1, _x0:_x1])
+                    _tight_ok = False
+                    if os.environ.get("MANGA_PROMO_TIGHT", "1") == "1":
+                        try:
+                            _sst = self._rect_ink_strips(
+                                image, (_x0, _y0, _x1 - _x0, _y1 - _y0))
+                        except Exception:
+                            _sst = []
+                        if _sst and not (len(_sst) == 1
+                                         and _sst[0][0] <= _x0
+                                         and _sst[0][1] <= _y0
+                                         and _sst[0][2] >= _x1
+                                         and _sst[0][3] >= _y1):
+                            for _sp in _sst:
+                                _sx0 = max(0, int(_sp[0]))
+                                _sy0 = max(0, int(_sp[1]))
+                                _sx1 = min(w, int(_sp[2]))
+                                _sy1 = min(h, int(_sp[3]))
+                                if _sx1 - _sx0 >= 6 and _sy1 - _sy0 >= 5:
+                                    out[_sy0:_sy1, _sx0:_sx1] |= \
+                                        _raw[_sy0:_sy1, _sx0:_sx1]
+                                    _sweep[_sy0:_sy1, _sx0:_sx1] |= \
+                                        out[_sy0:_sy1, _sx0:_sx1]
+                            _tight_ok = True
+                    if not _tight_ok:
+                        out[_y0:_y1, _x0:_x1] |= _raw[_y0:_y1, _x0:_x1]
+                        _sweep[_y0:_y1, _x0:_x1] |= (out[_y0:_y1, _x0:_x1])
             self._compose_sweep_mask = _sweep
             if _n_str and self.debug:
                 try:
@@ -6530,8 +6578,24 @@ class _MangaTranslatorBody_85:
                     _qy0 = max(0, int(_pb[1]))
                     _qx1 = min(w, int(_pb[2]))
                     _qy1 = min(h, int(_pb[3]))
-                    if _qx1 - _qx0 >= 8 and _qy1 - _qy0 >= 8:
-                        out[_qy0:_qy1, _qx0:_qx1] = True
+                    if _qx1 - _qx0 < 8 or _qy1 - _qy0 < 8:
+                        continue
+                    if os.environ.get("MANGA_PROMO_TIGHT", "1") == "1":
+                        # دو-عکسی: promo فقط به‌اندازهٔ متنِ خودش
+                        _pbst = self._rect_ink_strips(
+                            image, (_qx0, _qy0, _qx1 - _qx0, _qy1 - _qy0))
+                        if _pbst:
+                            for _sp in _pbst:
+                                _sx0 = max(0, int(_sp[0]))
+                                _sy0 = max(0, int(_sp[1]))
+                                _sx1 = min(w, int(_sp[2]))
+                                _sy1 = min(h, int(_sp[3]))
+                                if _sx1 - _sx0 >= 6 and _sy1 - _sy0 >= 5:
+                                    out[_sy0:_sy1, _sx0:_sx1] = True
+                                    _sweep[_sy0:_sy1, _sx0:_sx1] = True
+                            continue
+                        continue
+                    out[_qy0:_qy1, _qx0:_qx1] = True
                 except Exception:
                     pass
             for _fb in (getattr(self, "_lama_force_rect_boxes",
@@ -7850,6 +7914,87 @@ class _MangaTranslatorBody_85:
         except Exception:
             return 0
 
+    def _rect_ink_strips(self, image: np.ndarray, rect,
+                         max_strips: int = 48) -> list:
+        """نوارهای تایتِ جوهرِ متن داخلِ مستطیل (برای promo/sfx بدونِ poly).
+        قراردادِ دو-عکسی: انتقال به‌اندازهٔ خودِ متن (خط‌به‌خط)، نه مربعِ
+        بزرگ — عکسِ دوم فقط جاهایی را میگیرد که واقعاً متن بوده."""
+        try:
+            h_img, w_img = image.shape[:2]
+            try:
+                _rx, _ry, _rw, _rh = [int(v) for v in rect[:4]]
+            except Exception:
+                return []
+            _x0 = max(0, _rx)
+            _y0 = max(0, _ry)
+            _x1 = min(w_img, _rx + _rw)
+            _y1 = min(h_img, _ry + _rh)
+            if _x1 - _x0 < 10 or _y1 - _y0 < 10:
+                return []
+            _crop = image[_y0:_y1, _x0:_x1]
+            g = cv2.cvtColor(_crop, cv2.COLOR_BGR2GRAY)
+            _bh, _bw = g.shape[:2]
+            _fw = max(2, min(6, _bw // 8))
+            _fh = max(2, min(6, _bh // 8))
+            _frame = np.concatenate([
+                g[:_fh].ravel(), g[_bh - _fh:].ravel(),
+                g[:, :_fw].ravel(), g[:, _bw - _fw:].ravel()])
+            _bg = float(np.median(_frame))
+            _df = np.abs(g.astype(np.float32) - _bg)
+            ink = (_df >= 34.0)
+            _cov = float(ink.mean())
+            if _cov <= 0.0:
+                return []
+            if _cov > 0.62:
+                return [[_x0, _y0, _x1, _y1]]
+            ink_u = (ink.astype(np.uint8)) * 255
+            ink_u = cv2.morphologyEx(ink_u, cv2.MORPH_OPEN,
+                                     np.ones((2, 2), np.uint8))
+            ink_u = cv2.morphologyEx(ink_u, cv2.MORPH_CLOSE,
+                                     np.ones((5, 9), np.uint8))
+            m = ink_u > 0
+            _prof = m.sum(axis=1)
+            _thr = max(2.0, 0.025 * _bw)
+            _rows = _prof >= _thr
+            bands = []
+            _s = None
+            _gap = 0
+            for _i, _v in enumerate(_rows):
+                if _v:
+                    if _s is None:
+                        _s = _i
+                    _gap = 0
+                elif _s is not None:
+                    _gap += 1
+                    if _gap >= 4:
+                        bands.append((_s, _i - _gap + 1))
+                        _s = None
+            if _s is not None:
+                bands.append((_s, _bh))
+            out = []
+            for (_a, _b) in bands:
+                if _b - _a < 5:
+                    continue
+                _cols = np.nonzero(m[_a:_b].sum(axis=0) > 0)[0]
+                if _cols.size < 6:
+                    continue
+                _cx0 = int(_cols.min())
+                _cx1 = int(_cols.max()) + 1
+                if _cx1 - _cx0 < 8:
+                    continue
+                _py = 3
+                _px = 5
+                _sy0 = max(0, _y0 + _a - _py)
+                _sy1 = min(h_img, _y0 + _b + _py)
+                _sx0 = max(0, _x0 + _cx0 - _px)
+                _sx1 = min(w_img, _x0 + _cx1 + _px)
+                out.append([_sx0, _sy0, _sx1, _sy1])
+                if len(out) >= max_strips:
+                    break
+            return out
+        except Exception:
+            return []
+
     def _compose_two_image(self, donor: np.ndarray, original: np.ndarray,
 
                            mask: np.ndarray,
@@ -7925,8 +8070,26 @@ class _MangaTranslatorBody_85:
                     _wy0 = max(0, int(_pbW[1]))
                     _wx1 = min(_cmp.shape[1], int(_pbW[2]))
                     _wy1 = min(_cmp.shape[0], int(_pbW[3]))
-                    if _wx1 - _wx0 >= 8 and _wy1 - _wy0 >= 8:
-                        _cmp[_wy0:_wy1, _wx0:_wx1] = True
+                    if _wx1 - _wx0 < 8 or _wy1 - _wy0 < 8:
+                        continue
+                    if os.environ.get("MANGA_PROMO_TIGHT", "1") == "1":
+                        # قراردادِ دو-عکسی: promo هم به‌اندازهٔ خودِ متن
+                        # منتقل شود (خط‌به‌خط)، نه کلِ مربعِ بزرگ.
+                        _pst = self._rect_ink_strips(
+                            original, (_wx0, _wy0,
+                                       _wx1 - _wx0, _wy1 - _wy0))
+                        if _pst:
+                            for _sp in _pst:
+                                _sx0 = max(0, int(_sp[0]))
+                                _sy0 = max(0, int(_sp[1]))
+                                _sx1 = min(_cmp.shape[1], int(_sp[2]))
+                                _sy1 = min(_cmp.shape[0], int(_sp[3]))
+                                if _sx1 - _sx0 >= 6 and _sy1 - _sy0 >= 5:
+                                    _cmp[_sy0:_sy1, _sx0:_sx1] = True
+                            continue
+                        # جوهری پیدا نشد → چیزی منتقل نشود (اصل میماند)
+                        continue
+                    _cmp[_wy0:_wy1, _wx0:_wx1] = True
             except Exception:
                 pass
             try:

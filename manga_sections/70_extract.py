@@ -4208,6 +4208,271 @@ class _MangaTranslatorBody_70:
         except Exception:
             return None
 
+    def _rescue_missed_det_lines(self, image: np.ndarray,
+                                 regions: List["TextRegion"],
+                                 page_boxes: list) -> List["TextRegion"]:
+        """نجاتِ خطوطی که paddle det داخلِ جعبه می‌بیند ولی در متنِ ناحیه
+        نیامده‌اند (مثل خطِ اولِ کوتاهِ «i-i» بالای «Hi mm»).
+        قرارداد: هر خطی که det داخلِ حباب می‌بیند باید حساب شود."""
+        if os.environ.get("MANGA_DET_RESCUE", "1") == "0":
+            return regions
+        _det_fn = getattr(self.ocr, "det_only", None)
+        _rec_fn = getattr(self.ocr, "rec_only", None)
+        if not callable(_det_fn) or not callable(_rec_fn):
+            return regions
+        if not regions:
+            return regions
+        try:
+            h_img, w_img = image.shape[:2]
+        except Exception:
+            return regions
+        _boxes = []
+        for _b in (page_boxes or []):
+            try:
+                _bx1, _by1, _bx2, _by2 = float(_b[0]), float(_b[1]), \
+                    float(_b[2]), float(_b[3])
+                if _bx2 - _bx1 >= 16 and _by2 - _by1 >= 16:
+                    _boxes.append((_bx1, _by1, _bx2, _by2))
+            except Exception:
+                continue
+        _n_rescued = 0
+        for _rg in regions:
+            try:
+                if getattr(_rg, "no_touch", False):
+                    continue
+                _txt0 = str(getattr(_rg, "source_text", "") or "").strip()
+                if not _txt0:
+                    continue
+                _polys = [np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                          for _p in (getattr(_rg, "ocr_polys", None) or [])
+                          if np.asarray(_p).size >= 6]
+                if not _polys:
+                    continue
+                rx, ry, rw, rh = [float(v) for v in _rg.rect[:4]]
+                _box = None
+                _best_io = -1.0
+                for (_bx1, _by1, _bx2, _by2) in _boxes:
+                    _ix = max(0.0, min(rx + rw, _bx2) - max(rx, _bx1))
+                    _iy = max(0.0, min(ry + rh, _by2) - max(ry, _by1))
+                    _io = (_ix * _iy) / max(1e-6, rw * rh)
+                    if _io > _best_io:
+                        _best_io = _io
+                        _box = (_bx1, _by1, _bx2, _by2)
+                if _box is None or _best_io < 0.55:
+                    _box = (rx, ry, rx + rw, ry + rh)
+                _bx1, _by1, _bx2, _by2 = _box
+                _pad = 8
+                _cx1 = max(0, int(_bx1) - _pad)
+                _cy1 = max(0, int(_by1) - _pad)
+                _cx2 = min(w_img, int(_bx2) + _pad)
+                _cy2 = min(h_img, int(_by2) + _pad)
+                if _cx2 - _cx1 < 24 or _cy2 - _cy1 < 24:
+                    continue
+                _crop = image[_cy1:_cy2, _cx1:_cx2]
+                if _crop is None or _crop.size == 0:
+                    continue
+                _quads = []
+                for _cimg, _cs in ((_crop, 1.0),):
+                    for _q in (_det_fn(_cimg) or []):
+                        try:
+                            _qf = np.asarray(_q, dtype=np.float32) \
+                                .reshape(-1, 2).copy()
+                            if _cs > 1.01:
+                                _qf = _qf / _cs
+                            _qf[:, 0] += _cx1
+                            _qf[:, 1] += _cy1
+                            _quads.append(_qf)
+                        except Exception:
+                            continue
+                if not _quads and max(_crop.shape[:2]) < 420:
+                    try:
+                        _sc = 2.0
+                        _up = cv2.resize(_crop, None, fx=_sc, fy=_sc,
+                                         interpolation=cv2.INTER_CUBIC)
+                        for _q in (_det_fn(_up) or []):
+                            try:
+                                _qf = np.asarray(_q, dtype=np.float32) \
+                                    .reshape(-1, 2).copy() / _sc
+                                _qf[:, 0] += _cx1
+                                _qf[:, 1] += _cy1
+                                _quads.append(_qf)
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+                if not _quads:
+                    continue
+                _adds = []
+                for _qf in _quads:
+                    try:
+                        _qx1 = float(_qf[:, 0].min())
+                        _qy1 = float(_qf[:, 1].min())
+                        _qx2 = float(_qf[:, 0].max())
+                        _qy2 = float(_qf[:, 1].max())
+                        _qa = max(1e-6, (_qx2 - _qx1) * (_qy2 - _qy1))
+                        _ix = max(0.0, min(_qx2, _bx2) - max(_qx1, _bx1))
+                        _iy = max(0.0, min(_qy2, _by2) - max(_qy1, _by1))
+                        if (_ix * _iy) / _qa < 0.55:
+                            continue
+                        _qcx = float(_qf[:, 0].mean())
+                        _qcy = float(_qf[:, 1].mean())
+                        if not (_bx1 - 2.0 <= _qcx <= _bx2 + 2.0
+                                and _by1 - 2.0 <= _qcy <= _by2 + 2.0):
+                            continue
+                        _foreign = False
+                        for (_ox1, _oy1, _ox2, _oy2) in _boxes:
+                            if (_ox1, _oy1, _ox2, _oy2) == _box:
+                                continue
+                            if (_ox1 + 3.0) <= _qcx <= (_ox2 - 3.0) \
+                                    and (_oy1 + 3.0) <= _qcy <= (_oy2 - 3.0):
+                                _ix2 = max(0.0, min(_qx2, _ox2)
+                                           - max(_qx1, _ox1))
+                                _iy2 = max(0.0, min(_qy2, _oy2)
+                                           - max(_qy1, _oy1))
+                                if (_ix2 * _iy2) / _qa > \
+                                        (_ix * _iy) / _qa + 0.10:
+                                    _foreign = True
+                                    break
+                        if _foreign:
+                            continue
+                        _covered = False
+                        for _pp in _polys:
+                            try:
+                                _px1 = float(_pp[:, 0].min())
+                                _py1 = float(_pp[:, 1].min())
+                                _px2 = float(_pp[:, 0].max())
+                                _py2 = float(_pp[:, 1].max())
+                                _ix3 = max(0.0, min(_qx2, _px2 + 3.0)
+                                           - max(_qx1, _px1 - 3.0))
+                                _iy3 = max(0.0, min(_qy2, _py2 + 3.0)
+                                           - max(_qy1, _py1 - 3.0))
+                                if (_ix3 * _iy3) / _qa >= 0.45:
+                                    _covered = True
+                                    break
+                            except Exception:
+                                continue
+                        if _covered:
+                            continue
+                        for _ad in _adds:
+                            try:
+                                _ax1 = float(_ad[1][:, 0].min())
+                                _ay1 = float(_ad[1][:, 1].min())
+                                _ax2 = float(_ad[1][:, 0].max())
+                                _ay2 = float(_ad[1][:, 1].max())
+                                _ix4 = max(0.0, min(_qx2, _ax2)
+                                           - max(_qx1, _ax1))
+                                _iy4 = max(0.0, min(_qy2, _ay2)
+                                           - max(_qy1, _ay1))
+                                if (_ix4 * _iy4) / _qa >= 0.45:
+                                    _covered = True
+                                    break
+                            except Exception:
+                                continue
+                        if _covered:
+                            continue
+                        _lx1 = max(0, int(_qx1) - 4)
+                        _ly1 = max(0, int(_qy1) - 3)
+                        _lx2 = min(w_img, int(_qx2) + 5)
+                        _ly2 = min(h_img, int(_qy2) + 4)
+                        if _lx2 - _lx1 < 10 or _ly2 - _ly1 < 7:
+                            continue
+                        _lc = image[_ly1:_ly2, _lx1:_lx2]
+                        if _lc is None or _lc.size == 0:
+                            continue
+                        _rr = _rec_fn(_lc)
+                        if not _rr:
+                            continue
+                        _rt = str(_rr[0]).strip()
+                        _rc = float(_rr[1]) if len(_rr) > 1 else 0.0
+                        if not _rt or _rc < 0.55:
+                            continue
+                        if self._is_non_english_script(_rt):
+                            continue
+                        try:
+                            if _latin_lang(self) \
+                                    and _latin_junk_line(_rt, True):
+                                continue
+                        except Exception:
+                            pass
+                        _lt_n = sum(1 for _c in _rt
+                                    if _c.isascii() and _c.isalpha())
+                        _cjk_n = sum(
+                            1 for _c in _rt
+                            if (0x3040 <= ord(_c) <= 0x30FF)
+                            or (0x3400 <= ord(_c) <= 0x9FFF)
+                            or (0xAC00 <= ord(_c) <= 0xD7AF))
+                        if _lt_n < 2 and _cjk_n < 2:
+                            continue
+                        _lpoly = np.array(
+                            [[_lx1, _ly1], [_lx2, _ly1],
+                             [_lx2, _ly2], [_lx1, _ly2]],
+                            dtype=np.int32)
+                        _adds.append((_rt, _lpoly.astype(np.float32)))
+                    except Exception:
+                        continue
+                if not _adds:
+                    continue
+                try:
+                    _vert = self._polys_vertical(
+                        [p.astype(np.int32) for p in _polys])
+                except Exception:
+                    _vert = False
+                _top = []
+                _bot = []
+                for (_rt, _lp) in _adds:
+                    _qcy = float(_lp[:, 1].mean())
+                    _qcx = float(_lp[:, 0].mean())
+                    if _vert:
+                        _ref = min(float(p[:, 0].mean()) for p in _polys)
+                        if _qcx < _ref:
+                            _top.append((_rt, _lp))
+                        else:
+                            _bot.append((_rt, _lp))
+                    else:
+                        _ref = min(float(p[:, 1].mean()) for p in _polys)
+                        if _qcy < _ref:
+                            _top.append((_rt, _lp))
+                        else:
+                            _bot.append((_rt, _lp))
+                _new_polys = list(getattr(_rg, "ocr_polys", None) or [])
+                _pre_txt = " ".join(_t for (_t, _p) in _top).strip()
+                _post_txt = " ".join(_t for (_t, _p) in _bot).strip()
+                _new_txt = " ".join(
+                    _p2 for _p2 in (_pre_txt, _txt0, _post_txt)
+                    if _p2).strip()
+                for (_rt, _lp) in (_top + _bot):
+                    _new_polys.append(_lp.astype(np.int32))
+                _rg.source_text = re.sub(r"\s{2,}", " ", _new_txt)
+                _rg.ocr_polys = _new_polys
+                try:
+                    _nx0 = min(rx, min(float(p[:, 0].min())
+                                       for p in _new_polys))
+                    _ny0 = min(ry, min(float(p[:, 1].min())
+                                       for p in _new_polys))
+                    _nx1 = max(rx + rw, max(float(p[:, 0].max())
+                                            for p in _new_polys) + 1)
+                    _ny1 = max(ry + rh, max(float(p[:, 1].max())
+                                            for p in _new_polys) + 1)
+                    _rg.rect = (int(_nx0), int(_ny0),
+                                int(_nx1 - _nx0), int(_ny1 - _ny0))
+                except Exception:
+                    pass
+                _n_rescued += len(_adds)
+                try:
+                    print(f"    [✓] نجاتِ خطِ جامانده: «{_new_txt[:60]}» "
+                          f"→ ناحیهٔ {_rg.id}", flush=True)
+                except Exception:
+                    pass
+            except Exception:
+                continue
+        if _n_rescued:
+            try:
+                print(f"[*] {_n_rescued} خطِ جاماندهٔ paddle det به نواحی "
+                      f"برگشت (قرارداد: هر خطِ det حساب شود)", flush=True)
+            except Exception:
+                pass
+        return regions
+
     def extract_regions_phase(self, image: np.ndarray
             ) -> Tuple[List[TextRegion], Optional[np.ndarray], dict]:
         _page_cache: dict = {}
@@ -4222,6 +4487,11 @@ class _MangaTranslatorBody_70:
         if self.det is not None:
             unique_regions, page_boxes = self._extract_regions_from_bubbles(
                 image, page_cache=_page_cache)
+            try:
+                unique_regions = self._rescue_missed_det_lines(
+                    image, unique_regions, page_boxes)
+            except Exception:
+                pass
         else:
             print("    [!] detector-v4-s در دسترس نیست → ناحیهٔ متنی پیدا نشد")
         _raise_if_stop()
