@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.369"
+APP_VER = "1.14.370"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -1130,7 +1130,7 @@ def _cache_dir_for(output_path) -> str:
 def _trans_sig_of(provider, model, api_base, prompt_mode,
                   instruction, fake, temperature, top_p,
                   deep_thinking=True, safety_settings=False,
-                  max_tokens=None) -> str:
+                  max_tokens=None, brief=False, glossary_sig="") -> str:
     import hashlib as _hl
 
     def _ms(v) -> str:
@@ -1162,7 +1162,7 @@ def _trans_sig_of(provider, model, api_base, prompt_mode,
         except Exception:
             _mt = "mt-"
         parts = [
-            "t1", prov, mdl, ab, pm,
+            "t2", prov, mdl, ab, pm,
             (_hl.sha256(instr.encode("utf-8", "ignore")).hexdigest()[:12]
              if instr else "-"),
             "fake" if fake else "real",
@@ -1171,8 +1171,32 @@ def _trans_sig_of(provider, model, api_base, prompt_mode,
             "think" if deep_thinking else "nothink",
             "sbn" if safety_settings else "nosbn",
             _mt,
+            "brf" if brief else "nbrf",
+            (str(glossary_sig).strip() or "-"),
         ]
         return _hl.sha256("|".join(parts).encode("utf-8", "ignore")).hexdigest()[:16]
+    except Exception:
+        return ""
+
+def _glossary_text_sig(txt) -> str:
+    try:
+        items = {}
+        for ln in str(txt or "").splitlines():
+            ln = ln.strip()
+            if not ln or ln.startswith("#"):
+                continue
+            for sep in ("=", ":", "\t"):
+                if sep in ln:
+                    k, v = ln.split(sep, 1)
+                    k, v = k.strip(), v.strip()
+                    if k and v:
+                        items[k] = v
+                    break
+        if not items:
+            return ""
+        import hashlib as _hl
+        _j = "\n".join(f"{k}={v}" for k, v in sorted(items.items()))
+        return _hl.sha256(_j.encode("utf-8", "ignore")).hexdigest()[:10]
     except Exception:
         return ""
 
@@ -3413,9 +3437,6 @@ def _browser_extract_js() -> str:
 
 
 def _prov_keys_js() -> str:
-    # کلیدِ API هر provider (gemini / custom) جداگانه در localStorage
-    # مرورگر میماند؛ با برگشتن به همان provider دوباره پر میشود —
-    # دیگر با سوییچ‌کردن مدل و برگشت، کلید پاک نمی‌شود.
     return """() => {
   if (window.__mangaProvKeysInit) return [];
   window.__mangaProvKeysInit = true;
@@ -9433,7 +9454,9 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     (top_p_v if top_p_v not in (None, "") else 0.9),
                     bool(thinking_v if thinking_v is not None else True),
                     bool(safety_v),
-                    _mt_eff_q)
+                    _mt_eff_q,
+                    brief=bool(story_brief_v),
+                    glossary_sig=_glossary_text_sig(glossary_text_v))
                 _cache_dir_q = _cache_dir_for(out_v)
                 _sig_prev = ""
                 _fake_prev = None

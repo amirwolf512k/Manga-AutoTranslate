@@ -126,10 +126,6 @@ public class MainActivity extends Activity {
                     if (on != readerMode) {
                         readerMode = on;
                         if (fab != null) {
-                            // مرورگر داخلِ «نمایش» نمیآید: در حالتِ نمایش
-                            // دکمهٔ مرورگر کلاً پنهان میشود (رفرشِ صفحهٔ
-                            // نمایش را دکمهٔ رفرشِ خودِ وب انجام میدهد —
-                            // دیگر دو دکمهٔ رفرش همزمان دیده نمیشود).
                             fab.setText("🌐");
                             fab.setTextSize(20);
                             fab.setContentDescription("باز کردن مرورگر + استخراج عکس");

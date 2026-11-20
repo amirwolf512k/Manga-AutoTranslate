@@ -2295,9 +2295,6 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         BOOL on = (wcsstr(s, L"1") != NULL);
         if (on != g_readerMode) {
             g_readerMode = on;
-            // مرورگر داخلِ «نمایش» نمیآید: در حالتِ نمایش دکمهٔ
-            // مرورگر کلاً پنهان میشود (رفرشِ نمایش را دکمهٔ رفرشِ
-            // خودِ وب انجام میدهد — دیگر دو دکمهٔ رفرش دیده نمیشود).
             if (g_btnGlobe != NULL) {
                 BOOL brVis0 = (g_hwndBr != NULL && IsWindowVisible(g_hwndBr));
                 ShowWindow(g_btnGlobe,

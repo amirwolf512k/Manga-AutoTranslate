@@ -1141,7 +1141,6 @@ class _MangaTranslatorBody_70:
                 best = (u_txt, u_polys, scv, u_angs, u_texts, u_blks)
 
 
-        # F1: قرنطینهٔ مرز — خطِ بیرون از مرزِ detector حذف میشود
         try:
             if merged and not _tilted0:
                 _bx1o, _by1o = float(rect[0]), float(rect[1])
@@ -1320,9 +1319,6 @@ class _MangaTranslatorBody_70:
         except Exception:
             pass
 
-        # F1-final: قرنطینهٔ مرز روی خروجِ نهایی — مسیرهای variants/
-        # halves/r90/deskew/rotate همگی در best جمع میشوند؛ هر خطِ
-        # بیرون از کادرِ اصلیِ detector (بدونِ pad) حذف میشود.
         try:
             _bx1f, _by1f = float(rect[0]), float(rect[1])
             _bx2f, _by2f = float(rect[2]), float(rect[3])
@@ -3005,12 +3001,6 @@ class _MangaTranslatorBody_70:
         except Exception:
             pass
         if _raw_det_dbg:
-            # مرزِ سبز در دیباگ = خروجیِ خامِ detector-v4 (همهٔ جعبهها،
-            # حتی جعبههایی که ناحیهٔ نهایی نساختهاند — مثل SFX کرههای
-            # یا حباب «!!!» که متنِ معتبر ندارند). قبلاً اینجا جعبهها
-            # از نواحیِ نهایی بازسازی میشد؛ در نتیجه جعبهٔ detector که
-            # ناحیه نساخته بود سبز رسم نمیشد و کوارِ آبیِ paddle det
-            # که داخلِ همان جعبه بود «بیرون از کادرِ سبز» به نظر میرسید.
             try:
                 _raw_seen: set = set()
                 _raw_uniq: list = []
@@ -3032,10 +3022,6 @@ class _MangaTranslatorBody_70:
         if self.debug:
             print(f"    [*] RT-DETR: {n0} خام → {before} OCR → {len(regions)} نهایی")
 
-        # مرزِ سخت: paddle det/rec فقط داخل جعبه‌های detector-v4 اجرا میشود.
-        # نجاتِ خطِ یتیم (OCR بیرون از جعبه‌ها) حذف شد: هم متنِ حبابها را
-        # دوباره میخواند (استخراجِ تکراری) و هم paddle det بیرون از کادرِ
-        # detector پیدا میشد و روی SFX/آثار هنری کوار آبی میساخت.
         return regions, page_boxes
 
     @staticmethod
@@ -3674,8 +3660,6 @@ class _MangaTranslatorBody_70:
     def _discover_free_text_regions(self, image: np.ndarray,
                                    regions: List["TextRegion"],
                                    relaxed: bool = False) -> List["TextRegion"]:
-        """نویسه‌های آزادِ بیرون از حبابها را می‌یابد (SFX/تبلیغِ خاموش) —
-        فقط وقتی مرزِ detector-v4 بیرونشان باشد. متنِ داخل حباب هرگز اینجا نمی‌آید."""
         try:
             h_img, w_img = image.shape[:2]
         except Exception:
@@ -3965,10 +3949,6 @@ class _MangaTranslatorBody_70:
                                       - max(_qy1, float(_by1)))
                             if (_ix * _iy) / _qa < 0.5:
                                 continue
-                            # مرزِ مطلق: مرکزِ کوار باید داخلِ جعبهٔ
-                            # detector باشد؛ سپس کوار به داخلِ جعبه
-                            # کلمپ میشود (کوارِ آبی هرگز بیرون از
-                            # کادرِ سبز رسم نمیشود).
                             _cx = float(np.mean(_qf[:, 0]))
                             _cy = float(np.mean(_qf[:, 1]))
                             if not (float(_bx1) <= _cx <= float(_bx2)
@@ -4217,9 +4197,6 @@ class _MangaTranslatorBody_70:
     def _rescue_missed_det_lines(self, image: np.ndarray,
                                  regions: List["TextRegion"],
                                  page_boxes: list) -> List["TextRegion"]:
-        """نجاتِ خطوطی که paddle det داخلِ جعبه می‌بیند ولی در متنِ ناحیه
-        نیامده‌اند (مثل خطِ اولِ کوتاهِ «i-i» بالای «Hi mm»).
-        قرارداد: هر خطی که det داخلِ حباب می‌بیند باید حساب شود."""
         if os.environ.get("MANGA_DET_RESCUE", "1") == "0":
             return regions
         _det_fn = getattr(self.ocr, "det_only", None)
@@ -4341,8 +4318,6 @@ class _MangaTranslatorBody_70:
                                     break
                         if _foreign:
                             continue
-                        # خط باید عمدتاً داخلِ رکتِ خودِ ناحیه باشد —
-                        # رکتِ ناحیهٔ دیگر (مثلِ کپشنهای کنارِ هم) رد
                         _rix = max(0.0, min(_qx2, rx + rw)
                                    - max(_qx1, rx))
                         _riy = max(0.0, min(_qy2, ry + rh)
@@ -4400,20 +4375,12 @@ class _MangaTranslatorBody_70:
                         _rc = float(_rr[1]) if len(_rr) > 1 else 0.0
                         if not _rt:
                             continue
-                        # خطِ کوتاهِ توقف (I-I و مانندش) دست‌نویس و
-                        # شکل‌دار است → conf پایینِ rec طبیعی است؛
-                        # برایِ خطِ کوتاه آستانهٔ ۰٫۴۰ کافی است.
                         _vis_n = len(re.sub(r"\s+", "", _rt))
                         _conf_min = 0.40 if _vis_n <= 6 else 0.55
                         if _rc < _conf_min:
                             continue
                         try:
                             if bool(self._is_non_english_script(_rt)):
-                                # خطِ توقفِ کوتاهِ دست‌نویس (مثلِ «I-I»)
-                                # گاهی به‌اشتباه چینی خوانده میشود
-                                # («土-士») — کوتاه را بپذیر؛ متنِ خام
-                                # به مترجم میرود و از بستر حدس میزند
-                                # (پرامپت: متنِ خراب OCR → بازسازی).
                                 _vis = re.sub(r"\s+", "", _rt)
                                 if len(_vis) > 6:
                                     continue
@@ -4435,8 +4402,6 @@ class _MangaTranslatorBody_70:
                             if (0x3040 <= ord(_c) <= 0x30FF)
                             or (0x3400 <= ord(_c) <= 0x9FFF)
                             or (0xAC00 <= ord(_c) <= 0xD7AF))
-                        # خوانشِ مختلط (I-士) هم خطِ واقعی است — مجموعِ
-                        # حروف کافی است
                         if (_lt_n + _cjk_n) < 2:
                             continue
                         _lpoly = np.array(
@@ -4546,10 +4511,6 @@ class _MangaTranslatorBody_70:
             print(f"[*] {_nt_n} ناحیهٔ فقط عدد/نماد → دست‌نخورده "
                   f"(نه ترجمه، نه پاکسازی)")
 
-        # مرزِ سخت: کشفِ SFX بیرون از جعبه‌های detector-v4 حذف شد.
-        # paddle det حق ندارد بیرون از کادرهای detector-v4 بگردد؛
-        # گزینهٔ «پاکسازی SFX» فقط برای نواحیِ داخلِ جعبه‌های detector
-        # که متنشان به‌عنوان sfx دسته‌بندی شده کار میکند.
 
         if len(unique_regions) > 1:
             def _norm_t(t):
@@ -5232,8 +5193,6 @@ class _MangaTranslatorBody_70:
 
     def _stitch_pages_for_efficiency(self, image_files: List[str], work_dir: str) -> List[str]:
 
-        # نگاشتِ نوارِ خروجی → فایلهایِ منبعی که در آن هستند
-        # (برای بازسازیِ نگاشتِ فصل→نوار در ورودیِ چندفصلی)
         self._stitch_src_map: Dict[str, List[str]] = {}
         if not image_files:
             return image_files

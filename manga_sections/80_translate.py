@@ -292,9 +292,6 @@ class _MangaTranslatorBody_80:
                 by_key[key] = (key, [])
                 groups.append(by_key[key][1])
             by_key[key][1].append(r)
-        # نامِ فشردهٔ p1..pN به مدل داده میشود (به‌جای strip_001.jpg) —
-        # هم در ورودی و هم در اکویِ خروجی ذخیره میکند؛ مسیریابی از طریق
-        # region_page انجام میشود، پس نامِ واقعی لازم نیست.
         pages = [{"filename": f"p{gi + 1}",
                   "dialogues": [[_di + 1, (r.source_text or "")]
                                  for _di, r in enumerate(rs)]}
@@ -626,9 +623,6 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
             config_args["response_mime_type"] = "application/json"
-            # پاسخِ ساخت‌یافته با schemaٔ اجباری API (مثل K3 v4.4):
-            # خروجیِ فشرده و بدونِ توکن‌های تزئینی (newline/تورفتگی/markdown)
-            # + بدونِ انحرافِ فرمت — کاهشِ تا ۶۰٪ توکنِ خروجی.
             if not getattr(self, "_g_schema_off", False):
                 config_args["response_schema"] = MT_JSON_SCHEMA
             if getattr(self, "deep_thinking", True):
@@ -638,10 +632,6 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
         else:
-            # درخواستِ غیر-JSON (بریف داستان، پرابِ سبک، ...):
-            # ۲۰۴۸ توکن برای مدل‌های thinker کم است (تفکر هم از سهمِ
-            # خروجی می‌خورد → پاسخِ خالی) و تفکرِ بالا فقط وقت را
-            # هدر میدهد — سقف بالاتر + تفکرِ پایین.
             config_args["max_output_tokens"] = 4096
             try:
                 config_args["thinking_config"] = genai_types.ThinkingConfig(
@@ -651,7 +641,6 @@ class _MangaTranslatorBody_80:
         try:
             config = genai_types.GenerateContentConfig(**config_args)
         except Exception:
-            # سرور/SDK این schema را نپذیرفت — بدونِ schema ادامه میدهیم.
             config_args.pop("response_schema", None)
             self._g_schema_off = True
             config = genai_types.GenerateContentConfig(**config_args)
@@ -689,12 +678,6 @@ class _MangaTranslatorBody_80:
                         if _t:
                             _parts.append(_t)
                     else:
-                        # استریم وسطِ کار خطا داد (مثلاً 429/500 وسطِ پاسخ).
-                        # قبلاً این خطا بلعیده می‌شد و به‌جایش «Unterminated
-                        # string» بی‌معنی می‌آمد؛ همان کلیدِ مرده دوباره
-                        # امتحان می‌شد و آبشارِ کلید/مدل فعال نمی‌شد.
-                        # حالا همان خطا را پاس میدهیم — صفحه‌های نجات‌یافته
-                        # (توسط salvage) حفظ شده‌اند و آبشار درست ادامه می‌یابد.
                         raise
                 text = "".join(_parts)
             else:
@@ -1790,7 +1773,6 @@ class _MangaTranslatorBody_80:
                 if ("BLOCK_NONE" in _es or "safety_settings" in _es.lower()
                         or ("blocked" in err_str and "safety" in err_str)):
                     self._sbn_ok = False
-                # سرور response_schema را رد کرد → تلاشِ بعدی بدونِ schema
                 if not getattr(self, "_g_schema_off", False) \
                         and ("response_schema" in err_str
                              or ("schema" in err_str
@@ -1801,11 +1783,6 @@ class _MangaTranslatorBody_80:
                     print("    [!] سرور schemaٔ خروجی را نپذیرفت — "
                           "بدونِ schema ادامه میدهیم.")
 
-                # نجاتِ استریم را در همهٔ مسیرها نگه دار: دیالوگ‌هایی که
-                # salvage قبلاً پر کرده، از کارِ بعدی حذف میشوند تا
-                # دوباره ترجمه و توکن نسوزند (قبلاً فقط مسیرِ تایم‌اوت
-                # این کار را می‌کرد و خطایِ JSON نصفه، کلِ دسته را
-                # دوباره می‌فرستاد).
                 _salv = [r for r in work_regions
                          if not (r.translated_text or "").strip()]
                 _had_salv = bool(_salv) and len(_salv) < len(work_regions)
@@ -1817,10 +1794,6 @@ class _MangaTranslatorBody_80:
                                           "expecting value",
                                           "expecting property",
                                           "extra data"))):
-                    # پاسخِ استریم نصفه بریده شد ولی بخشِ آن نجات یافت —
-                    # آبشارِ مدل/کلید را نسوزان؛ همان مدل با کمی صبر
-                    # ادامه میدهد (خطایِ واقعیِ پشتِ صحنه قبلاً توسط
-                    # _translate_with_gemini پاس داده شده و مدیریت شده).
                     _ws = min(1.5 + attempt, 6.0)
                     print(f"    [!] پاسخِ استریم نصفه بریده شد — "
                           f"{len(work_regions)} دیالوگِ باقی‌مانده "
@@ -2068,8 +2041,6 @@ class _MangaTranslatorBody_80:
                     if self._is_model_unavailable_error(e):
                         if "high demand" in err_str \
                                 or "spikes in demand" in err_str:
-                            # شلوغیِ سرورِ گوگل (503) — تعویضِ فوریِ مدل
-                            # کمکی نمیکند؛ اول صبرِ طولانی بعد کلیدِ دیگر.
                             _w503 = min(15.0 + 10.0 * attempt, 45.0)
                             print(f"    [*] سرورِ Gemini شلوغ است (503) — "
                                   f"صبر {_w503:.0f}ثانیه…")

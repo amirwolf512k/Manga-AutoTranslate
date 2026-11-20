@@ -2474,19 +2474,11 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
                 keep.append(True)
                 clamped.append(p)
                 continue
-            # مرزِ مطلقِ detector-v4: خطی که مرکزش بیرون از جعبهٔ
-            # detector افتاده متعلق به این ناحیه نیست — paddle det
-            # حق ندارد بیرون از کادرِ detector خطی ثبت کند.
             if not ((bx1 - tol) <= cx <= (bx2 + tol)
                     and (by1 - tol) <= cy <= (by2 + tol)):
                 keep.append(False)
                 clamped.append(None)
                 continue
-            # تخصیص خط به بهترین مالک: خودی در تساوی برنده میماند؛
-            # باکسِ همسایه فقط وقتی خط را بهطورِ قاطع بیشتر میپوشاند
-            # (≥۱۰٪ بیشتر از خودی) و مرکزِ خط هم درونِ آن است، خط را
-            # میگیرد — بزرگ/کوچک بودنِ باکس دیگر نقشی ندارد (رفعِ
-            # دوبارخوانیِ متنِ مرزی بینِ دو کادرِ detector).
             _own_cov = 0.0
             try:
                 _oix = max(0.0, min(_qx2, bx2) - max(_qx1, bx1))
@@ -2511,9 +2503,6 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
                     break
             keep.append(not _stolen)
             if not _stolen:
-                # کلمپِ نقاطِ کوار به داخلِ جعبهٔ detector (با تلورانس):
-                # کوارِ آبی (paddle det) هرگز بیرون از کادرِ سبز
-                # (detector-v4) رسم/ذخیره نمیشود.
                 try:
                     _cp = pp.copy()
                     _cp[:, 0] = np.clip(_cp[:, 0], bx1 - tol, bx2 + tol)
@@ -2563,9 +2552,6 @@ def _latin_junk_line(text, region_has_letters: Optional[bool] = None):
     if all(len(t) <= 2 for t in toks):
         _vow = "AEIOUaeiou"
         if not any(any(c in _vow for c in t) for t in toks):
-            # واژه‌های واقعیِ بی‌واکلِ استاندارد (y واکه است):
-            # «MY»، «my»، «by»، «Mr»، «Dr» — خطِ اولِ «MY WHIP…»
-            # گم میشد چون آشغال شمرده میشد؛ اینها واژه‌اند، نه نویزِ OCR.
             if len(toks) == 1 and toks[0].lower() in ("my", "by",
                                                       "mr", "dr"):
                 return False

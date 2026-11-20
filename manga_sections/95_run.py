@@ -91,7 +91,9 @@ class _MangaTranslatorBody_95:
                       fake: bool, temperature: float, top_p: float,
                       deep_thinking: bool = True,
                       safety_settings: bool = False,
-                      max_tokens=None) -> str:
+                      max_tokens=None,
+                      brief: bool = False,
+                      glossary_sig: str = "") -> str:
         import hashlib as _hl
         try:
             prov = str(provider or "").strip().lower()
@@ -105,7 +107,7 @@ class _MangaTranslatorBody_95:
             except Exception:
                 _mt = "mt-"
             parts = [
-                "t1", prov, mdl, ab, pm,
+                "t2", prov, mdl, ab, pm,
                 (_hl.sha256(instr.encode("utf-8", "ignore")).hexdigest()[:12]
                  if instr else "-"),
                 "fake" if fake else "real",
@@ -114,8 +116,23 @@ class _MangaTranslatorBody_95:
                 "think" if deep_thinking else "nothink",
                 "sbn" if safety_settings else "nosbn",
                 _mt,
+                "brf" if brief else "nbrf",
+                (str(glossary_sig).strip() or "-"),
             ]
             return _hl.sha256("|".join(parts).encode("utf-8", "ignore")).hexdigest()[:16]
+        except Exception:
+            return ""
+
+    @staticmethod
+    def _glossary_sig_of(items) -> str:
+        try:
+            if not items:
+                return ""
+            import hashlib as _hl
+            _j = "\n".join(f"{str(k)}={str(v)}"
+                            for k, v in sorted(items.items()))
+            return _hl.sha256(
+                _j.encode("utf-8", "ignore")).hexdigest()[:10]
         except Exception:
             return ""
 
@@ -640,6 +657,10 @@ class _MangaTranslatorBody_95:
                                                          False)),
                             max_tokens=getattr(self, "max_output_tokens",
                                                None),
+                            brief=bool(getattr(self, "story_brief_enabled",
+                                               False)),
+                            glossary_sig=MangaTranslator._glossary_sig_of(
+                                getattr(self, "_name_glossary", None) or {}),
                         ))
                 except Exception:
                     _ch_sig = ""
@@ -647,13 +668,6 @@ class _MangaTranslatorBody_95:
                                 and MangaTranslator._chapter_store_max() > 0
                                 and not bool(getattr(self, "translate_retranslate",
                                                      False))
-                                # انبارِ فصلها فقط صفحههایِ نهاییِ بدونِ
-                                # دیباگ را نگه میدارد — اگر دیباگ روشن باشد
-                                # و فصل از انبار برگردد، تصویرِ دیباگ هرگز
-                                # ساخته نمیشود (باگِ «دیباگ فعال نمیشه تا
-                                # لینک/فایل عوض شود»). با دیباگِ روشن،
-                                # انبار دور میخورد تا تصاویرِ دیباگ هم
-                                # ساخته شوند (بقیهٔ مراحل از کش می‌مانند).
                                 and not bool(getattr(self, "debug", False)))
                 os.makedirs(src_dir, exist_ok=True)
                 image_files = []
@@ -750,8 +764,6 @@ class _MangaTranslatorBody_95:
                          if _n_from_store else "")
                       + " → شروعِ استخراج/پاکسازی/ترجمه…")
 
-                # ادغامِ لینکهایِ تک‌تصویری (کاور/تیتراژ مثل credits) با فصلِ
-                # مجاور تا برشِ امن و چسباندنِ نوار مثلِ حالتِ تک‌لینک فعال بماند.
                 _merged_covers = 0
                 _merged_any = True
                 while _merged_any:
@@ -944,12 +956,6 @@ class _MangaTranslatorBody_95:
             and int(getattr(self, "stitch_max_height", 0) or 0) <= 0
             and not getattr(self, "stitch_explicit", False))
         if _ch_plan:
-            # ورودیِ چندفصلیِ واقعی (دو فصلِ چندصفحه‌ای یا بیشتر):
-            # با برشِ فعال (پیش‌فرضِ ۸۰۰۰ برای فصل) همهٔ صفحهها مثلِ
-            # تک‌لینک در یک جریانِ پیوسته چسبانده و با برشِ امن قطع
-            # میشوند (حتی مرزِ بین دو فصل)؛ نگاشتِ نوار→فصل بعد از
-            # چسباندن بازسازی میشود تا انبارِ فصلها و ترتیبِ خروجی
-            # درست بماند. بدونِ برش (۰) رفتارِ قدیمی: صفحات مستقل.
             _n_multi_ch = sum(
                 1 for _p in _ch_plan
                 if _p.get("kind") == "new" and len(_p.get("files") or []) > 1)
@@ -969,7 +975,6 @@ class _MangaTranslatorBody_95:
         if _ch_plan and image_files:
             _strip_map = getattr(self, "_stitch_src_map", None) or {}
             if _strip_map:
-                # نگاشتِ معکوس: فایلِ منبع → نوارهایی که آن را در خود دارند
                 _strips_of_src: Dict[str, List[str]] = {}
                 for _spth, _srcs in _strip_map.items():
                     for _sf in _srcs:
@@ -998,9 +1003,6 @@ class _MangaTranslatorBody_95:
                     print(f"[*] {_n_shared_ch} فصل نوارِ مشترک با فصلِ مجاور "
                           f"دارد → در انبارِ فصلها ذخیره نمیشوند "
                           f"(خروجی و ترتیب درست است).")
-            # وقتی فقط یک فصلِ «تازه» ماند، همهٔ نوارها/صفحه‌های خروجی
-            # متعلق به همان فصل است → فایلهایِ پلن را به خروجیِ نهایی
-            # نگاشت کن تا انبارِ فصلها و مونتاژِ نهایی درست کار کنند.
             _new_ents = [_pl for _pl in _ch_plan
                          if _pl.get("kind") == "new" and _pl.get("files")]
             if len(_new_ents) == 1:
@@ -1087,6 +1089,9 @@ class _MangaTranslatorBody_95:
             deep_thinking=bool(getattr(self, "deep_thinking", True)),
             safety_settings=bool(getattr(self, "safety_settings", False)),
             max_tokens=getattr(self, "max_output_tokens", None),
+            brief=bool(getattr(self, "story_brief_enabled", False)),
+            glossary_sig=MangaTranslator._glossary_sig_of(
+                getattr(self, "_name_glossary", None) or {}),
         )
         _state_path = os.path.join(cache_dir, "state.json")
         _sig_prev = ""
@@ -1186,10 +1191,6 @@ class _MangaTranslatorBody_95:
         if page_ext == ".jpeg":
             page_ext = ".jpg"
 
-        # فایلِ دیباگِ هر صفحه — اگر حالتِ دیباگ روشن باشد و فایلِ
-        # دیباگِ صفحه هنوز ساخته نشده باشد، صفحه از کشِ رندر رد
-        # نمیشود تا تصویرِ دیباگش هم ساخته شود (استخراج/ترجمه/
-        # پاکسازی همچنان از کش میمانند — فقط رندر تکرار میشود).
         _dbg_pages_dir = os.path.join(cache_dir, "debug" + cache_tag)
 
         def _dbg_file_of(_of: str) -> str:
@@ -1649,9 +1650,6 @@ class _MangaTranslatorBody_95:
                 _prev_busy.release()
 
         def _preview_ready_pages_run() -> None:
-            # پیش‌نمایشِ ترجمه‌دار برای حالتِ فقط-پاکسازی معنا ندارد؛
-            # در آن حالت صفحه‌ها از مسیرِ finish (پاکسازی + دیباگ) زنده
-            # می‌آیند.
             if getattr(self, "clean_only", False):
                 return
             for page_i in sorted(list(extracted_map.keys())):
@@ -1700,9 +1698,6 @@ class _MangaTranslatorBody_95:
 
         def _queue_dialogues(regions: List[TextRegion], page_i: int) -> None:
             nonlocal global_id, dialogue_buffer
-            # در حالتِ فقط-پاکسازی ترجمه‌ای در کار نیست؛ اگر صف
-            # ساخته شود pending_by_page هرگز صفر نمیشود و صفحه‌ها
-            # تا «آخرِ کار» در نمایش زنده نمی‌آیند.
             if getattr(self, "clean_only", False):
                 return
             if not regions:
@@ -2092,9 +2087,6 @@ class _MangaTranslatorBody_95:
                 with _qd_lock:
                     _qd_inflight.add(page_i)
                 extracted_map[page_i] = (out_file, image, None, regions, dbg)
-                # دیباگِ همان لحظه: هم‌زمان با استخراجِ هر صفحه، تصویرِ
-                # دیباگش (کادرهای تشخیص روی عکسِ اصلی) داخل نمایش زنده
-                # می‌افتد — بی‌آنکه بقیهٔ مراحل (پاکسازی/ترجمه) تمام شود.
                 if getattr(self, "debug", False) and dbg is not None:
                     try:
                         _live_dump(dbg, dbg=True, slot=page_i + 1)
@@ -2530,7 +2522,6 @@ class _MangaTranslatorBody_95:
                         pass
                 _pgs_ch.sort(key=MangaTranslator._natural_sort_key)
                 _final_pages.extend(_pgs_ch)
-            # نوارِ مشترک بین دو فصل فقط یک‌بار در خروجی بیاید
             _seen_fpg: set = set()
             _dedup_fpg: List[str] = []
             for _fpg in _final_pages:

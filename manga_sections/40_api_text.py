@@ -1121,9 +1121,6 @@ def _live_dump(src, dbg: bool = False, key: Optional[str] = None,
                 _write_live_now(img, d, int(slot), key, slot_new, dbg)
             else:
                 _slot = int(slot)
-                # ovl/base را هم همراهِ صف ببر — وگرنه تصویرِ دیباگِ
-                # slotهای بی‌ترتیب (استخراجِ موازی) فایلِ _base.jpg و
-                # .json لازم برای نمایشِ زندهٔ دیباگ را از دست میداد.
                 _ovl_q = getattr(img, "ovl", None)
                 _base_q = getattr(img, "base", None)
                 if isinstance(src, str):
