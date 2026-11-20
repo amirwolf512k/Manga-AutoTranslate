@@ -447,6 +447,10 @@ class _MangaTranslatorBody_70:
             return "", [], [], []
         crop0 = image_bgr[y1:y2, x1:x2]
         ch0, cw0 = crop0.shape[:2]
+        if os.environ.get("MANGA_DBG_CROP"):
+            print(f"    [DBG-CROP] rect={tuple(int(v) for v in rect)} "
+                  f"crop=({x1},{y1},{x2},{y2}) {cw0}x{ch0} "
+                  f"blocks={block_rects}", flush=True)
 
         try:
             _sk = self._estimate_skew_angle(crop0)
@@ -481,6 +485,8 @@ class _MangaTranslatorBody_70:
                 return "", [], 0.0, []
             if not results or not results[0]:
                 return "", [], 0.0, []
+            if os.environ.get("MANGA_DBG_CROP"):
+                print(f"    [DBG-OCR] raw-lines={[(str(l[1][0])[:28], round(float(l[1][1]), 2)) for l in results[0] if isinstance(l, (list, tuple)) and len(l) >= 2 and isinstance(l[1], (list, tuple))]}", flush=True)
             lines, polys, confs, entries = [], [], [], []
             for line in results[0]:
                 try:

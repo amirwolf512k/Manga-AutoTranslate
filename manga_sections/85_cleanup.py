@@ -132,6 +132,11 @@ class _MangaTranslatorBody_85:
             "tiny", "piece", "way", "need", "want", "money", "carry", "dream",
             "found", "single", "league", "hand", "look", "part",
             "tokyo", "hokkaido", "meiji", "nuggets", "flakes", "prospectors",
+            # توقفِ بی‌واکلِ واقعیِ انگلیسی — پیش از این «HMPH.» بی‌واکه
+            # بود و sfx شمرده میشد (نه پاک میشد نه ترجمه):
+            "hmph", "hmpf", "pfft", "pff", "tsk", "grr", "grrr",
+            "brr", "brrr", "psst", "shh", "shhh", "mph", "ngh",
+            "hm", "hmm", "mm", "mmm", "err", "errm", "hmph.", "hmph!",
         }
 
         core = re.sub(r"[!?.…~\-]+$", "", low_full).strip()
@@ -241,6 +246,13 @@ class _MangaTranslatorBody_85:
         if len(stripped) <= 12 and SFX_WORD_RE.match(stripped):
             if core not in dialogue_short and alpha_only.lower() not in dialogue_short:
                 return "sfx"
+        if has_cjk:
+            # متنِ چینی/ژاپنی داخلِ جعبهٔ detector = دیالوگ است؛
+            # هیوریستیکِ «بدونِ واکه» برایِ لاتین است (HMPH و مانندش)
+            # و متنِ CJK را — که اصلاً واکهٔ لاتین ندارد — به‌اشتباه sfx
+            # میکرد؛ نتیجه: «护盾带了吗؟» و «どうする؟» پاک و ترجمه
+            # نمیشدند و متنِ اصلی سرِ جایش میماند.
+            return "dialogue"
         if 4 <= len(stripped) <= 24:
             _rep = re.search(r"([a-zA-Z])\1{2,}", stripped)
             _vowrun = re.search(r"[aeiouAEIOU]{3,}", stripped)
@@ -2167,6 +2179,23 @@ class _MangaTranslatorBody_85:
                                       flush=True)
                             kept |= _cm2
                             continue
+                    if _pm_ok:
+                        # قطعهٔ درشتِ «متن + لبهٔ جعبه» (کپشنِ متوازی‌الأضلاع
+                        # مثلِ TO BE CONTINUED): لبه‌های موربِ جعبه با
+                        # حروف پیوند میخورند و یک مؤلفهٔ بزرگِ «هنر»
+                        # ساخته میشود؛ ردِ کامل → fallbackِ block-rect
+                        # کلِ جعبه را به LaMa میداد و جعبهٔ سفید سیاه
+                        # میشد. فقطِ بخشِ داخلِ poly (همان حروف) را نگه
+                        # دار — محافظه‌کارانه‌تر از fallback است.
+                        _cm2 = (lal == ci)
+                        _in_px = int(np.count_nonzero(_cm2 & (_pm > 0)))
+                        if _in_px >= 30:
+                            if dbg:
+                                print(f"      [📐dbg] قطعهٔ درشت — فقطِ "
+                                      f"حروفِ درپالی ({_in_px}/{ca})",
+                                      flush=True)
+                            kept |= (_cm2 & (_pm > 0))
+                            continue
                     if dbg:
                         print(f"      [📐dbg] رد: قطعهٔ هنر ca={ca} "
                               f"{cwd}×{chg}", flush=True)
@@ -3855,6 +3884,65 @@ class _MangaTranslatorBody_85:
                 return None
             out = crop_img.copy()
             out[m] = np.clip(med, 0, 255).astype(np.uint8)
+            return out
+        except Exception:
+            return None
+
+    @staticmethod
+    def _bright_island_fill(crop_img: np.ndarray,
+                            crop_msk: np.ndarray
+                            ) -> Optional[np.ndarray]:
+        """جعبهٔ کپشنِ روشن روی زمینهٔ تیره (TO BE CONTINUED و مانندش):
+        حلقهٔ ۹px معمول آمیخته از سفیدِ جعبه و تیرهٔ پیرامون است، پس
+        مسیرهای حلقه‌ای رد میشوند و LaMa با بافتِ تیره جعبه را سیاه
+        پر میکند. اینجا: خوشهٔ روشنِ غالبِ داخلِ برش (زمینهٔ خودِ
+        جعبه) باید «یکپارچه» باشد — بزرگ‌ترین مؤلفهٔ روشن ≥۵۵٪ کلِ
+        روشنیها (داخلِ پیوستهٔ جعبه، نه خطوطِ پراکندهٔ متنِ سفیدِ
+        جعبهٔ سیاه: آنجا نسبت ~۰٫۱ است)."""
+        try:
+            m = crop_msk > 0
+            if not m.any():
+                return None
+            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            h, w = g.shape
+            if h < 16 or w < 16:
+                return None
+            inner = np.zeros((h, w), bool)
+            _mg = 2
+            inner[_mg:h - _mg, _mg:w - _mg] = True
+            n_inner = int(np.count_nonzero(inner))
+            if n_inner < 1:
+                return None
+            cand0 = inner & (g >= 190.0)
+            if int(np.count_nonzero(cand0)) < 250:
+                return None
+            med0 = np.median(crop_img[cand0].astype(np.int16), axis=0)
+            d0 = np.abs(crop_img[cand0].astype(np.int16)
+                        - med0[None, :]).max(axis=1)
+            # خوشهٔ روشنِ غالب: فقط پیکسلهای نزدیکِ میانگینِ اولیه —
+            # خطوطِ روشنِ اسکرین‌تونِ تیره (۲۰۰-۲۳۰) جدا میمانند.
+            near0 = np.zeros((h, w), bool)
+            _idx = np.nonzero(cand0)
+            near0[_idx] = (d0 <= 18.0)
+            n_near = int(np.count_nonzero(near0))
+            if n_near < 250:
+                return None
+            if n_near < 0.22 * n_inner:
+                return None
+            # یکپارچگی: بزرگ‌ترین مؤلفهٔ روشن باید عمدهٔ روشنیها باشد
+            # (زمینهٔ پیوستهٔ جعبه)؛ متنِ سفیدِ پراکنده رد میشود.
+            try:
+                _nb, _lb, _sb, _ = cv2.connectedComponentsWithStats(
+                    near0.astype(np.uint8), 8)
+                _largest = max((int(_sb[_i, cv2.CC_STAT_AREA])
+                                for _i in range(1, _nb)), default=0)
+                if _largest < 0.55 * n_near:
+                    return None
+            except Exception:
+                return None
+            med = np.median(crop_img[near0].astype(np.int16), axis=0)
+            out = crop_img.copy()
+            out[m] = np.clip(np.rint(med), 0, 255).astype(np.uint8)
             return out
         except Exception:
             return None
@@ -8306,6 +8394,20 @@ class _MangaTranslatorBody_85:
                             if _zvDR.size < 40 \
                                     or float((_zvDR >= 170).mean()) < 0.35:
                                 continue
+                            # جزیرهٔ روشن (جعبهٔ کپشنِ سفید روی تیره):
+                            # خودِ خط روی زمینهٔ روشن نشسته — تیرگیِ
+                            # حلقه از بیرونِ جعبه میآید نه از زمینه؛
+                            # رنگ‌کردن با تیره = سیاه‌کردنِ جعبه
+                            # (باگِ TO BE CONTINUED).
+                            try:
+                                _ogDR = _oG[_by0:_by1,
+                                            _bx0:_bx1][_zcDR]
+                                if _ogDR.size >= 40 \
+                                        and float((_ogDR >= 170).mean()) \
+                                        >= 0.40:
+                                    continue
+                            except Exception:
+                                pass
                             _dkDR = _rbDR \
                                 & (_oG[_by0:_by1, _bx0:_bx1] < 110)
                             if int(_dkDR.sum()) < 30:
@@ -8951,6 +9053,20 @@ class _MangaTranslatorBody_85:
                                 continue
                     except Exception:
                         pass
+                    # جعبهٔ سفیدِ کپشن روی زمینهٔ تیره (TO BE CONTINUED):
+                    # خودِ نوار روی «جزیرهٔ روشن» نشسته — محتوای اصلیِ
+                    # زیرِ نوار ≥۵۰٪ روشن است ولی حلقه و نمونه‌های کناری
+                    # (اسکرین‌تونِ بیرونِ جعبه) تیرهاند؛ نجات با رنگِ
+                    # کناریِ تیره فقط جعبهٔ سفید را سیاه میکرد.
+                    # پرِ سفیدِ تخت اینجا «واقعی» است → دست نزن.
+                    # (متنِ سفید روی جعبهٔ سیاه ~۲۵-۳۵٪ روشن است و
+                    # همچنان نجات میشود؛ مرزِ امن = ۰٫۵۰)
+                    try:
+                        _subL = _of[_y0:_y1, _x0:_x1][_sub].mean(axis=1)
+                        if float((_subL >= 180.0).mean()) >= 0.50:
+                            continue
+                    except Exception:
+                        pass
                     _fill = out[_y0:_y1, _x0:_x1][_sub]
                     if float((_fill.min(axis=1) >= 244).mean()) < 0.60:
                         continue
@@ -9056,6 +9172,25 @@ class _MangaTranslatorBody_85:
                         if _lc is None:
                             _lc = _rc
                         elif _rc is not None:
+                            # ردیف روی جزیرهٔ روشن (جعبهٔ سفید روی
+                            # زمینهٔ تیره): پیکسلهای روشنِ خودِ ردیف
+                            # میگویند زمینه سفید است؛ نمونهٔ کناری از
+                            # بیرونِ جعبه (تیره) آمده → رنگِ تیره ممنوع.
+                            try:
+                                _bfew = _o_row[_lum_r >= 170.0]
+                                if _bfew.shape[0] >= 2:
+                                    _bfm = float(np.median(
+                                        _bfew.mean(axis=1)))
+                                    _sl2 = float(_lc.mean()) \
+                                        if _lc is not None else -1.0
+                                    _sr2 = float(_rc.mean()) \
+                                        if _rc is not None else -1.0
+                                    if _bfm >= 215.0 \
+                                            and max(_sl2, _sr2) \
+                                            < _bfm - 60.0:
+                                        continue
+                            except Exception:
+                                pass
                             _t = ((_cols - _cols.min())
                                   / max(1.0, float(_cols.max()
                                                    - _cols.min())))
@@ -9908,6 +10043,9 @@ class _MangaTranslatorBody_85:
                                     pass
                     except Exception:
                         pass
+            if os.environ.get("MANGA_CF_DBG"):
+                print(f"  [CF] cluster@({bx0},{by0}) {bx1-bx0}x{by1-by0} "
+                      f"ok_flat={_ok_flat} q_lama={_q_lama}", flush=True)
             _force_lama = False
             if _q_lama:
                 try:
@@ -9962,6 +10100,28 @@ class _MangaTranslatorBody_85:
                 _keep_flat = False
                 if result is None and not _q_lama:
                     result = self._flat_fill_cluster(crop_img, crop_msk)
+                if result is None and _q_lama:
+                    # جعبهٔ کپشنِ روشن روی زمینهٔ تیره (TO BE CONTINUED):
+                    # حلقهٔ دورِ خوشه آمیخته است (سفیدِ جعبه + تیرهٔ
+                    # پیرامون) پس مسیرهای حلقه‌ای رد میشوند و LaMa با
+                    # بافتِ تیرهٔ پیرامون جعبه را سیاه پر میکند؛
+                    # زمینهٔ روشنِ خودِ جعبه غالب و یکدست است →
+                    # پرِ تخت از خودِ جعبه.
+                    try:
+                        _gif = MangaTranslator._bright_island_fill(
+                            crop_img, crop_msk)
+                        if _gif is not None:
+                            result = _gif
+                            _keep_flat = True
+                            if self.debug:
+                                try:
+                                    print(f"  [⚡]جزیرهٔ روشن → پرِ تخت از "
+                                          f"زمینهٔ خودِ جعبه "
+                                          f"@({cx0},{cy0})")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
                 if result is None and _q_lama:
                     # بلوکِ بزرگِ متنی با سایهٔ نرمِ دورِ حروف (عنوانِ
                     # فصل): حلقهٔ ۵-۹px یکدست نیست ولی شکافهای دور از
@@ -10039,6 +10199,10 @@ class _MangaTranslatorBody_85:
                         and self._bg_is_textured(crop_img, crop_msk,
                                                  strong=True)):
                     result = None
+            if os.environ.get("MANGA_CF_DBG"):
+                print(f"  [CF] → cluster@({bx0},{by0}) method={method} "
+                      f"result={'yes' if result is not None else 'NONE'}",
+                      flush=True)
             return [cx0, cy0, cx1, cy1, crop_msk, result, method]
 
         _fill_w = 1
