@@ -1641,6 +1641,11 @@ class _MangaTranslatorBody_95:
                 _prev_busy.release()
 
         def _preview_ready_pages_run() -> None:
+            # پیش‌نمایشِ ترجمه‌دار برای حالتِ فقط-پاکسازی معنا ندارد؛
+            # در آن حالت صفحه‌ها از مسیرِ finish (پاکسازی + دیباگ) زنده
+            # می‌آیند.
+            if getattr(self, "clean_only", False):
+                return
             for page_i in sorted(list(extracted_map.keys())):
                 if page_i in finished_pages:
                     continue
@@ -1687,6 +1692,11 @@ class _MangaTranslatorBody_95:
 
         def _queue_dialogues(regions: List[TextRegion], page_i: int) -> None:
             nonlocal global_id, dialogue_buffer
+            # در حالتِ فقط-پاکسازی ترجمه‌ای در کار نیست؛ اگر صف
+            # ساخته شود pending_by_page هرگز صفر نمیشود و صفحه‌ها
+            # تا «آخرِ کار» در نمایش زنده نمی‌آیند.
+            if getattr(self, "clean_only", False):
+                return
             if not regions:
                 return
             queued = 0
@@ -2074,6 +2084,14 @@ class _MangaTranslatorBody_95:
                 with _qd_lock:
                     _qd_inflight.add(page_i)
                 extracted_map[page_i] = (out_file, image, None, regions, dbg)
+                # دیباگِ همان لحظه: هم‌زمان با استخراجِ هر صفحه، تصویرِ
+                # دیباگش (کادرهای تشخیص روی عکسِ اصلی) داخل نمایش زنده
+                # می‌افتد — بی‌آنکه بقیهٔ مراحل (پاکسازی/ترجمه) تمام شود.
+                if getattr(self, "debug", False) and dbg is not None:
+                    try:
+                        _live_dump(dbg, dbg=True, slot=page_i + 1)
+                    except Exception:
+                        pass
                 try:
                     if image is not None and regions:
                         try:

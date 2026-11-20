@@ -1121,24 +1121,54 @@ def _live_dump(src, dbg: bool = False, key: Optional[str] = None,
                 _write_live_now(img, d, int(slot), key, slot_new, dbg)
             else:
                 _slot = int(slot)
+                # ovl/base را هم همراهِ صف ببر — وگرنه تصویرِ دیباگِ
+                # slotهای بی‌ترتیب (استخراجِ موازی) فایلِ _base.jpg و
+                # .json لازم برای نمایشِ زندهٔ دیباگ را از دست میداد.
+                _ovl_q = getattr(img, "ovl", None)
+                _base_q = getattr(img, "base", None)
                 if isinstance(src, str):
                     _pl = {"kind": "path", "data": src, "key": key,
-                           "slot_new": slot_new, "dbg": dbg}
+                           "slot_new": slot_new, "dbg": dbg,
+                           "ovl": _ovl_q}
                 else:
                     try:
                         _ok, _buf = cv2.imencode(
                             ".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, 86])
                         _pl = ({"kind": "bytes", "data": _buf, "key": key,
-                                "slot_new": slot_new, "dbg": dbg}
+                                "slot_new": slot_new, "dbg": dbg,
+                                "ovl": _ovl_q}
                                if _ok else None)
                     except Exception:
                         _pl = None
+                if (_pl is not None and dbg and _ovl_q is not None
+                        and _base_q is not None):
+                    try:
+                        _ok2, _bbuf = cv2.imencode(
+                            ".jpg", _base_q, [cv2.IMWRITE_JPEG_QUALITY, 86])
+                        if _ok2:
+                            _pl["base_buf"] = _bbuf
+                    except Exception:
+                        pass
                 if _pl is not None:
                     st["pending"][_slot] = _pl
                 while st["next"] in st["pending"]:
                     _pl2 = st["pending"].pop(st["next"])
                     _img2 = _live_payload_load(_pl2)
                     if _img2 is not None:
+                        if bool(_pl2.get("dbg")):
+                            _ovl2 = _pl2.get("ovl")
+                            _bb2 = _pl2.get("base_buf")
+                            if _ovl2 is not None and _bb2 is not None:
+                                try:
+                                    _bs2 = cv2.imdecode(
+                                        _bb2, cv2.IMREAD_COLOR)
+                                    if _bs2 is not None:
+                                        _v2 = _img2.view(_DebugPageVis)
+                                        _v2.ovl = _ovl2
+                                        _v2.base = _bs2
+                                        _img2 = _v2
+                                except Exception:
+                                    pass
                         _write_live_now(_img2, d, st["next"],
                                         _pl2.get("key"),
                                         bool(_pl2.get("slot_new")),

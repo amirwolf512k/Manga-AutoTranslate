@@ -3412,6 +3412,85 @@ def _browser_extract_js() -> str:
                      "true" if _web_host() else "false"))
 
 
+def _prov_keys_js() -> str:
+    # کلیدِ API هر provider (gemini / custom) جداگانه در localStorage
+    # مرورگر میماند؛ با برگشتن به همان provider دوباره پر میشود —
+    # دیگر با سوییچ‌کردن مدل و برگشت، کلید پاک نمی‌شود.
+    return """() => {
+  if (window.__mangaProvKeysInit) return [];
+  window.__mangaProvKeysInit = true;
+  const MAP = "manga_prov_keys_v1";
+  const provEl = () => document.querySelector(
+    "#manga_provider_row input, #manga_provider_row select, #manga_provider_row textarea");
+  const keyEl = () => {
+    const root = document.getElementById("manga_api_keys");
+    if (!root) return null;
+    return root.querySelector("input, textarea") || null;
+  };
+  const setVal = (el, s) => {
+    try {
+      const proto = (el.tagName === "TEXTAREA")
+        ? window.HTMLTextAreaElement.prototype
+        : window.HTMLInputElement.prototype;
+      const desc = Object.getOwnPropertyDescriptor(proto, "value");
+      if (desc && desc.set) desc.set.call(el, s); else el.value = s;
+    } catch (e) { el.value = s; }
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    el.dispatchEvent(new Event("change", { bubbles: true }));
+  };
+  const loadMap = () => {
+    try { return JSON.parse(localStorage.getItem(MAP) || "{}") || {}; }
+    catch (e) { return {}; }
+  };
+  const saveMap = (m) => {
+    try { localStorage.setItem(MAP, JSON.stringify(m)); } catch (e) {}
+  };
+  const curProv = () => {
+    const pe = provEl();
+    return pe ? String(pe.value || "").trim() : "";
+  };
+  if (!window.__mangaLastProv) window.__mangaLastProv = curProv();
+  const onChange = (ev) => {
+    try {
+      const t = ev.target;
+      if (!t || !t.closest || !t.closest("#manga_provider_row")) return;
+      const np = String(t.value || "").trim();
+      const lp = String(window.__mangaLastProv || "").trim();
+      if (!np || np === lp) return;
+      const kel = keyEl();
+      const cur = kel ? String(kel.value || "").trim() : "";
+      const m = loadMap();
+      if (lp === "gemini" || lp === "custom") {
+        if (cur) m[lp] = cur; else delete m[lp];
+        saveMap(m);
+      }
+      window.__mangaLastProv = np;
+      if ((np === "gemini" || np === "custom") && kel) {
+        const saved = String(m[np] || "").trim();
+        if (saved) setVal(kel, saved);
+      }
+    } catch (e) {}
+  };
+  document.addEventListener("change", onChange, true);
+  setInterval(() => {
+    try {
+      const p = curProv();
+      if (p !== "gemini" && p !== "custom") return;
+      const kel = keyEl();
+      const k = kel ? String(kel.value || "").trim() : "";
+      if (!k) return;
+      const m = loadMap();
+      if (m[p] !== k) { m[p] = k; saveMap(m); }
+    } catch (e) {}
+  }, 4000);
+  [300, 900, 2000, 4000].forEach((t) => setTimeout(() => {
+    if (!window.__mangaLastProv) window.__mangaLastProv = curProv();
+  }, t));
+  return [];
+}
+"""
+
+
 def _dark_js_src() -> str:
     return """() => {
   document.body.classList.add('dark');
@@ -3691,7 +3770,7 @@ def run_web():
 <title>نمایش</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
-html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}
+html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none;touch-action:pan-y}
 .bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:9px 12px;background:#0c0c0e;border-bottom:1px solid #232326;direction:rtl;position:sticky;top:0;z-index:10;transform:translateZ(0);backface-visibility:hidden;will-change:transform}
 .dot{width:9px;height:9px;border-radius:50%;background:#ff4a3d;animation:p 1.2s infinite;flex:none}
 .dot.off{background:#2e7d4f;animation:none}
@@ -4739,9 +4818,22 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       }
     };
     if (mode) {
-      fetch(bakedSrc(a), { method: 'HEAD', cache: 'no-store' })
-        .then(function(r){ done(r.ok); })
-        .catch(function(){ done(false); });
+      // در حالتِ دیباگ، اول تصویرِ دیباگِ همان صفحه چک میشود —
+      // تا هم‌زمان با استخراج (قبل از پایانِ کل کار) دیده شود؛
+      // اگر نبود، تصویرِ نهایی (baked) به‌عنوان جایگزین.
+      fetch(P + DBG + 'live_' + pad(a + 1) + '_base.jpg',
+            { method: 'HEAD', cache: 'no-store' })
+        .then(function(r){
+          if (r.ok) { done(true); return; }
+          fetch(bakedSrc(a), { method: 'HEAD', cache: 'no-store' })
+            .then(function(r2){ done(r2.ok); })
+            .catch(function(){ done(false); });
+        })
+        .catch(function(){
+          fetch(bakedSrc(a), { method: 'HEAD', cache: 'no-store' })
+            .then(function(r2){ done(r2.ok); })
+            .catch(function(){ done(false); });
+        });
     } else {
       fetch(sliceMark(a) + '?r=' + Date.now(), { cache: 'no-store' })
         .then(function(r){
@@ -4963,16 +5055,18 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   var wrap = document.getElementById('wrap');
   var z = 1;
   var baseW = function(){ return Math.max(200, Math.min(900, window.innerWidth || 360)); };
-  var applyZoom = function(nz){
+  var applyZoom = function(nz, cx, cy){
     nz = Math.min(4, Math.max(0.5, +nz || 1));
-    var midY = window.innerHeight / 2;
-    var relY = (window.scrollY + midY) / Math.max(0.01, z);
+    var sx = (typeof cx === 'number') ? cx : (window.innerWidth / 2);
+    var sy = (typeof cy === 'number') ? cy : (window.innerHeight / 2);
+    var relX = (window.scrollX + sx) / Math.max(0.01, z);
+    var relY = (window.scrollY + sy) / Math.max(0.01, z);
     z = nz;
     wrap.style.maxWidth = 'none';
     wrap.style.width = Math.round(baseW() * z) + 'px';
     wrap.style.marginLeft = 'auto';
     wrap.style.marginRight = 'auto';
-    window.scrollTo(0, Math.max(0, relY * z - midY));
+    window.scrollTo(Math.max(0, relX * z - sx), Math.max(0, relY * z - sy));
     if (zv) zv.textContent = Math.round(z * 100) + '%';
   };
   var zi = document.getElementById('zi'), zo = document.getElementById('zo'),
@@ -4983,12 +5077,74 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   window.addEventListener('wheel', function(e){
     if (!e.ctrlKey && !e.metaKey) return;
     e.preventDefault();
-    applyZoom(z * (e.deltaY < 0 ? 1.12 : 1 / 1.12));
+    applyZoom(z * (e.deltaY < 0 ? 1.12 : 1 / 1.12), e.clientX, e.clientY);
   }, { passive: false });
   document.addEventListener('keydown', function(e){
     if (e.key === '+' || e.key === '=') applyZoom(z * 1.15);
     else if (e.key === '-' || e.key === '_') applyZoom(z * 0.87);
     else if (e.key === '0') applyZoom(1);
+  });
+  // زومِ لمسی (اندروید/موبایل): دوانگشت = زوم، یک‌انگشت وقتی زوم
+  // است = جابه‌جایی، دوضربه = زومِ روشن/خاموش — با touch-action:pan-y
+  // روی body، مرورگر ژستِ pinch را به دستِ همین کد میسپارد.
+  var pinch = null, pan = null, lastTapT = 0, lastTapX = 0, lastTapY = 0;
+  var tDist = function(a, b){ return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); };
+  var tMid = function(a, b){ return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 }; };
+  var tapOnCtl = function(t){
+    try { return !!(t && t.closest && t.closest('button, a, input, select, textarea, .zbtn, .fbtn')); }
+    catch (e) { return false; }
+  };
+  document.addEventListener('touchstart', function(e){
+    if (e.touches.length === 2) {
+      pinch = { startDist: tDist(e.touches[0], e.touches[1]), startZ: z };
+      pan = null;
+    } else if (e.touches.length === 1) {
+      pan = { x: e.touches[0].clientX, y: e.touches[0].clientY,
+              sl: window.scrollX, st: window.scrollY, moved: false };
+    }
+  }, { passive: true });
+  document.addEventListener('touchmove', function(e){
+    if (pinch && e.touches.length === 2) {
+      e.preventDefault();
+      var d = tDist(e.touches[0], e.touches[1]);
+      var m = tMid(e.touches[0], e.touches[1]);
+      applyZoom(pinch.startZ * (d / Math.max(1, pinch.startDist)), m.x, m.y);
+    } else if (pan && e.touches.length === 1) {
+      var t = e.touches[0];
+      if (Math.abs(t.clientX - pan.x) > 12 || Math.abs(t.clientY - pan.y) > 12)
+        pan.moved = true;
+      if (z > 1.05) {
+        e.preventDefault();
+        window.scrollTo(pan.sl - (t.clientX - pan.x),
+                        pan.st - (t.clientY - pan.y));
+      }
+    }
+  }, { passive: false });
+  document.addEventListener('touchend', function(e){
+    if (e.touches.length < 2) pinch = null;
+    if (e.touches.length === 0) {
+      var ct = (e.changedTouches && e.changedTouches[0]) || null;
+      if (pan && !pan.moved && ct && !tapOnCtl(ct.target)) {
+        var now = Date.now();
+        if (now - lastTapT <= 320
+            && Math.abs(ct.clientX - lastTapX) < 44
+            && Math.abs(ct.clientY - lastTapY) < 44) {
+          if (z > 1.3) applyZoom(1, ct.clientX, ct.clientY);
+          else applyZoom(2.2, ct.clientX, ct.clientY);
+          lastTapT = 0;
+        } else {
+          lastTapT = now; lastTapX = ct.clientX; lastTapY = ct.clientY;
+        }
+      }
+      pan = null;
+    }
+  });
+  document.addEventListener('touchcancel', function(){ pinch = null; pan = null; });
+  window.addEventListener('dblclick', function(e){
+    if (tapOnCtl(e.target)) return;
+    e.preventDefault();
+    if (z > 1.3) applyZoom(1, e.clientX, e.clientY);
+    else applyZoom(2.2, e.clientX, e.clientY);
   });
   var updateProgress = function(){
     if (!pf) return;
@@ -5711,7 +5867,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             "@keyframes rtryS{to{transform:rotate(360deg)}}"
             "*{box-sizing:border-box;margin:0;padding:0}"
             "html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans-serif;"
-            "overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none}"
+            "overscroll-behavior-y:contain;-webkit-user-select:none;user-select:none;touch-action:pan-y}",
             ".rdr{background:#000;direction:ltr}"
             ".rdr-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:8px 10px;"
             "background:#0c0c0e;border-bottom:1px solid #232326;position:sticky;top:0;"
@@ -6246,16 +6402,20 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     if (z > 1.3) setZoom(1);
     else zoomBy(2.2, e.clientX, e.clientY);
   });
-  let pinch = null, pan = null;
+  let pinch = null, pan = null, lastTap = 0, lastTapX = 0, lastTapY = 0;
   const dist = (a, b) => Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY);
   const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
+  const tapOnCtl = (t) => {
+    try { return !!(t && t.closest && t.closest('button, a, input, select, textarea, .rdr-btn')); }
+    catch (err) { return false; }
+  };
   document.addEventListener('touchstart', (e) => {
     if (e.touches.length === 2) {
       pinch = { startDist: dist(e.touches[0], e.touches[1]), startZ: z };
       pan = null;
     } else if (e.touches.length === 1) {
       pan = { x: e.touches[0].clientX, y: e.touches[0].clientY,
-              sl: window.scrollX, st: window.scrollY };
+              sl: window.scrollX, st: window.scrollY, moved: false };
     }
   }, { passive: true });
   document.addEventListener('touchmove', (e) => {
@@ -6264,15 +6424,34 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       const d = dist(e.touches[0], e.touches[1]);
       const m = mid(e.touches[0], e.touches[1]);
       applyZoom(pinch.startZ * (d / Math.max(1, pinch.startDist)), m.x, m.y);
-    } else if (pan && e.touches.length === 1 && z > 1.05) {
-      e.preventDefault();
-      const t = e.touches[0];
-      window.scrollTo(pan.sl - (t.clientX - pan.x), pan.st - (t.clientY - pan.y));
+    } else if (pan && e.touches.length === 1) {
+      const t1 = e.touches[0];
+      if (Math.abs(t1.clientX - pan.x) > 12 || Math.abs(t1.clientY - pan.y) > 12)
+        pan.moved = true;
+      if (z > 1.05) {
+        e.preventDefault();
+        window.scrollTo(pan.sl - (t1.clientX - pan.x), pan.st - (t1.clientY - pan.y));
+      }
     }
   }, { passive: false });
   document.addEventListener('touchend', (e) => {
     if (e.touches.length < 2) pinch = null;
-    if (e.touches.length === 0) pan = null;
+    if (e.touches.length === 0) {
+      const ct = (e.changedTouches && e.changedTouches[0]) || null;
+      if (pan && !pan.moved && ct && !tapOnCtl(ct.target)) {
+        const now = Date.now();
+        if (now - lastTap <= 320
+            && Math.abs(ct.clientX - lastTapX) < 44
+            && Math.abs(ct.clientY - lastTapY) < 44) {
+          if (z > 1.3) setZoom(1);
+          else zoomBy(2.2, ct.clientX, ct.clientY);
+          lastTap = 0;
+        } else {
+          lastTap = now; lastTapX = ct.clientX; lastTapY = ct.clientY;
+        }
+      }
+      pan = null;
+    }
   });
   document.addEventListener('touchcancel', () => { pinch = null; pan = null; });
   const updateProgress = () => {
@@ -11296,6 +11475,14 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
         except Exception:
             try:
                 demo.load(js=_browser_extract_js())
+            except Exception:
+                pass
+
+        try:
+            demo.load(None, None, None, js=_prov_keys_js())
+        except Exception:
+            try:
+                demo.load(js=_prov_keys_js())
             except Exception:
                 pass
 
