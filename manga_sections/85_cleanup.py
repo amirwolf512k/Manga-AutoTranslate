@@ -9733,6 +9733,26 @@ class _MangaTranslatorBody_85:
                 _ok_flat = (_cb_area <= 0.0035 * _pg_area
                             and (bx1 - bx0) <= 0.30 * _pg_w
                             and (by1 - by0) <= 0.22 * _pg_h)
+                if not _ok_flat:
+                    # عنوانِ فصل و بلوکِ بزرگِ متن روی زمینهٔ یکدست:
+                    # LaMa روی ماسکِ بزرگ، خاکستریِ لکه‌ای میسازد؛ اگر
+                    # حلقهٔ دورِ خوشه خیلی تخت است، پرِ تخت مجاز است.
+                    try:
+                        _rfb = MangaTranslator._ring_flat_stats(
+                            crop_img, crop_msk, band=18)
+                        if _rfb is not None and _rfb[1] <= 10.0:
+                            _ok_flat = ((bx1 - bx0) <= 0.85 * _pg_w
+                                        and (by1 - by0) <= 0.22 * _pg_h)
+                            if self.debug:
+                                try:
+                                    print(f"  [⚡]خوشهٔ بزرگ با حلقهٔ تخت "
+                                          f"(med={_rfb[0]:.0f} "
+                                          f"std={_rfb[1]:.0f}) → پرِ تخت "
+                                          f"بهجایِ LaMa @({cx0},{cy0})")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
             _force_lama = False
             if _q_lama:
                 try:
