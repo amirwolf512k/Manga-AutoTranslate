@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.358"
+APP_VER = "1.14.359"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -3785,7 +3785,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 #wrap{max-width:min(100%,900px);margin:0 auto;width:100%}
 .c{position:relative;width:100%}
 .c.hide{display:none}
-.c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none;content-visibility:auto;contain-intrinsic-size:auto 1200px}
+.c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none}/* content-visibility:auto حذف شد: تصویرِ دیده‌نشده با ارتفاعِ غلطِ ۱۲۰۰px چیده می‌شد و وقت ورود به دید می‌پرید — عاملِ «هی می‌پره میاد» و لگِ زوم */
 .slotw{width:100%}
 .slotw img{background:#0b0b0d}
 .dslot{position:relative;width:100%}
@@ -4295,11 +4295,35 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     });
   }
 
+  // نسبتِ واقعیِ صفحه از اولین تصویرِ لودشده یاد گرفته میشود و روی
+  // placeholderهای بعدی اعمال میشود — وگرنه placeholder با نسبتِ ثابتِ
+  // ۲:3 جایگزینِ تصویرِ واقعی می‌شد و محتوای زیرش با هر استخراج جابه‌جا
+  // می‌شد (همان «هی می‌پره»). صفحاتِ یک فصل معمولاً هم‌نسبت‌اند.
+  var phAR = '';
+  function phApply(d){
+    if (phAR) { try { d.style.aspectRatio = phAR; } catch (e) {} }
+  }
   function mkPh(){
     var d = document.createElement('div');
     d.className = 'ph';
+    phApply(d);
     d.innerHTML = '<span class="sp"></span>' + UT('rdr.translating', 'در حال ترجمه…');
     return d;
+  }
+  function learnAR(node){
+    try {
+      if (phAR || !node) return;
+      if (node.classList && node.classList.contains('slotw')) return;
+      var im = (node.tagName === 'IMG') ? node
+        : (node.querySelector ? node.querySelector('img') : null);
+      if (!im || im.naturalWidth < 2 || im.naturalHeight < 2) return;
+      phAR = im.naturalWidth + '/' + im.naturalHeight;
+      var cs = [cF, cD];
+      for (var ci = 0; ci < cs.length; ci++) {
+        var phs = cs[ci].querySelectorAll('.ph');
+        for (var pi = 0; pi < phs.length; pi++) phApply(phs[pi]);
+      }
+    } catch (e) {}
   }
   var SVGNS = 'http://www.w3.org/2000/svg';
   function svgEl(t, at){
@@ -4404,6 +4428,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       if (ok && c2 === cur) {
         cont.replaceChild(node, cur);
         node.__ok = 1;
+        learnAR(node);
         if (dbg) ensureOvl(i + 1);
       } else if (!ok) {
         cur.__pend = 0;
@@ -4984,11 +5009,25 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                   else { im.src = u; }
                 })
                 .catch(function(){});
-              ovlMem.delete(P + DBG + 'live_' + pad(slot) + '.json');
-              var svgs = el.querySelectorAll('svg.dovl');
-              for (var si = 0; si < svgs.length; si++)
-                if (svgs[si].parentNode === el) el.removeChild(svgs[si]);
-              (function(s2){ setTimeout(function(){ ensureOvl(s2); }, 450); })(slot);
+              // تعویضِ اتمیِ اورلی: قبلاً svgها بلافاصله حذف و ۴۵۰ms بعد
+              // دوباره ساخته می‌شدند — با هر استخراج، کادرهای دیباگ محو و
+              // برمی‌گشتند («می‌ره میاد»). حالا اورلیِ تازه وقتی می‌آید که
+              // json آماده است و در همان لحظه جایگزین می‌شود — بدون خلأ.
+              var ojU = P + DBG + 'live_' + pad(slot) + '.json';
+              ovlMem.delete(ojU);
+              (function(el2, u2){
+                var tries = 0;
+                var go = function(){
+                  ovlGet(u2, true)
+                    .then(function(j){
+                      if (el2 && el2.parentNode) putOvl(el2, j);
+                    })
+                    .catch(function(){
+                      if (tries++ < 3) setTimeout(go, 700);
+                    });
+                };
+                go();
+              })(el, ojU);
             })(slot);
           } else {
             (function(slot, engMt){
@@ -5109,6 +5148,19 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   // زومِ لمسی (اندروید/موبایل): دوانگشت = زوم، یک‌انگشت وقتی زوم
   // است = جابه‌جایی، دوضربه = زومِ روشن/خاموش — با touch-action:pan-y
   // روی body، مرورگر ژستِ pinch را به دستِ همین کد میسپارد.
+  // applyZoom در هر touchmove اجرا می‌شد (چندبار در هر فریم) و هر بار
+  // relayout کاملِ صفحه می‌داد — روی گوشی لگ می‌گرفت. حالا با rAF
+  // در هر فریم فقط یک‌بار (آخرین مقدار) اعمال می‌شود.
+  var _zqArg = null, _zqRaf = 0;
+  var applyZoomQ = function(nz, cx, cy){
+    _zqArg = [nz, cx, cy];
+    if (_zqRaf) return;
+    _zqRaf = requestAnimationFrame(function(){
+      _zqRaf = 0;
+      var q = _zqArg; _zqArg = null;
+      if (q) applyZoom(q[0], q[1], q[2]);
+    });
+  };
   var pinch = null, pan = null, lastTapT = 0, lastTapX = 0, lastTapY = 0;
   var tDist = function(a, b){ return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); };
   var tMid = function(a, b){ return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 }; };
@@ -5130,7 +5182,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       e.preventDefault();
       var d = tDist(e.touches[0], e.touches[1]);
       var m = tMid(e.touches[0], e.touches[1]);
-      applyZoom(pinch.startZ * (d / Math.max(1, pinch.startDist)), m.x, m.y);
+      applyZoomQ(pinch.startZ * (d / Math.max(1, pinch.startDist)), m.x, m.y);
     } else if (pan && e.touches.length === 1) {
       var t = e.touches[0];
       var dx = t.clientX - pan.x, dy = t.clientY - pan.y;
@@ -5910,7 +5962,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".rdrS{position:relative;background:#000;overflow-x:clip}"
             ".rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}"
             ".rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;"
-            "-webkit-user-drag:none;pointer-events:none;content-visibility:auto;contain-intrinsic-size:auto 1200px;"
+            "-webkit-user-drag:none;pointer-events:none;"
             "background:#0b0b0d}"
             ".rdr-progress{position:fixed;bottom:0;left:0;right:0;height:3px;background:#1a1a1c;z-index:3}"
             ".rdrB{height:100%;width:0;background:linear-gradient(90deg,#ff4a3d,#ff8a5e)}"
