@@ -646,7 +646,15 @@ class _MangaTranslatorBody_95:
                 _ch_store_on = (bool(_ch_sig)
                                 and MangaTranslator._chapter_store_max() > 0
                                 and not bool(getattr(self, "translate_retranslate",
-                                                     False)))
+                                                     False))
+                                # انبارِ فصلها فقط صفحههایِ نهاییِ بدونِ
+                                # دیباگ را نگه میدارد — اگر دیباگ روشن باشد
+                                # و فصل از انبار برگردد، تصویرِ دیباگ هرگز
+                                # ساخته نمیشود (باگِ «دیباگ فعال نمیشه تا
+                                # لینک/فایل عوض شود»). با دیباگِ روشن،
+                                # انبار دور میخورد تا تصاویرِ دیباگ هم
+                                # ساخته شوند (بقیهٔ مراحل از کش می‌مانند).
+                                and not bool(getattr(self, "debug", False)))
                 os.makedirs(src_dir, exist_ok=True)
                 image_files = []
                 _seen_ch: set = set()
@@ -2508,7 +2516,8 @@ class _MangaTranslatorBody_95:
                         else:
                             _ch_complete = False
                 if (_ch_complete and _store_files and _pl.get("sig")
-                        and not _pl.get("no_store")):
+                        and not _pl.get("no_store")
+                        and not bool(getattr(self, "debug", False))):
                     try:
                         _ok_put = MangaTranslator._chapter_store_put(
                             _pl.get("url") or "", _pl["sig"],
