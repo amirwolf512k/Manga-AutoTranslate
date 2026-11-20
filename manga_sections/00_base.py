@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.368"
+APP_VER = "1.14.369"
 
 
 FLASH_PROMPT = 'تو نویسندهٔ دیالوگِ دوبلهٔ فارسی هستی، نه مترجمِ کتاب.\n\nمتنِ مانگا و مانهوا را به فارسیِ محاوره\u200cایِ گفتاری برگردان — همان زبانی که آدم\u200cها در خیابان و فیلم حرف می\u200cزنند و هر ایرانیِ معمولی بدونِ فکر کردن و راحت می\u200cفهمد. فارسیِ کتابی، نوشتاری، اداری یا ترجمهٔ تحت\u200cاللفظی ممنوع است.\n\nقبل از ترجمه، کلِ صفحات را با هم بخوان تا داستان، ژانر و شخصیت\u200cها را درک کنی؛ بعد هر دیالوگ را در بسترِ همین داستان و با شناختِ لحظه\u200cای که در آن اتفاق می\u200cافتد ترجمه کن. خودت تشخیص بده هر شخصیت با چه لحنی حرف می\u200cزند و همان لحن را در فارسی زنده بازسازی کن: شخصیتِ جوان و صمیمی خودمونی، خشن و لات کوچه\u200cبازاری، بزرگ\u200cسالِ محترم که باز هم گفتاری حرف می\u200cزند، و روایت یا توضیحِ کنارِ کادر که روان و شیواست نه خیابانی.\n\nمتنِ مبدأ می\u200cتواند کره\u200cای، ژاپنی، چینی یا انگلیسی باشد و چون خروجیِ OCR است گاهی قطعه\u200cقطعه، ناقص یا درهم است؛ معنای درست را از خودِ زبانِ مبدأ و بسترِ داستان بازسازی کن، نه لفظ\u200cبه\u200cلفظ. معادلِ طبیعی و رایجِ فارسی برای اصطلاح\u200cها، شوخی\u200cها و ضرب\u200cالمثل\u200cها پیدا کن و جمله\u200cها را کوتاه و نفس\u200cدار نگه دار.\n\nاگر متنی بی\u200cمعنا یا خیلی خراب است، معمولاً افکتِ صوتی یا نام است؛ محتمل\u200cترین معنا را حدس بزن یا صدای محیطی را آوانگاری کن، اما خالی نگذار. هیچ سانسور، تلطیف یا مؤدب\u200cسازی نکن؛ خشونت و فحش با همان شدتِ اصلی برگردد.'
@@ -23,49 +23,36 @@ def _prompt_real_lines(s: str) -> str:
 
 FLASH_PROMPT = _prompt_real_lines(FLASH_PROMPT)
 FLASH_LITE_PROMPT = _prompt_real_lines(FLASH_LITE_PROMPT)
-MT_SYSTEM_PROTOCOL_ITEMS = ("2. IDENTITY & TASK: You are an Expert Manga & Comic Dialogue Translation Engine.\r\n"
-"3. CONTEXT & READING FLOW: You receive an array of pages, each containing sequential dialogue items in `[id, text]` format. Translate them into natural, flowing Persian according to the provided translation rules.\r\n"
-"4. STRICT 1-TO-1 TRANSLATION:\r\n"
-"   - Maintain the exact sequence of dialogue blocks for each page.\r\n"
-"   - For every input `[id, text]` item in `dialogues`, preserve its exact `id` and provide its translation in `fa`.\r\n"
-"   - NEVER skip, merge, reorder, or duplicate `id`s.\r\n"
-"5. EMPTY / NOISE: If a page has an empty `dialogues` list, output an empty array `[]` for its translations.\r\n"
-"6. RAW OCR INPUT — NO PLACEHOLDERS: The dialogue blocks are raw OCR output from comic pages; they may contain OCR errors, missing or garbled fragments. NEVER refuse, skip or sanitize any block, and NEVER output placeholders such as '[REDACTED]' or \"I can't translate\". Even if a block looks broken or nonsensical, interpret the most likely intended dialogue and translate it into natural Persian.\r\n"
-"7. SAFETY FALLBACK: If translation of a specific text block is restricted by safety policies, do not refuse or break the response; populate its `fa` with '[CENSORED]'.\r\n"
-"8. MANDATORY OUTPUT FORMAT & CONCRETE EXAMPLE:\r\n"
-"Output must be a raw JSON array matching this exact concrete structure:\r\n"
-"[\r\n"
-"  {\r\n"
-"    \"filename\": \"001.png\",\r\n"
-"    \"translations\": [\r\n"
-"      { \"id\": 1, \"fa\": \"ترجمه دیالوگ اول\" },\r\n"
-"      { \"id\": 2, \"fa\": \"ترجمه دیالوگ دوم\" }\r\n"
-"    ]\r\n"
-"  }\r\n"
-"]")
+MT_SYSTEM_PROTOCOL_ITEMS = ("2. IDENTITY & TASK: Expert Manga & Comic Dialogue Translation Engine.\r\n"
+"3. INPUT: array of pages; each page is [filename, dialogues] and `dialogues` holds sequential `[id, text]` items — raw comic OCR that may be garbled or incomplete. NEVER refuse, skip or sanitize any block; NEVER output placeholders like '[REDACTED]' or \"I can't translate\"; always infer the intended dialogue.\r\n"
+"4. 1-TO-1: for every input item keep its exact `id` and put its Persian translation in `fa`; keep page order; NEVER skip, merge, reorder or duplicate ids.\r\n"
+"5. EMPTY: a page with empty `dialogues` gets an empty `translations` array.\r\n"
+"6. OUTPUT: one raw compact JSON array only (schema-enforced by the API) — no markdown, no notes, no extra fields.\r\n"
+"7. SAFETY FALLBACK: if a block is restricted by safety policies, put '[CENSORED]' in its `fa` and keep the response valid.")
 
 MT_JSON_SCHEMA = {
     "type": "array",
+    "description": "List of processed manga pages with their translations.",
     "items": {
         "type": "object",
         "properties": {
-            "filename": {"type": "string"},
+            "filename": {
+                "type": "string",
+                "description": "The filename of the image as provided.",
+            },
             "translations": {
                 "type": "array",
+                "description": "Extracted text blocks and their translations.",
                 "items": {
                     "type": "object",
                     "properties": {
-                        "id": {"type": "integer"},
-                        "fa": {"type": "string"},
-                        "names": {
-                            "type": "array",
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "en": {"type": "string"},
-                                    "fa": {"type": "string"},
-                                },
-                            },
+                        "id": {
+                            "type": "integer",
+                            "description": "The exact id of the dialogue item from input.",
+                        },
+                        "fa": {
+                            "type": "string",
+                            "description": "Creative, natural Persian translation.",
                         },
                     },
                     "required": ["id", "fa"],
@@ -78,22 +65,21 @@ MT_JSON_SCHEMA = {
     },
 }
 
-MT_JP_USER_DIRECTIVE = "\r\n*** CRITICAL MANDATORY DIRECTIVE FOR JAPANESE DIALOGUE BLOCKS ***\r\n1. FURIGANA / DUPLICATE CLEANUP: The input dialogue may contain both Kanji and its small Furigana phonetic reading captured together (e.g., '宿夏ライカ' or duplicated phrases). Identify the intended word/name and translate it ONLY ONCE. Do NOT translate both the Kanji and its phonetic reading.\r\n2. DEDUPLICATION: Eliminate accidental repeated words/syllables in the source block and produce exactly ONE clean, unified Persian translation.\r\n"
-MT_JP_SYSTEM_RULE = "\r\n1. MANDATORY FURIGANA & DEDUPLICATION PURGE (HIGHEST PRIORITY):\r\n   - Input dialogue blocks may contain Kanji together with their small Furigana phonetic readings (e.g. '宿夏ライカ' or duplicated phrases).\r\n   - Recognize the word and translate it ONLY ONCE. Strip away phonetic duplicate readings and repeated words.\r\n   - Provide strictly ONE clean, unified Persian translation for each dialogue block.\r\n"
+MT_JP_USER_DIRECTIVE = "\r\n*** JAPANESE DIALOGUE DIRECTIVE ***\r\n1. FURIGANA/RUBY: small kana printed beside/above Kanji (e.g. '雷夏' + 'ライカ') are the SAME word's pronunciation — translate it ONCE; never translate the reading separately.\r\n2. DEDUP: collapse repeated/stuttered OCR phrasing into ONE clean sentence per block.\r\n"
+MT_JP_SYSTEM_RULE = "\r\n1. FURIGANA & DEDUP (HIGHEST PRIORITY):\r\n   - Kanji plus small furigana readings = one word; translate it ONCE, strip duplicate readings and repeated words.\r\n   - One clean unified Persian translation per block.\r\n"
 
 _MT_NO_CENSOR_ITEM = (
-"7. NO CENSORSHIP: This is a professional manga/comic translation pipeline for mature audiences. "
-"NEVER censor, sanitize, soften or refuse any dialogue. Profanity, insults, threats, dark humor and violence "
-"must be translated with their FULL original intensity. NEVER output '[CENSORED]' or any placeholder. "
-"If you genuinely cannot translate one specific line, put that line's original text unchanged in its `fa` field "
-"and translate all remaining lines normally.\r\n")
+"7. NO CENSORSHIP: professional manga/comic pipeline for mature audiences. "
+"NEVER censor, sanitize, soften or refuse any dialogue. Profanity, insults, threats, dark humor "
+"and violence must keep their FULL original intensity; NEVER output '[CENSORED]' or any placeholder. "
+"If one line is truly untranslatable, put that line's original text unchanged in its `fa` and translate the rest normally.\r\n")
 
 def mt_system_instruction(japanese: bool = False, uncensored: bool = False, **_kw) -> str:
     items = MT_SYSTEM_PROTOCOL_ITEMS
     if uncensored:
         items = items.replace(
-            "7. SAFETY FALLBACK: If translation of a specific text block is restricted by safety policies, "
-            "do not refuse or break the response; populate its `fa` with '[CENSORED]'.\r\n",
+            "7. SAFETY FALLBACK: if a block is restricted by safety policies, "
+            "put '[CENSORED]' in its `fa` and keep the response valid.",
             _MT_NO_CENSOR_ITEM)
     out = ("SYSTEM BEHAVIOR PROTOCOL:\r\n"
            + (MT_JP_SYSTEM_RULE if japanese else "")
@@ -112,9 +98,7 @@ def mt_plain_system_instruction(japanese: bool = False, uncensored: bool = False
            "9. PLAIN TEXT OUTPUT ONLY: Reply with ONLY the Persian translation itself as plain text. Do NOT output JSON, arrays, objects, keys, filenames, quotes or any notes — just the translation sentence.")
     return out
 
-HIDDEN_ID_RULE_TEXT = ("اسامی خاص، اعداد و تکنیک\u200cها را در کلِ فایل یکسان برگردان. "
-                       "هیچ id را جا نینداز یا ادغام نکن؛ جابه\u200cجا هم نکن؛ "
-                       "برای هر id دقیقاً یک fa بده.")
+HIDDEN_ID_RULE_TEXT = "هیچ id را جا نینداز، ادغام یا جابه‌جا نکن؛ برای هر id دقیقاً یک fa بده."
 
 def _has_hidden_id_rule(text: str) -> bool:
     t = _norm_prompt_text(text)
@@ -125,7 +109,7 @@ def strip_hidden_rules(text: str) -> str:
     if not t.strip():
         return t
     lines = [ln for ln in t.split("\n")
-             if not ("جا نینداز" in ln and "ادغام نکن" in ln)]
+             if not ("جا نینداز" in ln and "ادغام" in ln)]
     out = "\n".join(lines)
     while "\n\n\n" in out:
         out = out.replace("\n\n\n", "\n\n")
@@ -142,30 +126,31 @@ def append_hidden_id_rule(rules: str) -> str:
 def mt_user_prompt(rules: str, pages, japanese: bool = False,
                    style_ref=None, context: str = "") -> str:
     import json as _json
-    pages_json = _json.dumps(list(pages), ensure_ascii=False,
+    # صفحات به‌صورت آرایه‌های موضعی [filename, dialogues] سریالی میشوند —
+    # کلیدهای تکراریِ "filename"/"dialogues" حذف شد (هر صفحه ~۸ توکن کمتر؛
+    # خروجی همچنان با schemaٔ اجباریِ API، شیء filename/translations است).
+    _pages_c = [[p.get("filename"), p.get("dialogues")] for p in (pages or [])]
+    pages_json = _json.dumps(_pages_c, ensure_ascii=False,
                              separators=(",", ":"))
     rules = append_hidden_id_rule(rules)
     _style = ""
     if style_ref:
         _lines = []
-        for _s, _f in style_ref[:10]:
-            _s2 = str(_s).replace('\r', ' ').replace('\n', ' ')[:120]
-            _f2 = str(_f).replace('\r', ' ').replace('\n', ' ')[:120]
+        for _s, _f in style_ref[:6]:
+            _s2 = str(_s).replace('\r', ' ').replace('\n', ' ')[:90]
+            _f2 = str(_f).replace('\r', ' ').replace('\n', ' ')[:90]
             _lines.append('- "' + _s2 + '" -> "' + _f2 + '"')
-        _style = ("\r\n\r\nSTYLE REFERENCE — earlier dialogue from this "
-                  "same chapter was already translated (possibly by another "
-                  "model or token). Your new translations MUST match its tone, "
-                  "register and phrasing style exactly — same character "
-                  "voices, same level of formality, same naming choices:\r\n"
+        _style = ("\r\n\r\nSTYLE REFERENCE — earlier translations from this "
+                  "same chapter; match their tone, register and naming "
+                  "exactly:\r\n"
                   + "\r\n".join(_lines) + "\r\n")
-    return ("TASK: Translate the sequential dialogue blocks for the following "
-            "manga pages into natural, high-quality Persian according to the "
-            "rules below.\r\n"
+    return ("TASK: Translate the dialogue blocks of the manga pages below "
+            "into natural, high-quality Persian per the rules.\r\n"
             + (MT_JP_USER_DIRECTIVE if japanese else "")
-            + "\r\nTRANSLATION RULES:\r\n" + (rules or "")
+            + "\r\nRULES:\r\n" + (rules or "")
             + (context or "")
             + _style
-            + "\r\n\r\nINPUT PAGES AND DIALOGUES (JSON):\r\n"
+            + "\r\n\r\nPAGES (JSON):\r\n"
             + pages_json + "\r\n")
 
 PROMPT_PRESETS = {

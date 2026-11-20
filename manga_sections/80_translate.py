@@ -289,21 +289,18 @@ class _MangaTranslatorBody_80:
             else:
                 key = ("u",)
             if key not in by_key:
-                fname = pf or "page_01.png"
-                _taken = {g[0] for g in groups}
-                _base, _ext = os.path.splitext(fname)
-                _n = 2
-                while fname in _taken:
-                    fname = f"{_base}_{_n}{_ext}"
-                    _n += 1
-                by_key[key] = (fname, [])
-                groups.append((fname, by_key[key][1]))
+                by_key[key] = (key, [])
+                groups.append(by_key[key][1])
             by_key[key][1].append(r)
-        pages = [{"filename": fname,
+        # نامِ فشردهٔ p1..pN به مدل داده میشود (به‌جای strip_001.jpg) —
+        # هم در ورودی و هم در اکویِ خروجی ذخیره میکند؛ مسیریابی از طریق
+        # region_page انجام میشود، پس نامِ واقعی لازم نیست.
+        pages = [{"filename": f"p{gi + 1}",
                   "dialogues": [[_di + 1, (r.source_text or "")]
                                  for _di, r in enumerate(rs)]}
-                 for fname, rs in groups]
-        region_page = {id(r): fname for fname, rs in groups for r in rs}
+                 for gi, rs in enumerate(groups)]
+        region_page = {id(r): f"p{gi + 1}"
+                       for gi, rs in enumerate(groups) for r in rs}
         return pages, region_page
 
     _CENSOR_CORES = {
@@ -629,6 +626,11 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
             config_args["response_mime_type"] = "application/json"
+            # پاسخِ ساخت‌یافته با schemaٔ اجباری API (مثل K3 v4.4):
+            # خروجیِ فشرده و بدونِ توکن‌های تزئینی (newline/تورفتگی/markdown)
+            # + بدونِ انحرافِ فرمت — کاهشِ تا ۶۰٪ توکنِ خروجی.
+            if not getattr(self, "_g_schema_off", False):
+                config_args["response_schema"] = MT_JSON_SCHEMA
             if getattr(self, "deep_thinking", True):
                 try:
                     config_args["thinking_config"] = \
@@ -646,7 +648,13 @@ class _MangaTranslatorBody_80:
                     thinking_level="low")
             except Exception:
                 pass
-        config = genai_types.GenerateContentConfig(**config_args)
+        try:
+            config = genai_types.GenerateContentConfig(**config_args)
+        except Exception:
+            # سرور/SDK این schema را نپذیرفت — بدونِ schema ادامه میدهیم.
+            config_args.pop("response_schema", None)
+            self._g_schema_off = True
+            config = genai_types.GenerateContentConfig(**config_args)
         client = self._thread_client()
         model = self._thread_model()
         self._pace_before_gemini_call()
@@ -1310,16 +1318,13 @@ class _MangaTranslatorBody_80:
         if not self._name_glossary:
             return ""
         lines = "\n".join(
-            f"  {src} → {per}" for src, per in sorted(self._name_glossary.items())
+            f"{src}={per}" for src, per in sorted(self._name_glossary.items())
         )
         return (
-            "\r\n\r\nقفل واژه‌نامه (الزامی):\r\n"
-            "این معادل‌ها قطعی‌اند؛ در همهٔ ترجمه‌ها دقیقاً همین شکل را به‌کار ببر "
-            "و املای فارسی آن‌ها را عوض نکن:\r\n"
+            "\r\n\r\nGLOSSARY (mandatory):\r\n"
+            "These equivalents are final — use exactly these forms in all "
+            "translations and never change their Persian spelling:\r\n"
             f"{lines}\r\n"
-            "اسم خاص جدیدی که در واژه‌نامه نیست را طبیعی نویسه‌گردانی کن و در فیلد "
-            "اختیاری names هر آیتم گزارش بده "
-            '("names": [{"en": "SOURCE", "fa": "فارسی"}]).\r\n'
         )
 
     def _brief_prompt_block(self) -> str:
@@ -1651,6 +1656,14 @@ class _MangaTranslatorBody_80:
             _ctx = (self._glossary_prompt_block() + self._brief_prompt_block())
             _out = mt_user_prompt(rules, pages, _jp, style_ref=_sref,
                                   context=_ctx)
+            try:
+                _n_dlg = sum(len(p.get("dialogues") or []) for p in pages)
+                print(f"    [*] پرامپت: {len(_out):,} نویسه "
+                      f"({len(pages)} صفحه / {_n_dlg} دیالوگ)"
+                      + (" | schema فشرده" if not getattr(
+                          self, "_g_schema_off", False) else ""))
+            except Exception:
+                pass
             if _attempt_cell[0] > 1:
                 _out += self._CENSOR_RETRY_NOTE
             if getattr(self, "_style_retry_mode", False):
@@ -1717,6 +1730,10 @@ class _MangaTranslatorBody_80:
                         text = self._translate_via_provider(
                             user_prompt, system_instruction,
                             timeout=_tout, on_item=_on_item)
+                try:
+                    print(f"    [*] پاسخ: {len(text):,} نویسه")
+                except Exception:
+                    pass
 
                 self._parse_translation_response(
                     text, work_regions, _pctx.get("region_page"))
@@ -1773,6 +1790,16 @@ class _MangaTranslatorBody_80:
                 if ("BLOCK_NONE" in _es or "safety_settings" in _es.lower()
                         or ("blocked" in err_str and "safety" in err_str)):
                     self._sbn_ok = False
+                # سرور response_schema را رد کرد → تلاشِ بعدی بدونِ schema
+                if not getattr(self, "_g_schema_off", False) \
+                        and ("response_schema" in err_str
+                             or ("schema" in err_str
+                                 and any(k in err_str for k in (
+                                         "invalid", "unsupported",
+                                         "not supported", "unknown")))):
+                    self._g_schema_off = True
+                    print("    [!] سرور schemaٔ خروجی را نپذیرفت — "
+                          "بدونِ schema ادامه میدهیم.")
 
                 # نجاتِ استریم را در همهٔ مسیرها نگه دار: دیالوگ‌هایی که
                 # salvage قبلاً پر کرده، از کارِ بعدی حذف میشوند تا
