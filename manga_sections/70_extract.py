@@ -4429,7 +4429,9 @@ class _MangaTranslatorBody_70:
                             if (0x3040 <= ord(_c) <= 0x30FF)
                             or (0x3400 <= ord(_c) <= 0x9FFF)
                             or (0xAC00 <= ord(_c) <= 0xD7AF))
-                        if _lt_n < 2 and _cjk_n < 2:
+                        # خوانشِ مختلط (I-士) هم خطِ واقعی است — مجموعِ
+                        # حروف کافی است
+                        if (_lt_n + _cjk_n) < 2:
                             continue
                         _lpoly = np.array(
                             [[_lx1, _ly1], [_lx2, _ly1],

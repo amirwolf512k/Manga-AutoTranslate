@@ -2117,9 +2117,18 @@ class _MangaTranslatorBody_85:
             core_u = (core.astype(np.uint8)) * 255
             core_u = cv2.morphologyEx(core_u, cv2.MORPH_CLOSE,
                                       np.ones((3, 3), np.uint8))
-            near = cv2.dilate(core_u, np.ones((5, 5), np.uint8)) > 0
-            halo = (np.abs(g.astype(np.float32) - med) >= 14.0) \
-                & (np.abs(g.astype(np.float32) - med) <= 30.0) & near
+            _flat_share = float(
+                (np.abs(g.astype(np.float32) - med) < 10.0).mean())
+            if _flat_share >= 0.55:
+                # زمینهٔ یکدست (مثلِ عنوانِ فصل روی سفید): هالهٔ پهن —
+                # درخششِ نرمِ کم‌رنگ دورِ حروف را هم بگیر (شبحِ صورتی)
+                near = cv2.dilate(core_u, np.ones((21, 21), np.uint8)) > 0
+                halo = (np.abs(g.astype(np.float32) - med) >= 10.0) \
+                    & (np.abs(g.astype(np.float32) - med) <= 60.0) & near
+            else:
+                near = cv2.dilate(core_u, np.ones((11, 11), np.uint8)) > 0
+                halo = (np.abs(g.astype(np.float32) - med) >= 14.0) \
+                    & (np.abs(g.astype(np.float32) - med) <= 48.0) & near
             lm = ((core_u > 0) | halo)
             _pm = np.full(lm.shape, 255, dtype=np.uint8)
             _pm_ok = False
@@ -3803,6 +3812,50 @@ class _MangaTranslatorBody_85:
             if cov < 0.06 or cov > 0.92:
                 return None
             return g
+        except Exception:
+            return None
+
+    @staticmethod
+    def _gap_flat_fill(crop_img: np.ndarray,
+                       crop_msk: np.ndarray,
+                       full_msk: Optional[np.ndarray] = None
+                       ) -> Optional[np.ndarray]:
+        """پرِ تخت با رنگِ شکافهای دور از جوهر (میانِ حروف) — برای
+        بلوکهای متنیِ بزرگ با سایهٔ نرمِ دورِ حروف (عنوانِ فصل) که
+        حلقهٔ ۵pxشان یکدست نیست ولی شکافها سفیدِ خالص‌اند.
+        full_msk = ماسکِ کلِ صفحه در همین برش — خطوطِ همسایه را هم
+        از ناحیهٔ «دور» بیرون میکشد (فقط زمینهٔ واقعی میماند)."""
+        try:
+            m = crop_msk > 0
+            if not m.any():
+                return None
+            _base = (full_msk if isinstance(full_msk, np.ndarray)
+                     and full_msk.shape == crop_msk.shape
+                     else crop_msk)
+            far = ~(cv2.dilate(_base, np.ones((11, 11), np.uint8)) > 0)
+            n_far = int(np.count_nonzero(far))
+            if n_far < 300:
+                return None
+            g = cv2.cvtColor(crop_img, cv2.COLOR_BGR2GRAY)
+            _fv = g[far]
+            hist = np.bincount(_fv.ravel(), minlength=256)
+            dom = int(hist.argmax())
+            _share = float(hist[max(0, dom - 8):dom + 9].sum()) \
+                / max(1, n_far)
+            if _share < 0.62:
+                return None
+            _sel = far & (np.abs(g.astype(np.int16) - dom) <= 10)
+            n_sel = int(np.count_nonzero(_sel))
+            if n_sel < 200:
+                return None
+            rp = crop_img[_sel].astype(np.int16)
+            med = np.median(rp, axis=0)
+            d = np.abs(rp - med[None, :]).max(axis=1)
+            if float((d <= 20).mean()) < 0.90:
+                return None
+            out = crop_img.copy()
+            out[m] = np.clip(med, 0, 255).astype(np.uint8)
+            return out
         except Exception:
             return None
 
@@ -6280,25 +6333,55 @@ class _MangaTranslatorBody_85:
             if failed.any():
                 # تایت‌کردنِ failed با جوهرِ واقعی: فقط جاهای poly که
                 # واقعاً متن دارند منتقل شود (نه کلِ poly به‌صورت مربع).
+                # استثنا: زمینهٔ تخت (عنوانِ فصل روی سفید) → poly کامل
+                # بماند؛ درخششِ نرم دورِ حروف در دونور پاک شده و باید
+                # منتقل شود، وگرنه شبحِ حروف در خروجی میماند.
                 try:
                     _fbx0 = int(min(float(p[:, 0].min()) for p in polys))
                     _fby0 = int(min(float(p[:, 1].min()) for p in polys))
                     _fbx1 = int(max(float(p[:, 0].max()) for p in polys)) + 1
                     _fby1 = int(max(float(p[:, 1].max()) for p in polys)) + 1
-                    _fst = self._rect_ink_strips(
-                        image, (_fbx0, _fby0, _fbx1 - _fbx0, _fby1 - _fby0))
-                    if _fst:
-                        _inkm = np.zeros((h, w), dtype=np.uint8)
-                        for _sp in _fst:
-                            _sx0 = max(0, int(_sp[0]))
-                            _sy0 = max(0, int(_sp[1]))
-                            _sx1 = min(w, int(_sp[2]))
-                            _sy1 = min(h, int(_sp[3]))
-                            if _sx1 - _sx0 >= 6 and _sy1 - _sy0 >= 5:
-                                _inkm[_sy0:_sy1, _sx0:_sx1] = 255
-                        _fd = cv2.bitwise_and(failed, _inkm)
-                        if int(cv2.countNonZero(_fd)) >= 60:
-                            failed = _fd
+                    _tighten = True
+                    try:
+                        _gx0 = max(0, _fbx0 - 24)
+                        _gy0 = max(0, _fby0 - 24)
+                        _gx1 = min(w, _fbx1 + 25)
+                        _gy1 = min(h, _fby1 + 25)
+                        if _gx1 - _gx0 >= 40 and _gy1 - _gy0 >= 30:
+                            _fgc = cv2.cvtColor(
+                                image[_gy0:_gy1, _gx0:_gx1],
+                                cv2.COLOR_BGR2GRAY)
+                            _fmc = failed[_gy0:_gy1, _gx0:_gx1]
+                            _ffar = ~(cv2.dilate(
+                                _fmc, np.ones((11, 11), np.uint8)) > 0)
+                            _nfar = int(_ffar.sum())
+                            if _nfar >= 300:
+                                _hist = np.bincount(
+                                    _fgc[_ffar].ravel(), minlength=256)
+                                _dom = int(_hist.argmax())
+                                _share = float(
+                                    _hist[max(0, _dom - 8):_dom + 9].sum()
+                                ) / max(1, _nfar)
+                                if _share >= 0.62:
+                                    _tighten = False
+                    except Exception:
+                        pass
+                    if _tighten:
+                        _fst = self._rect_ink_strips(
+                            image, (_fbx0, _fby0,
+                                    _fbx1 - _fbx0, _fby1 - _fby0))
+                        if _fst:
+                            _inkm = np.zeros((h, w), dtype=np.uint8)
+                            for _sp in _fst:
+                                _sx0 = max(0, int(_sp[0]))
+                                _sy0 = max(0, int(_sp[1]))
+                                _sx1 = min(w, int(_sp[2]))
+                                _sy1 = min(h, int(_sp[3]))
+                                if _sx1 - _sx0 >= 6 and _sy1 - _sy0 >= 5:
+                                    _inkm[_sy0:_sy1, _sx0:_sx1] = 255
+                            _fd = cv2.bitwise_and(failed, _inkm)
+                            if int(cv2.countNonZero(_fd)) >= 60:
+                                failed = _fd
                 except Exception:
                     pass
             if n == 0:
@@ -6312,7 +6395,7 @@ class _MangaTranslatorBody_85:
                     continue
             if not _pm.any():
                 return None, failed
-            _pm = cv2.dilate(_pm, np.ones((7, 7), np.uint8)) > 0
+            _pm = cv2.dilate(_pm, np.ones((15, 15), np.uint8)) > 0
             m = (m & _pm).astype(np.uint8) * 255
             failed = (failed & _pm).astype(np.uint8) * 255
             if not m.any() and not failed.any():
@@ -8458,8 +8541,20 @@ class _MangaTranslatorBody_85:
                                         continue
                                 except Exception:
                                     pass
-                                _tgt[_ri] = np.median(
-                                    _orgB[_ri][_free], axis=0)
+                                # نیمهٔ روشن مبنا: پیکسلهای آزادِ داخلِ
+                                # خط گاهی درخششِ نرمِ دورِ حروفاند
+                                # (عنوانِ فصل) — میانهٔ کامل، نوارِ تمیز
+                                # را به رنگِ هاله برمیگرداند؛ نیمهٔ روشن
+                                # زمینهٔ واقعی است.
+                                try:
+                                    _lum = _rf.mean(axis=1)
+                                    _ord2 = np.argsort(_lum)
+                                    _kn = max(8, _rf.shape[0] // 2)
+                                    _tgt[_ri] = np.median(
+                                        _rf[_ord2[-_kn:]], axis=0)
+                                except Exception:
+                                    _tgt[_ri] = np.median(
+                                        _orgB[_ri][_free], axis=0)
                                 _have[_ri] = True
                             if int(_have.sum()) < max(
                                     4, int(0.3 * _bh)):
@@ -8489,6 +8584,19 @@ class _MangaTranslatorBody_85:
                                         mode='same')
                             if float(_tgt.std()) > 24.0:
                                 continue
+                            # پرِ نوارِ ازقبلِ روشن: اگر میانهٔ نوار در
+                            # سطحِ روشنِ زمینه (نزدیکِ روشن‌ترین ردیف)
+                            # است، تیره‌کردنش فقط خرابی است — درخششِ نرمِ
+                            # دورِ حروف (عنوانِ فصل) نباید به نوارِ تمیز
+                            # برگردد.
+                            try:
+                                _tgt_hi = float(np.max(
+                                    _tgt[_have].mean(axis=1))) \
+                                    if bool(_have.any()) else 0.0
+                                if float(_medS.mean()) >= _tgt_hi - 12.0:
+                                    continue
+                            except Exception:
+                                pass
                             _vtA = max(0, _yA - 9)
                             _vtB = max(0, _yA - 3)
                             _vbA = min(_hH, _yZ + 4)
@@ -8823,6 +8931,26 @@ class _MangaTranslatorBody_85:
                     _sub = (_lab[_y0:_y1, _x0:_x1] == _j)
                     if not _sub.any():
                         continue
+                    # زمینهٔ پیرامونِ خودش سفید است؟ → پرِ سفیدِ تخت
+                    # «درست» است و نجاتِ آن فقط درخششِ دورِ حروف
+                    # (عنوانِ فصل) را برمیگرداند.
+                    try:
+                        _rY0 = max(0, _y - 10)
+                        _rY1 = min(H, _y + _h + 10)
+                        _rX0 = max(0, _x - 10)
+                        _rX1 = min(W, _x + _w + 10)
+                        _ringW = (_lab[_rY0:_rY1, _rX0:_rX1] != _j) \
+                            & (~_m_all[_rY0:_rY1, _rX0:_rX1])
+                        if int(_ringW.sum()) >= 200:
+                            _ring_med = float(np.median(
+                                original[_rY0:_rY1,
+                                         _rX0:_rX1][_ringW]
+                                .astype(np.float32)
+                                .mean(axis=1)))
+                            if _ring_med >= 233.0:
+                                continue
+                    except Exception:
+                        pass
                     _fill = out[_y0:_y1, _x0:_x1][_sub]
                     if float((_fill.min(axis=1) >= 244).mean()) < 0.60:
                         continue
@@ -9092,7 +9220,34 @@ class _MangaTranslatorBody_85:
             keep = cv2.morphologyEx(keep, cv2.MORPH_CLOSE,
                                     np.ones((5, 5), np.uint8))
             keep = cv2.dilate(keep, np.ones((7, 7), np.uint8))
-            return ((m0 | (keep > 0)).astype(np.uint8)) * 255
+            m0 = (m0 | (keep > 0))
+            # هالهٔ روشنِ کم‌اشباع (درخششِ نرمِ صورتی/بنفش دورِ حروفِ
+            # عنوان روی زمینهٔ سفید): فقط وقتی زمینهٔ دورِ «محلی» سفیدِ
+            # نزدیک است — رنگِ هاله با اشباعِ ≤۲۴ از فیلترِ اشباع رد
+            # میشود.
+            try:
+                gsm = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+                _far_out = (cv2.dilate(m0.astype(np.uint8),
+                                       np.ones((71, 71), np.uint8)) > 0) \
+                    & ~(cv2.dilate(m0.astype(np.uint8),
+                                   np.ones((35, 35), np.uint8)) > 0)
+                if int(_far_out.sum()) >= 4000:
+                    _far_med = float(np.median(gsm[_far_out]))
+                    if _far_med >= 235.0:
+                        _ring2 = (cv2.dilate(
+                            m0.astype(np.uint8),
+                            np.ones((35, 35), np.uint8)) > 0) & (~m0)
+                        _lightglow = _ring2 & (gsm <= _far_med - 12) \
+                            & (gsm >= 110)
+                        if int(_lightglow.sum()) >= 40:
+                            _lg = cv2.morphologyEx(
+                                (_lightglow.astype(np.uint8)) * 255,
+                                cv2.MORPH_CLOSE,
+                                np.ones((5, 5), np.uint8)) > 0
+                            m0 = m0 | _lg
+            except Exception:
+                pass
+            return (m0.astype(np.uint8)) * 255
         except Exception:
             return mask
 
@@ -9807,7 +9962,29 @@ class _MangaTranslatorBody_85:
                 _keep_flat = False
                 if result is None and not _q_lama:
                     result = self._flat_fill_cluster(crop_img, crop_msk)
-                elif result is None and _q_lama \
+                if result is None and _q_lama:
+                    # بلوکِ بزرگِ متنی با سایهٔ نرمِ دورِ حروف (عنوانِ
+                    # فصل): حلقهٔ ۵-۹px یکدست نیست ولی شکافهای دور از
+                    # جوهر (میانِ حروف) سفیدِ خالص‌اند → پرِ تخت از
+                    # شکافها — LaMa روی چنین ماسکی خاکستریِ حروف‌شکل
+                    # میگذارد (شبحِ خوانا).
+                    try:
+                        _gff = MangaTranslator._gap_flat_fill(
+                            crop_img, crop_msk,
+                            full_msk=mask[cy0:cy1, cx0:cx1])
+                        if _gff is not None:
+                            result = _gff
+                            _keep_flat = True
+                            if self.debug:
+                                try:
+                                    print(f"  [⚡]خوشهٔ بزرگ → پرِ تخت از "
+                                          f"شکافهای میانِ حروف "
+                                          f"@({cx0},{cy0})")
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
+                if result is None and _q_lama \
                         and _android_gate("MANGA_FILL_RESCUE") \
                         and float(cv2.countNonZero(crop_msk)) >= 0.40 * float(
                             max(1, (bx1 - bx0) * (by1 - by0))):
