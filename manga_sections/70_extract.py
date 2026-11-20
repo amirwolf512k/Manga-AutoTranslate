@@ -4392,12 +4392,32 @@ class _MangaTranslatorBody_70:
                             continue
                         _rt = str(_rr[0]).strip()
                         _rc = float(_rr[1]) if len(_rr) > 1 else 0.0
-                        if not _rt or _rc < 0.55:
+                        if not _rt:
                             continue
-                        if self._is_non_english_script(_rt):
+                        # خطِ کوتاهِ توقف (I-I و مانندش) دست‌نویس و
+                        # شکل‌دار است → conf پایینِ rec طبیعی است؛
+                        # برایِ خطِ کوتاه آستانهٔ ۰٫۴۰ کافی است.
+                        _vis_n = len(re.sub(r"\s+", "", _rt))
+                        _conf_min = 0.40 if _vis_n <= 6 else 0.55
+                        if _rc < _conf_min:
                             continue
                         try:
-                            if _latin_lang(self) \
+                            if bool(self._is_non_english_script(_rt)):
+                                # خطِ توقفِ کوتاهِ دست‌نویس (مثلِ «I-I»)
+                                # گاهی به‌اشتباه چینی خوانده میشود
+                                # («土-士») — کوتاه را بپذیر؛ متنِ خام
+                                # به مترجم میرود و از بستر حدس میزند
+                                # (پرامپت: متنِ خراب OCR → بازسازی).
+                                _vis = re.sub(r"\s+", "", _rt)
+                                if len(_vis) > 6:
+                                    continue
+                                _ne_short = True
+                            else:
+                                _ne_short = False
+                        except Exception:
+                            _ne_short = False
+                        try:
+                            if not _ne_short and _latin_lang(self) \
                                     and _latin_junk_line(_rt, True):
                                 continue
                         except Exception:

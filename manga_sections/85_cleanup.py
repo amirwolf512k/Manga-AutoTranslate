@@ -6581,6 +6581,11 @@ class _MangaTranslatorBody_85:
                     if _qx1 - _qx0 < 8 or _qy1 - _qy0 < 8:
                         continue
                     if os.environ.get("MANGA_PROMO_TIGHT", "1") == "1":
+                        # اگر مسیرِ poly همین پرومو را با نوارِ خطِ تایت
+                        # پوشش داده (SFX مورب و مانندِ آن)، مربعِ کامل
+                        # ممنوع — همان نوارها کافی است.
+                        if bool(out[_qy0:_qy1, _qx0:_qx1].any()):
+                            continue
                         # دو-عکسی: promo فقط به‌اندازهٔ متنِ خودش
                         _pbst = self._rect_ink_strips(
                             image, (_qx0, _qy0, _qx1 - _qx0, _qy1 - _qy0))
@@ -8075,6 +8080,9 @@ class _MangaTranslatorBody_85:
                     if os.environ.get("MANGA_PROMO_TIGHT", "1") == "1":
                         # قراردادِ دو-عکسی: promo هم به‌اندازهٔ خودِ متن
                         # منتقل شود (خط‌به‌خط)، نه کلِ مربعِ بزرگ.
+                        # نوارِ poly از قبل هست → مربع ممنوع.
+                        if bool(_cmp[_wy0:_wy1, _wx0:_wx1].any()):
+                            continue
                         _pst = self._rect_ink_strips(
                             original, (_wx0, _wy0,
                                        _wx1 - _wx0, _wy1 - _wy0))
