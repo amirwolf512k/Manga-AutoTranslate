@@ -4335,6 +4335,14 @@ class _MangaTranslatorBody_70:
                                     break
                         if _foreign:
                             continue
+                        # خط باید عمدتاً داخلِ رکتِ خودِ ناحیه باشد —
+                        # رکتِ ناحیهٔ دیگر (مثلِ کپشنهای کنارِ هم) رد
+                        _rix = max(0.0, min(_qx2, rx + rw)
+                                   - max(_qx1, rx))
+                        _riy = max(0.0, min(_qy2, ry + rh)
+                                   - max(_qy1, ry))
+                        if (_rix * _riy) / _qa < 0.30:
+                            continue
                         _covered = False
                         for _pp in _polys:
                             try:

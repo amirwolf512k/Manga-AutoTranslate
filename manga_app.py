@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.360"
+APP_VER = "1.14.361"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")

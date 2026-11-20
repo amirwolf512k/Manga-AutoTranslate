@@ -11729,8 +11729,9 @@ class _MangaTranslatorBody_85:
                 _y1 = min(h, ry + rh + 5)
                 if _x1 > _x0 and _y1 > _y0:
                     ok[_y0:_y1, _x0:_x1] = True
-            if not ok.any():
-                return 0
+            # توجه: حتی وقتی ok خالی است ادامه میدهیم — واترمارکهای
+            # جاماندهٔ بیرونِ زون از OCRِ سراسریِ تصویرِ پاکشده پیدا
+            # میشوند (متونِ عادی همچنان به زونِ نواحی نیاز دارند).
             try:
                 _res = self._ocr_cleaned_chunked(cleaned)
             except Exception:
@@ -11785,10 +11786,29 @@ class _MangaTranslatorBody_85:
                     continue
                 sub_ok = ok[by0:by1, bx0:bx1]
                 if float(sub_ok.mean()) < 0.40:
-                    if _dbg_br:
-                        print("  [BROOM] → skip: outside zone "
-                              f"(ok={float(sub_ok.mean()):.2f})", flush=True)
-                    continue
+                    _wm_like = False
+                    try:
+                        _wm_like = bool(
+                            MangaTranslator._is_watermark_text(t))
+                    except Exception:
+                        _wm_like = False
+                    if _wm_like:
+                        # واترمارکِ جامانده (دامنه/اسکن‌گروه) بیرونِ
+                        # زونِ نواحی هم پاک شود — تشخیص‌نشده بودنِ
+                        # جعبهٔ detector نباید متنِ تبلیغ را نگه دارد.
+                        if _dbg_br:
+                            try:
+                                print(f"  [BROOM] ← واترمارکِ بیرونِ زون: "
+                                      f"{t[:40]!r}", flush=True)
+                            except Exception:
+                                pass
+                        sub_ok = np.ones_like(sub_ok)
+                    else:
+                        if _dbg_br:
+                            print("  [BROOM] → skip: outside zone "
+                                  f"(ok={float(sub_ok.mean()):.2f})",
+                                  flush=True)
+                        continue
                 sub_go = go[by0:by1, bx0:bx1]
                 sub_same = same[by0:by1, bx0:bx1]
                 _med = float(np.median(sub_go))
