@@ -636,7 +636,16 @@ class _MangaTranslatorBody_80:
                 except Exception:
                     pass
         else:
-            config_args["max_output_tokens"] = 2048
+            # درخواستِ غیر-JSON (بریف داستان، پرابِ سبک، ...):
+            # ۲۰۴۸ توکن برای مدل‌های thinker کم است (تفکر هم از سهمِ
+            # خروجی می‌خورد → پاسخِ خالی) و تفکرِ بالا فقط وقت را
+            # هدر میدهد — سقف بالاتر + تفکرِ پایین.
+            config_args["max_output_tokens"] = 4096
+            try:
+                config_args["thinking_config"] = genai_types.ThinkingConfig(
+                    thinking_level="low")
+            except Exception:
+                pass
         config = genai_types.GenerateContentConfig(**config_args)
         client = self._thread_client()
         model = self._thread_model()
@@ -671,6 +680,14 @@ class _MangaTranslatorBody_80:
                         _t = getattr(response, "text", None)
                         if _t:
                             _parts.append(_t)
+                    else:
+                        # استریم وسطِ کار خطا داد (مثلاً 429/500 وسطِ پاسخ).
+                        # قبلاً این خطا بلعیده می‌شد و به‌جایش «Unterminated
+                        # string» بی‌معنی می‌آمد؛ همان کلیدِ مرده دوباره
+                        # امتحان می‌شد و آبشارِ کلید/مدل فعال نمی‌شد.
+                        # حالا همان خطا را پاس میدهیم — صفحه‌های نجات‌یافته
+                        # (توسط salvage) حفظ شده‌اند و آبشار درست ادامه می‌یابد.
+                        raise
                 text = "".join(_parts)
             else:
                 response = client.models.generate_content(
@@ -1332,20 +1349,43 @@ class _MangaTranslatorBody_80:
             "حداکثر ۲۵ خط، فقط خود بریف را بنویس.\n\n"
             f"{joined}"
         )
-        try:
-            print("[بریف داستان] یک‌بار کل فصل خوانده می‌شود…")
-            if self.provider_type == "gemini":
-                raw = self._translate_with_gemini(
-                    prompt, "تو دستیار تحلیل داستان هستی.", structured=False)
-            else:
-                raw = self._translate_via_provider(
-                    prompt, "تو دستیار تحلیل داستان هستی.", structured=False)
-            brief = (raw or "").strip()
-            if 60 < len(brief) < 6000:
-                self._chapter_brief = brief
-                print(f"[+] بریف داستان آماده شد ({len(brief)} نویسه)")
-        except Exception as e:
-            print(f"[!] ساخت بریف داستان ناموفق ({e}) — بدون بریف ادامه می‌دهیم")
+        _berr = None
+        for _bi in range(3):
+            try:
+                print("[بریف داستان] یک‌بار کل فصل خوانده می‌شود…"
+                      + (f" (تلاش {_bi + 1}/3)" if _bi else ""))
+                _bt = max(90.0, float(
+                    getattr(self, "api_timeout", 45.0) or 45.0))
+                if self.provider_type == "gemini":
+                    raw = self._translate_with_gemini(
+                        prompt, "تو دستیار تحلیل داستان هستی.",
+                        structured=False, timeout=_bt)
+                else:
+                    raw = self._translate_via_provider(
+                        prompt, "تو دستیار تحلیل داستان هستی.",
+                        structured=False)
+                brief = (raw or "").strip()
+                if 60 < len(brief) < 6000:
+                    self._chapter_brief = brief
+                    print(f"[+] بریف داستان آماده شد ({len(brief)} نویسه)")
+                    return
+                _berr = f"بریف خارجِ اندازه ({len(brief)} نویسه)"
+            except Exception as e:
+                _berr = e
+                _bs = str(e).lower()
+                _transient = any(k in _bs for k in (
+                    "500", "503", "internal", "unavailable", "rate",
+                    "429", "timeout", "timed out", "overloaded", "demand"))
+                if not _transient:
+                    break
+                try:
+                    if self._api_keys and len(self._api_keys) > 1:
+                        self._switch_to_next_key(reason="بریف", cycle=True)
+                        self._recreate_api_client()
+                except Exception:
+                    pass
+                time.sleep(2.0 + 2.0 * _bi)
+        print(f"[!] ساخت بریف داستان ناموفق ({_berr}) — بدون بریف ادامه می‌دهیم")
 
     def _glossary_note_names(self, item: dict) -> None:
         try:
@@ -1734,6 +1774,33 @@ class _MangaTranslatorBody_80:
                         or ("blocked" in err_str and "safety" in err_str)):
                     self._sbn_ok = False
 
+                # نجاتِ استریم را در همهٔ مسیرها نگه دار: دیالوگ‌هایی که
+                # salvage قبلاً پر کرده، از کارِ بعدی حذف میشوند تا
+                # دوباره ترجمه و توکن نسوزند (قبلاً فقط مسیرِ تایم‌اوت
+                # این کار را می‌کرد و خطایِ JSON نصفه، کلِ دسته را
+                # دوباره می‌فرستاد).
+                _salv = [r for r in work_regions
+                         if not (r.translated_text or "").strip()]
+                _had_salv = bool(_salv) and len(_salv) < len(work_regions)
+                if _had_salv:
+                    work_regions = _salv
+                if _had_salv and (isinstance(e, json.JSONDecodeError)
+                                  or any(k in err_str for k in (
+                                          "unterminated string",
+                                          "expecting value",
+                                          "expecting property",
+                                          "extra data"))):
+                    # پاسخِ استریم نصفه بریده شد ولی بخشِ آن نجات یافت —
+                    # آبشارِ مدل/کلید را نسوزان؛ همان مدل با کمی صبر
+                    # ادامه میدهد (خطایِ واقعیِ پشتِ صحنه قبلاً توسط
+                    # _translate_with_gemini پاس داده شده و مدیریت شده).
+                    _ws = min(1.5 + attempt, 6.0)
+                    print(f"    [!] پاسخِ استریم نصفه بریده شد — "
+                          f"{len(work_regions)} دیالوگِ باقی‌مانده "
+                          f"ادامه می‌یابد (صبر {_ws:.0f}ثانیه)")
+                    time.sleep(_ws)
+                    continue
+
                 _fr = str(getattr(self, "_last_finish_reason", "") or "").strip()
                 if _fr in ("MAX_TOKENS", "LENGTH"):
                     print("    [!] پاسخ ناتمام ماند — سقفِ توکنِ خروجی "
@@ -1972,6 +2039,23 @@ class _MangaTranslatorBody_80:
                                 continue
 
                     if self._is_model_unavailable_error(e):
+                        if "high demand" in err_str \
+                                or "spikes in demand" in err_str:
+                            # شلوغیِ سرورِ گوگل (503) — تعویضِ فوریِ مدل
+                            # کمکی نمیکند؛ اول صبرِ طولانی بعد کلیدِ دیگر.
+                            _w503 = min(15.0 + 10.0 * attempt, 45.0)
+                            print(f"    [*] سرورِ Gemini شلوغ است (503) — "
+                                  f"صبر {_w503:.0f}ثانیه…")
+                            time.sleep(_w503)
+                            try:
+                                if self._api_keys and len(self._api_keys) > 1:
+                                    self._switch_to_next_key(reason="503",
+                                                             cycle=True)
+                                    self._recreate_api_client()
+                            except Exception:
+                                pass
+                            if attempt < self.max_retries:
+                                continue
                         if self._note_model_fail():
                             self._reset_model_cascade(reason="۳ بار UNAVAILABLE")
                             self._recreate_api_client()
