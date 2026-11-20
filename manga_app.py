@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.370"
+APP_VER = "1.14.371"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -2365,6 +2365,18 @@ footer { display: none !important; }
 .credit a:hover { color: var(--ink-red) !important; border-color: var(--ink-red);
                   transform: translateY(-1px); }
 .credit svg { width: 15px; height: 15px; fill: currentColor; flex: none; }
+.credit-reset {
+  display: inline-flex; align-items: center; gap: 7px;
+  color: var(--ink-dim) !important; font-size: 13px !important;
+  border: 1px solid var(--ink-line) !important;
+  padding: 7px 16px !important; border-radius: 999px !important;
+  background: #0a0a0d !important;
+  cursor: pointer; font-family: inherit; min-height: 38px !important;
+  line-height: 1.25 !important;
+  transition: border-color .2s, color .2s, transform .2s;
+}
+.credit-reset:hover { color: var(--ink-red) !important; border-color: var(--ink-red) !important;
+                      transform: translateY(-1px); }
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #060607; }
 ::-webkit-scrollbar-thumb { background: #232329; border-radius: 6px; }
@@ -2449,13 +2461,13 @@ footer { display: none !important; }
 
 .log-tools { display: flex; gap: 8px; margin: 0 0 10px; flex-wrap: wrap; }
 .log-tool-btn {
-  background: #121216; color: var(--ink-dim);
-  border: 1px solid var(--ink-line); border-radius: 999px;
-  padding: 7px 16px; font-size: .78rem; cursor: pointer;
-  font-family: inherit; min-height: 34px;
+  background: #121216 !important; color: var(--ink-dim) !important;
+  border: 1px solid var(--ink-line) !important; border-radius: 999px !important;
+  padding: 4px 11px !important; font-size: .72rem !important; cursor: pointer;
+  font-family: inherit; min-height: 28px !important; line-height: 1.25 !important;
   transition: color .18s, border-color .18s, transform .18s;
 }
-.log-tool-btn:hover { color: var(--ink-red); border-color: var(--ink-red); transform: translateY(-1px); }
+.log-tool-btn:hover { color: var(--ink-red) !important; border-color: var(--ink-red) !important; transform: translateY(-1px); }
 .log-tool-btn:active { transform: translateY(0); }
 
 .support {
@@ -2464,13 +2476,16 @@ footer { display: none !important; }
 .support-toggle {
   display: inline-flex; align-items: center; gap: 8px;
   color: var(--ink-dim) !important; text-decoration: none !important;
-  font-size: 13px; font-weight: 600; border: 1px solid var(--ink-line);
-  padding: 8px 20px; border-radius: 999px; background: #0a0a0d;
-  cursor: pointer; font-family: inherit; min-height: 38px;
+  font-size: 13px !important; font-weight: 600;
+  border: 1px solid var(--ink-line) !important;
+  padding: 8px 20px !important; border-radius: 999px !important;
+  background: #0a0a0d !important;
+  cursor: pointer; font-family: inherit; min-height: 38px !important;
+  line-height: 1.25 !important;
   transition: border-color .2s, color .2s, transform .2s;
 }
 .support-toggle:hover {
-  color: var(--ink-red) !important; border-color: var(--ink-red);
+  color: var(--ink-red) !important; border-color: var(--ink-red) !important;
   transform: translateY(-1px);
 }
 .support-toggle svg {
@@ -2507,14 +2522,15 @@ footer { display: none !important; }
 .support-row.ton .support-addr:hover { border-color: #0098ea; }
 .support-row.trx .support-addr:hover { border-color: #e84142; }
 .support-copy {
-  background: #121216; color: var(--ink-dim);
-  border: 1px solid var(--ink-line); border-radius: 10px;
-  padding: 8px 16px; font-size: .78rem; cursor: pointer;
-  font-family: inherit; min-height: 38px; flex: none;
+  background: #121216 !important; color: var(--ink-dim) !important;
+  border: 1px solid var(--ink-line) !important; border-radius: 10px !important;
+  padding: 6px 13px !important; font-size: .74rem !important; cursor: pointer;
+  font-family: inherit; min-height: 32px !important; flex: none;
+  line-height: 1.25 !important;
   transition: color .18s, border-color .18s, transform .18s;
 }
 .support-copy:hover, .support-copy.ok {
-  color: #38c98a; border-color: #2e7d4f; transform: translateY(-1px);
+  color: #38c98a !important; border-color: #2e7d4f !important; transform: translateY(-1px);
 }
 
 @media (max-width: 620px) {
@@ -2523,11 +2539,12 @@ footer { display: none !important; }
   .nav { padding: 14px 12px !important; }
   .nav-brand { font-size: 1.12rem !important; white-space: normal !important; }
   #runbtn, #manga_test_key { min-height: 56px !important; font-size: 1.04rem !important; }
-  .stepcard button { min-height: 44px !important; }
+  .stepcard button:not(.log-tool-btn):not(.credit-reset):not(.support-copy):not(.support-toggle) { min-height: 44px !important; }
   #manga_live_log textarea { font-size: 10.5px !important; max-height: 34vh !important; }
   #manga_status_chip { font-size: .78rem; padding: 8px 13px; }
   .credit { gap: 8px; }
   .credit a { padding: 8px 13px; }
+  .credit-reset { padding: 8px 13px; }
   .support { padding: 0; }
   .support-body { padding: 12px 10px 10px; }
   .support-row { gap: 6px; }
@@ -3481,26 +3498,31 @@ def _prov_keys_js() -> str:
       const kel = keyEl();
       const cur = kel ? String(kel.value || "").trim() : "";
       const m = loadMap();
-      if (lp === "gemini" || lp === "custom") {
-        if (cur) m[lp] = cur; else delete m[lp];
+      if ((lp === "gemini" || lp === "custom") && cur && cur !== m[np]) {
+        m[lp] = cur;
         saveMap(m);
       }
       window.__mangaLastProv = np;
       if ((np === "gemini" || np === "custom") && kel) {
         const saved = String(m[np] || "").trim();
         if (saved) setVal(kel, saved);
+        else if (cur && m[lp] === cur) setVal(kel, "");
       }
     } catch (e) {}
   };
   document.addEventListener("change", onChange, true);
+  const _t0 = Date.now();
   setInterval(() => {
     try {
+      if (Date.now() - _t0 < 8000) return;
       const p = curProv();
       if (p !== "gemini" && p !== "custom") return;
       const kel = keyEl();
       const k = kel ? String(kel.value || "").trim() : "";
       if (!k) return;
       const m = loadMap();
+      const other = (p === "gemini") ? "custom" : "gemini";
+      if (m[other] && m[other] === k) return;
       if (m[p] !== k) { m[p] = k; saveMap(m); }
     } catch (e) {}
   }, 4000);
@@ -11873,6 +11895,10 @@ try { window.__mangaUpdateProg('', ''); } catch (e) {}
     <img class="gh-avatar" src="data:image/png;base64,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" width="22" height="22" alt="gh" />
     سورس
   </a>
+  <button type="button" class="credit-reset" id="manga_reset_all"
+          title="پاک کردنِ همهٔ تنظیماتِ ذخیره‌شده (کلیدها، مدل‌ها، فرم) و بازگشت به پیش‌فرض">
+    ↺ ریست
+  </button>
 </div>
 <div class="support" id="manga_support">
   <button type="button" class="support-toggle" id="manga_support_toggle"
@@ -11955,6 +11981,31 @@ try { window.__mangaUpdateProg('', ''); } catch (e) {}
       fallbackCopy(addr, btn);
     } catch (err) {}
   }, true);
+  const tryBindReset = () => {
+    const btn = document.getElementById('manga_reset_all');
+    if (!btn || btn.__bound) return;
+    btn.__bound = true;
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const ok = window.confirm(
+        'همهٔ تنظیماتِ ذخیره‌شده (کلیدها، مدل‌ها، فرم، واژه‌نامه، نشست) پاک شود و همه‌چیز به حالتِ پیش‌فرض برگردد؟');
+      if (!ok) return;
+      try {
+        const kill = [];
+        for (let i = 0; i < localStorage.length; i++) {
+          const k = localStorage.key(i);
+          if (k && (k.indexOf('manga') === 0 || k === 'mt_last_site')) kill.push(k);
+        }
+        kill.forEach((k) => { try { localStorage.removeItem(k); } catch (err) {} });
+      } catch (err) {}
+      try { sessionStorage.clear(); } catch (err) {}
+      window.location.reload();
+    });
+  };
+  tryBindReset();
+  const moR = new MutationObserver(tryBindReset);
+  moR.observe(document.body, { childList: true, subtree: true });
 }
 """
         try:
