@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.356"
+APP_VER = "1.14.358"
 HERE = os.path.dirname(os.path.abspath(__file__))
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
@@ -3781,6 +3781,7 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .zbtn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:7px 11px;font-size:.85rem;cursor:pointer;font-family:inherit;flex:none;min-height:36px;min-width:36px}
 .zbtn:active{background:#2a2a30}
 .zv{color:#97948c;font-size:.78rem;min-width:42px;text-align:center;flex:none;font-variant-numeric:tabular-nums}
+#vport{width:100%;overflow-x:clip}/* سند هرگز افقی سرریز نمیکند؛ پنِ افقیِ زوم فقط با transform روی wrap — نوارِ بالایی (sticky) با چپ‌وراست‌کردن کنار نمی‌رود */
 #wrap{max-width:min(100%,900px);margin:0 auto;width:100%}
 .c{position:relative;width:100%}
 .c.hide{display:none}
@@ -4001,9 +4002,11 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 
 </style></head><body>
 <div class="bar"><span class="dot" id="dot"></span><div class="t">نمایش — صفحه‌ها سر جایشان پر می‌شوند</div><button type="button" class="zbtn" id="mtoggle" style="display:none" title="حالتِ دیباگ/نهایی">دیباگ</button><button type="button" class="zbtn" id="zo" title="کوچک‌تر">−</button><span class="zv" id="zv">100%</span><button type="button" class="zbtn" id="zi" title="بزرگ‌تر">+</button><button type="button" class="zbtn" id="zf" title="پهنای صفحه">پهنا</button><div class="n" id="n">0</div></div>
+<div id="vport">
 <div id="wrap">
 <main class="c" id="cF"><div class="hint" id="hF">در انتظار اولین صفحه…</div></main>
 <main class="c hide" id="cD"><div class="hint" id="hD">در انتظار دیباگ…</div></main>
+</div>
 </div>
 <div class="plab" id="plab" dir="rtl"></div>
 <div class="pbar"><div class="pfill" id="pf"></div></div>
@@ -5053,20 +5056,39 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
 
   var zv = document.getElementById('zv'), pf = document.getElementById('pf');
   var wrap = document.getElementById('wrap');
-  var z = 1;
+  var z = 1, panX = 0;
   var baseW = function(){ return Math.max(200, Math.min(900, window.innerWidth || 360)); };
+  // زومِ درست در صفحهٔ RTL: سند هیچ سرریزِ افقی ندارد (#vport با
+  // overflow-x:clip میبُرد) و جابه‌جاییِ افقیِ محتوای زوم‌شده فقط با
+  // transform روی wrap انجام میشود. لنگرِ زوم (نقطهٔ زیرِ انگشت) به‌صورتِ
+  // «کسری از عرضِ wrap» محاسبه میشود که جهت‌آزاد است — قبلاً فرمول
+  // مبتنی بر scrollX با فرضِ LTR بود و در RTL زوم می‌پرید پایین‌سمت‌راست.
   var applyZoom = function(nz, cx, cy){
     nz = Math.min(4, Math.max(0.5, +nz || 1));
-    var sx = (typeof cx === 'number') ? cx : (window.innerWidth / 2);
+    var vw = window.innerWidth || 360;
+    var sx = (typeof cx === 'number') ? cx : (vw / 2);
     var sy = (typeof cy === 'number') ? cy : (window.innerHeight / 2);
-    var relX = (window.scrollX + sx) / Math.max(0.01, z);
-    var relY = (window.scrollY + sy) / Math.max(0.01, z);
+    var r0 = wrap.getBoundingClientRect();
+    var topDoc = r0.top + window.scrollY;
+    var oldW = Math.max(1, r0.width || 1);
+    var frX = Math.max(0, Math.min(1, (sx - r0.left) / oldW));
+    var relY = (window.scrollY + sy - topDoc) / Math.max(0.01, z);
     z = nz;
+    var newW = Math.round(baseW() * z);
     wrap.style.maxWidth = 'none';
-    wrap.style.width = Math.round(baseW() * z) + 'px';
+    wrap.style.width = newW + 'px';
     wrap.style.marginLeft = 'auto';
     wrap.style.marginRight = 'auto';
-    window.scrollTo(Math.max(0, relX * z - sx), Math.max(0, relY * z - sy));
+    if (newW > vw) {
+      var r1 = wrap.getBoundingClientRect();
+      var wantLeft = sx - frX * newW;
+      panX = Math.max(0, Math.min(newW - vw, panX + (wantLeft - r1.left)));
+      wrap.style.transform = 'translateX(' + Math.round(panX) + 'px)';
+    } else {
+      panX = 0;
+      wrap.style.transform = '';
+    }
+    window.scrollTo(0, Math.max(0, topDoc + relY * z - sy));
     if (zv) zv.textContent = Math.round(z * 100) + '%';
   };
   var zi = document.getElementById('zi'), zo = document.getElementById('zo'),
@@ -5100,7 +5122,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       pan = null;
     } else if (e.touches.length === 1) {
       pan = { x: e.touches[0].clientX, y: e.touches[0].clientY,
-              sl: window.scrollX, st: window.scrollY, moved: false };
+              st: window.scrollY, px: panX, moved: false };
     }
   }, { passive: true });
   document.addEventListener('touchmove', function(e){
@@ -5111,12 +5133,18 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       applyZoom(pinch.startZ * (d / Math.max(1, pinch.startDist)), m.x, m.y);
     } else if (pan && e.touches.length === 1) {
       var t = e.touches[0];
-      if (Math.abs(t.clientX - pan.x) > 12 || Math.abs(t.clientY - pan.y) > 12)
+      var dx = t.clientX - pan.x, dy = t.clientY - pan.y;
+      if (Math.abs(dx) > 12 || Math.abs(dy) > 12)
         pan.moved = true;
       if (z > 1.05) {
         e.preventDefault();
-        window.scrollTo(pan.sl - (t.clientX - pan.x),
-                        pan.st - (t.clientY - pan.y));
+        var vw2 = window.innerWidth || 360;
+        var w2 = wrap.offsetWidth || 0;
+        if (w2 > vw2) {
+          panX = Math.max(0, Math.min(w2 - vw2, pan.px + dx));
+          wrap.style.transform = 'translateX(' + Math.round(panX) + 'px)';
+        }
+        window.scrollTo(0, Math.max(0, pan.st - dy));
       }
     }
   }, { passive: false });
@@ -5879,7 +5907,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             ".rdr-btn.fs{background:#ff4a3d;border-color:#ff4a3d;color:#fff;font-weight:700}"
             ".rdr-title{flex:1 1 120px;color:#97948c;font-size:.8rem;white-space:nowrap;"
             "overflow:hidden;text-overflow:ellipsis;text-align:right;direction:rtl;min-width:0}"
-            ".rdrS{position:relative;background:#000}"
+            ".rdrS{position:relative;background:#000;overflow-x:clip}"
             ".rdrC{margin:0 auto;max-width:min(100%,900px);width:100%}"
             ".rdrC img{display:block;width:100%;height:auto;max-width:none;user-select:none;"
             "-webkit-user-drag:none;pointer-events:none;content-visibility:auto;contain-intrinsic-size:auto 1200px;"
@@ -6117,21 +6145,39 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   const prog = root.querySelector('.rdrB');
   if (!c) return;
   const PH1 = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
-  let z = 1;
+  let z = 1, panX = 0;
   const MIN = 0.5, MAX = 4;
   const baseWidth = () => Math.max(200, Math.min(900, window.innerWidth || 360));
+  // مانند ریدر زنده: سند هیچ سرریزِ افقی ندارد (.rdrS با overflow-x:
+  // clip میبُرد)؛ پنِ افقی با transform و لنگرِ زومِ جهت‌آزاد (کسری از
+  // عرض) — در RTL دیگر زوم نمیپرد و نوارِ بالایی با چپ‌وراست‌کردن
+  // خراب نمیشود.
   const applyZoom = (nz, cx, cy) => {
     nz = Math.min(MAX, Math.max(MIN, +nz || 1));
-    const sx = (typeof cx === 'number') ? cx : (window.innerWidth / 2);
+    const vw = window.innerWidth || 360;
+    const sx = (typeof cx === 'number') ? cx : (vw / 2);
     const sy = (typeof cy === 'number') ? cy : (window.innerHeight / 2);
-    const relX = (window.scrollX + sx) / Math.max(0.01, z);
-    const relY = (window.scrollY + sy) / Math.max(0.01, z);
+    const r0 = c.getBoundingClientRect();
+    const topDoc = r0.top + window.scrollY;
+    const oldW = Math.max(1, r0.width || 1);
+    const frX = Math.max(0, Math.min(1, (sx - r0.left) / oldW));
+    const relY = (window.scrollY + sy - topDoc) / Math.max(0.01, z);
     z = nz;
+    const newW = Math.round(baseWidth() * z);
     c.style.maxWidth = 'none';
-    c.style.width = Math.round(baseWidth() * z) + 'px';
+    c.style.width = newW + 'px';
     c.style.marginLeft = 'auto';
     c.style.marginRight = 'auto';
-    window.scrollTo(Math.max(0, relX * z - sx), Math.max(0, relY * z - sy));
+    if (newW > vw) {
+      const r1 = c.getBoundingClientRect();
+      const wantLeft = sx - frX * newW;
+      panX = Math.max(0, Math.min(newW - vw, panX + (wantLeft - r1.left)));
+      c.style.transform = 'translateX(' + Math.round(panX) + 'px)';
+    } else {
+      panX = 0;
+      c.style.transform = '';
+    }
+    window.scrollTo(0, Math.max(0, topDoc + relY * z - sy));
     if (bar) bar.textContent = Math.round(z * 100) + '%';
     root.dataset.zoom = String(z);
   };
@@ -6415,7 +6461,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       pan = null;
     } else if (e.touches.length === 1) {
       pan = { x: e.touches[0].clientX, y: e.touches[0].clientY,
-              sl: window.scrollX, st: window.scrollY, moved: false };
+              st: window.scrollY, px: panX, moved: false };
     }
   }, { passive: true });
   document.addEventListener('touchmove', (e) => {
@@ -6426,11 +6472,18 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       applyZoom(pinch.startZ * (d / Math.max(1, pinch.startDist)), m.x, m.y);
     } else if (pan && e.touches.length === 1) {
       const t1 = e.touches[0];
-      if (Math.abs(t1.clientX - pan.x) > 12 || Math.abs(t1.clientY - pan.y) > 12)
+      const dx = t1.clientX - pan.x, dy = t1.clientY - pan.y;
+      if (Math.abs(dx) > 12 || Math.abs(dy) > 12)
         pan.moved = true;
       if (z > 1.05) {
         e.preventDefault();
-        window.scrollTo(pan.sl - (t1.clientX - pan.x), pan.st - (t1.clientY - pan.y));
+        const vw2 = window.innerWidth || 360;
+        const w2 = c.offsetWidth || 0;
+        if (w2 > vw2) {
+          panX = Math.max(0, Math.min(w2 - vw2, pan.px + dx));
+          c.style.transform = 'translateX(' + Math.round(panX) + 'px)';
+        }
+        window.scrollTo(0, Math.max(0, pan.st - dy));
       }
     }
   }, { passive: false });
