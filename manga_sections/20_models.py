@@ -2563,6 +2563,12 @@ def _latin_junk_line(text, region_has_letters: Optional[bool] = None):
     if all(len(t) <= 2 for t in toks):
         _vow = "AEIOUaeiou"
         if not any(any(c in _vow for c in t) for t in toks):
+            # واژه‌های واقعیِ بی‌واکلِ استاندارد (y واکه است):
+            # «MY»، «my»، «by»، «Mr»، «Dr» — خطِ اولِ «MY WHIP…»
+            # گم میشد چون آشغال شمرده میشد؛ اینها واژه‌اند، نه نویزِ OCR.
+            if len(toks) == 1 and toks[0].lower() in ("my", "by",
+                                                      "mr", "dr"):
+                return False
             if region_has_letters is False:
                 return False
             return True
