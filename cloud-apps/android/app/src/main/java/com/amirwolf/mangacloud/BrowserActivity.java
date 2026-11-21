@@ -43,131 +43,10 @@ public class BrowserActivity extends Activity {
             "Chrome/120.0.0.0 Mobile Safari/537.36";
 
     private static final String EXTRACT_JS =
-        "(function(){" +
-        "try{" +
-        "if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];" +
-        "}catch(e){}" +
-        "function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}" +
-        "function qsz(u){" +
-        "var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i);" +
-        "if(!m)return 0;" +
-        "var a=parseInt(m[2],10)||0;" +
-        "var b=parseInt(m[3]||'0',10)||0;" +
-        "if(a>0&&b>0)return Math.max(a,b);" +
-        "if(m[1]&&a>0)return a;" +
-        "return 0}" +
-        "function junk(u){" +
-        "if(!u)return 1;" +
-        "if(u.indexOf('data:')===0)return 1;" +
-        "if(u.indexOf('blob:')===0)return 1;" +
-        "if(!/^https?:/i.test(u))return 1;" +
-        "var b=String(u).split(/[?#]/)[0];" +
-        "if(/\\.(svg|ico|gif)$/i.test(b))return 1;" +
-        "if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp)$/i.test(b))return 1;" +
-        "var q=qsz(u);" +
-        "if(q>0&&q<=400)return 1;" +
-        "if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;" +
-        "if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1;" +
-        "return 0}" +
-        "var seen={},picked=[];" +
-        "function add(u){" +
-        "try{" +
-        "if(!u)return;" +
-        "u=abs(String(u).trim());" +
-        "if(!u)return;" +
-        "if(junk(u))return;" +
-        "try{if(u===location.href)return}catch(e){}" +
-        "var k=keyOf(u);" +
-        "if(Object.prototype.hasOwnProperty.call(seen,k))return;" +
-        "seen[k]=1;picked.push(u)" +
-        "}catch(e){}}" +
-        "function domPass(){" +
-        "var els2=document.querySelectorAll('img');" +
-        "for(var i=0;i<els2.length;i++){" +
-        "var el=els2[i],ok=false,nw=0,nh=0;" +
-        "try{ok=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}" +
-        "if(!ok)continue;" +
-        "if(nw&&nh&&Math.max(nw,nh)<300)continue;" +
-        "var u='';" +
-        "try{u=el.currentSrc||el.src||''}catch(e){}" +
-        "if(u)add(u)" +
-        "}" +
-        "}" +
-        "function resPass(){" +
-        "var rs=[];" +
-        "try{rs=performance.getEntriesByType('resource')}catch(e){}" +
-        "for(var i=0;i<rs.length;i++){" +
-        "var en=rs[i]||{};" +
-        "var t=String(en.initiatorType||'');" +
-        "if(t!=='img'&&t!=='css'&&t!=='link'&&t!=='other'&&t!=='svg'&&t!=='embed'&&t!=='fetch'&&t!=='xmlhttprequest')continue;" +
-        "var n=String(en.name||'');" +
-        "if(!n)continue;" +
-        "var b=n.split(/[?#]/)[0];" +
-        "var ext=/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b);" +
-        "if(!ext){" +
-        "if(t==='fetch'||t==='xmlhttprequest')continue;" +
-        "if(!/(^|\\/)(pages?|images?|img|media|manga|manhwa|webtoon|chapters?|episodes?|comic|uploads|wp-content|cdn)(\\/|[_\\-.]|$)/i.test(b))continue" +
-        "}" +
-        "add(n)" +
-        "}" +
-        "}" +
-        "domPass();resPass()" +
-        "if(picked.length)return picked;" +
-        "var all=[],good=[],idx=0;" +
-        "var els=document.querySelectorAll('img,source');" +
-        "for(var i=0;i<els.length;i++){" +
-        "var el=els[i];" +
-        "var cs=null;" +
-        "try{cs=el.currentSrc||el.src||null}catch(e){}" +
-        "var cands=[cs,el.getAttribute('data-src'),el.getAttribute('data-lazy-src'),el.getAttribute('data-original'),el.getAttribute('data-original-src'),el.getAttribute('data-orig-src'),el.getAttribute('data-lazy'),el.getAttribute('data-url'),el.getAttribute('data-image'),el.getAttribute('data-echo')];" +
-        "var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');" +
-        "if(ss){" +
-        "var parts=ss.split(','),best='',bw=0;" +
-        "for(var k=0;k<parts.length;k++){" +
-        "var tk=parts[k].trim().split(/\\s+/);" +
-        "var u0=tk[0]||'';" +
-        "var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;" +
-        "if(u0&&w0>=bw){bw=w0;best=u0}}" +
-        "if(best)cands.push(best)}" +
-        "if(el.tagName==='SOURCE'&&el.parentNode){" +
-        "var pe=el.parentNode.querySelector('img');" +
-        "if(pe&&pe.src)cands.push(pe.src)}" +
-        "var pick=null,pj=1;" +
-        "for(var j=0;j<cands.length;j++){" +
-        "var u=cands[j];" +
-        "if(!u)continue;" +
-        "u=abs(String(u).trim());" +
-        "if(!u||u.indexOf('data:')===0)continue;" +
-        "try{if(u===location.href)continue}catch(e){}" +
-        "if(!pick)pick=u;" +
-        "if(!junk(u)){pick=u;pj=0;break}" +
-        "}" +
-        "if(!pick)continue;" +
-        "var nw=0,nh=0;" +
-        "try{nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}" +
-        "if(nw&&nh&&Math.max(nw,nh)<300)continue;" +
-        "all.push([pick,idx]);" +
-        "if(!pj)good.push([pick,idx]);" +
-        "idx++" +
-        "}" +
-        "function keyOf(u){" +
-        "var b=String(u).split(/[?#]/)[0];" +
-        "return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}" +
-        "function dedupe(list){" +
-        "var by={},order=[];" +
-        "for(var i=0;i<list.length;i++){" +
-        "var it=list[i],k=keyOf(it[0]);" +
-        "if(Object.prototype.hasOwnProperty.call(by,k)){" +
-        "var o=by[k];" +
-        "if(qsz(it[0])>qsz(o[0]))by[k]=it" +
-        "}else{by[k]=it;order.push(k)}}" +
-        "var out=[];" +
-        "for(var j=0;j<order.length;j++)out.push(by[order[j]][0]);" +
-        "return out}" +
-        "var res=dedupe(good);" +
-        "if(!res.length)res=dedupe(all);" +
-        "return res;" +
-        "})()";
+        "(function(){var OUT=[],SEEN={};function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}function qsz(u){try{var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i);if(!m)return 0;var a=parseInt(m[2],10)||0;var b=parseInt(m[3]||'0',10)||0;if(a>0&&b>0)return Math.max(a,b);if(m[1]&&a>0)return a;return 0}catch(e){return 0}}function junk(u){if(!u)return 1;u=String(u);if(u.indexOf('data:')===0)return 1;if(u.indexOf('blob:')===0)return 1;if(!/^https?:/i.test(u))return 1;var b=u.split(/[?#]/)[0];if(/\\.(svg|ico|gif|css|js|mjs|json|html?|xml|txt|pdf|zip|rar|7z|gz|mp4|webm|mp3|m4a|ogg|wav|woff2?|ttf|otf|eot|map)$/i.test(b))return 1;if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp|avif)$/i.test(b))return 1;var q=qsz(u);if(q>0&&q<=400)return 1;if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1;if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1;return 0}function keyOf(u){var b=String(u).split(/[?#]/)[0];return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}function add(u){try{if(!u)return;u=abs(String(u).trim());if(!u||junk(u))return;try{if(u===location.href)return}catch(e){}var k=keyOf(u);if(Object.prototype.hasOwnProperty.call(SEEN,k))return;SEEN[k]=1;OUT.push(u)}catch(e){}}function bestSrcset(ss){try{var parts=String(ss).split(','),best='',bw=-1;for(var k=0;k<parts.length;k++){var tk=parts[k].trim().split(/\\s+/);var u0=tk[0]||'';var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;if(u0&&w0>=bw){bw=w0;best=u0}}return best}catch(e){return ''}}var DATA_ATTS=['data-src','data-lazy-src','data-original','data-original-src','data-orig-src','data-lazy','data-url','data-image','data-echo','data-asurl','data-cfsrc','data-hi-res-src','data-full-src','data-full_image','data-large-src','data-file','data-path','data-actualsrc'];function scanDoc(doc){try{var els=doc.querySelectorAll('img');for(var i=0;i<els.length;i++){var el=els[i];var nw=0,nh=0,loaded=false;try{loaded=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){}var u='';try{u=el.currentSrc||el.src||''}catch(e){}if(u&&u.indexOf('data:')===0)u='';if(u&&loaded&&nw&&nh&&Math.max(nw,nh)<300)u='';if(u)add(u);try{var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');if(ss){var bs=bestSrcset(ss);if(bs)add(bs)}}catch(e){}for(var j=0;j<DATA_ATTS.length;j++){try{var v=el.getAttribute(DATA_ATTS[j]);if(v&&v.length>4)add(v)}catch(e){}}}}catch(e){}try{var sos=doc.querySelectorAll('source');for(var i2=0;i2<sos.length;i2++){var so=sos[i2];try{var s2=so.getAttribute('srcset')||so.getAttribute('data-srcset')||so.getAttribute('src');if(s2){var b2=bestSrcset(s2);if(!b2)b2=s2;if(b2)add(b2)}}catch(e){}}}catch(e){}try{var as=doc.querySelectorAll('a[href]');for(var i3=0;i3<as.length;i3++){var h=as[i3].getAttribute('href')||'';if(/^https?:/i.test(h)&&/\\.(jpe?g|png|webp|avif|bmp)([?#]|$)/i.test(h))add(h)}}catch(e){}try{var st=doc.querySelectorAll('[style*=\"url(\"]');for(var i4=0;i4<st.length;i4++){var m=String(st[i4].getAttribute('style')||'').match(/url\\((['\"]?)([^'\")]+)\\1\\)/i);if(m&&m[2])add(m[2])}}catch(e){}}function scanAll(){try{scanDoc(document)}catch(e){}try{var fs=document.querySelectorAll('iframe');for(var i=0;i<fs.length;i++){try{var d=fs[i].contentDocument;if(d)scanDoc(d)}catch(e){}}}catch(e){}try{var of=window.frames;for(var j=0;j<of.length;j++){try{var d2=of[j].document;if(d2)scanDoc(d2)}catch(e){}}}catch(e){}}function perfPass(){try{var rs=performance.getEntriesByType('resource');for(var i=0;i<rs.length;i++){var en=rs[i]||{};var n=String(en.name||'');if(!n)continue;var b=n.split(/[?#]/)[0];var t=String(en.initiatorType||'');if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)){add(n);continue}if(t==='img')add(n)}}catch(e){}}function scriptPass(){try{if(OUT.length)return;var sc=document.querySelectorAll('script');var re=/https?:\\\\?\\/\\\\?\\/[^\"'\\s\\\\<>()[\\]]+?\\.(?:jpe?g|png|webp|avif|bmp)(?:\\?[^\"'\\\\\\s<>()[\\]]*)?/gi;var m,guard=0;for(var i=0;i<sc.length&&guard<800;i++){var txt='';try{txt=sc[i].textContent||''}catch(e){continue}if(!txt||txt.length<10)continue;re.lastIndex=0;while((m=re.exec(txt))&&guard<800){guard++;try{add(m[0].replace(/\\\\\\//g,'/'))}catch(e){}}}}catch(e){}}try{if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];}catch(e){}scanAll();perfPass();scriptPass();return OUT;})()";
+
+    private static final String SCROLL_JS =
+        "(function(){try{if(window.__MT_SCROLLING)return;window.__MT_SCROLLING=1;window.__MT_SCROLL_DONE=0;var step=Math.max(500,Math.floor(window.innerHeight*0.85));var y=0,n=0,stable=0,lastH=0;function H(){try{return Math.max(document.body?document.body.scrollHeight:0,document.documentElement?document.documentElement.scrollHeight:0)}catch(e){return 0}}lastH=H();function tick(){try{y+=step;window.scrollTo(0,y);n++;var h=H();if(h===lastH)stable++;else{stable=0;lastH=h}var atBottom=(y+window.innerHeight>=h-8);if((atBottom&&stable>=3)||n>90){try{window.scrollTo(0,0)}catch(e){}window.__MT_SCROLL_DONE=1;return}setTimeout(tick,280)}catch(e){window.__MT_SCROLL_DONE=1}}tick()}catch(e){try{window.__MT_SCROLL_DONE=1}catch(e2){}}})()";
 
     private WebView web;
     private EditText urlBox;
@@ -482,6 +361,58 @@ public class BrowserActivity extends Activity {
         } catch (Exception ignored) {}
     }
 
+    private interface ArrCallback {
+        void onResult(JSONArray arr);
+    }
+
+    private void startAutoScroll(final Runnable done) {
+        try {
+            web.evaluateJavascript(SCROLL_JS, null);
+        } catch (Exception ignored) {}
+        final Handler h = new Handler();
+        final long t0 = System.currentTimeMillis();
+        final Runnable[] tick = new Runnable[1];
+        tick[0] = () -> {
+            try {
+                web.evaluateJavascript("(window.__MT_SCROLL_DONE===1)?1:0", v -> {
+                    boolean finished = "1".equals(v)
+                            || System.currentTimeMillis() - t0 > 30000;
+                    if (finished) {
+                        h.postDelayed(done, 700);
+                    } else {
+                        h.postDelayed(tick[0], 800);
+                    }
+                });
+            } catch (Exception e) {
+                done.run();
+            }
+        };
+        h.postDelayed(tick[0], 900);
+    }
+
+    private void extractWithScroll(final ArrCallback then) {
+        try {
+            web.evaluateJavascript(EXTRACT_JS, value -> runOnUiThread(() -> {
+                JSONArray arr = parseLinksRaw(value);
+                if (arr != null && arr.length() > 0) {
+                    then.onResult(arr);
+                    return;
+                }
+                countLbl.setText("… در حال آماده‌سازی صفحه (اسکرول خودکار)");
+                startAutoScroll(() -> {
+                    try {
+                        web.evaluateJavascript(EXTRACT_JS, v2 -> runOnUiThread(() ->
+                                then.onResult(parseLinksRaw(v2))));
+                    } catch (Exception e) {
+                        runOnUiThread(() -> then.onResult(null));
+                    }
+                });
+            }));
+        } catch (Exception e) {
+            runOnUiThread(() -> then.onResult(null));
+        }
+    }
+
     private static boolean isMangaPlusViewer(String u) {
         if (u == null) return false;
         try {
@@ -506,42 +437,34 @@ public class BrowserActivity extends Activity {
             return;
         }
         extractBtn.setText("… در حال استخراج");
-        try {
-            web.evaluateJavascript(EXTRACT_JS, value -> runOnUiThread(() -> {
-                extractBtn.setText("🖼 استخراج عکس");
-                try {
-                    JSONArray arr = parseLinksRaw(value);
-                    if (arr == null || arr.length() == 0) {
-                        countLbl.setText("عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن");
-                        Toast.makeText(BrowserActivity.this,
-                                "هیچ عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن " +
-                                "تا عکس‌های تنبل لود بشن",
-                                Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    StringBuilder links = new StringBuilder();
-                    for (int i = 0; i < arr.length(); i++) {
-                        if (i > 0) links.append('\n');
-                        links.append(arr.getString(i));
-                    }
-                    Intent out = new Intent();
-                    out.putExtra(EXTRA_LINKS, links.toString());
-                    setResult(RESULT_OK, out);
-                    Toast.makeText(BrowserActivity.this,
-                            "✅ " + arr.length() + " لینک عکس گرفته شد",
-                            Toast.LENGTH_SHORT).show();
-                    finish();
-                } catch (final Exception e) {
-                    Toast.makeText(BrowserActivity.this,
-                            "خطا در استخراج: " + e.getMessage(),
-                            Toast.LENGTH_LONG).show();
-                }
-            }));
-        } catch (Exception e) {
+        extractWithScroll(arr -> {
             extractBtn.setText("🖼 استخراج عکس");
-            Toast.makeText(this, "خطا: " + e.getMessage(),
-                    Toast.LENGTH_LONG).show();
-        }
+            try {
+                if (arr == null || arr.length() == 0) {
+                    countLbl.setText("عکسی پیدا نشد — صفحه فصل را باز کن");
+                    Toast.makeText(BrowserActivity.this,
+                            "هیچ عکسی پیدا نشد — صفحه فصل را باز کن",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                StringBuilder links = new StringBuilder();
+                for (int i = 0; i < arr.length(); i++) {
+                    if (i > 0) links.append('\n');
+                    links.append(arr.getString(i));
+                }
+                Intent out = new Intent();
+                out.putExtra(EXTRA_LINKS, links.toString());
+                setResult(RESULT_OK, out);
+                Toast.makeText(BrowserActivity.this,
+                        "✅ " + arr.length() + " لینک عکس گرفته شد",
+                        Toast.LENGTH_SHORT).show();
+                finish();
+            } catch (final Exception e) {
+                Toast.makeText(BrowserActivity.this,
+                        "خطا در استخراج: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     private static String sniffMime(byte[] d) {
@@ -729,47 +652,39 @@ public class BrowserActivity extends Activity {
             return;
         }
         extractBtn.setText("… در حال دانلود");
-        try {
-            web.evaluateJavascript(EXTRACT_JS, value -> runOnUiThread(() -> {
-                extractBtn.setText("🖼 استخراج");
-                try {
-                    JSONArray arr = parseLinksRaw(value);
-                    if (arr == null || arr.length() == 0) {
-                        countLbl.setText("عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن");
-                        Toast.makeText(BrowserActivity.this,
-                                "هیچ عکسی پیدا نشد — تا آخرِ صفحه اسکرول کن " +
-                                "تا عکس‌های تنبل لود بشن",
-                                Toast.LENGTH_LONG).show();
-                        return;
-                    }
-                    int n = arr.length();
-                    if (n == 1 && isMangaPlusViewer(arr.getString(0))) {
-                        Intent out = new Intent();
-                        out.putExtra(EXTRA_LINKS, arr.getString(0));
-                        setResult(RESULT_OK, out);
-                        Toast.makeText(BrowserActivity.this,
-                                "لینکِ فصلِ مانگاپلاس گرفته شد —"
-                                        + " موتور خودش عکس‌ها را از"
-                                        + " API رسمی می‌گیرد",
-                                Toast.LENGTH_LONG).show();
-                        finish();
-                        return;
-                    }
-                    java.util.ArrayList<String> urls = new java.util.ArrayList<>();
-                    for (int i = 0; i < n; i++) urls.add(arr.getString(i));
-                    countLbl.setText("⬇ 0/" + n);
-                    startDownloadAll(urls);
-                } catch (final Exception e) {
-                    Toast.makeText(BrowserActivity.this,
-                            "خطا در دانلود: " + e.getMessage(),
-                            Toast.LENGTH_LONG).show();
-                }
-            }));
-        } catch (Exception e) {
+        extractWithScroll(arr -> {
             extractBtn.setText("🖼 استخراج");
-            Toast.makeText(this, "خطا: " + e.getMessage(),
-                    Toast.LENGTH_LONG).show();
-        }
+            try {
+                if (arr == null || arr.length() == 0) {
+                    countLbl.setText("عکسی پیدا نشد — صفحه فصل را باز کن");
+                    Toast.makeText(BrowserActivity.this,
+                            "هیچ عکسی پیدا نشد — صفحه فصل را باز کن",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+                int n = arr.length();
+                if (n == 1 && isMangaPlusViewer(arr.getString(0))) {
+                    Intent out = new Intent();
+                    out.putExtra(EXTRA_LINKS, arr.getString(0));
+                    setResult(RESULT_OK, out);
+                    Toast.makeText(BrowserActivity.this,
+                            "لینکِ فصلِ مانگاپلاس گرفته شد —"
+                                    + " موتور خودش عکس‌ها را از"
+                                    + " API رسمی می‌گیرد",
+                            Toast.LENGTH_LONG).show();
+                    finish();
+                    return;
+                }
+                java.util.ArrayList<String> urls = new java.util.ArrayList<>();
+                for (int i = 0; i < n; i++) urls.add(arr.getString(i));
+                countLbl.setText("⬇ 0/" + n);
+                startDownloadAll(urls);
+            } catch (final Exception e) {
+                Toast.makeText(BrowserActivity.this,
+                        "خطا در دانلود: " + e.getMessage(),
+                        Toast.LENGTH_LONG).show();
+            }
+        });
     }
 
     @SuppressWarnings("deprecation")
