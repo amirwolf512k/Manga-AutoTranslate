@@ -37,7 +37,7 @@ class BrowserActivity : Activity() {
 
         private const val EXTRACT_JS = """
 (function(){
-var OUT=[],SEEN={};
+var OUT=[],SEEN={},BLOBS=[],BSEEN={};
 function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}}
 function qsz(u){
 try{
@@ -97,6 +97,10 @@ try{loaded=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalH
 var u='';
 try{u=el.currentSrc||el.src||''}catch(e){}
 if(u&&u.indexOf('data:')===0)u='';
+if(u&&u.indexOf('blob:')===0){
+if(loaded&&nw&&nh&&Math.max(nw,nh)>=300)addBlob(u);
+u='';
+}
 if(u&&loaded&&nw&&nh&&Math.max(nw,nh)<300)u='';
 if(u)add(u);
 try{
@@ -130,6 +134,16 @@ var st=doc.querySelectorAll('[style*="url("]');
 for(var i4=0;i4<st.length;i4++){
 var m=String(st[i4].getAttribute('style')||'').match(/url\((['"]?)([^'")]+)\1\)/i);
 if(m&&m[2])add(m[2])}
+}catch(e){}}
+function blobKey(u){return String(u).split('#')[0]}
+function addBlob(u){
+try{
+if(!u)return;
+u=String(u).trim();
+if(u.indexOf('blob:')!==0)return;
+var k=blobKey(u);
+if(Object.prototype.hasOwnProperty.call(BSEEN,k))return;
+BSEEN[k]=1;BLOBS.push(u)
 }catch(e){}}
 function scanAll(){
 try{scanDoc(document)}catch(e){}
@@ -176,6 +190,7 @@ if(/(^|\.)mangaplus\.shueisha\.co\.jp${'$'}/i.test(location.host)&&location.path
 scanAll();
 perfPass();
 scriptPass();
+if(BLOBS.length>=3||(BLOBS.length>=1&&BLOBS.length>=OUT.length))return BLOBS;
 return OUT;
 })()
         """
@@ -557,12 +572,22 @@ tick()
         h.postDelayed(tick, 900)
     }
 
+    private fun hasBlobs(arr: JSONArray?): Boolean {
+        if (arr == null) return false
+        try {
+            for (i in 0 until arr.length()) {
+                if (arr.optString(i).startsWith("blob:")) return true
+            }
+        } catch (_: Exception) {}
+        return false
+    }
+
     private fun extractWithScroll(then: (JSONArray?) -> Unit) {
         try {
             web.evaluateJavascript(EXTRACT_JS) { raw ->
                 runOnUiThread {
                     val arr = parseLinksRaw(raw)
-                    if (arr != null && arr.length() > 0) {
+                    if (arr != null && arr.length() > 0 && !hasBlobs(arr)) {
                         then(arr)
                         return@runOnUiThread
                     }
@@ -570,10 +595,15 @@ tick()
                     startAutoScroll {
                         try {
                             web.evaluateJavascript(EXTRACT_JS) { raw2 ->
-                                runOnUiThread { then(parseLinksRaw(raw2)) }
+                                runOnUiThread {
+                                    val arr2 = parseLinksRaw(raw2)
+                                    val best = if ((arr2?.length() ?: 0) >
+                                            (arr?.length() ?: 0)) arr2 else arr
+                                    then(best)
+                                }
                             }
                         } catch (_: Exception) {
-                            then(null)
+                            then(arr)
                         }
                     }
                 }
@@ -791,6 +821,15 @@ tick()
                     countLbl.text = "عکسی پیدا نشد — صفحه فصل را باز کن"
                     Toast.makeText(this,
                         "هیچ عکسی پیدا نشد — صفحه فصل را باز کن",
+                        Toast.LENGTH_LONG).show()
+                    return@extractWithScroll
+                }
+                if (hasBlobs(arr)) {
+                    countLbl.text = "${arr.length()} عکس آماده — دکمه «استخراج دانلود» را بزن"
+                    Toast.makeText(this,
+                        "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند " +
+                        "(${arr.length()} صفحه آماده) — " +
+                        "از دکمه «استخراج دانلود» استفاده کن",
                         Toast.LENGTH_LONG).show()
                     return@extractWithScroll
                 }
