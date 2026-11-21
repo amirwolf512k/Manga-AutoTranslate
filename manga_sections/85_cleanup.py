@@ -7877,9 +7877,8 @@ class _MangaTranslatorBody_85:
                     _field = (os.environ.get("MANGA_HQC_FIELD", "0") == "1"
                               and fstd <= 32.0)
                     if not _field:
-                        if rsp <= 16.0:
-                            tgt = rmed
-                        elif fstd <= 55.0:
+                        tgt = rmed
+                        if rsp > 5.0 and fstd <= 55.0:
                             try:
                                 ry, rx = np.nonzero(fbm)
                                 _A = np.stack(
@@ -7893,16 +7892,18 @@ class _MangaTranslatorBody_85:
                                 _res = np.sqrt(
                                     ((_A @ _coef - _rpx) ** 2)
                                     .sum(axis=1)).mean()
-                                if _res > 13.0:
+                                if _res <= 10.0:
+                                    plane = _coef
+                                elif rsp > 16.0:
                                     if _dbg:
                                         print(f"    [228d] قطعه@({x0},{y0}) "
                                               f"حلقهشلوغ res={_res:.0f} رد",
                                               flush=True)
                                     continue
-                                plane = _coef
                             except Exception:
-                                continue
-                        else:
+                                if rsp > 16.0:
+                                    continue
+                        elif fstd > 55.0 and rsp > 16.0:
                             if _dbg:
                                 print(f"    [228d] قطعه@({x0},{y0}) "
                                       f"پربافت fstd={fstd:.0f} رد",
@@ -8241,8 +8242,11 @@ class _MangaTranslatorBody_85:
                                     _zone_qc[_qy0:_qy1, _qx0:_qx1] = 0
                             except Exception:
                                 continue
-                    self._fill_harmony_qc(donor, original, _zone_qc,
-                                          verbose=verbose or self.debug)
+                    self._fill_harmony_qc(
+                        donor, original,
+                        cv2.dilate(_zone_qc, cv2.getStructuringElement(
+                            cv2.MORPH_ELLIPSE, (13, 13))),
+                        verbose=verbose or self.debug)
                 except Exception:
                     pass
             _cmp = cv2.dilate(mask, self._compose_kernel9()) > 0
@@ -11644,6 +11648,13 @@ class _MangaTranslatorBody_85:
                                         _zq[_qy0:_qy1, _qx0:_qx1] = False
                                 except Exception:
                                     continue
+                    except Exception:
+                        pass
+                    try:
+                        _zq = cv2.dilate(
+                            _zq.astype(np.uint8),
+                            cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE, (13, 13))) > 0
                     except Exception:
                         pass
                     self._fill_harmony_qc(cleaned, image, _zq,
