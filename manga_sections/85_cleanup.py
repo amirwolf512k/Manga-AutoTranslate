@@ -7740,7 +7740,7 @@ class _MangaTranslatorBody_85:
             _ed = (cv2.dilate(
                 _ed, cv2.getStructuringElement(
                     cv2.MORPH_ELLIPSE, (7, 7))) > 0)
-            zm_c = zm & (~_ed)
+            zm_c = zm & ch
             if not zm_c.any():
                 return 0
             _n_lab, _lab, _stats, _cents = \
@@ -7751,6 +7751,165 @@ class _MangaTranslatorBody_85:
             _dbg = os.environ.get("MANGA_HQC_DBG", "0") == "1"
             n_fix = 0
             n_px = 0
+
+            def _rowband_plane():
+                try:
+                    _xa0 = max(bx0, x0 - 4) - bx0
+                    _xa1 = min(bx1, x1 + 5) - bx0
+                    _xsL = slice(_xa0, _xa1)
+                    _xsA = slice(bx0 + _xa0, bx0 + _xa1)
+                    _ab = []
+                    _ya = None
+                    _prev_med = None
+                    for yy in range(y0 - 1, max(by0, y0 - 30), -1):
+                        _rowV = original[yy, _xsA].astype(np.float32)
+                        _rowM = (~_chc[yy - by0, _xsL]) \
+                            & (~_edc[yy - by0, _xsL])
+                        if int(_rowM.sum()) >= max(16, int(0.15 * (x1 - x0))):
+                            _rv = _rowV[_rowM]
+                            _rmed = np.median(_rv, axis=0)
+                            for _ in range(2):
+                                _kv = np.abs(_rv - _rmed).max(axis=1) <= 26.0
+                                if int(_kv.sum()) < 8:
+                                    break
+                                _rmed = np.median(_rv[_kv], axis=0)
+                            _keep = np.abs(_rv - _rmed).max(axis=1) <= 26.0
+                            if int(_keep.sum()) >= max(10,
+                                                       int(0.40 * _rowM.sum())):
+                                _gm = float(_rmed.mean())
+                                if _prev_med is not None \
+                                        and abs(_gm - _prev_med) > 30.0:
+                                    break
+                                _prev_med = _gm
+                                _ab.append(_rv[_keep])
+                                if _ya is None:
+                                    _ya = float(yy)
+                                if len(_ab) >= 4:
+                                    break
+                    _be = []
+                    _yb = None
+                    _prev_med = None
+                    for yy in range(y1 + 1, min(by1, y1 + 30)):
+                        _rowV = original[yy, _xsA].astype(np.float32)
+                        _rowM = (~_chc[yy - by0, _xsL]) \
+                            & (~_edc[yy - by0, _xsL])
+                        if int(_rowM.sum()) >= max(16, int(0.15 * (x1 - x0))):
+                            _rv = _rowV[_rowM]
+                            _rmed = np.median(_rv, axis=0)
+                            for _ in range(2):
+                                _kv = np.abs(_rv - _rmed).max(axis=1) <= 26.0
+                                if int(_kv.sum()) < 8:
+                                    break
+                                _rmed = np.median(_rv[_kv], axis=0)
+                            _keep = np.abs(_rv - _rmed).max(axis=1) <= 26.0
+                            if int(_keep.sum()) >= max(10,
+                                                       int(0.40 * _rowM.sum())):
+                                _gm = float(_rmed.mean())
+                                if _prev_med is not None \
+                                        and abs(_gm - _prev_med) > 30.0:
+                                    break
+                                _prev_med = _gm
+                                _be.append(_rv[_keep])
+                                if _yb is None:
+                                    _yb = float(yy)
+                                if len(_be) >= 4:
+                                    break
+                    if _ya is None and _yb is None:
+                        return None
+                    _ca = (np.median(np.concatenate(_ab, axis=0), axis=0)
+                           if _ab else None)
+                    _cb = (np.median(np.concatenate(_be, axis=0), axis=0)
+                           if _be else None)
+                    if _ca is None or _cb is None:
+                        _cs = _ca if _ca is not None else _cb
+                        _flat = np.broadcast_to(
+                            np.asarray(_cs, dtype=np.float32), (3,))
+                        try:
+                            _fpx2 = donor[by0:by1, bx0:bx1][pch_p]
+                            if _fpx2.shape[0] >= 25:
+                                _fmed2 = np.median(
+                                    _fpx2.astype(np.float32), axis=0)
+                                if float(np.abs(_fmed2 - _cs).max()) < 14.0:
+                                    return None
+                        except Exception:
+                            pass
+                        return np.stack([
+                            _flat,
+                            np.zeros(3, np.float32),
+                            np.zeros(3, np.float32)])
+                    _cb = np.median(np.concatenate(_be, axis=0), axis=0)
+                    _pya = _ya - y0
+                    _pyb = _yb - y0
+                    if abs(_pyb - _pya) < 4.0:
+                        return None
+                    _slope = (_cb - _ca) / float(_pyb - _pya)
+                    _c0 = _ca - _slope * _pya
+                    _g_ca = float(_ca[0] * 0.114 + _ca[1] * 0.587
+                                  + _ca[2] * 0.299)
+                    _g_cb = float(_cb[0] * 0.114 + _cb[1] * 0.587
+                                  + _cb[2] * 0.299)
+                    _exp_span = abs(_g_ca - _g_cb) * min(
+                        1.0, (y1 - y0) / max(1.0, abs(_pyb - _pya)))
+                    _need = False
+                    try:
+                        _fpx2 = donor[by0:by1, bx0:bx1][pch_p]
+                        if _fpx2.shape[0] >= 25:
+                            _fpx2f = _fpx2.astype(np.float32)
+                            _fmed2 = np.median(_fpx2f, axis=0)
+                            _mid = 0.5 * (_ca + _cb)
+                            if float(np.abs(_fmed2 - _mid).max()) >= 14.0:
+                                _need = True
+                            if _exp_span >= 18.0:
+                                _fgG = (_fpx2f[:, 0] * 0.114
+                                        + _fpx2f[:, 1] * 0.587
+                                        + _fpx2f[:, 2] * 0.299)
+                                _fg_span = float(np.percentile(_fgG, 90)
+                                                 - np.percentile(_fgG, 10))
+                                if _fg_span < 0.5 * _exp_span:
+                                    _need = True
+                        else:
+                            _need = True
+                    except Exception:
+                        _need = True
+                    if not _need:
+                        return None
+                    return np.stack([
+                        _c0.astype(np.float32),
+                        np.zeros(3, np.float32),
+                        _slope.astype(np.float32)])
+                except Exception:
+                    return None
+
+            def _fb_fill(_coef_fb):
+                nonlocal n_fix, n_px
+                try:
+                    _repl = donor[by0:by1, bx0:bx1].copy()
+                    _py3, _px3 = np.nonzero(pch_p)
+                    _A3 = np.stack(
+                        [np.ones(_px3.size, np.float32),
+                         (_px3 + bx0 - x0).astype(np.float32),
+                         (_py3 + by0 - y0).astype(np.float32)],
+                        axis=1)
+                    _repl[pch_p] = np.clip(
+                        np.rint(_A3 @ _coef_fb), 0,
+                        255).astype(np.uint8)
+                    _wm = pch_p.astype(np.float32)
+                    _wm = cv2.GaussianBlur(_wm, (0, 0), 2.0)
+                    _wm = np.minimum(_wm * 1.6, 1.0)
+                    _wm *= zm[by0:by1, bx0:bx1].astype(np.float32)
+                    _sub = donor[by0:by1, bx0:bx1].astype(np.float32)
+                    donor[by0:by1, bx0:bx1] = np.clip(
+                        _sub * (1.0 - _wm[..., None])
+                        + _repl.astype(np.float32) * _wm[..., None],
+                        0, 255).astype(np.uint8)
+                    n_fix += 1
+                    n_px += int(pch_p.sum())
+                    if _dbg:
+                        print(f"    [228d] قطعه@({x0},{y0}) "
+                              f"rowband-fb اعمال شد", flush=True)
+                except Exception:
+                    pass
+
             for _i in range(1, _n_lab):
                 try:
                     _a = int(_stats[_i, cv2.CC_STAT_AREA])
@@ -7782,6 +7941,12 @@ class _MangaTranslatorBody_85:
                                 + _ocf[:, :, 2] * 0.299)
                     _edc = _ed[by0:by1, bx0:bx1]
                     _chc = ch[by0:by1, bx0:bx1]
+                    pch_p = np.zeros((by1 - by0, bx1 - bx0), bool)
+                    pch_p[y0 - by0:y1 - by0 + 1,
+                          x0 - bx0:x1 - bx0 + 1] = pch_b
+                    pcc_p = np.zeros((by1 - by0, bx1 - bx0), bool)
+                    pcc_p[y0 - by0:y1 - by0 + 1,
+                          x0 - bx0:x1 - bx0 + 1] = pcc
                     cand = (cv2.dilate(_pcp, _k) > 0) \
                         & (~_edc) & (~_chc)
                     if int(cand.sum()) < 80:
@@ -7803,6 +7968,9 @@ class _MangaTranslatorBody_85:
                         if _dbg:
                             print(f"    [228d] قطعه@({x0},{y0}) "
                                   f"حلقهکم={_nr}", flush=True)
+                        _fbP = _rowband_plane()
+                        if _fbP is not None:
+                            _fb_fill(_fbP)
                         continue
                     _gl = _lum_map[cand]
                     _hist, _edges = np.histogram(_gl, bins=32,
@@ -7814,19 +7982,19 @@ class _MangaTranslatorBody_85:
                                   f"حلقهٔ بیخوشه "
                                   f"({_hist[_mb]}/{_nr}) رد",
                                   flush=True)
+                        _fbP = _rowband_plane()
+                        if _fbP is not None:
+                            _fb_fill(_fbP)
                         continue
-                    pch_p = np.zeros((by1 - by0, bx1 - bx0), bool)
-                    pch_p[y0 - by0:y1 - by0 + 1,
-                          x0 - bx0:x1 - bx0 + 1] = pch_b
-                    pcc_p = np.zeros((by1 - by0, bx1 - bx0), bool)
-                    pcc_p[y0 - by0:y1 - by0 + 1,
-                          x0 - bx0:x1 - bx0 + 1] = pcc
                     _m0 = float(0.5 * (_edges[_mb] + _edges[_mb + 1]))
                     fbm = cand & (np.abs(_lum_map - _m0) <= 40.0)
                     if int(fbm.sum()) < 80:
                         if _dbg:
                             print(f"    [228d] قطعه@({x0},{y0}) "
                                   f"خوشهکم={int(fbm.sum())}", flush=True)
+                        _fbP = _rowband_plane()
+                        if _fbP is not None:
+                            _fb_fill(_fbP)
                         continue
                     rpx = _ocf[fbm]
                     rmed = np.median(rpx, axis=0)
@@ -7856,6 +8024,11 @@ class _MangaTranslatorBody_85:
                     if d < _thr and rsp >= 20.0 and fstd <= 9.0:
                         d = _thr + 1.0
                     if d < _thr:
+                        if rsp >= 18.0:
+                            _fbP = _rowband_plane()
+                            if _fbP is not None:
+                                _fb_fill(_fbP)
+                                continue
                         if _dbg:
                             print(f"    [228d] قطعه@({x0},{y0}) "
                                   f"سالم d={d:.0f} پ={fmed.round(0)} "
@@ -7873,6 +8046,9 @@ class _MangaTranslatorBody_85:
                                         f"(زیرِ قطعه {_umed:.0f} vs "
                                         f"حلقه {_m0:.0f}) → رد",
                                         flush=True)
+                                _fbP = _rowband_plane()
+                                if _fbP is not None:
+                                    _fb_fill(_fbP)
                                 continue
                     except Exception:
                         pass
