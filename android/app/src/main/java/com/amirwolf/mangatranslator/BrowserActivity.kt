@@ -331,12 +331,12 @@ tick()
     private lateinit var web: WebView
     private lateinit var urlBox: EditText
     private lateinit var extractBtn: TextView
-    private lateinit var dlBtn: TextView
     private lateinit var countLbl: TextView
     private lateinit var progress: ProgressBar
 
     private val foundStore = java.util.LinkedHashSet<String>()
     private var chapterKeyNow = ""
+    private var recording = false
     private var dlDir: java.io.File? = null
     private var dlDone = 0
     private var dlOk = 0
@@ -454,13 +454,13 @@ tick()
             setPadding(12, 10, 12, 10)
         }
         countLbl = TextView(this).apply {
-            text = "عکسی پیدا نشده — اول فصل را باز کن"
+            text = "اول فصل را باز کن، بعد «شروع ضبط» را بزن"
             setTextColor(MUT)
             textSize = 12f
             setPadding(4, 0, 4, 0)
         }
         extractBtn = TextView(this).apply {
-            text = "🖼 استخراج لینک"
+            text = "▶ شروع ضبط"
             setTextColor(Color.WHITE)
             textSize = 14f
             typeface = Typeface.DEFAULT_BOLD
@@ -469,31 +469,15 @@ tick()
                 setColor(ACC)
                 cornerRadius = 24f
             }
-            setOnClickListener { extractImages() }
-        }
-        dlBtn = TextView(this).apply {
-            text = "⬇ استخراج دانلود"
-            setTextColor(Color.WHITE)
-            textSize = 14f
-            typeface = Typeface.DEFAULT_BOLD
-            setPadding(22, 14, 22, 14)
-            background = GradientDrawable().apply {
-                setColor(Color.parseColor("#2d3649"))
-                setStroke(1, ACC)
-                cornerRadius = 24f
+            setOnClickListener {
+                if (!recording) startRecording() else showExtractChoice()
             }
-            setOnClickListener { downloadImages() }
         }
         bottom.addView(countLbl, LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         bottom.addView(extractBtn, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT,
             ViewGroup.LayoutParams.WRAP_CONTENT))
-        val dlLp = LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.WRAP_CONTENT,
-            ViewGroup.LayoutParams.WRAP_CONTENT)
-        dlLp.setMargins(8, 0, 0, 0)
-        bottom.addView(dlBtn, dlLp)
         root.addView(bottom, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT,
             ViewGroup.LayoutParams.WRAP_CONTENT))
@@ -691,7 +675,34 @@ tick()
         } catch (_: Exception) { false }
     }
 
+    private fun startRecording() {
+        val cur = try { web.url ?: "" } catch (_: Exception) { "" }
+        if (cur.isEmpty() || cur == "about:blank") {
+            Toast.makeText(this, "اول یک سایت را باز کن",
+                Toast.LENGTH_SHORT).show()
+            return
+        }
+        recording = true
+        foundStore.clear()
+        chapterKeyNow = chapterKey(cur)
+        try { web.evaluateJavascript(CLEAR_STORE_JS, null) } catch (_: Exception) {}
+        extractBtn.text = "🖼 استخراج"
+        countLbl.text = "در حال ضبط… صفحه فصل را ورق بزن"
+        try { web.reload() } catch (_: Exception) {}
+    }
+
+    private fun showExtractChoice() {
+        val b = android.app.AlertDialog.Builder(this)
+        b.setTitle("استخراج")
+        b.setItems(arrayOf("استخراج با لینک", "استخراج با دانلود")) { _, which ->
+            if (which == 0) extractImages() else downloadImages()
+        }
+        b.setNegativeButton("انصراف", null)
+        b.show()
+    }
+
     private fun recountAsync() {
+        if (!recording) return
         try {
             syncChapterKey()
             web.evaluateJavascript(EXTRACT_JS) { raw ->
@@ -700,9 +711,9 @@ tick()
                     runOnUiThread {
                         val n = mergeFound(arr)
                         countLbl.text = if (n > 0) {
-                            "$n عکس آماده استخراج"
+                            "● $n عکس ضبط شد"
                         } else {
-                            "عکسی پیدا نشده — اول فصل را باز کن"
+                            "در حال ضبط… صفحه فصل را ورق بزن"
                         }
                     }
                 } catch (_: Exception) {}
@@ -948,14 +959,14 @@ tick()
                 Toast.LENGTH_SHORT).show()
             return
         }
-        dlBtn.text = "… در حال دانلود"
+        extractBtn.text = "… در حال دانلود"
         extractWithScroll { arr ->
-            dlBtn.text = "⬇ استخراج دانلود"
+            extractBtn.text = "🖼 استخراج"
             try {
                 if (arr == null || arr.length() == 0) {
-                    countLbl.text = "عکسی پیدا نشد — صفحه فصل را باز کن"
+                    countLbl.text = "هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن"
                     Toast.makeText(this@BrowserActivity,
-                        "هیچ عکسی پیدا نشد — صفحه فصل را باز کن",
+                        "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
                         Toast.LENGTH_LONG).show()
                     return@extractWithScroll
                 }
@@ -992,21 +1003,21 @@ tick()
         }
         extractBtn.text = "… در حال استخراج"
         extractWithScroll { arr ->
-            extractBtn.text = "🖼 استخراج عکس"
+            extractBtn.text = "🖼 استخراج"
             try {
                 if (arr == null || arr.length() == 0) {
-                    countLbl.text = "عکسی پیدا نشد — صفحه فصل را باز کن"
+                    countLbl.text = "هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن"
                     Toast.makeText(this,
-                        "هیچ عکسی پیدا نشد — صفحه فصل را باز کن",
+                        "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
                         Toast.LENGTH_LONG).show()
                     return@extractWithScroll
                 }
                 if (hasBlobs(arr)) {
-                    countLbl.text = "${arr.length()} عکس آماده — دکمه «استخراج دانلود» را بزن"
+                    countLbl.text = "${arr.length()} عکس آماده — گزینه «استخراج با دانلود» را انتخاب کن"
                     Toast.makeText(this,
                         "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند " +
                         "(${arr.length()} صفحه آماده) — " +
-                        "از دکمه «استخراج دانلود» استفاده کن",
+                        "از گزینه «استخراج با دانلود» استفاده کن",
                         Toast.LENGTH_LONG).show()
                     return@extractWithScroll
                 }

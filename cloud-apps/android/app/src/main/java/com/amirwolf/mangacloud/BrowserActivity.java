@@ -67,6 +67,7 @@ public class BrowserActivity extends Activity {
     private final java.util.LinkedHashSet<String> foundStore =
             new java.util.LinkedHashSet<>();
     private String chapterKeyNow = "";
+    private boolean recording = false;
 
     private final Handler recountHandler = new Handler();
     private final Runnable recountTick = new Runnable() {
@@ -201,13 +202,13 @@ public class BrowserActivity extends Activity {
         bottom.setPadding(dp(10), dp(8), dp(10), dp(8));
 
         countLbl = new TextView(this);
-        countLbl.setText("عکسی پیدا نشده — اول فصل را باز کن");
+        countLbl.setText("اول فصل را باز کن، بعد «شروع ضبط» را بزن");
         countLbl.setTextColor(Color.parseColor("#8a93a8"));
         countLbl.setTextSize(12);
         countLbl.setPadding(dp(4), 0, dp(4), 0);
 
         extractBtn = new TextView(this);
-        extractBtn.setText("🖼 استخراج");
+        extractBtn.setText("▶ شروع ضبط");
         extractBtn.setTextColor(Color.WHITE);
         extractBtn.setTextSize(14);
         extractBtn.setTypeface(Typeface.DEFAULT_BOLD);
@@ -217,7 +218,9 @@ public class BrowserActivity extends Activity {
         exBg.setCornerRadius(dp(22));
         extractBtn.setBackground(exBg);
         extractBtn.setOnClickListener(new View.OnClickListener() {
-            @Override public void onClick(View v) { showExtractChoice(); }
+            @Override public void onClick(View v) {
+                if (!recording) startRecording(); else showExtractChoice();
+            }
         });
 
         bottom.addView(countLbl, new LinearLayout.LayoutParams(
@@ -445,7 +448,27 @@ public class BrowserActivity extends Activity {
         return arr;
     }
 
+    private void startRecording() {
+        String cur;
+        try { cur = web.getUrl() != null ? web.getUrl() : ""; }
+        catch (Exception e) { cur = ""; }
+        if (cur.isEmpty() || cur.equals("about:blank")) {
+            Toast.makeText(this, "اول یک سایت را باز کن",
+                    Toast.LENGTH_SHORT).show();
+            return;
+        }
+        recording = true;
+        foundStore.clear();
+        chapterKeyNow = chapterKey(cur);
+        try { web.evaluateJavascript(CLEAR_STORE_JS, null); }
+        catch (Exception ignored) {}
+        extractBtn.setText("🖼 استخراج");
+        countLbl.setText("در حال ضبط… صفحه فصل را ورق بزن");
+        try { web.reload(); } catch (Exception ignored) {}
+    }
+
     private void recountAsync() {
+        if (!recording) return;
         try {
             syncChapterKey();
             web.evaluateJavascript(EXTRACT_JS, value -> {
@@ -454,8 +477,8 @@ public class BrowserActivity extends Activity {
                     runOnUiThread(() -> {
                         final int n = mergeFound(arr);
                         countLbl.setText(n > 0
-                                ? n + " عکس آماده استخراج"
-                                : "عکسی پیدا نشده — اول فصل را باز کن");
+                                ? "● " + n + " عکس ضبط شد"
+                                : "در حال ضبط… صفحه فصل را ورق بزن");
                     });
                 } catch (Exception ignored) {}
             });
@@ -559,9 +582,9 @@ public class BrowserActivity extends Activity {
             extractBtn.setText("🖼 استخراج عکس");
             try {
                 if (arr == null || arr.length() == 0) {
-                    countLbl.setText("عکسی پیدا نشد — صفحه فصل را باز کن");
+                    countLbl.setText("هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن");
                     Toast.makeText(BrowserActivity.this,
-                            "هیچ عکسی پیدا نشد — صفحه فصل را باز کن",
+                            "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
                             Toast.LENGTH_LONG).show();
                     return;
                 }
@@ -793,9 +816,9 @@ public class BrowserActivity extends Activity {
             extractBtn.setText("🖼 استخراج");
             try {
                 if (arr == null || arr.length() == 0) {
-                    countLbl.setText("عکسی پیدا نشد — صفحه فصل را باز کن");
+                    countLbl.setText("هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن");
                     Toast.makeText(BrowserActivity.this,
-                            "هیچ عکسی پیدا نشد — صفحه فصل را باز کن",
+                            "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
                             Toast.LENGTH_LONG).show();
                     return;
                 }
