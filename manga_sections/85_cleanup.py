@@ -6457,6 +6457,13 @@ class _MangaTranslatorBody_85:
                         _cols = np.nonzero(_band[_ry])[0]
                         if _cols.size >= 2:
                             _band[_ry, _cols.min():_cols.max() + 1] = 255
+                    _colsB = np.where(_band.any(axis=0))[0]
+                    for _cx in _colsB:
+                        _rws = np.nonzero(_band[:, _cx])[0]
+                        if _rws.size >= 2 \
+                                and (_rws.max() - _rws.min()) <= max(
+                                    30, int(1.6 * (sy1 - sy0))):
+                            _band[_rws.min():_rws.max() + 1, _cx] = 255
                     _sub[_band > 0] = 255
                 except Exception:
                     pass
