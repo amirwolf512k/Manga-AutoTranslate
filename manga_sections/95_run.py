@@ -2615,51 +2615,66 @@ class _MangaTranslatorBody_95:
         except Exception:
             pass
 
-    def _render_one_region(self, pil_img, draw, image, original_image, region) -> None:
-        x, y, w, h = region.rect
-        try:
-            _polys = [np.asarray(p, dtype=np.float32).reshape(-1, 2)
-                      for p in (getattr(region, "ocr_polys", None) or [])
-                      if np.asarray(p).size >= 6]
-            if _polys:
-                _pts = np.concatenate(_polys, axis=0)
-                px0, py0 = float(_pts[:, 0].min()), float(_pts[:, 1].min())
-                px1, py1 = float(_pts[:, 0].max()), float(_pts[:, 1].max())
-                if (px1 - px0) >= 10 and (py1 - py0) >= 8:
-                    _off = max(abs((px0 + px1) / 2 - (x + w / 2)) / max(1.0, w),
-                               abs((py0 + py1) / 2 - (y + h / 2)) / max(1.0, h))
-                    if _off > 0.35:
-                        _padx = max(6, int(0.06 * (px1 - px0)))
-                        _pady = max(5, int(0.08 * (py1 - py0)))
-                        x = max(0, int(px0 - _padx))
-                        y = max(0, int(py0 - _pady))
-                        w = int(px1 - px0 + 2 * _padx)
-                        h = int(py1 - py0 + 2 * _pady)
-        except Exception:
-            pass
+    def _render_one_region(self, pil_img, draw, image, original_image, region,
+                           rbox=None) -> None:
+        if rbox is not None:
+            try:
+                x, y, w, h = (int(rbox[0]), int(rbox[1]),
+                              int(rbox[2]), int(rbox[3]))
+                if w < 8 or h < 8:
+                    rbox = None
+            except Exception:
+                rbox = None
+        if rbox is None:
+            x, y, w, h = region.rect
+        else:
+            x, y, w, h = int(rbox[0]), int(rbox[1]), int(rbox[2]), int(rbox[3])
+        if rbox is None:
+            try:
+                _polys = [np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                          for p in (getattr(region, "ocr_polys", None) or [])
+                          if np.asarray(p).size >= 6]
+                if _polys:
+                    _pts = np.concatenate(_polys, axis=0)
+                    px0, py0 = float(_pts[:, 0].min()), float(_pts[:, 1].min())
+                    px1, py1 = float(_pts[:, 0].max()), float(_pts[:, 1].max())
+                    if (px1 - px0) >= 10 and (py1 - py0) >= 8:
+                        _off = max(abs((px0 + px1) / 2 - (x + w / 2)) / max(1.0, w),
+                                   abs((py0 + py1) / 2 - (y + h / 2)) / max(1.0, h))
+                        if _off > 0.35:
+                            _padx = max(6, int(0.06 * (px1 - px0)))
+                            _pady = max(5, int(0.08 * (py1 - py0)))
+                            x = max(0, int(px0 - _padx))
+                            y = max(0, int(py0 - _pady))
+                            w = int(px1 - px0 + 2 * _padx)
+                            h = int(py1 - py0 + 2 * _pady)
+            except Exception:
+                pass
 
-        try:
-            _rpolys = list(getattr(region, "ocr_polys", None) or [])
-            if _rpolys:
-                _rvert = self._polys_vertical(_rpolys)
-                _rdense = (not _rvert) and MangaTranslator._polys_dense(_rpolys)
-                if _rvert or _rdense:
-                    _rbb = MangaTranslator._text_block_box(
-                        _rpolys, region.rect, vert=_rvert)
-                    if _rbb is not None:
-                        x, y, w, h = (int(_rbb[0]), int(_rbb[1]),
-                                      int(_rbb[2]), int(_rbb[3]))
-        except Exception:
-            pass
+            try:
+                _rpolys = list(getattr(region, "ocr_polys", None) or [])
+                if _rpolys:
+                    _rvert = self._polys_vertical(_rpolys)
+                    _rdense = (not _rvert) and MangaTranslator._polys_dense(_rpolys)
+                    if _rvert or _rdense:
+                        _rbb = MangaTranslator._text_block_box(
+                            _rpolys, region.rect, vert=_rvert)
+                        if _rbb is not None:
+                            x, y, w, h = (int(_rbb[0]), int(_rbb[1]),
+                                          int(_rbb[2]), int(_rbb[3]))
+            except Exception:
+                pass
 
-        short = len((region.translated_text or "").split()) <= 2
-        if short and (w < 90 or h < 50):
+            short = len((region.translated_text or "").split()) <= 2
+            if short and (w < 90 or h < 50):
 
-            expand = max(4, int(min(w, h) * 0.12))
-            x = max(0, x - expand // 2)
-            y = max(0, y - expand // 2)
-            w = w + expand
-            h = h + expand
+                expand = max(4, int(min(w, h) * 0.12))
+                x = max(0, x - expand // 2)
+                y = max(0, y - expand // 2)
+                w = w + expand
+                h = h + expand
+        else:
+            short = len((region.translated_text or "").split()) <= 2
 
         pad = max(3, int(min(w, h) * (0.05 if short else 0.08)))
         box_w = max(14, w - 2 * pad)
@@ -2812,6 +2827,30 @@ class _MangaTranslatorBody_95:
 
             n = max(1, len(lines))
 
+            _gap = max(2, int(round(glyph_h * 0.14)))
+            line_h = glyph_h + _gap
+            _mf_try = int(max_font or 52)
+            for _ in range(12):
+                if line_h * n + 2 * sw <= box_h:
+                    break
+                _mf_try = max(13, _mf_try - 2)
+                if _mf_try >= int(max_font or 52):
+                    break
+                try:
+                    font, lines, sw = self._wrap_and_fit(
+                        draw, region.translated_text, box_w, box_h,
+                        style=style, max_size=_mf_try)
+                    n = max(1, len(lines))
+                    bb = font.getbbox("آیگچ", stroke_width=sw)
+                    glyph_h = bb[3] - bb[1]
+                    _gap = max(2, int(round(glyph_h * 0.14)))
+                    line_h = glyph_h + _gap
+                except Exception:
+                    break
+            if line_h * n + 2 * sw > box_h:
+                line_h = max(glyph_h + 1,
+                             (box_h - 2 * sw) // max(1, n))
+
             _olines = None
             try:
                 _olines = MangaTranslator._group_polys_to_lines(
@@ -2827,9 +2866,6 @@ class _MangaTranslatorBody_95:
                 except Exception:
                     _align_ok = False
             if _align_ok:
-                line_h = glyph_h + 1
-                if line_h * n + 2 * sw > box_h:
-                    line_h = max(4, (box_h - 2 * sw) // n)
                 _cy_off = (float(bb[1]) + float(bb[3])) / 2.0
                 _y_top = y + 1
                 _y_bot = y + pad + box_h - max(4, line_h)
@@ -2837,28 +2873,46 @@ class _MangaTranslatorBody_95:
                     print(f"    [pos] r{region.id} ALIGN font={getattr(font,'size','?')} "
                           f"n={n} olines={len(_olines)} bb=({bb[1]:.0f},{bb[3]:.0f}) "
                           f"line_h={line_h} y={y} pad={pad} box_h={box_h}")
+                _ys: List[int] = []
+                _ok_align = True
                 for i, line in enumerate(lines):
-                    shaped = self._shape_farsi(line)
-                    line_w = draw.textbbox(
-                        (0, 0), shaped, font=font, stroke_width=sw)[2]
-                    line_x = x + pad + max(0, (box_w - line_w) // 2)
                     _bx0, _by0, _bx1, _by1 = _olines[i]
                     _cy = (_by0 + _by1) / 2.0
-                    line_y = int(round(_cy - _cy_off))
+                    _ly = int(round(_cy - _cy_off))
                     if _y_bot >= _y_top:
-                        line_y = max(_y_top, min(line_y, _y_bot))
-                    draw.text(
-                        (line_x, line_y),
-                        shaped,
-                        font=font,
-                        fill=text_rgb,
-                        stroke_width=sw,
-                        stroke_fill=stroke_rgb,
-                    )
-            else:
-                line_h = glyph_h + 1
-                if line_h * n + 2 * sw > box_h:
-                    line_h = max(4, (box_h - 2 * sw) // n)
+                        _ly = max(_y_top, min(_ly, _y_bot))
+                    _ys.append(_ly)
+                _sep = line_h
+                for i in range(1, n):
+                    if _ys[i] < _ys[i - 1] + _sep:
+                        _ys[i] = _ys[i - 1] + _sep
+                if _y_bot >= _y_top and _ys[-1] > _y_bot:
+                    if _sep * (n - 1) <= (_y_bot - _y_top):
+                        _shift = _ys[-1] - _y_bot
+                        _ys[0] = max(_y_top, _ys[0] - _shift)
+                        for i in range(1, n):
+                            _ys[i] = max(_ys[i - 1] + _sep,
+                                         min(_ys[i] - _shift, _y_bot))
+                    else:
+                        _ok_align = False
+                if _ok_align:
+                    for i, line in enumerate(lines):
+                        shaped = self._shape_farsi(line)
+                        line_w = draw.textbbox(
+                            (0, 0), shaped, font=font, stroke_width=sw)[2]
+                        line_x = x + pad + max(0, (box_w - line_w) // 2)
+                        line_y = _ys[i]
+                        draw.text(
+                            (line_x, line_y),
+                            shaped,
+                            font=font,
+                            fill=text_rgb,
+                            stroke_width=sw,
+                            stroke_fill=stroke_rgb,
+                        )
+                    return
+                _align_ok = False
+            if not _align_ok:
                 total_h = line_h * n
                 start_y = y + pad + max(0, (box_h - total_h) // 2)
 
@@ -2868,8 +2922,6 @@ class _MangaTranslatorBody_95:
                           f"n={n} olines={len(_olines) if _olines else 0} "
                           f"bb=({bb[1]:.0f},{bb[3]:.0f}) line_h={line_h} "
                           f"y={y} pad={pad} box_h={box_h} start_y={start_y}")
-
-                bottom_limit = y + pad + box_h
 
                 for i, line in enumerate(lines):
                     shaped = self._shape_farsi(line)
@@ -2976,7 +3028,9 @@ class _MangaTranslatorBody_95:
                       f"fit=({fit_w},{fit_h}) lines={len(lines)} "
                       f"font={getattr(font, 'size', '?')}")
 
-            line_h = font.getbbox("آی", stroke_width=sw)[3] + 6
+            _rbb2 = font.getbbox("آیگچ", stroke_width=sw)
+            line_h = (_rbb2[3] - _rbb2[1]) + max(3, int(round(
+                (_rbb2[3] - _rbb2[1]) * 0.14)))
             tmp_h = line_h * len(lines) + 10
             tmp_w = 0
             for line in lines:

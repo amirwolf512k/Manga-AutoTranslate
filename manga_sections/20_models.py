@@ -2501,6 +2501,15 @@ def _clamp_lines_to_det(res, box, block_rects=None, tol: float = 6.0):
                         and _ocov > _own_cov + 0.05:
                     _stolen = True
                     break
+                if _ocov > _own_cov + 0.02:
+                    _stolen = True
+                    break
+                if abs(_ocov - _own_cov) <= 0.02 \
+                        and oa < own_area * 0.90 \
+                        and (ox1 - tol) <= cx <= (ox2 + tol) \
+                        and (oy1 - tol) <= cy <= (oy2 + tol):
+                    _stolen = True
+                    break
             keep.append(not _stolen)
             if not _stolen:
                 try:

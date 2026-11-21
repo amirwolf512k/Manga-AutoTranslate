@@ -4218,6 +4218,15 @@ class _MangaTranslatorBody_70:
                     _boxes.append((_bx1, _by1, _bx2, _by2))
             except Exception:
                 continue
+        _other_polys: List[List[np.ndarray]] = []
+        for _rg2 in regions:
+            try:
+                _pl2 = [np.asarray(_p, dtype=np.float32).reshape(-1, 2)
+                        for _p in (getattr(_rg2, "ocr_polys", None) or [])
+                        if np.asarray(_p).size >= 6]
+                _other_polys.append(_pl2)
+            except Exception:
+                _other_polys.append([])
         _n_rescued = 0
         for _rg in regions:
             try:
@@ -4286,6 +4295,11 @@ class _MangaTranslatorBody_70:
                 if not _quads:
                     continue
                 _adds = []
+                _rg_idx = -1
+                try:
+                    _rg_idx = regions.index(_rg)
+                except Exception:
+                    _rg_idx = -1
                 for _qf in _quads:
                     try:
                         _qx1 = float(_qf[:, 0].min())
@@ -4357,6 +4371,30 @@ class _MangaTranslatorBody_70:
                                     break
                             except Exception:
                                 continue
+                        if _covered:
+                            continue
+                        for _oi, _opl in enumerate(_other_polys):
+                            if _oi == _rg_idx:
+                                continue
+                            _cov2 = False
+                            for _pp2 in _opl:
+                                try:
+                                    _px1b = float(_pp2[:, 0].min())
+                                    _py1b = float(_pp2[:, 1].min())
+                                    _px2b = float(_pp2[:, 0].max())
+                                    _py2b = float(_pp2[:, 1].max())
+                                    _ix5 = max(0.0, min(_qx2, _px2b + 3.0)
+                                               - max(_qx1, _px1b - 3.0))
+                                    _iy5 = max(0.0, min(_qy2, _py2b + 3.0)
+                                               - max(_qy1, _py1b - 3.0))
+                                    if (_ix5 * _iy5) / _qa >= 0.45:
+                                        _cov2 = True
+                                        break
+                                except Exception:
+                                    continue
+                            if _cov2:
+                                _covered = True
+                                break
                         if _covered:
                             continue
                         _lx1 = max(0, int(_qx1) - 4)
@@ -4530,12 +4568,12 @@ class _MangaTranslatorBody_70:
                     _a1 = max(1, _rw * _rh)
                     _a2 = max(1, _kw * _kh)
                     _iom = _inter / min(_a1, _a2)
-                    if _iom < 0.55:
+                    if _iom < 0.35:
                         continue
                     _kt = _norm_t(_k.source_text)
                     _same = bool(_rt and _kt and _rt == _kt
                                  and len(_rt.replace(" ", "")) >= 2)
-                    _sub = bool(_rt and _kt and _iom >= 0.75
+                    _sub = bool(_rt and _kt and _iom >= 0.60
                                 and (len(_kt) >= 8 and _rt in _kt
                                      or len(_rt) >= 8 and _kt in _rt))
                     if _same or _sub:

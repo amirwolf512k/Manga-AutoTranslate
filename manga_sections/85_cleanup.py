@@ -5419,6 +5419,65 @@ class _MangaTranslatorBody_85:
                                 pass
                     except Exception:
                         pass
+                    try:
+                        if _dkrf < 0.50 and _brtf >= 0.35:
+                            _ring_med_mt = float(np.median(rg))
+                            _fgf2 = _g_out[oy:oy + dm.shape[0],
+                                            ox:ox + dm.shape[1]][mm]
+                            _fill_med_mt = (float(np.median(_fgf2))
+                                            if _fgf2.size else 0.0)
+                            if (_ring_med_mt < 175.0
+                                    and _fill_med_mt >= _ring_med_mt + 30.0):
+                                _sicM = sub_img[oy:oy + dm.shape[0],
+                                                ox:ox + dm.shape[1]]
+                                _rcM = sub_bgr[oy:oy + dm.shape[0],
+                                               ox:ox + dm.shape[1]]
+                                _gM = cv2.cvtColor(_sicM, cv2.COLOR_BGR2GRAY)
+                                try:
+                                    if float((rg < 110.0).mean()) >= 0.5:
+                                        _selM = ring & (_gM < 110.0)
+                                    else:
+                                        _selM = ring & (_gM >= 110.0)
+                                    if int(_selM.sum()) < 8:
+                                        _selM = ring
+                                    _colM = np.median(
+                                        _sicM[_selM].astype(np.float32),
+                                        axis=0).astype(np.uint8)
+                                except Exception:
+                                    _colM = None
+                                if _colM is not None:
+                                    _ppcM = None
+                                    try:
+                                        _ppM = getattr(self,
+                                                       "_page_protect",
+                                                       None)
+                                        if _ppM is not None:
+                                            _ptM = _ppM[cy0:cy1, cx0:cx1]
+                                            if _ptM.shape[:2] == \
+                                                    _sicM.shape[:2]:
+                                                _ppcM = _ptM
+                                    except Exception:
+                                        _ppcM = None
+                                    try:
+                                        _unmM = ~mm
+                                        _rcM[_unmM] = _sicM[_unmM]
+                                    except Exception:
+                                        _rcM[:] = _sicM
+                                    _tgtM = mm if _ppcM is None \
+                                        else (mm & (_ppcM == 0))
+                                    if _tgtM.any():
+                                        _rcM[_tgtM] = _colM
+                                    _n_rej += 1
+                                    try:
+                                        print(f"    [🛡] mid-tone fill → "
+                                              f"ring color fill "
+                                              f"(ring={_ring_med_mt:.0f} "
+                                              f"fill={_fill_med_mt:.0f})",
+                                              flush=True)
+                                    except Exception:
+                                        pass
+                    except Exception:
+                        pass
                     if _dbg:
                         print(f"      [🛡dbg] ring bright frac {_rbm:.2f} "
                               f"< 0.50 → no validate", flush=True)
@@ -6377,7 +6436,7 @@ class _MangaTranslatorBody_85:
                                          cv2.COLOR_BGR2GRAY)
                     _med = float(np.median(_g))
                     _lite = (np.abs(_g.astype(np.float32) - _med)
-                                <= 14.0)
+                                <= 26.0)
                     _kd = cv2.dilate(kept.astype(np.uint8),
                                         np.ones((7, 7), np.uint8)) > 0
                     _add2 = _kd & _lite & (~kept)
@@ -8276,8 +8335,20 @@ class _MangaTranslatorBody_85:
                     cv2.imwrite(_dzC, (_cmp.astype(np.uint8)) * 255)
             except Exception:
                 pass
-            _out = np.ascontiguousarray(
-                np.where(_cmp[..., None], donor, original))
+            _feather = os.environ.get("MANGA_CMP_FEATHER", "1") != "0"
+            if _feather:
+                try:
+                    _dist = cv2.distanceTransform(
+                        _cmp.astype(np.uint8), cv2.DIST_L2, 3)
+                    _aF = np.clip(_dist * 0.25, 0.0, 1.0).astype(np.float32)
+                    _out = cv2.blendLinear(donor, original, _aF, 1.0 - _aF)
+                    _out = np.ascontiguousarray(_out)
+                except Exception:
+                    _out = np.ascontiguousarray(
+                        np.where(_cmp[..., None], donor, original))
+            else:
+                _out = np.ascontiguousarray(
+                    np.where(_cmp[..., None], donor, original))
             try:
                 if os.environ.get("MANGA_PROMO_BAND_FLAT", "1") != "0":
                     _nBF = self._promo_band_flatten(_out, original, _cmp)
@@ -8994,7 +9065,7 @@ class _MangaTranslatorBody_85:
                     except Exception:
                         pass
                     _fill = out[_y0:_y1, _x0:_x1][_sub]
-                    if float((_fill.min(axis=1) >= 244).mean()) < 0.60:
+                    if float((_fill.min(axis=1) >= 236).mean()) < 0.60:
                         continue
                     _outf = out[_y0:_y1, _x0:_x1].astype(np.float32)
                     _ch_rows = 0
@@ -9003,7 +9074,7 @@ class _MangaTranslatorBody_85:
                         if _cols.size < 6:
                             continue
                         _row_fill = _outf[_ry, _cols]
-                        if float((_row_fill.min(axis=1) >= 244).mean()) < 0.80:
+                        if float((_row_fill.min(axis=1) >= 236).mean()) < 0.80:
                             continue
                         _o_row = _of[_y0 + _ry, _x0:_x1][_cols]
                         _orow_m = float(np.median(_o_row.mean(axis=1)))
@@ -9046,7 +9117,7 @@ class _MangaTranslatorBody_85:
                                if _rv is not None else None)
                         if _have_bg:
                             _base = np.median(_bg_r, axis=0)
-                            if float(_base.mean()) >= 225.0:
+                            if float(_base.mean()) >= 230.0:
                                 continue
                             _anc = None
                             try:

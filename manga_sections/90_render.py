@@ -202,7 +202,7 @@ class _MangaTranslatorBody_90:
 
         smallest_attempt = None
 
-        for line_gap in (4, 2, 1, 0):
+        for line_gap in (8, 5, 3, 2, 1):
             for size in range(max_size, min_size - 1, -1):
                 font, lines, sw, total_h, widest, line_h = wrap_at(size, line_gap)
                 smallest_attempt = (font, lines, sw, line_h)
@@ -283,10 +283,131 @@ class _MangaTranslatorBody_90:
 
         return text_rgb, stroke_rgb
 
+    def _region_render_box(self, region: "TextRegion") -> Optional[Tuple[int, int, int, int]]:
+        try:
+            x, y, w, h = region.rect
+        except Exception:
+            return None
+        try:
+            _polys = [np.asarray(p, dtype=np.float32).reshape(-1, 2)
+                      for p in (getattr(region, "ocr_polys", None) or [])
+                      if np.asarray(p).size >= 6]
+            if _polys:
+                _pts = np.concatenate(_polys, axis=0)
+                px0, py0 = float(_pts[:, 0].min()), float(_pts[:, 1].min())
+                px1, py1 = float(_pts[:, 0].max()), float(_pts[:, 1].max())
+                if (px1 - px0) >= 10 and (py1 - py0) >= 8:
+                    _off = max(abs((px0 + px1) / 2 - (x + w / 2)) / max(1.0, w),
+                               abs((py0 + py1) / 2 - (y + h / 2)) / max(1.0, h))
+                    if _off > 0.35:
+                        _padx = max(6, int(0.06 * (px1 - px0)))
+                        _pady = max(5, int(0.08 * (py1 - py0)))
+                        x = max(0, int(px0 - _padx))
+                        y = max(0, int(py0 - _pady))
+                        w = int(px1 - px0 + 2 * _padx)
+                        h = int(py1 - py0 + 2 * _pady)
+        except Exception:
+            pass
+        try:
+            _rpolys = list(getattr(region, "ocr_polys", None) or [])
+            if _rpolys:
+                _rvert = self._polys_vertical(_rpolys)
+                _rdense = (not _rvert) and MangaTranslator._polys_dense(_rpolys)
+                if _rvert or _rdense:
+                    _rbb = MangaTranslator._text_block_box(
+                        _rpolys, region.rect, vert=_rvert)
+                    if _rbb is not None:
+                        x, y, w, h = (int(_rbb[0]), int(_rbb[1]),
+                                      int(_rbb[2]), int(_rbb[3]))
+        except Exception:
+            pass
+        short = len((region.translated_text or "").split()) <= 2
+        if short and (w < 90 or h < 50):
+            expand = max(4, int(min(w, h) * 0.12))
+            x = max(0, x - expand // 2)
+            y = max(0, y - expand // 2)
+            w = w + expand
+            h = h + expand
+        return int(x), int(y), int(w), int(h)
+
+    @staticmethod
+    def _resolve_render_box_overlaps(items: list) -> None:
+        n = len(items)
+        if n < 2:
+            return
+        for _i in range(n):
+            for _j in range(_i + 1, n):
+                a, b = items[_i], items[_j]
+                iw = min(a["x"] + a["w"], b["x"] + b["w"]) - max(a["x"], b["x"])
+                ih = min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
+                if iw <= 2 or ih <= 2:
+                    continue
+                ow = iw / max(1, min(a["w"], b["w"]))
+                oh = ih / max(1, min(a["h"], b["h"]))
+                if ow >= 0.82 and oh >= 0.82:
+                    continue
+                mid_x = (max(a["x"], b["x"]) + min(a["x"] + a["w"], b["x"] + b["w"])) / 2.0
+                mid_y = (max(a["y"], b["y"]) + min(a["y"] + a["h"], b["y"] + b["h"])) / 2.0
+                min_w = 40
+                min_h = 20
+                if ow >= 0.28 and oh < 0.82 and (oh >= 0.12 or ow >= 0.5):
+                    if a["x"] <= b["x"]:
+                        new_r = max(a["x"] + min_w, int(round(mid_x)) - 1)
+                        if new_r < a["x"] + a["w"]:
+                            a["w"] = new_r - a["x"]
+                        new_l = min(b["x"] + b["w"] - min_w, int(round(mid_x)) + 1)
+                        if new_l > b["x"]:
+                            b["w"] = (b["x"] + b["w"]) - new_l
+                            b["x"] = new_l
+                    else:
+                        new_r = max(b["x"] + min_w, int(round(mid_x)) - 1)
+                        if new_r < b["x"] + b["w"]:
+                            b["w"] = new_r - b["x"]
+                        new_l = min(a["x"] + a["w"] - min_w, int(round(mid_x)) + 1)
+                        if new_l > a["x"]:
+                            a["w"] = (a["x"] + a["w"]) - new_l
+                            a["x"] = new_l
+                    continue
+                if oh >= 0.28 and ow < 0.82 and (ow >= 0.12 or oh >= 0.5):
+                    if a["y"] <= b["y"]:
+                        new_b = max(a["y"] + min_h, int(round(mid_y)) - 1)
+                        if new_b < a["y"] + a["h"]:
+                            a["h"] = new_b - a["y"]
+                        new_t = min(b["y"] + b["h"] - min_h, int(round(mid_y)) + 1)
+                        if new_t > b["y"]:
+                            b["h"] = (b["y"] + b["h"]) - new_t
+                            b["y"] = new_t
+                    else:
+                        new_b = max(b["y"] + min_h, int(round(mid_y)) - 1)
+                        if new_b < b["y"] + b["h"]:
+                            b["h"] = new_b - b["y"]
+                        new_t = min(a["y"] + a["h"] - min_h, int(round(mid_y)) + 1)
+                        if new_t > a["y"]:
+                            a["h"] = (a["y"] + a["h"]) - new_t
+                            a["y"] = new_t
+
     def render_translations(self, image: np.ndarray, regions: List[TextRegion],
                             original_image: np.ndarray) -> np.ndarray:
         pil_img = Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         draw = ImageDraw.Draw(pil_img)
+
+        _rboxes: dict = {}
+        try:
+            _items = []
+            for region in regions:
+                if not region.translated_text:
+                    continue
+                if self._is_json_garbage_text(region.translated_text):
+                    continue
+                _rb = self._region_render_box(region)
+                if _rb is not None:
+                    _items.append({"r": region, "x": _rb[0], "y": _rb[1],
+                                   "w": _rb[2], "h": _rb[3]})
+            self._resolve_render_box_overlaps(_items)
+            for _it in _items:
+                _rboxes[id(_it["r"])] = (_it["x"], _it["y"], _it["w"], _it["h"])
+        except Exception:
+            _rboxes = {}
 
         for region in regions:
             if not region.translated_text:
@@ -298,14 +419,20 @@ class _MangaTranslatorBody_90:
                 continue
 
             try:
-                self._render_one_region(pil_img, draw, image, original_image, region)
+                self._render_one_region(pil_img, draw, image, original_image,
+                                        region,
+                                        rbox=_rboxes.get(id(region)))
             except Exception as e:
                 print(f"  [!] رندر ناحیه {region.id} خطا داد ({e}) → فال‌بک…")
                 _done = False
                 try:
                     import gc as _gc
                     _gc.collect()
-                    self._render_one_region(pil_img, draw, image, original_image, region)
+                    try:
+                        self._render_one_region(pil_img, draw, image, original_image, region,
+                                                rbox=_rboxes.get(id(region)))
+                    except Exception:
+                        self._render_one_region(pil_img, draw, image, original_image, region)
                     _done = True
                     print(f"  [+] ناحیه {region.id} در تلاشِ دوم رندر شد.")
                 except Exception:
