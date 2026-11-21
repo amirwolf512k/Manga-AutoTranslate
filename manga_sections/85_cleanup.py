@@ -6444,6 +6444,22 @@ class _MangaTranslatorBody_85:
                         m[sy0:sy1, sx0:sx1][_add2] = 255
                 except Exception:
                     pass
+                try:
+                    _sub = m[sy0:sy1, sx0:sx1]
+                    _band = np.zeros(_sub.shape, dtype=np.uint8)
+                    _band[_sub > 0] = 255
+                    _band = cv2.morphologyEx(
+                        _band, cv2.MORPH_CLOSE,
+                        cv2.getStructuringElement(
+                            cv2.MORPH_ELLIPSE, (17, 5)))
+                    _rows = np.where(_band.any(axis=1))[0]
+                    for _ry in _rows:
+                        _cols = np.nonzero(_band[_ry])[0]
+                        if _cols.size >= 2:
+                            _band[_ry, _cols.min():_cols.max() + 1] = 255
+                    _sub[_band > 0] = 255
+                except Exception:
+                    pass
                 n += 1
             if failed.any():
                 try:
@@ -7829,6 +7845,8 @@ class _MangaTranslatorBody_85:
                         _thr = min(_thr, 14.0)
                     _rspread = float(np.max(rmed) - np.min(rmed))
                     if d < _thr and _rspread <= 6.0 and _fsp >= 5.0:
+                        d = _thr + 1.0
+                    if d < _thr and rsp >= 20.0 and fstd <= 9.0:
                         d = _thr + 1.0
                     if d < _thr:
                         if _dbg:
