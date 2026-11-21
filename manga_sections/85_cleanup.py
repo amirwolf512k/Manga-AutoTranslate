@@ -8336,19 +8336,20 @@ class _MangaTranslatorBody_85:
             except Exception:
                 pass
             _feather = os.environ.get("MANGA_CMP_FEATHER", "1") != "0"
+            _out = np.ascontiguousarray(
+                np.where(_cmp[..., None], donor, original))
             if _feather:
                 try:
-                    _dist = cv2.distanceTransform(
-                        _cmp.astype(np.uint8), cv2.DIST_L2, 3)
-                    _aF = np.clip(_dist * 0.25, 0.0, 1.0).astype(np.float32)
-                    _out = cv2.blendLinear(donor, original, _aF, 1.0 - _aF)
-                    _out = np.ascontiguousarray(_out)
+                    _kF = np.ones((7, 7), np.uint8)
+                    _bandF = cv2.dilate(_cmp.astype(np.uint8), _kF) > 0
+                    _coreF = cv2.erode(_cmp.astype(np.uint8), _kF) > 0
+                    _bandF = _bandF & (~_coreF)
+                    if _bandF.any():
+                        _blurF = cv2.blur(_out, (5, 5))
+                        _out[_bandF] = _blurF[_bandF]
+                        _out = np.ascontiguousarray(_out)
                 except Exception:
-                    _out = np.ascontiguousarray(
-                        np.where(_cmp[..., None], donor, original))
-            else:
-                _out = np.ascontiguousarray(
-                    np.where(_cmp[..., None], donor, original))
+                    pass
             try:
                 if os.environ.get("MANGA_PROMO_BAND_FLAT", "1") != "0":
                     _nBF = self._promo_band_flatten(_out, original, _cmp)

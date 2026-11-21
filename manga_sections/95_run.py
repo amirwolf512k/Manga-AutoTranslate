@@ -2827,7 +2827,7 @@ class _MangaTranslatorBody_95:
 
             n = max(1, len(lines))
 
-            _gap = max(2, int(round(glyph_h * 0.14)))
+            _gap = max(3, int(round(glyph_h * 0.14)))
             line_h = glyph_h + _gap
             _mf_try = int(max_font or 52)
             for _ in range(12):
@@ -2843,12 +2843,12 @@ class _MangaTranslatorBody_95:
                     n = max(1, len(lines))
                     bb = font.getbbox("آیگچ", stroke_width=sw)
                     glyph_h = bb[3] - bb[1]
-                    _gap = max(2, int(round(glyph_h * 0.14)))
+                    _gap = max(3, int(round(glyph_h * 0.14)))
                     line_h = glyph_h + _gap
                 except Exception:
                     break
             if line_h * n + 2 * sw > box_h:
-                line_h = max(glyph_h + 1,
+                line_h = max(glyph_h + 2,
                              (box_h - 2 * sw) // max(1, n))
 
             _olines = None
