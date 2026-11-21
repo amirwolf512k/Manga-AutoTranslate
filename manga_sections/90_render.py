@@ -331,6 +331,124 @@ class _MangaTranslatorBody_90:
         return int(x), int(y), int(w), int(h)
 
     @staticmethod
+    def _dup_line_key(s: str) -> str:
+        """کلیدِ مقایسهٔ متن برای تشخیصِ اکو — بدونِ نشانه‌های پایان."""
+        t = str(s or "").strip()
+        t = " ".join(t.split())
+        while t and t[-1] in ".!?\u061f\u066f…،,;:\"'»»":
+            t = t[:-1].rstrip()
+        return t
+
+    @staticmethod
+    def _src_frag_continues(prev_src: str, next_src: str) -> bool:
+        """آیا دو پاره‌خط، ادامهٔ یک جمله‌اند؟ (برای زنجیرهٔ دوتایی)"""
+        p = str(prev_src or "").strip()
+        n = str(next_src or "").strip()
+        if not p or not n:
+            return False
+        if p[-1] not in ".!?\u061f…\"'":
+            return True
+        nl = n.lower()
+        for c in ("and ", "but ", "or ", "to ", "that ", "the ",
+                  "with ", "of ", "in ", "a "):
+            if nl.startswith(c):
+                return True
+        for c in ("و ", "یا ", "که ", "به ", "در ", "با ", "هم "):
+            if n.startswith(c):
+                return True
+        return False
+
+    @staticmethod
+    def _merge_echo_duplicate_lines(_items: list) -> set:
+        """ادغامِ اکویِ ترجمه — دو پاره‌خطِ چسبیدهٔ یک بلوک که ترجمهٔ
+        یکسان گرفته‌اند (خطای echo مدل هنگامِ ترجمهٔ پاره‌خط‌ها، مثل
+        بنرِ «...CAST ASIDE HIS OWN STATUS / AND RISKED HIS LIFE.» که
+        هر دو «و زندگیش رو به خطر انداخت.» گرفتند) → فقط یک‌بار رندر،
+        جعبهٔ رندر به اجتماعِ هر دو گسترش می‌یابد. ناحیهٔ پاک‌سازی دست
+        نخورده می‌ماند (متن اصلی حذف شده، متن فارسی یک‌بار روی هر دو)."""
+        skip: set = set()
+        try:
+            items = [it for it in _items if it.get("r") is not None]
+            n = len(items)
+            if n < 2:
+                return skip
+            items = sorted(items, key=lambda it: (it["y"], it["x"]))
+
+            # زنجیره‌های عمودیِ نزدیک (بلوکِ چندپاره: بنر/متنِ شکسته)
+            parent = list(range(n))
+
+            def _find(i):
+                while parent[i] != i:
+                    parent[i] = parent[parent[i]]
+                    i = parent[i]
+                return i
+
+            for i in range(n):
+                for j in range(i + 1, n):
+                    a, b = items[i], items[j]
+                    ah, bh = a["h"], b["h"]
+                    gap = b["y"] - (a["y"] + a["h"])
+                    if gap < -max(6, int(0.25 * min(ah, bh))) \
+                            or gap > max(8, int(0.40 * min(ah, bh))):
+                        continue
+                    ov = min(a["x"] + a["w"], b["x"] + b["w"]) \
+                        - max(a["x"], b["x"])
+                    if ov < 0.55 * min(a["w"], b["w"]):
+                        continue
+                    ri, rj = _find(i), _find(j)
+                    if ri != rj:
+                        parent[rj] = ri
+
+            groups: dict = {}
+            for i in range(n):
+                groups.setdefault(_find(i), []).append(i)
+
+            for g in list(groups.values()):
+                g.sort(key=lambda i: items[i]["y"])
+                if len(g) < 2:
+                    continue
+                chain_ok = len(g) >= 3
+                k = 0
+                while k < len(g):
+                    m = k + 1
+                    while m < len(g):
+                        a, b = items[g[k]], items[g[m]]
+                        ra, rb = a["r"], b["r"]
+                        ta = MangaTranslator._dup_line_key(
+                            getattr(ra, "translated_text", ""))
+                        tb = MangaTranslator._dup_line_key(
+                            getattr(rb, "translated_text", ""))
+                        sa = MangaTranslator._dup_line_key(
+                            getattr(ra, "source_text", ""))
+                        sb = MangaTranslator._dup_line_key(
+                            getattr(rb, "source_text", ""))
+                        sa_raw = str(getattr(ra, "source_text", "") or "").strip()
+                        sb_raw = str(getattr(rb, "source_text", "") or "").strip()
+                        if (ta and ta == tb and sa and sb and sa != sb
+                                and (chain_ok or MangaTranslator.
+                                     _src_frag_continues(sa_raw, sb_raw))):
+                            ax1 = max(a["x"] + a["w"], b["x"] + b["w"])
+                            ay1 = max(a["y"] + a["h"], b["y"] + b["h"])
+                            a["x"] = min(a["x"], b["x"])
+                            a["y"] = min(a["y"], b["y"])
+                            a["w"] = ax1 - a["x"]
+                            a["h"] = ay1 - a["y"]
+                            skip.add(id(rb))
+                            m += 1
+                            continue
+                        break
+                    k = m if m > k + 1 else k + 1
+            if skip:
+                ids = sorted({getattr(it["r"], "id", "?")
+                              for it in items if id(it["r"]) in skip})
+                print("  [✓]ادغامِ اکویِ ترجمه: "
+                      + ", ".join(str(i) for i in ids)
+                      + " → یک‌بار رندر شد")
+        except Exception as _e:
+            print(f"  [!] ادغامِ اکو ناموفق ({_e})")
+        return skip
+
+    @staticmethod
     def _resolve_render_box_overlaps(items: list) -> None:
         n = len(items)
         if n < 2:
@@ -418,6 +536,7 @@ class _MangaTranslatorBody_90:
         draw = ImageDraw.Draw(pil_img)
 
         _rboxes: dict = {}
+        _skip_echo: set = set()
         try:
             _items = []
             for region in regions:
@@ -429,6 +548,10 @@ class _MangaTranslatorBody_90:
                 if _rb is not None:
                     _items.append({"r": region, "x": _rb[0], "y": _rb[1],
                                    "w": _rb[2], "h": _rb[3]})
+            try:
+                _skip_echo = self._merge_echo_duplicate_lines(_items)
+            except Exception:
+                _skip_echo = set()
             self._resolve_render_box_overlaps(_items)
             for _it in _items:
                 _rboxes[id(_it["r"])] = (_it["x"], _it["y"], _it["w"], _it["h"])
@@ -437,6 +560,8 @@ class _MangaTranslatorBody_90:
 
         for region in regions:
             if not region.translated_text:
+                continue
+            if id(region) in _skip_echo:
                 continue
             if self._is_json_garbage_text(region.translated_text):
                 print(f"  [!] رندرِ ناحیه {region.id} رد شد — پاسخِ JSONِ "
