@@ -7880,13 +7880,19 @@ class _MangaTranslatorBody_85:
                         tgt = rmed
                         if rsp > 5.0 and fstd <= 55.0:
                             try:
-                                ry, rx = np.nonzero(fbm)
+                                _fbm_w = cand & (
+                                    np.abs(_lum_map - _m0) <= 75.0)
+                                if int(_fbm_w.sum()) >= 80:
+                                    _fbm_u = _fbm_w
+                                else:
+                                    _fbm_u = fbm
+                                ry, rx = np.nonzero(_fbm_u)
                                 _A = np.stack(
                                     [np.ones(rx.size, np.float32),
                                      (rx + bx0 - x0).astype(np.float32),
                                      (ry + by0 - y0).astype(np.float32)],
                                     axis=1)
-                                _rpx = rpx
+                                _rpx = _ocf[_fbm_u]
                                 _coef, *_ = np.linalg.lstsq(
                                     _A, _rpx, rcond=None)
                                 _res = np.sqrt(
