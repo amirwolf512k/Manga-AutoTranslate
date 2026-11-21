@@ -342,46 +342,72 @@ class _MangaTranslatorBody_90:
                 ih = min(a["y"] + a["h"], b["y"] + b["h"]) - max(a["y"], b["y"])
                 if iw <= 2 or ih <= 2:
                     continue
-                ow = iw / max(1, min(a["w"], b["w"]))
-                oh = ih / max(1, min(a["h"], b["h"]))
-                if ow >= 0.82 and oh >= 0.82:
+                # نسبتِ هم‌پوشانی نسبت به «هر دو» جعبه (کوچک و بزرگ) —
+                # جعبهٔ ریزِ کنارِ حبابِ بزرگ (مثل واترمارکِ سایت که فقط
+                # چند پیکسل با جعبهٔ حباب هم‌پوشانی دارد) دیگر نباید جعبهٔ
+                # رندرِ حباب را از ۵۰۰px به ۲۸px بسُپارد (متن ریز بالای
+                # حباب می‌افتاد و بدنه خالی می‌ماند).
+                ow_s = iw / max(1, min(a["w"], b["w"]))
+                ow_l = iw / max(1, max(a["w"], b["w"]))
+                oh_s = ih / max(1, min(a["h"], b["h"]))
+                oh_l = ih / max(1, max(a["h"], b["h"]))
+                if ow_s >= 0.82 and oh_s >= 0.82:
                     continue
-                mid_x = (max(a["x"], b["x"]) + min(a["x"] + a["w"], b["x"] + b["w"])) / 2.0
-                mid_y = (max(a["y"], b["y"]) + min(a["y"] + a["h"], b["y"] + b["h"])) / 2.0
                 min_w = 40
                 min_h = 20
-                if ow >= 0.28 and oh < 0.82 and (oh >= 0.12 or ow >= 0.5):
+                # برشِ افقی (حباب‌های چسبیدهٔ کنارِهم): فقط وقتی «هر دو»
+                # جعبه در محورِ عمودی هم‌پوشانیِ واقعی دارند؛ نه اینکه یک
+                # جعبهٔ ۳۸px تمامِ ارتفاعِ خودش داخلِ بازهٔ حباب باشد.
+                # محورِ برش = محوری که هم‌پوشانیِ نسبی‌اش کمتر است
+                # (کنارِهم → برشِ افقی؛ روِهم → برشِ عمودی).
+                _do_h = (ow_s <= oh_s and ow_s >= 0.15
+                         and oh_s >= 0.30 and oh_l >= 0.30)
+                _do_v = (oh_s < ow_s and oh_s >= 0.15
+                         and ow_s >= 0.30 and ow_l >= 0.30)
+                if _do_h:
+                    # برشِ ۶۰/۴۰ به‌جایِ وسطِ دقیق — متن کمی به درز
+                    # نزدیک‌تر می‌ماند (قبلاً زیاد دور می‌افتاد)
+                    _lx = max(a["x"], b["x"])
+                    _rx = min(a["x"] + a["w"], b["x"] + b["w"])
+                    cut_lo = int(round(_lx + 0.40 * (_rx - _lx)))
+                    cut_hi = int(round(_lx + 0.60 * (_rx - _lx)))
                     if a["x"] <= b["x"]:
-                        new_r = max(a["x"] + min_w, int(round(mid_x)) - 1)
+                        new_r = max(a["x"] + min_w, cut_hi)
                         if new_r < a["x"] + a["w"]:
                             a["w"] = new_r - a["x"]
-                        new_l = min(b["x"] + b["w"] - min_w, int(round(mid_x)) + 1)
+                        new_l = min(b["x"] + b["w"] - min_w, cut_lo)
                         if new_l > b["x"]:
                             b["w"] = (b["x"] + b["w"]) - new_l
                             b["x"] = new_l
                     else:
-                        new_r = max(b["x"] + min_w, int(round(mid_x)) - 1)
+                        new_r = max(b["x"] + min_w, cut_hi)
                         if new_r < b["x"] + b["w"]:
                             b["w"] = new_r - b["x"]
-                        new_l = min(a["x"] + a["w"] - min_w, int(round(mid_x)) + 1)
+                        new_l = min(a["x"] + a["w"] - min_w, cut_lo)
                         if new_l > a["x"]:
                             a["w"] = (a["x"] + a["w"]) - new_l
                             a["x"] = new_l
                     continue
-                if oh >= 0.28 and ow < 0.82 and (ow >= 0.12 or oh >= 0.5):
+                # برشِ عمودی (حباب‌های روِهم): فقط وقتی «هر دو» جعبه در
+                # محورِ افقی هم‌پوشانیِ واقعی دارند
+                if _do_v:
+                    _ty = max(a["y"], b["y"])
+                    _by = min(a["y"] + a["h"], b["y"] + b["h"])
+                    cut_lo = int(round(_ty + 0.40 * (_by - _ty)))
+                    cut_hi = int(round(_ty + 0.60 * (_by - _ty)))
                     if a["y"] <= b["y"]:
-                        new_b = max(a["y"] + min_h, int(round(mid_y)) - 1)
+                        new_b = max(a["y"] + min_h, cut_hi)
                         if new_b < a["y"] + a["h"]:
                             a["h"] = new_b - a["y"]
-                        new_t = min(b["y"] + b["h"] - min_h, int(round(mid_y)) + 1)
+                        new_t = min(b["y"] + b["h"] - min_h, cut_lo)
                         if new_t > b["y"]:
                             b["h"] = (b["y"] + b["h"]) - new_t
                             b["y"] = new_t
                     else:
-                        new_b = max(b["y"] + min_h, int(round(mid_y)) - 1)
+                        new_b = max(b["y"] + min_h, cut_hi)
                         if new_b < b["y"] + b["h"]:
                             b["h"] = new_b - b["y"]
-                        new_t = min(a["y"] + a["h"] - min_h, int(round(mid_y)) + 1)
+                        new_t = min(a["y"] + a["h"] - min_h, cut_lo)
                         if new_t > a["y"]:
                             a["h"] = (a["y"] + a["h"]) - new_t
                             a["y"] = new_t
