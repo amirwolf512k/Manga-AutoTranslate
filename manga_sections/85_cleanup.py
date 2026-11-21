@@ -4492,6 +4492,27 @@ class _MangaTranslatorBody_85:
                 self._qc_kernel31 = _qc
             _fm = sub_msk > 0
             _ring = (cv2.dilate(sub_msk, _qc) > 0) & (~_fm)
+            try:
+                if _fm.any() and int(_ring.sum()) >= 120:
+                    _gsm = cv2.cvtColor(sub_bgr,
+                                        cv2.COLOR_BGR2GRAY).astype(np.float32)
+                    _rsm = float(np.std(_gsm[_ring]))
+                    _rmedm = float(np.median(_gsm[_ring]))
+                    if _rmedm < 175.0 and _rsm <= 24.0:
+                        _hps = _gsm - cv2.GaussianBlur(_gsm, (0, 0), 2.0)
+                        _fsm = float(np.std(_hps[_fm]))
+                        if _fsm > max(6.5, 1.7 * _rsm):
+                            _smB = cv2.medianBlur(sub_bgr, 5)
+                            _smB = cv2.GaussianBlur(_smB, (0, 0), 1.1)
+                            sub_bgr[_fm] = _smB[_fm]
+                            try:
+                                print(f"    [✓] خال‌زداییِ پرِ LaMa "
+                                      f"(حبابِ تیره) mottle={_fsm:.1f}",
+                                      flush=True)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
             if _fm.any() and _ring.any():
                 _g = cv2.cvtColor(sub_bgr, cv2.COLOR_BGR2GRAY)
                 _bg_px = _g[_ring]
