@@ -1,0 +1,35 @@
+name: Check HF Space
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Wait and probe space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          for i in 1 2 3 4 5 6 7 8 9 10; do
+            echo "--- attempt $i ---"
+            ST=$(curl -s -H "Authorization: Bearer $HF_TOKEN" \
+              "https://huggingface.co/api/spaces/amirwolf512/manga-autotranslate" \
+              | python3 -c "import json,sys;d=json.load(sys.stdin);print(d.get('runtime',{}).get('stage','?'))" 2>/dev/null || echo "?")
+            echo "stage: $ST"
+            if [ "$ST" = "RUNNING" ]; then break; fi
+            if [ "$ST" = "RUNTIME_ERROR" ] || [ "$ST" = "CRASHED" ] || [ "$ST" = "PAUSED" ]; then
+              echo "!!! space problem: $ST"
+              break
+            fi
+            sleep 30
+          done
+          echo "=== runtime logs ==="
+          curl -s -H "Authorization: Bearer $HF_TOKEN" \
+            "https://huggingface.co/api/spaces/amirwolf512/manga-autotranslate/logs/run" | tail -50 || true
+          echo ""
+          echo "=== HTTP probe ==="
+          curl -s -o /tmp/page.html -w "http=%{http_code} size=%{size_download}\n" --max-time 60 \
+            "https://amirwolf512-manga-autotranslate.hf.space/" || true
+          head -c 400 /tmp/page.html || true
