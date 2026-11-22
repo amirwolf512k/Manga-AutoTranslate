@@ -88,8 +88,8 @@ if not _have_code():
 
 import runpy
 
-sys.argv = [os.path.join(HERE, "manga_app.py")]
-runpy.run_path(sys.argv[0], run_name="__main__")
+sys.argv = [os.path.abspath(__file__)]
+runpy.run_path(os.path.join(HERE, "manga_app.py"), run_name="__main__")
 
 import time
 
