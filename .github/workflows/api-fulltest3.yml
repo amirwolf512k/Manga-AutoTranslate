@@ -1,0 +1,176 @@
+name: API Test Round 3 (prompt v3 — self-review)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-r3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev
+
+      - name: Install python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt beautifulsoup4 google-genai
+
+      - name: Verify prompt v3 is active
+        run: |
+          python3 - <<'PY'
+          ns = {"re": __import__("re"), "json": __import__("json")}
+          exec(compile(open("manga_sections/00_base.py", encoding="utf-8").read(),
+                       "00_base.py", "exec"), ns)
+          pro = ns["PROMPT_PRESETS"]["professional"]
+          assert "از معنا بساز، از کلمات تبدیل نکن" in pro, "پرامپت v3 روی این شاخه نیست!"
+          assert "آزمون دهان" in pro and "آزمون بوی ترجمه" in pro
+          print("[OK] پرامپت راند ۳ فعال است —", len(pro), "کاراکتر")
+          PY
+
+      - name: Run quality pages (ko / ja / zh / en — real ci_imgs pages)
+        env:
+          COARENA_KEY: ${{ secrets.TEST_COARENA_KEY }}
+          COARENA_BASE: ${{ secrets.TEST_COARENA_BASE }}
+        run: |
+          set -o pipefail
+          run_one () {
+            NAME="$1"; IMG="$2"; shift 2
+            echo "=================================================="
+            echo ">>> $NAME  ($IMG)"
+            echo "=================================================="
+            python3 manga.py \
+              -i "ci_imgs/$IMG" \
+              -o "out_q_${NAME}.pdf" \
+              --provider custom \
+              --api-base "$COARENA_BASE" \
+              --model gpt-6-luna \
+              --api-key "$COARENA_KEY" \
+              --font fonts/Sahel-Bold.ttf \
+              --no-style-fonts \
+              --api-timeout 120 \
+              --batch-workers 2 \
+              --ocr-lang "$@" \
+              2>&1 | tee "q_${NAME}.log" || echo "[!] $NAME FAILED (ادامه)"
+          }
+          run_one ko lang_ko.jpg ko en
+          run_one ja lang_ja_bw.jpg ja en
+          run_one zh lang_zh.jpg zh
+          run_one en up0822_en.jpg en
+
+      - name: Collect translations
+        if: always()
+        run: |
+          mkdir -p qtrans
+          for d in out_q_*.cache; do
+            [ -d "$d" ] || continue
+            if [ -f "$d/trans.json" ]; then
+              cp "$d/trans.json" "qtrans/${d%.cache}_trans.json" || true
+            fi
+          done
+          ls -la qtrans/ || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r3-quality
+          path: |
+            out_q_*.pdf
+            q_*.log
+            qtrans/
+          if-no-files-found: warn
+
+  chapters-r3:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { site: asura, n: "101",   url: "https://asurascans.com/comics/damn-reincarnation-7ba78ec7/chapter/101", lang: "en" }
+          - { site: mgeko, n: "ch1",   url: "https://www.mgeko.cc/reader/en/3fhl-isekai-harry-potter-chapter-1-eng-li/", lang: "en" }
+          - { site: naver, n: "orv-1", url: "https://m.comic.naver.com/webtoon/detail?titleId=747269&no=1", lang: "ko en" }
+          - { site: dmm,   n: "chaoren-ep10", url: "https://www.dongmanmanhua.cn/BOY/chaorendeshidai/%E7%AC%AC9%E8%AF%9D/viewer?title_no=1604&episode_no=10", lang: "zh" }
+    env:
+      COARENA_KEY: ${{ secrets.TEST_COARENA_KEY }}
+      COARENA_BASE: ${{ secrets.TEST_COARENA_BASE }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: sudo apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev
+
+      - name: Install python dependencies
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install -r requirements.txt beautifulsoup4 google-genai
+
+      - name: Verify prompt v3 is active
+        run: |
+          python3 - <<'PY'
+          ns = {"re": __import__("re"), "json": __import__("json")}
+          exec(compile(open("manga_sections/00_base.py", encoding="utf-8").read(),
+                       "00_base.py", "exec"), ns)
+          pro = ns["PROMPT_PRESETS"]["professional"]
+          assert "از معنا بساز، از کلمات تبدیل نکن" in pro, "پرامپت v3 روی این شاخه نیست!"
+          print("[OK] پرامپت راند ۳ فعال است —", len(pro), "کاراکتر")
+          PY
+
+      - name: Run full chapter (${{ matrix.site }} ${{ matrix.n }})
+        run: |
+          set -o pipefail
+          OUT="out_${{ matrix.site }}_${{ matrix.n }}.pdf"
+          python3 manga.py \
+            -i "${{ matrix.url }}" \
+            -o "$OUT" \
+            --provider custom \
+            --api-base "$COARENA_BASE" \
+            --model gpt-6-luna \
+            --api-key "$COARENA_KEY" \
+            --font fonts/Sahel-Bold.ttf \
+            --no-style-fonts \
+            --api-timeout 120 \
+            --batch-workers 2 \
+            --ocr-lang ${{ matrix.lang }} \
+            2>&1 | tee run.log
+          echo "---- خروجی ----"
+          ls -la "$OUT" || echo "[!] خروجی ساخته نشد"
+
+      - name: Collect translations
+        if: always()
+        run: |
+          mkdir -p chtrans
+          d="out_${{ matrix.site }}_${{ matrix.n }}.cache"
+          if [ -f "$d/trans.json" ]; then
+            cp "$d/trans.json" "chtrans/${{ matrix.site }}_${{ matrix.n }}_trans.json" || true
+          fi
+          ls -la chtrans/ || true
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: r3-chapter-${{ matrix.site }}-${{ matrix.n }}
+          path: |
+            out_*.pdf
+            run.log
+            chtrans/
+          if-no-files-found: warn
