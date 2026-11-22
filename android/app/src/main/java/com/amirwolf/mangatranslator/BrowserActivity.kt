@@ -335,11 +335,82 @@ tick()
     private lateinit var progress: ProgressBar
 
     private val foundStore = java.util.LinkedHashSet<String>()
+    private val netLog = java.util.LinkedHashSet<String>()
     private var chapterKeyNow = ""
     private var recording = false
     private var dlDir: java.io.File? = null
     private var dlDone = 0
     private var dlOk = 0
+
+    private val reImgExt = Regex(
+        "\\.(jpe?g|png|webp|avif|bmp|tiff?)$", RegexOption.IGNORE_CASE)
+    private val reBadExt = Regex(
+        "\\.(svg|ico|gif|css|js|mjs|json|html?|xml|txt|pdf|zip|rar|7z|gz|" +
+        "mp4|webm|mp3|m4a|ogg|wav|woff2?|ttf|otf|eot|map)$",
+        RegexOption.IGNORE_CASE)
+    private val reDimTag = Regex(
+        "[-_]\\d{2,4}x\\d{2,4}\\.\\w{2,5}$", RegexOption.IGNORE_CASE)
+    private val reJunkWords = Regex(
+        "(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|" +
+        "thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|" +
+        "pixel|profile|rating|share|follow|comment|credits)",
+        RegexOption.IGNORE_CASE)
+    private val reAdWord = Regex(
+        "(?:^|[^a-z0-9])ads?[._/-]", RegexOption.IGNORE_CASE)
+    private val reJunkDir = Regex(
+        "/(covers?|thumbs?|thumbnails?|avatars?|banners?|creatives?|gifs?|" +
+        "decorations?|emojis?|smileys?|stickers?)/", RegexOption.IGNORE_CASE)
+    private val reAdHost = Regex(
+        "(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|" +
+        "adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|" +
+        "buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|" +
+        "pubmatic|media\\.net)", RegexOption.IGNORE_CASE)
+    private val reQsz = Regex(
+        "[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?",
+        RegexOption.IGNORE_CASE)
+
+    private fun junkUrl(u: String): Boolean {
+        val b = u.substringBefore('#').substringBefore('?')
+        if (reBadExt.containsMatchIn(b)) return true
+        if (reDimTag.containsMatchIn(b)) return true
+        if (reJunkWords.containsMatchIn(b)) return true
+        if (reAdWord.containsMatchIn(b)) return true
+        if (reJunkDir.containsMatchIn(b)) return true
+        if (reAdHost.containsMatchIn(b)) return true
+        val m = reQsz.find(u) ?: return false
+        val a = m.groupValues[2].toIntOrNull() ?: 0
+        val bb = m.groupValues[3].toIntOrNull() ?: 0
+        if (a > 0 && bb > 0) return maxOf(a, bb) <= 400
+        if (a > 0 && m.groupValues[1] == "f") return a <= 400
+        return false
+    }
+
+    private fun folderOf(u: String): String {
+        if (u.startsWith("blob:")) return "blob:"
+        return try {
+            val p = java.net.URI(u)
+            var path = p.path ?: ""
+            val cut = path.lastIndexOf('/')
+            path = if (cut >= 0) path.substring(0, cut + 1) else "/"
+            (p.scheme ?: "https") + "://" + (p.host ?: "") + path
+        } catch (_: Exception) {
+            u.substringBefore('#').substringBefore('?')
+        }
+    }
+
+    private fun shortFolder(f: String): String {
+        if (f == "blob:") return "درون صفحه (رمزگشایی‌شده)"
+        var s = f.removePrefix("https://").removePrefix("http://")
+        if (s.length > 46) s = s.substring(0, 20) + "…" + s.substring(s.length - 24)
+        return s
+    }
+
+    private fun snapshotCount(): Int {
+        val keys = HashSet<String>()
+        synchronized(netLog) { for (u in netLog) keys.add(u) }
+        for (u in foundStore) keys.add(u)
+        return keys.size
+    }
 
     private val recountHandler = Handler()
     private val recountTick = object : Runnable {
@@ -524,6 +595,41 @@ tick()
                 return false
             }
 
+            override fun shouldInterceptRequest(
+                view: WebView?,
+                request: WebResourceRequest?
+            ): android.webkit.WebResourceResponse? {
+                try {
+                    if (recording && request != null) {
+                        val u = request.url?.toString() ?: ""
+                        if (u.startsWith("http")) {
+                            var dest = ""
+                            var accept = ""
+                            val hdrs = request.requestHeaders
+                            if (hdrs != null) {
+                                for ((k, v) in hdrs) {
+                                    val lk = k.lowercase()
+                                    if (lk == "sec-fetch-dest") dest = v.lowercase()
+                                    else if (lk == "accept") accept = v.lowercase()
+                                }
+                            }
+                            val b = u.substringBefore('#').substringBefore('?')
+                            val extImg = reImgExt.containsMatchIn(b)
+                            if (dest == "image" ||
+                                (accept.contains("image/") &&
+                                        !accept.contains("text/html")) ||
+                                extImg
+                            ) {
+                                if (!junkUrl(u)) {
+                                    synchronized(netLog) { netLog.add(u) }
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+                return null
+            }
+
             override fun onPageFinished(view: WebView?, url: String?) {
                 super.onPageFinished(view, url)
                 try {
@@ -644,6 +750,7 @@ tick()
             if (k != chapterKeyNow) {
                 chapterKeyNow = k
                 foundStore.clear()
+                synchronized(netLog) { netLog.clear() }
                 try { web.evaluateJavascript(CLEAR_STORE_JS, null) } catch (_: Exception) {}
             }
         } catch (_: Exception) {}
@@ -661,7 +768,11 @@ tick()
 
     private fun storeSnapshot(): JSONArray {
         val arr = JSONArray()
-        for (u in foundStore) arr.put(u)
+        val seen = HashSet<String>()
+        for (u in foundStore) if (seen.add(u)) arr.put(u)
+        synchronized(netLog) {
+            for (u in netLog) if (seen.add(u)) arr.put(u)
+        }
         return arr
     }
 
@@ -684,6 +795,7 @@ tick()
         }
         recording = true
         foundStore.clear()
+        synchronized(netLog) { netLog.clear() }
         chapterKeyNow = chapterKey(cur)
         try { web.evaluateJavascript(CLEAR_STORE_JS, null) } catch (_: Exception) {}
         extractBtn.text = "🖼 استخراج"
@@ -692,13 +804,113 @@ tick()
     }
 
     private fun showExtractChoice() {
+        val cur = try { web.url ?: "" } catch (_: Exception) { "" }
+        if (cur.isNotEmpty() && isMangaPlusViewerUrl(cur)) {
+            val out = Intent()
+            out.putExtra(EXTRA_LINKS, cur)
+            setResult(RESULT_OK, out)
+            Toast.makeText(this,
+                "لینک فصل مانگاپلاس گرفته شد — " +
+                "موتور خودش عکس‌ها را از API رسمی می‌گیرد",
+                Toast.LENGTH_LONG).show()
+            finish()
+            return
+        }
+        extractBtn.text = "… در حال آماده‌سازی"
+        extractWithScroll { arr ->
+            extractBtn.text = "🖼 استخراج"
+            try {
+                val all = ArrayList<String>()
+                if (arr != null) {
+                    for (i in 0 until arr.length()) {
+                        val u = arr.optString(i)
+                        if (u.isNotBlank()) all.add(u)
+                    }
+                }
+                if (all.isEmpty()) {
+                    countLbl.text = "هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن"
+                    Toast.makeText(this,
+                        "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
+                        Toast.LENGTH_LONG).show()
+                    return@extractWithScroll
+                }
+                val folders = LinkedHashMap<String, MutableList<String>>()
+                for (u in all) {
+                    folders.getOrPut(folderOf(u)) { mutableListOf() }.add(u)
+                }
+                val entries = folders.entries.sortedByDescending { it.value.size }
+                val labels = Array(entries.size) { i ->
+                    "\u200E" + shortFolder(entries[i].key) +
+                            "  —  " + entries[i].value.size + " عکس"
+                }
+                val checked = BooleanArray(entries.size) { i ->
+                    entries[i].value.size >= 2
+                }
+                if (checked.none { it } && entries.isNotEmpty()) checked[0] = true
+                val b = android.app.AlertDialog.Builder(this)
+                b.setTitle("پوشه‌های عکس (${entries.size}) — انتخاب کن")
+                b.setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+                    checked[which] = isChecked
+                }
+                b.setPositiveButton("ادامه") { _, _ ->
+                    val sel = ArrayList<String>()
+                    for (i in entries.indices) {
+                        if (checked[i]) sel.addAll(entries[i].value)
+                    }
+                    if (sel.isEmpty()) {
+                        Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
+                            Toast.LENGTH_SHORT).show()
+                        return@setPositiveButton
+                    }
+                    showLinkDownloadChoice(sel)
+                }
+                b.setNegativeButton("انصراف", null)
+                b.show()
+            } catch (e: Exception) {
+                Toast.makeText(this, "خطا در استخراج: ${e.message}",
+                    Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    private fun showLinkDownloadChoice(sel: List<String>) {
         val b = android.app.AlertDialog.Builder(this)
-        b.setTitle("استخراج")
+        b.setTitle("استخراج (${sel.size} عکس)")
         b.setItems(arrayOf("استخراج با لینک", "استخراج با دانلود")) { _, which ->
-            if (which == 0) extractImages() else downloadImages()
+            if (which == 0) finishWithLinks(sel) else downloadSelected(sel)
         }
         b.setNegativeButton("انصراف", null)
         b.show()
+    }
+
+    private fun finishWithLinks(sel: List<String>) {
+        try {
+            if (sel.any { it.startsWith("blob:") }) {
+                countLbl.text = "${sel.size} عکس آماده — گزینه «استخراج با دانلود» را انتخاب کن"
+                Toast.makeText(this,
+                    "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند " +
+                    "(${sel.size} صفحه آماده) — " +
+                    "از گزینه «استخراج با دانلود» استفاده کن",
+                    Toast.LENGTH_LONG).show()
+                return
+            }
+            val out = Intent()
+            out.putExtra(EXTRA_LINKS, sel.joinToString("\n"))
+            setResult(RESULT_OK, out)
+            Toast.makeText(this,
+                "✅ ${sel.size} لینک عکس گرفته شد",
+                Toast.LENGTH_SHORT).show()
+            finish()
+        } catch (e: Exception) {
+            Toast.makeText(this, "خطا در استخراج: ${e.message}",
+                Toast.LENGTH_LONG).show()
+        }
+    }
+
+    private fun downloadSelected(sel: List<String>) {
+        extractBtn.text = "… در حال دانلود"
+        countLbl.text = "⬇ 0/${sel.size}"
+        startDownloadAll(sel)
     }
 
     private fun recountAsync() {
@@ -709,7 +921,8 @@ tick()
                 try {
                     val arr = parseLinksRaw(raw)
                     runOnUiThread {
-                        val n = mergeFound(arr)
+                        mergeFound(arr)
+                        val n = snapshotCount()
                         countLbl.text = if (n > 0) {
                             "● $n عکس ضبط شد"
                         } else {
@@ -859,7 +1072,9 @@ tick()
                                 android.util.Base64.NO_WRAP)
                 }
             }
-            if (dataUrl.startsWith("data:image/")) {
+            if (dataUrl.startsWith("data:image/") &&
+                !dataUrl.startsWith("data:image/svg")
+            ) {
                 val head = dataUrl.substringBefore(",", "")
                 val b64 = dataUrl.substringAfter(",", "")
                 val bytes = try {
@@ -868,10 +1083,29 @@ tick()
                     null
                 }
                 if (bytes != null && bytes.isNotEmpty()) {
-                    val f = java.io.File(dir, "page_%03d%s".format(idx + 1,
-                            extOf(head, bytes)))
-                    java.io.FileOutputStream(f).use { it.write(bytes) }
-                    dlOk++
+                    var maxDim = 0
+                    try {
+                        val o = android.graphics.BitmapFactory.Options()
+                        o.inJustDecodeBounds = true
+                        android.graphics.BitmapFactory.decodeByteArray(
+                            bytes, 0, bytes.size, o)
+                        maxDim = maxOf(o.outWidth, o.outHeight)
+                    } catch (_: Exception) {}
+                    var headStr = ""
+                    try {
+                        headStr = String(bytes.copyOfRange(
+                            0, minOf(600, bytes.size)), Charsets.ISO_8859_1)
+                    } catch (_: Exception) {}
+                    val small =
+                        (maxDim in 1..299) ||
+                        (maxDim <= 0 && bytes.size < 4096) ||
+                        headStr.contains("<svg", ignoreCase = true)
+                    if (!small) {
+                        val f = java.io.File(dir, "page_%03d%s".format(idx + 1,
+                                extOf(head, bytes)))
+                        java.io.FileOutputStream(f).use { it.write(bytes) }
+                        dlOk++
+                    }
                 }
             }
             dlDone++
@@ -949,95 +1183,6 @@ tick()
         } catch (e: Exception) {
             Toast.makeText(this, "خطا در شروع دانلود: ${e.message}",
                 Toast.LENGTH_LONG).show()
-        }
-    }
-
-    private fun downloadImages() {
-        val cur = try { web.url ?: "" } catch (_: Exception) { "" }
-        if (cur.isEmpty() || cur == "about:blank") {
-            Toast.makeText(this, "اول یک سایت را باز کن",
-                Toast.LENGTH_SHORT).show()
-            return
-        }
-        extractBtn.text = "… در حال دانلود"
-        extractWithScroll { arr ->
-            extractBtn.text = "🖼 استخراج"
-            try {
-                if (arr == null || arr.length() == 0) {
-                    countLbl.text = "هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن"
-                    Toast.makeText(this@BrowserActivity,
-                        "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
-                        Toast.LENGTH_LONG).show()
-                    return@extractWithScroll
-                }
-                val n = arr.length()
-                if (n == 1 && isMangaPlusViewerUrl(arr.getString(0))) {
-                    val out = Intent()
-                    out.putExtra(EXTRA_LINKS, arr.getString(0))
-                    setResult(RESULT_OK, out)
-                    Toast.makeText(this@BrowserActivity,
-                        "لینک فصل مانگاپلاس گرفته شد — " +
-                        "موتور خودش عکس‌ها را از API رسمی می‌گیرد",
-                        Toast.LENGTH_LONG).show()
-                    finish()
-                    return@extractWithScroll
-                }
-                val urls = ArrayList<String>(n)
-                for (i in 0 until n) urls.add(arr.getString(i))
-                countLbl.text = "⬇ 0/$n"
-                startDownloadAll(urls)
-            } catch (e: Exception) {
-                Toast.makeText(this@BrowserActivity,
-                    "خطا در دانلود: ${e.message}",
-                    Toast.LENGTH_LONG).show()
-            }
-        }
-    }
-
-    private fun extractImages() {
-        val cur = try { web.url ?: "" } catch (_: Exception) { "" }
-        if (cur.isEmpty() || cur == "about:blank") {
-            Toast.makeText(this, "اول یک سایت را باز کن",
-                Toast.LENGTH_SHORT).show()
-            return
-        }
-        extractBtn.text = "… در حال استخراج"
-        extractWithScroll { arr ->
-            extractBtn.text = "🖼 استخراج"
-            try {
-                if (arr == null || arr.length() == 0) {
-                    countLbl.text = "هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن"
-                    Toast.makeText(this,
-                        "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
-                        Toast.LENGTH_LONG).show()
-                    return@extractWithScroll
-                }
-                if (hasBlobs(arr)) {
-                    countLbl.text = "${arr.length()} عکس آماده — گزینه «استخراج با دانلود» را انتخاب کن"
-                    Toast.makeText(this,
-                        "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند " +
-                        "(${arr.length()} صفحه آماده) — " +
-                        "از گزینه «استخراج با دانلود» استفاده کن",
-                        Toast.LENGTH_LONG).show()
-                    return@extractWithScroll
-                }
-                val links = StringBuilder()
-                for (i in 0 until arr.length()) {
-                    if (i > 0) links.append('\n')
-                    links.append(arr.getString(i))
-                }
-                val out = Intent()
-                out.putExtra(EXTRA_LINKS, links.toString())
-                setResult(RESULT_OK, out)
-                Toast.makeText(this,
-                    "✅ ${arr.length()} لینک عکس گرفته شد",
-                    Toast.LENGTH_SHORT).show()
-                finish()
-            } catch (e: Exception) {
-                Toast.makeText(this,
-                    "خطا در استخراج: ${e.message}",
-                    Toast.LENGTH_LONG).show()
-            }
         }
     }
 

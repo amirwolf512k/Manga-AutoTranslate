@@ -66,8 +66,111 @@ public class BrowserActivity extends Activity {
     private int dlSeq = 0;
     private final java.util.LinkedHashSet<String> foundStore =
             new java.util.LinkedHashSet<>();
+    private final java.util.LinkedHashSet<String> netLog =
+            new java.util.LinkedHashSet<>();
     private String chapterKeyNow = "";
     private boolean recording = false;
+
+    private static final java.util.regex.Pattern RE_IMG_EXT =
+            java.util.regex.Pattern.compile(
+                    "\\.(jpe?g|png|webp|avif|bmp|tiff?)$",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern RE_BAD_EXT =
+            java.util.regex.Pattern.compile(
+                    "\\.(svg|ico|gif|css|js|mjs|json|html?|xml|txt|pdf|zip|rar|7z|gz|"
+                            + "mp4|webm|mp3|m4a|ogg|wav|woff2?|ttf|otf|eot|map)$",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern RE_DIM_TAG =
+            java.util.regex.Pattern.compile(
+                    "[-_]\\d{2,4}x\\d{2,4}\\.\\w{2,5}$",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern RE_JUNK_WORDS =
+            java.util.regex.Pattern.compile(
+                    "(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|"
+                            + "thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|"
+                            + "pixel|profile|rating|share|follow|comment|credits)",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern RE_AD_WORD =
+            java.util.regex.Pattern.compile(
+                    "(?:^|[^a-z0-9])ads?[._/-]",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern RE_JUNK_DIR =
+            java.util.regex.Pattern.compile(
+                    "/(covers?|thumbs?|thumbnails?|avatars?|banners?|creatives?|gifs?|"
+                            + "decorations?|emojis?|smileys?|stickers?)/",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern RE_AD_HOST =
+            java.util.regex.Pattern.compile(
+                    "(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|"
+                            + "adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|"
+                            + "buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|"
+                            + "pubmatic|media\\.net)",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern RE_QSZ =
+            java.util.regex.Pattern.compile(
+                    "[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?",
+                    java.util.regex.Pattern.CASE_INSENSITIVE);
+
+    private static boolean junkUrl(String u) {
+        String b = u;
+        int h1 = b.indexOf('#');
+        if (h1 >= 0) b = b.substring(0, h1);
+        int h2 = b.indexOf('?');
+        if (h2 >= 0) b = b.substring(0, h2);
+        if (RE_BAD_EXT.matcher(b).find()) return true;
+        if (RE_DIM_TAG.matcher(b).find()) return true;
+        if (RE_JUNK_WORDS.matcher(b).find()) return true;
+        if (RE_AD_WORD.matcher(b).find()) return true;
+        if (RE_JUNK_DIR.matcher(b).find()) return true;
+        if (RE_AD_HOST.matcher(b).find()) return true;
+        java.util.regex.Matcher m = RE_QSZ.matcher(u);
+        if (!m.find()) return false;
+        int a = 0;
+        int bb = 0;
+        try { a = Integer.parseInt(m.group(2)); } catch (Exception ignored) {}
+        try { bb = m.group(3) != null ? Integer.parseInt(m.group(3)) : 0; }
+        catch (Exception ignored) {}
+        if (a > 0 && bb > 0) return Math.max(a, bb) <= 400;
+        if (a > 0 && "f".equals(m.group(1))) return a <= 400;
+        return false;
+    }
+
+    private static String folderOf(String u) {
+        if (u.startsWith("blob:")) return "blob:";
+        try {
+            java.net.URI p = new java.net.URI(u);
+            String path = p.getPath() == null ? "" : p.getPath();
+            int cut = path.lastIndexOf('/');
+            path = cut >= 0 ? path.substring(0, cut + 1) : "/";
+            String scheme = p.getScheme() == null ? "https" : p.getScheme();
+            String host = p.getHost() == null ? "" : p.getHost();
+            return scheme + "://" + host + path;
+        } catch (Exception e) {
+            String b = u;
+            int h1 = b.indexOf('#');
+            if (h1 >= 0) b = b.substring(0, h1);
+            int h2 = b.indexOf('?');
+            if (h2 >= 0) b = b.substring(0, h2);
+            return b;
+        }
+    }
+
+    private static String shortFolder(String f) {
+        if ("blob:".equals(f)) return "درون صفحه (رمزگشایی‌شده)";
+        String s = f;
+        if (s.startsWith("https://")) s = s.substring(8);
+        else if (s.startsWith("http://")) s = s.substring(7);
+        if (s.length() > 46)
+            s = s.substring(0, 20) + "…" + s.substring(s.length() - 24);
+        return s;
+    }
+
+    private int snapshotCount() {
+        java.util.HashSet<String> keys = new java.util.HashSet<>();
+        synchronized (netLog) { keys.addAll(netLog); }
+        keys.addAll(foundStore);
+        return keys.size();
+    }
 
     private final Handler recountHandler = new Handler();
     private final Runnable recountTick = new Runnable() {
@@ -275,6 +378,50 @@ public class BrowserActivity extends Activity {
             }
 
             @Override
+            public android.webkit.WebResourceResponse shouldInterceptRequest(
+                    WebView view, WebResourceRequest request) {
+                try {
+                    if (recording && request != null && request.getUrl() != null) {
+                        String u = request.getUrl().toString();
+                        if (u.startsWith("http")) {
+                            String dest = "";
+                            String accept = "";
+                            java.util.Map<String, String> hdrs =
+                                    request.getRequestHeaders();
+                            if (hdrs != null) {
+                                for (java.util.Map.Entry<String, String> e :
+                                        hdrs.entrySet()) {
+                                    String lk = e.getKey() == null
+                                            ? "" : e.getKey().toLowerCase();
+                                    if (lk.equals("sec-fetch-dest"))
+                                        dest = e.getValue() == null
+                                                ? "" : e.getValue().toLowerCase();
+                                    else if (lk.equals("accept"))
+                                        accept = e.getValue() == null
+                                                ? "" : e.getValue().toLowerCase();
+                                }
+                            }
+                            String b = u;
+                            int h1 = b.indexOf('#');
+                            if (h1 >= 0) b = b.substring(0, h1);
+                            int h2 = b.indexOf('?');
+                            if (h2 >= 0) b = b.substring(0, h2);
+                            boolean extImg = RE_IMG_EXT.matcher(b).find();
+                            if (dest.equals("image")
+                                    || (accept.contains("image/")
+                                        && !accept.contains("text/html"))
+                                    || extImg) {
+                                if (!junkUrl(u)) {
+                                    synchronized (netLog) { netLog.add(u); }
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {}
+                return null;
+            }
+
+            @Override
             public void onPageFinished(WebView view, String url) {
                 super.onPageFinished(view, url);
                 try {
@@ -426,6 +573,7 @@ public class BrowserActivity extends Activity {
             if (!k.equals(chapterKeyNow)) {
                 chapterKeyNow = k;
                 foundStore.clear();
+                synchronized (netLog) { netLog.clear(); }
                 try { web.evaluateJavascript(CLEAR_STORE_JS, null); }
                 catch (Exception ignored) {}
             }
@@ -444,7 +592,11 @@ public class BrowserActivity extends Activity {
 
     private JSONArray storeSnapshot() {
         JSONArray arr = new JSONArray();
-        for (String u : foundStore) arr.put(u);
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (String u : foundStore) if (seen.add(u)) arr.put(u);
+        synchronized (netLog) {
+            for (String u : netLog) if (seen.add(u)) arr.put(u);
+        }
         return arr;
     }
 
@@ -459,6 +611,7 @@ public class BrowserActivity extends Activity {
         }
         recording = true;
         foundStore.clear();
+        synchronized (netLog) { netLog.clear(); }
         chapterKeyNow = chapterKey(cur);
         try { web.evaluateJavascript(CLEAR_STORE_JS, null); }
         catch (Exception ignored) {}
@@ -475,7 +628,8 @@ public class BrowserActivity extends Activity {
                 try {
                     JSONArray arr = parseLinksRaw(value);
                     runOnUiThread(() -> {
-                        final int n = mergeFound(arr);
+                        mergeFound(arr);
+                        final int n = snapshotCount();
                         countLbl.setText(n > 0
                                 ? "● " + n + " عکس ضبط شد"
                                 : "در حال ضبط… صفحه فصل را ورق بزن");
@@ -568,55 +722,6 @@ public class BrowserActivity extends Activity {
         }
     }
 
-    private void extractImages() {
-        String cur;
-        try { cur = web.getUrl() != null ? web.getUrl() : ""; }
-        catch (Exception e) { cur = ""; }
-        if (cur.isEmpty() || cur.equals("about:blank")) {
-            Toast.makeText(this, "اول یک سایت را باز کن",
-                    Toast.LENGTH_SHORT).show();
-            return;
-        }
-        extractBtn.setText("… در حال استخراج");
-        extractWithScroll(arr -> {
-            extractBtn.setText("🖼 استخراج عکس");
-            try {
-                if (arr == null || arr.length() == 0) {
-                    countLbl.setText("هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن");
-                    Toast.makeText(BrowserActivity.this,
-                            "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
-                            Toast.LENGTH_LONG).show();
-                    return;
-                }
-                if (hasBlobs(arr)) {
-                    countLbl.setText(arr.length() + " عکس آماده — «استخراج با دانلود» را بزن");
-                    Toast.makeText(BrowserActivity.this,
-                            "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند "
-                                    + "(" + arr.length() + " صفحه آماده) — "
-                                    + "از گزینه «استخراج با دانلود» استفاده کن",
-                            Toast.LENGTH_LONG).show();
-                    return;
-                }
-                StringBuilder links = new StringBuilder();
-                for (int i = 0; i < arr.length(); i++) {
-                    if (i > 0) links.append('\n');
-                    links.append(arr.getString(i));
-                }
-                Intent out = new Intent();
-                out.putExtra(EXTRA_LINKS, links.toString());
-                setResult(RESULT_OK, out);
-                Toast.makeText(BrowserActivity.this,
-                        "✅ " + arr.length() + " لینک عکس گرفته شد",
-                        Toast.LENGTH_SHORT).show();
-                finish();
-            } catch (final Exception e) {
-                Toast.makeText(BrowserActivity.this,
-                        "خطا در استخراج: " + e.getMessage(),
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-    }
-
     private static String sniffMime(byte[] d) {
         if (d == null || d.length < 12) return null;
         if ((d[0] & 0xFF) == 0xFF && (d[1] & 0xFF) == 0xD8) return "image/jpeg";
@@ -678,29 +783,51 @@ public class BrowserActivity extends Activity {
             String d = dataUrl == null ? "" : dataUrl.trim();
             if (d.isEmpty() || !d.startsWith("data:image/"))
                 d = httpFetchDataUrl(srcUrl);
-            if (d.startsWith("data:image/")) {
+            if (d.startsWith("data:image/") && !d.startsWith("data:image/svg")) {
                 int ci = d.indexOf(',');
                 if (ci > 0) {
                     String head = d.substring(0, ci).toLowerCase();
                     byte[] data = android.util.Base64.decode(
                             d.substring(ci + 1), android.util.Base64.NO_WRAP);
                     if (data != null && data.length > 0) {
-                        String ext = ".jpg";
-                        java.util.regex.Matcher m = java.util.regex.Pattern
-                                .compile("data:image/(jpe?g|png|webp|bmp)")
-                                .matcher(head);
-                        if (m.find())
-                            ext = "." + ("jpeg".equals(m.group(1))
-                                    ? "jpg" : m.group(1));
-                        int seq = ++dlSeq;
-                        java.io.File f = new java.io.File(dlDir,
-                                "page_" + String.format(java.util.Locale.US,
-                                        "%03d", seq) + ext);
-                        try (java.io.FileOutputStream fo =
-                                     new java.io.FileOutputStream(f)) {
-                            fo.write(data);
+                        int maxDim = 0;
+                        try {
+                            android.graphics.BitmapFactory.Options o =
+                                    new android.graphics.BitmapFactory.Options();
+                            o.inJustDecodeBounds = true;
+                            android.graphics.BitmapFactory.decodeByteArray(
+                                    data, 0, data.length, o);
+                            maxDim = Math.max(o.outWidth, o.outHeight);
+                        } catch (Exception ignored) {}
+                        String headStr = "";
+                        try {
+                            headStr = new String(
+                                    java.util.Arrays.copyOfRange(
+                                            data, 0, Math.min(600, data.length)),
+                                    "ISO-8859-1");
+                        } catch (Exception ignored) {}
+                        boolean small =
+                                (maxDim >= 1 && maxDim < 300)
+                                || (maxDim <= 0 && data.length < 4096)
+                                || headStr.toLowerCase().contains("<svg");
+                        if (!small) {
+                            String ext = ".jpg";
+                            java.util.regex.Matcher m = java.util.regex.Pattern
+                                    .compile("data:image/(jpe?g|png|webp|bmp)")
+                                    .matcher(head);
+                            if (m.find())
+                                ext = "." + ("jpeg".equals(m.group(1))
+                                        ? "jpg" : m.group(1));
+                            int seq = ++dlSeq;
+                            java.io.File f = new java.io.File(dlDir,
+                                    "page_" + String.format(java.util.Locale.US,
+                                            "%03d", seq) + ext);
+                            try (java.io.FileOutputStream fo =
+                                         new java.io.FileOutputStream(f)) {
+                                fo.write(data);
+                            }
+                            dlOk++;
                         }
-                        dlOk++;
                     }
                 }
             }
@@ -792,59 +919,141 @@ public class BrowserActivity extends Activity {
     }
 
     private void showExtractChoice() {
-        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this);
-        b.setTitle("روش استخراج");
-        b.setItems(new String[]{"استخراج با لینک", "استخراج با دانلود"},
-                (dialog, which) -> {
-                    if (which == 0) extractImages(); else downloadImages();
-                });
-        b.setNegativeButton("انصراف", null);
-        b.show();
-    }
-
-    private void downloadImages() {
-        String cur;
+        final String cur;
         try { cur = web.getUrl() != null ? web.getUrl() : ""; }
         catch (Exception e) { cur = ""; }
-        if (cur.isEmpty() || cur.equals("about:blank")) {
-            Toast.makeText(this, "اول یک سایت را باز کن",
-                    Toast.LENGTH_SHORT).show();
+        if (!cur.isEmpty() && isMangaPlusViewer(cur)) {
+            Intent out = new Intent();
+            out.putExtra(EXTRA_LINKS, cur);
+            setResult(RESULT_OK, out);
+            Toast.makeText(BrowserActivity.this,
+                    "لینکِ فصلِ مانگاپلاس گرفته شد —"
+                            + " موتور خودش عکس‌ها را از"
+                            + " API رسمی می‌گیرد",
+                    Toast.LENGTH_LONG).show();
+            finish();
             return;
         }
-        extractBtn.setText("… در حال دانلود");
+        extractBtn.setText("… در حال آماده‌سازی");
         extractWithScroll(arr -> {
             extractBtn.setText("🖼 استخراج");
             try {
-                if (arr == null || arr.length() == 0) {
+                java.util.ArrayList<String> all = new java.util.ArrayList<>();
+                if (arr != null) {
+                    for (int i = 0; i < arr.length(); i++) {
+                        String u = arr.optString(i);
+                        if (u != null && !u.trim().isEmpty()) all.add(u);
+                    }
+                }
+                if (all.isEmpty()) {
                     countLbl.setText("هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن");
                     Toast.makeText(BrowserActivity.this,
                             "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
                             Toast.LENGTH_LONG).show();
                     return;
                 }
-                int n = arr.length();
-                if (n == 1 && isMangaPlusViewer(arr.getString(0))) {
-                    Intent out = new Intent();
-                    out.putExtra(EXTRA_LINKS, arr.getString(0));
-                    setResult(RESULT_OK, out);
-                    Toast.makeText(BrowserActivity.this,
-                            "لینکِ فصلِ مانگاپلاس گرفته شد —"
-                                    + " موتور خودش عکس‌ها را از"
-                                    + " API رسمی می‌گیرد",
-                            Toast.LENGTH_LONG).show();
-                    finish();
-                    return;
+                java.util.LinkedHashMap<String, java.util.List<String>> folders =
+                        new java.util.LinkedHashMap<>();
+                for (String u : all) {
+                    String f = folderOf(u);
+                    if (!folders.containsKey(f))
+                        folders.put(f, new java.util.ArrayList<>());
+                    folders.get(f).add(u);
                 }
-                java.util.ArrayList<String> urls = new java.util.ArrayList<>();
-                for (int i = 0; i < n; i++) urls.add(arr.getString(i));
-                countLbl.setText("⬇ 0/" + n);
-                startDownloadAll(urls);
+                java.util.List<java.util.Map.Entry<String, java.util.List<String>>>
+                        entries = new java.util.ArrayList<>(folders.entrySet());
+                entries.sort((a, b) -> Integer.compare(
+                        b.getValue().size(), a.getValue().size()));
+                int nf = entries.size();
+                CharSequence[] labels = new CharSequence[nf];
+                boolean[] checked = new boolean[nf];
+                for (int i = 0; i < nf; i++) {
+                    labels[i] = "\u200E" + shortFolder(entries.get(i).getKey())
+                            + "  —  " + entries.get(i).getValue().size()
+                            + " عکس";
+                    checked[i] = entries.get(i).getValue().size() >= 2;
+                }
+                boolean anyChecked = false;
+                for (boolean c : checked) if (c) { anyChecked = true; break; }
+                if (!anyChecked && nf > 0) checked[0] = true;
+                final boolean[] checkedF = checked;
+                android.app.AlertDialog.Builder b =
+                        new android.app.AlertDialog.Builder(this);
+                b.setTitle("پوشه‌های عکس (" + nf + ") — انتخاب کن");
+                b.setMultiChoiceItems(labels, checkedF,
+                        (dialog, which, isChecked) -> checkedF[which] = isChecked);
+                b.setPositiveButton("ادامه", (dialog, which) -> {
+                    java.util.ArrayList<String> sel = new java.util.ArrayList<>();
+                    for (int i = 0; i < nf; i++) {
+                        if (checkedF[i]) sel.addAll(entries.get(i).getValue());
+                    }
+                    if (sel.isEmpty()) {
+                        Toast.makeText(BrowserActivity.this,
+                                "هیچ پوشه‌ای انتخاب نشد",
+                                Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+                    showLinkDownloadChoice(sel);
+                });
+                b.setNegativeButton("انصراف", null);
+                b.show();
             } catch (final Exception e) {
                 Toast.makeText(BrowserActivity.this,
-                        "خطا در دانلود: " + e.getMessage(),
+                        "خطا در استخراج: " + e.getMessage(),
                         Toast.LENGTH_LONG).show();
             }
         });
+    }
+
+    private void showLinkDownloadChoice(final java.util.List<String> sel) {
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this);
+        b.setTitle("استخراج (" + sel.size() + " عکس)");
+        b.setItems(new String[]{"استخراج با لینک", "استخراج با دانلود"},
+                (dialog, which) -> {
+                    if (which == 0) finishWithLinks(sel);
+                    else downloadSelected(sel);
+                });
+        b.setNegativeButton("انصراف", null);
+        b.show();
+    }
+
+    private void finishWithLinks(final java.util.List<String> sel) {
+        try {
+            for (String u : sel) {
+                if (u.startsWith("blob:")) {
+                    countLbl.setText(sel.size()
+                            + " عکس آماده — گزینه «استخراج با دانلود» را بزن");
+                    Toast.makeText(BrowserActivity.this,
+                            "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند "
+                                    + "(" + sel.size() + " صفحه آماده) — "
+                                    + "از گزینه «استخراج با دانلود» استفاده کن",
+                            Toast.LENGTH_LONG).show();
+                    return;
+                }
+            }
+            StringBuilder links = new StringBuilder();
+            for (int i = 0; i < sel.size(); i++) {
+                if (i > 0) links.append('\n');
+                links.append(sel.get(i));
+            }
+            Intent out = new Intent();
+            out.putExtra(EXTRA_LINKS, links.toString());
+            setResult(RESULT_OK, out);
+            Toast.makeText(BrowserActivity.this,
+                    "✅ " + sel.size() + " لینک عکس گرفته شد",
+                    Toast.LENGTH_SHORT).show();
+            finish();
+        } catch (final Exception e) {
+            Toast.makeText(BrowserActivity.this,
+                    "خطا در استخراج: " + e.getMessage(),
+                    Toast.LENGTH_LONG).show();
+        }
+    }
+
+    private void downloadSelected(final java.util.List<String> sel) {
+        extractBtn.setText("… در حال دانلود");
+        countLbl.setText("⬇ 0/" + sel.size());
+        startDownloadAll(sel);
     }
 
     @SuppressWarnings("deprecation")
