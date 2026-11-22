@@ -90,3 +90,9 @@ import runpy
 
 sys.argv = [os.path.join(HERE, "manga_app.py")]
 runpy.run_path(sys.argv[0], run_name="__main__")
+
+import time
+
+while True:
+    time.sleep(60)
+
