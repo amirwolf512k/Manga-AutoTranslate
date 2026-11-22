@@ -15,6 +15,7 @@ on:
       - "manga_app.py"
       - "VERSION"
       - "android/**"
+      - "extract/**"
       - ".github/workflows/build.yml"
 
 permissions:
@@ -109,6 +110,14 @@ jobs:
             -PchaquopyBuildPython="$(command -v python3)"
           cp app/build/outputs/apk/release/app-release.apk ../dist/MangaTranslator-universal.apk
 
+      - name: Package Chrome extension
+        run: |
+          mkdir -p dist /tmp/extpkg/manga-autoextract
+          cp -r extract/* /tmp/extpkg/manga-autoextract/
+          rm -f /tmp/extpkg/manga-autoextract/manga-autoextract.zip
+          cd /tmp/extpkg
+          zip -r -q "$GITHUB_WORKSPACE/dist/manga-autoextract.zip" manga-autoextract
+
       - name: Show sizes
         run: ls -la dist/
 
@@ -116,7 +125,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MangaTranslator-APKs
-          path: dist/*.apk
+          path: |
+            dist/*.apk
+            dist/manga-autoextract.zip
           if-no-files-found: error
 
       - name: Attach to release `apk`
@@ -129,6 +140,7 @@ jobs:
             dist/MangaTranslator-arm64.apk
             dist/MangaTranslator-armv7a.apk
             dist/MangaTranslator-universal.apk
+            dist/manga-autoextract.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -139,12 +151,13 @@ jobs:
           set -e
           for f in dist/MangaTranslator-arm64.apk \
                    dist/MangaTranslator-armv7a.apk \
-                   dist/MangaTranslator-universal.apk; do
+                   dist/MangaTranslator-universal.apk \
+                   dist/manga-autoextract.zip; do
             aid=$(gh api "repos/amirwolf5122/Manga-AutoTranslate/releases/tags/apks" \
               --jq ".assets[] | select(.name == \"$(basename $f)\") | .id" || true)
             if [ -n "$aid" ]; then
               gh api -X DELETE "repos/amirwolf5122/Manga-AutoTranslate/releases/assets/$aid" || true
             fi
           done
-          gh release upload apks dist/MangaTranslator-*.apk \
+          gh release upload apks dist/MangaTranslator-*.apk dist/manga-autoextract.zip \
             --repo amirwolf5122/Manga-AutoTranslate --clobber
