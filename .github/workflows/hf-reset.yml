@@ -8,6 +8,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Reset HF space to single commit
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
@@ -21,7 +24,7 @@ jobs:
           echo "default branch: $DEFBR"
           echo "=== BEFORE ==="
           ls -la
-          test -f app.py
+          cp "$GITHUB_WORKSPACE/manga_app.py" app.py
           find . -mindepth 1 -maxdepth 1 \
             ! -name '.git' ! -name 'app.py' ! -name 'README.md' \
             ! -name '.gitattributes' -exec rm -rf {} +

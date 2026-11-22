@@ -427,7 +427,7 @@
     '.mttoast{position:fixed;z-index:2147483647;bottom:calc(78px + env(safe-area-inset-bottom,0px));right:50%;transform:translateX(50%);background:#1b1b24;border:1px solid #343444;color:#e8e8ec;padding:10px 18px;border-radius:10px;font-size:13px;direction:rtl;display:none;max-width:88vw;text-align:center;pointer-events:auto}' +
     '.mttoast.mtopen{display:block}' +
     '</style>' +
-    '<div class="mtfab"><span class="mtdot"></span><span class="mtlabel">شروع ضبط</span><span class="mtbadge">0</span></div>' +
+    '<div class="mtfab" style="display:none"><span class="mtdot"></span><span class="mtlabel">استخراج</span><span class="mtbadge">0</span></div>' +
     '<div class="mtmenu">' +
     '<button data-mt="ext">استخراج</button>' +
     '<div class="mtsep"></div>' +
@@ -515,8 +515,9 @@
 
   function setRec(on, count) {
     recording = on
+    fab.style.display = on ? 'flex' : 'none'
     fab.classList.toggle('mtrec', on)
-    fabLabel.textContent = on ? 'استخراج' : 'شروع ضبط'
+    fabLabel.textContent = 'استخراج'
     fabBadge.style.display = on ? 'flex' : 'none'
     fabBadge.textContent = String(count || 0)
     if (!on) gathered = null
@@ -563,7 +564,6 @@
   function onFabClick() {
     closeMenu()
     closePanel()
-    if (!recording) { startRecording(); return }
     gather().then(function (items) {
       if (!items.length) {
         toast('هیچ عکسی ضبط نشد — صفحه را اسکرول کن تا عکس‌ها لود شوند')

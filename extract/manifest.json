@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Manga AutoExtract",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "استخراج عکس مانگا و مانها از هر سایت — لینک‌ها روی صفحه + دانلود ZIP",
   "minimum_chrome_version": "103",
   "icons": {

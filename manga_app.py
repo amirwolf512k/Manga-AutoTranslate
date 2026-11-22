@@ -2332,38 +2332,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     step();
   }
 
-  function showRecMenu(){
-    closeAll();
-    menu = document.createElement('div'); menu.className = 'mtmenu';
-    var mi1 = document.createElement('button');
-    mi1.type = 'button'; mi1.className = 'mtmi';
-    mi1.textContent = '🖼 استخراج';
-    mi1.onclick = function(ev){ ev.stopPropagation(); closeAll(); doExtract(); };
-    var mi2 = document.createElement('button');
-    mi2.type = 'button'; mi2.className = 'mtmi';
-    mi2.textContent = 'توقف ضبط';
-    mi2.onclick = function(ev){
-      ev.stopPropagation(); closeAll();
-      clearRec();
-      mainBtn.textContent = '▶ شروع ضبط';
-      cnt.textContent = 'ضبط متوقف شد — برای شروعِ دوباره «شروع ضبط» را بزن';
-    };
-    menu.appendChild(mi1); menu.appendChild(mi2);
-    try{
-      var r = mainBtn.getBoundingClientRect();
-      menu.style.top = (r.bottom + 6) + 'px';
-      menu.style.right = Math.max(6, (window.innerWidth - r.right)) + 'px';
-      (document.documentElement || document.body).appendChild(menu);
-      setTimeout(function(){
-        function off(e){
-          try{ if(menu && !menu.contains(e.target)) closeAll(); }catch(e2){}
-          document.removeEventListener('mousedown', off, true);
-        }
-        document.addEventListener('mousedown', off, true);
-      }, 0);
-    }catch(e){}
-  }
-
   mainBtn.onclick = function(){
     closeAll();
     if(!rec){
@@ -2374,7 +2342,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       try{ location.reload(); }catch(e){}
       return;
     }
-    showRecMenu();
+    doExtract();
   };
 
   box.appendChild(fwd); box.appendChild(back); box.appendChild(url);
@@ -3515,10 +3483,11 @@ def _browser_extract_js() -> str:
                        && window.pywebview.api.openBrowser);
           const wv2 = !!(window.chrome && window.chrome.webview
                         && window.chrome.webview.postMessage);
+          const andr = /;\\s*wv\\)/i.test(navigator.userAgent || "");
           const row = document.getElementById('mt_browser_row');
           if (row) row.style.display = pw ? '' : 'none';
           const bm = document.querySelector('details.mt-browser');
-          if (bm) bm.style.display = (pw || wv2 || window.__mtWebFab)
+          if (bm) bm.style.display = (pw || wv2 || andr || window.__mtWebFab)
             ? 'none' : '';
         } catch (e) {}
       };
@@ -3627,20 +3596,19 @@ def _browser_extract_js() -> str:
         try {
           if (window.__mtWebFabInst) return;
           const neutr = !!(window.neutralino);
-          if (__WEB_HOST__ && !neutr) return;
           const pw = !!(window.pywebview && window.pywebview.api
                        && window.pywebview.api.openBrowser);
           const wv2 = !!(window.chrome && window.chrome.webview
                         && window.chrome.webview.postMessage);
           const andr = /;\\s*wv\\)/i.test(navigator.userAgent || "");
-          if (pw) return;
-          if (wv2 || andr) {
+          if (pw || wv2 || andr) {
             try {
               const bm0 = document.querySelector('details.mt-browser');
               if (bm0) bm0.style.display = 'none';
             } catch (e) {}
             return;
           }
+          if (__WEB_HOST__ && !neutr) return;
           window.__mtWebFabInst = true;
           window.__mtWebFab = true;
           const bm = document.querySelector('details.mt-browser');
@@ -4200,7 +4168,7 @@ def _browser_extract_js() -> str:
                 } catch (e) {}
                 return;
               }
-              showRecMenu();
+              doExtract();
             });
 
             const doExtract = () => {
@@ -4209,44 +4177,6 @@ def _browser_extract_js() -> str:
               if (page && page.length) mergeAcc(page);
               if (!acc.length) { showBlocked(); return; }
               showFolders();
-            };
-
-            const showRecMenu = () => {
-              closeFold(); closeMode();
-              modeEl = document.createElement("div");
-              modeEl.id = "mtWbrMode";
-              const mkMi = (txt, fn) => {
-                const b = document.createElement("button");
-                b.type = "button"; b.textContent = txt;
-                b.onclick = (ev) => {
-                  ev.stopPropagation(); closeMode(); fn();
-                };
-                return b;
-              };
-              modeEl.appendChild(mkMi("🖼 استخراج", () => doExtract()));
-              modeEl.appendChild(mkMi("توقف ضبط", () => {
-                rec = false;
-                acc = [];
-                for (const k of Object.keys(accSeen)) delete accSeen[k];
-                mainBtn.textContent = "▶ شروع ضبط";
-                cnt.textContent = "ضبط متوقف شد — برای شروعِ دوباره «شروع ضبط» را بزن";
-              }));
-              try {
-                const r = mainBtn.getBoundingClientRect();
-                modeEl.style.top = (r.bottom + 6) + "px";
-                modeEl.style.right =
-                  Math.max(6, window.innerWidth - r.right) + "px";
-                document.body.appendChild(modeEl);
-                setTimeout(() => {
-                  const off = (e) => {
-                    try {
-                      if (modeEl && !modeEl.contains(e.target)) closeMode();
-                    } catch (e2) {}
-                    document.removeEventListener("mousedown", off, true);
-                  };
-                  document.addEventListener("mousedown", off, true);
-                }, 0);
-              } catch (e) { closeMode(); }
             };
 
             const showFolders = () => {

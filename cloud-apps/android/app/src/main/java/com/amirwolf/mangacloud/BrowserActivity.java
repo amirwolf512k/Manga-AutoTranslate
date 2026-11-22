@@ -328,7 +328,7 @@ public class BrowserActivity extends Activity {
         extractBtn.setBackground(exBg);
         extractBtn.setOnClickListener(new View.OnClickListener() {
             @Override public void onClick(View v) {
-                if (!recording) startRecording(); else showRecMenu();
+                if (!recording) startRecording(); else showExtractChoice();
             }
         });
 
@@ -1080,30 +1080,6 @@ public class BrowserActivity extends Activity {
             Toast.makeText(this, "خطا در شروع دانلود: " + e.getMessage(),
                     Toast.LENGTH_LONG).show();
         }
-    }
-
-    private void showRecMenu() {
-        android.app.AlertDialog.Builder b =
-                new android.app.AlertDialog.Builder(this);
-        b.setTitle("در حال ضبط — چه کاری انجام شود؟");
-        b.setItems(new String[]{"🖼 استخراج", "توقف ضبط"},
-                (dialog, which) -> {
-                    if (which == 0) showExtractChoice();
-                    else stopRecording();
-                });
-        b.setNegativeButton("انصراف", null);
-        b.show();
-    }
-
-    private void stopRecording() {
-        recording = false;
-        foundStore.clear();
-        synchronized (netLog) { netLog.clear(); }
-        chapterKeyNow = "";
-        try { web.evaluateJavascript(CLEAR_STORE_JS, null); }
-        catch (Exception ignored) {}
-        extractBtn.setText("▶ شروع ضبط");
-        countLbl.setText("ضبط متوقف شد — برای شروعِ دوباره «شروع ضبط» را بزن");
     }
 
     private void showExtractChoice() {

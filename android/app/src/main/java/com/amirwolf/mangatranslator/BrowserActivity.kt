@@ -593,7 +593,7 @@ tick()
                 cornerRadius = 24f
             }
             setOnClickListener {
-                if (!recording) startRecording() else showRecMenu()
+                if (!recording) startRecording() else showExtractChoice()
             }
         }
         bottom.addView(countLbl, LinearLayout.LayoutParams(
@@ -869,26 +869,6 @@ tick()
         extractBtn.text = "🖼 استخراج"
         countLbl.text = "در حال ضبط… صفحه فصل را ورق بزن"
         try { web.reload() } catch (_: Exception) {}
-    }
-
-    private fun showRecMenu() {
-        val b = android.app.AlertDialog.Builder(this)
-        b.setTitle("در حال ضبط — چه کاری انجام شود؟")
-        b.setItems(arrayOf("🖼 استخراج", "توقف ضبط")) { _, w ->
-            if (w == 0) showExtractChoice() else stopRecording()
-        }
-        b.setNegativeButton("انصراف", null)
-        b.show()
-    }
-
-    private fun stopRecording() {
-        recording = false
-        foundStore.clear()
-        synchronized(netLog) { netLog.clear() }
-        chapterKeyNow = ""
-        try { web.evaluateJavascript(CLEAR_STORE_JS, null) } catch (_: Exception) {}
-        extractBtn.text = "▶ شروع ضبط"
-        countLbl.text = "ضبط متوقف شد — برای شروعِ دوباره «شروع ضبط» را بزن"
     }
 
     private fun showExtractChoice() {
