@@ -1192,11 +1192,12 @@ public class BrowserActivity extends Activity {
                     });
                     return;
                 }
-                THUMB_CACHE.put(u, bmp);
+                final android.graphics.Bitmap b2 = bmp;
+                THUMB_CACHE.put(u, b2);
                 runOnUiThread(() -> {
                     try {
                         if (u.equals(iv.getTag())) {
-                            iv.setImageBitmap(bmp);
+                            iv.setImageBitmap(b2);
                             iv.setVisibility(View.VISIBLE);
                         }
                     } catch (Exception ignored) {

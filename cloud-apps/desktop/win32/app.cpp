@@ -1030,6 +1030,7 @@ static void MtFillFieldAndClose(const std::vector<std::wstring> &links);
 static void MtStartDownload(const std::vector<std::wstring> &urls);
 static void MtShowFolderOverlay(void);
 static void MtOnExtractBtn(void);
+static void MtShowExtractMenu(void);
 static void LayoutApp(void);
 static void LayoutBrowser(void);
 static void MtCloseExtractMenu(void);
@@ -1302,7 +1303,7 @@ HRESULT MtMsgHandler::Impl(
         if (args == NULL)
             return S_OK;
         LPWSTR msg = NULL;
-        if (FAILED(args->get_TryGetWebMessageAsString(&msg))
+        if (FAILED(args->TryGetWebMessageAsString(&msg))
                 || msg == NULL)
             return S_OK;
         std::vector<std::wstring> links;
