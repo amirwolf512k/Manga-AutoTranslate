@@ -1,0 +1,25 @@
+name: Inspect HF Space
+
+on:
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Show space files and old stub
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          set -e
+          rm -rf hf && mkdir hf && cd hf
+          git clone "https://amirwolf512:${HF_TOKEN}@huggingface.co/spaces/amirwolf512/manga-autotranslate" .
+          echo "=== README.md ==="
+          cat README.md
+          echo "=== current app.py head (first 40 lines) ==="
+          head -40 app.py
+          echo "=== OLD STUB (a050184:app.py) ==="
+          git show a050184:app.py || echo "(old commit not found)"
+          echo "=== OLD README (a050184:README.md) ==="
+          git show a050184:README.md || true
