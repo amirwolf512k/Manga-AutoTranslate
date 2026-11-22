@@ -74,7 +74,10 @@ if(/(default|anon|guest|blank)[-_]?(pp|avatar|user|profile|image)/i.test(b))retu
 if(/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\.net)/i.test(b))return 1;
 return 0}
 function keyOf(u){
-var b=String(u).split(/[?#]/)[0];
+var s=String(u);
+var b=s.split(/[?#]/)[0];
+/* پروکسی‌ها (…/img-proxy?url=…2.webp): پسوند در مسیر نیست — کلِ URL کلید است */
+if(!/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))return s.split('#')[0];
 return b.replace(/[-_]\d{2,4}x\d{2,4}\./i,'.')}
 function bkey(u){return String(u).split('#')[0]}
 function hold(k,b){
@@ -179,6 +182,24 @@ for(var j2=0;j2<ns.length;j2++)grabTree(ns[j2])
 });
 obs.observe(document.documentElement||document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['src','srcset']})
 }catch(e){}
+/* مشاهده‌گرِ عملکرد: عکس‌های پروکسی‌شده (Service Worker / canvas / shadow DOM)
+   مثلِ cdn.mangareader.pro/img-proxy?url=…%2F2.webp */
+try{
+if(!W.__mtPO){W.__mtPO=1;
+var po=new PerformanceObserver(function(list){
+try{
+var es=list.getEntries();
+for(var i=0;i<es.length;i++){
+var en=es[i]||{};var n=String(en.name||'');
+if(!n)continue;
+var b=n.split(/[?#]/)[0];
+var t=String(en.initiatorType||'');
+if(/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)||t==='img'||
+/\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|${'$'})/i.test(n)){cap(n)}
+}
+}catch(e){}});
+po.observe({entryTypes:['resource'],buffered:true})
+}}catch(e){}
 /* قلابِ شبکه: عکس‌هایی که با fetch/XHR می‌آیند (حتی بدون پسوند) */
 try{
 var _f=W.fetch;
@@ -279,6 +300,7 @@ try{if(en.startTime<tp)continue}catch(e){}
 var b=n.split(/[?#]/)[0];
 var t=String(en.initiatorType||'');
 if(/\.(jpe?g|png|webp|avif|bmp|tiff?)${'$'}/i.test(b)){cap(n);continue}
+if(/\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|${'$'})/i.test(n)){cap(n);continue}
 if(t==='img'){if(n.indexOf('blob:')===0){capb(n)}else{cap(n)}}
 }
 }catch(e){}}
@@ -376,6 +398,9 @@ tick()
 
     private val reImgExt = Regex(
         "\\.(jpe?g|png|webp|avif|bmp|tiff?)$", RegexOption.IGNORE_CASE)
+    /* پروکسی‌های عکس: …/img-proxy?url=…%2F115%2F2.webp — پسوند در آخرِ کلِ URL */
+    private val reImgExtFull = Regex(
+        "\\.(jpe?g|png|webp|avif|bmp|tiff?)([&#]|$)", RegexOption.IGNORE_CASE)
     private val reBadExt = Regex(
         "\\.(svg|ico|gif|css|js|mjs|json|html?|xml|txt|pdf|zip|rar|7z|gz|" +
         "mp4|webm|mp3|m4a|ogg|wav|woff2?|ttf|otf|eot|map)$",
@@ -646,7 +671,8 @@ tick()
                                 }
                             }
                             val b = u.substringBefore('#').substringBefore('?')
-                            val extImg = reImgExt.containsMatchIn(b)
+                            val extImg = reImgExt.containsMatchIn(b) ||
+                                    reImgExtFull.containsMatchIn(u)
                             if (dest == "image" ||
                                 (accept.contains("image/") &&
                                         !accept.contains("text/html")) ||
@@ -1867,7 +1893,8 @@ tick()
             val js = "(function(){" +
                 "try{" +
                 "var KNOWN=" + sb + ";" +
-                "function keyOf(u){var b=String(u).split(/[?#]/)[0];" +
+                "function keyOf(u){var s=String(u);var b=s.split(/[?#]/)[0];" +
+                "if(!/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))return s.split('#')[0];" +
                 "return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}" +
                 "function ukey(u){return String(u).indexOf('blob:')===0?" +
                 "String(u).split('#')[0]:keyOf(u)}" +

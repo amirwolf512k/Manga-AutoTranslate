@@ -222,6 +222,7 @@ L"if(!n)continue;"
 L"var b=n.split(/[?#]/)[0];"
 L"var ext=/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b);"
 L"if(!ext){"
+L"if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)){add(n);continue}"
 L"if(t==='fetch'||t==='xmlhttprequest')continue;"
 L"if(!/(^|\\/)(pages?|images?|img|media|manga|manhwa|webtoon|chapters?|episodes?|comic|uploads|wp-content|cdn)(\\/|[_\\-.]|$)/i.test(b))continue"
 L"}"
@@ -268,7 +269,9 @@ L"if(!pj)good.push([pick,idx]);"
 L"idx++"
 L"}"
 L"function keyOf(u){"
-L"var b=String(u).split(/[?#]/)[0];"
+L"var s=String(u);"
+L"var b=s.split(/[?#]/)[0];"
+L"if(!/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))return s.split('#')[0];"
 L"return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}"
 L"function dedupe(list){"
 L"var by={},order=[];"
@@ -1356,6 +1359,19 @@ HRESULT MtResReqHandler::Impl(
                     }
                     hdrs->Release();
                 }
+            }
+            /* پروکسی‌های عکس مثلِ cdn.mangareader.pro/img-proxy?url=…%2F2.webp:
+               پسوندِ عکس در آخرِ کلِ URL (داخلِ کوئری) */
+            if (!img) {
+                std::wstring f = u;
+                size_t h = f.find(L'#');
+                if (h != std::wstring::npos)
+                    f = f.substr(0, h);
+                if (MtEndsWithI(f, L".jpg") || MtEndsWithI(f, L".jpeg")
+                        || MtEndsWithI(f, L".png") || MtEndsWithI(f, L".webp")
+                        || MtEndsWithI(f, L".avif") || MtEndsWithI(f, L".bmp")
+                        || MtEndsWithI(f, L".tiff") || MtEndsWithI(f, L".tif"))
+                    img = TRUE;
             }
             if (img && !MtJunkUrl(u))
                 MtRecAdd(u);

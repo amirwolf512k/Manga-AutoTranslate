@@ -1519,7 +1519,12 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     return 0;
   }
   function keyOf(u){
-    var b = String(u).split(/[?#]/)[0];
+    var s = String(u);
+    var b = s.split(/[?#]/)[0];
+    /* پروکسی‌ها (…/img-proxy?url=…2.webp): پسوند در مسیر نیست — کلِ URL (بدون فرگمنت) کلید است
+       وگرنه همهٔ صفحات یک کلید می‌شدند و فقط عکسِ اول می‌ماند! */
+    if(!/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))
+      return s.split('#')[0];
     return b.replace(/[-_]\d{2,4}x\d{2,4}\./i, '.');
   }
   var DATA_ATTS = ['data-src','data-lazy-src','data-original','data-original-src',
@@ -1611,6 +1616,10 @@ _MT_BROWSER_WIN_JS = r"""(function(){
           var t = String(en.initiatorType || '');
           if(/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)){ add(n); continue; }
           if(t === 'img') add(n);
+          else if(t === 'fetch' || t === 'xmlhttprequest' || t === 'other'){
+            /* عکس‌های پروکسی‌شده: …/img-proxy?url=…%2F115%2F2.webp */
+            if(/\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)) add(n);
+          }
         }
       }catch(e){}
     }
@@ -1678,6 +1687,27 @@ _MT_BROWSER_WIN_JS = r"""(function(){
   }
   function netHook(){
     if (window.__mtNetHook) return; window.__mtNetHook = 1;
+    /* مشاهده‌گرِ عملکرد: هر درخواستِ عکس (حتی از Service Worker / canvas / shadow DOM)
+       در resource-timing دیده می‌شود — مثلِ img-proxy مانگاریدر */
+    try{
+      var _po = new PerformanceObserver(function(list){
+        try{
+          var es = list.getEntries();
+          for(var i=0;i<es.length;i++){
+            var en = es[i] || {};
+            var n = String(en.name || '');
+            if(!n) continue;
+            var b = n.split(/[?#]/)[0];
+            var t = String(en.initiatorType || '');
+            if(/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b) || t === 'img' ||
+               /\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)){
+              netRec(n);
+            }
+          }
+        }catch(e){}
+      });
+      _po.observe({ entryTypes: ['resource'], buffered: true });
+    }catch(e){}
     try{
       var _f = window.fetch;
       if (typeof _f === 'function' && !window.__mtFH){
