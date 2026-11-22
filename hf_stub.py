@@ -1,9 +1,13 @@
-import importlib.util
 import io
 import os
 import sys
 import tarfile
 import urllib.request
+
+try:
+    import spaces  # noqa: F401
+except Exception:
+    pass
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 RAW_VER = "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/VERSION"
@@ -79,11 +83,10 @@ def _ensure_code():
 _ensure_code()
 
 if not _have_code():
-    print("[hf-stub] manga.py not available — UI-only mode")
+    print("[hf-stub] manga.py not available")
     sys.exit(1)
 
-spec = importlib.util.spec_from_file_location(
-    "manga_app", os.path.join(HERE, "manga_app.py"))
-mod = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(mod)
-mod.main()
+import runpy
+
+sys.argv = [os.path.join(HERE, "manga_app.py")]
+runpy.run_path(sys.argv[0], run_name="__main__")
