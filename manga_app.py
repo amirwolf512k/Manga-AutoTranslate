@@ -2348,6 +2348,38 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     step();
   }
 
+  function showRecMenu(){
+    closeAll();
+    menu = document.createElement('div'); menu.className = 'mtmenu';
+    var mi1 = document.createElement('button');
+    mi1.type = 'button'; mi1.className = 'mtmi';
+    mi1.textContent = '🖼 استخراج';
+    mi1.onclick = function(ev){ ev.stopPropagation(); closeAll(); doExtract(); };
+    var mi2 = document.createElement('button');
+    mi2.type = 'button'; mi2.className = 'mtmi';
+    mi2.textContent = 'توقف ضبط';
+    mi2.onclick = function(ev){
+      ev.stopPropagation(); closeAll();
+      clearRec();
+      mainBtn.textContent = '▶ شروع ضبط';
+      cnt.textContent = 'ضبط متوقف شد — برای شروعِ دوباره «شروع ضبط» را بزن';
+    };
+    menu.appendChild(mi1); menu.appendChild(mi2);
+    try{
+      var r = mainBtn.getBoundingClientRect();
+      menu.style.top = (r.bottom + 6) + 'px';
+      menu.style.right = Math.max(6, (window.innerWidth - r.right)) + 'px';
+      (document.documentElement || document.body).appendChild(menu);
+      setTimeout(function(){
+        function off(e){
+          try{ if(menu && !menu.contains(e.target)) closeAll(); }catch(e2){}
+          document.removeEventListener('mousedown', off, true);
+        }
+        document.addEventListener('mousedown', off, true);
+      }, 0);
+    }catch(e){}
+  }
+
   mainBtn.onclick = function(){
     closeAll();
     if(!rec){
@@ -2358,7 +2390,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       try{ location.reload(); }catch(e){}
       return;
     }
-    doExtract();
+    showRecMenu();
   };
 
   box.appendChild(fwd); box.appendChild(back); box.appendChild(url);
@@ -3623,7 +3655,14 @@ def _browser_extract_js() -> str:
           const wv2 = !!(window.chrome && window.chrome.webview
                         && window.chrome.webview.postMessage);
           const andr = /;\\s*wv\\)/i.test(navigator.userAgent || "");
-          if (pw || wv2 || andr) return;
+          if (pw) return;
+          if (wv2 || andr) {
+            try {
+              const bm0 = document.querySelector('details.mt-browser');
+              if (bm0) bm0.style.display = 'none';
+            } catch (e) {}
+            return;
+          }
           window.__mtWebFabInst = true;
           window.__mtWebFab = true;
           const bm = document.querySelector('details.mt-browser');
@@ -4183,7 +4222,7 @@ def _browser_extract_js() -> str:
                 } catch (e) {}
                 return;
               }
-              doExtract();
+              showRecMenu();
             });
 
             const doExtract = () => {
@@ -4192,6 +4231,44 @@ def _browser_extract_js() -> str:
               if (page && page.length) mergeAcc(page);
               if (!acc.length) { showBlocked(); return; }
               showFolders();
+            };
+
+            const showRecMenu = () => {
+              closeFold(); closeMode();
+              modeEl = document.createElement("div");
+              modeEl.id = "mtWbrMode";
+              const mkMi = (txt, fn) => {
+                const b = document.createElement("button");
+                b.type = "button"; b.textContent = txt;
+                b.onclick = (ev) => {
+                  ev.stopPropagation(); closeMode(); fn();
+                };
+                return b;
+              };
+              modeEl.appendChild(mkMi("🖼 استخراج", () => doExtract()));
+              modeEl.appendChild(mkMi("توقف ضبط", () => {
+                rec = false;
+                acc = [];
+                for (const k of Object.keys(accSeen)) delete accSeen[k];
+                mainBtn.textContent = "▶ شروع ضبط";
+                cnt.textContent = "ضبط متوقف شد — برای شروعِ دوباره «شروع ضبط» را بزن";
+              }));
+              try {
+                const r = mainBtn.getBoundingClientRect();
+                modeEl.style.top = (r.bottom + 6) + "px";
+                modeEl.style.right =
+                  Math.max(6, window.innerWidth - r.right) + "px";
+                document.body.appendChild(modeEl);
+                setTimeout(() => {
+                  const off = (e) => {
+                    try {
+                      if (modeEl && !modeEl.contains(e.target)) closeMode();
+                    } catch (e2) {}
+                    document.removeEventListener("mousedown", off, true);
+                  };
+                  document.addEventListener("mousedown", off, true);
+                }, 0);
+              } catch (e) { closeMode(); }
             };
 
             const showFolders = () => {
@@ -8753,52 +8830,105 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
             inp_path = gr.Textbox(label=TX("app.url", "یا URL تصویر/مانهوا (چند لینک = هر لینک در یک خط با اینتر)"),
                                   placeholder=TX("app.url_ph", "https://mgread.io/manga/cute-war/chapter-20/ > https://mgread.io/manga/cute-war/chapter-24/\nیا هر لینک در یک خط:\nhttps://cdn.example.com/chapter/1/001.webp"),
                                   elem_id="manga_inp_path")
-            gr.HTML(
-                '<details class="mt-browser" style="margin-top:8px;'
-                'border:1px solid rgba(148,163,184,.28);border-radius:12px;'
-                'background:rgba(127,127,152,.07);padding:8px 12px 10px">'
-                '<summary style="cursor:pointer;font-weight:700;'
-                'font-size:.95em;color:inherit">'
-                '🌐 ' + TX("app.br_title",
-                           "باز کردن مرورگر — سایت‌هایی که کپچا دارند") +
-                '</summary>'
-                '<div style="font-size:.86em;line-height:2;margin-top:8px;'
-                'opacity:.92">'
-                '<div>' + TX("app.br_s1",
-                             "۱) دکمهٔ نارنجیِ زیر را با ماوس بگیر و در نوارِ "
-                             "نشانک‌های مرورگرت رها کن (موبایل: «کپی نشانک» و "
-                             "دستی به نشانک‌ها اضافه کن).") + '</div>'
-                '<div>' + TX("app.br_s2",
-                             "۲) به سایتِ مانهوا برو، کپچا را خودت رد کن، فصلِ "
-                             "دلخواه را باز کن و تا آخرِ صفحه اسکرول کن تا "
-                             "همهٔ عکس‌ها لود بشن.") + '</div>'
-                '<div>' + TX("app.br_s3",
-                             "۳) روی نشانکِ «🖼 استخراج عکس» کلیک کن — لینکِ "
-                             "همهٔ عکس‌های فصل خودکار در فیلدِ بالا می‌نشیند؛ "
-                             "بعد فقط «شروع ترجمه» را بزن.") + '</div>'
-                '<div style="margin:10px 0 2px;display:flex;gap:8px;'
-                'flex-wrap:wrap;align-items:center">'
-                '<a id="mt_bmk" href="#" draggable="true" rel="noopener" '
-                'style="display:inline-block;background:linear-gradient(135deg,'
-                '#f59e0b,#ea580c);color:#fff;font-weight:800;font-size:.95em;'
-                'padding:8px 16px;border-radius:10px;text-decoration:none;'
-                'cursor:grab;box-shadow:0 2px 8px rgba(234,88,12,.35)">'
-                '🖼 ' + TX("app.br_bm", "استخراج عکس مانهوا") + '</a>'
-                '<button id="mt_bmk_copy" type="button" '
-                'style="background:transparent;border:1px solid rgba(148,163,'
-                '184,.4);color:inherit;border-radius:10px;padding:7px 14px;'
-                'font-size:.88em;cursor:pointer">📋 ' + TX("app.br_copy",
-                                                           "کپی نشانک") +
-                '</button><span id="mt_bmk_done" style="color:#7fd18a;'
-                'display:none;font-size:.85em">✔ ' + TX("app.br_done",
-                                                        "کپی شد") + '</span>'
-                '</div>'
-                '<div style="opacity:.7;font-size:.88em">' +
-                TX("app.br_note",
-                   "نشانک فقط در مرورگرِ خودِ تو اجرا میشود — پسورد و "
-                   "کوکی هیچ‌وقت به این اپ نمی‌رسد. اپِ اندروید: دکمهٔ 🌐 "
-                   "داخلِ خودِ اپ مرورگرِ داخلی دارد.") + '</div>'
-                '</div></details>')
+            if _web_host():
+                gr.HTML(
+                    '<details class="mt-browser" style="margin-top:8px;'
+                    'border:1px solid rgba(148,163,184,.28);border-radius:12px;'
+                    'background:rgba(127,127,152,.07);padding:8px 12px 10px">'
+                    '<summary style="cursor:pointer;font-weight:700;'
+                    'font-size:.95em;color:inherit">'
+                    '🧩 ' + TX("app.ext_title",
+                               "افزونهٔ کروم — برای سایت‌هایی که کپچا دارند") +
+                    '</summary>'
+                    '<div style="font-size:.86em;line-height:2;margin-top:8px;'
+                    'opacity:.92">'
+                    '<div><b>' + TX("app.ext_s0",
+                                   "نصب (یک بار برای همیشه):") + '</b></div>'
+                    '<div>' + TX("app.ext_s1",
+                                 "۱) فایل ZIP افزونه را دانلود کن و از حالت فشرده خارج کن (extract).") + '</div>'
+                    '<div>' + TX("app.ext_s2",
+                                 "۲) در نوار آدرس کروم بنویس: chrome://extensions و Enter بزن.") + '</div>'
+                    '<div>' + TX("app.ext_s3",
+                                 "۳) کلید «حالت توسعه‌دهنده» (Developer mode) را در بالای صفحه روشن کن.") + '</div>'
+                    '<div>' + TX("app.ext_s4",
+                                 "۴) روی «بارگذاری بدون بسته‌بندی» (Load unpacked) بزن و پوشهٔ manga-autoextract را انتخاب کن.") + '</div>'
+                    '<div style="margin-top:6px"><b>' + TX("app.ext_s5t",
+                                   "استخراج فصل:") + '</b></div>'
+                    '<div>' + TX("app.ext_s5",
+                                 "۵) به سایت مانهوا برو و دکمهٔ «شروع ضبط» پایین صفحه را بزن — صفحه تازه می‌شود و ضبط شروع می‌شود.") + '</div>'
+                    '<div>' + TX("app.ext_s6",
+                                 "۶) فصل را تا آخر اسکرول کن تا همهٔ عکس‌ها لود شوند — با عوض کردن فصل یا سایت، ضبط ادامه می‌یابد.") + '</div>'
+                    '<div>' + TX("app.ext_s7",
+                                 "۷) «استخراج» را بزن، عکس‌های دلخواه را تیک بزن و «کپی لینک‌ها» یا «دانلود ZIP» را انتخاب کن.") + '</div>'
+                    '<div>' + TX("app.ext_s8",
+                                 "۸) لینک‌ها را در فیلد ورودی بالا بچسبان و «شروع ترجمه» را بزن.") + '</div>'
+                    '<div style="margin:10px 0 2px;display:flex;gap:8px;'
+                    'flex-wrap:wrap;align-items:center">'
+                    '<a id="mt_ext_dl" '
+                    'href="https://github.com/amirwolf5122/Manga-AutoTranslate/'
+                    'releases/download/apks/manga-autoextract.zip" '
+                    'rel="noopener" target="_blank" '
+                    'style="display:inline-block;background:linear-gradient('
+                    '135deg,#f59e0b,#ea580c);color:#fff;font-weight:800;'
+                    'font-size:.95em;padding:8px 16px;border-radius:10px;'
+                    'text-decoration:none;'
+                    'box-shadow:0 2px 8px rgba(234,88,12,.35)">'
+                    '⬇ ' + TX("app.ext_dl", "دانلود افزونهٔ کروم (ZIP)") + '</a>'
+                    '</div>'
+                    '<div style="opacity:.7;font-size:.88em">' +
+                    TX("app.ext_note",
+                       "کار با کروم، اج، بریو، اپرا و هر کرومیمی دیگر — روی "
+                       "اندروید هم با مرورگرهایی که افزونه پشتیبانی می‌کنند. "
+                       "ضبط تا وقتی مرورگر باز است ادامه دارد و هیچ داده‌ای "
+                       "جایی ارسال نمی‌شود.") + '</div>'
+                    '</div></details>')
+            else:
+                gr.HTML(
+                    '<details class="mt-browser" style="margin-top:8px;'
+                    'border:1px solid rgba(148,163,184,.28);border-radius:12px;'
+                    'background:rgba(127,127,152,.07);padding:8px 12px 10px">'
+                    '<summary style="cursor:pointer;font-weight:700;'
+                    'font-size:.95em;color:inherit">'
+                    '🌐 ' + TX("app.br_title",
+                               "باز کردن مرورگر — سایت‌هایی که کپچا دارند") +
+                    '</summary>'
+                    '<div style="font-size:.86em;line-height:2;margin-top:8px;'
+                    'opacity:.92">'
+                    '<div>' + TX("app.br_s1",
+                                 "۱) دکمهٔ نارنجیِ زیر را با ماوس بگیر و در نوارِ "
+                                 "نشانک‌های مرورگرت رها کن (موبایل: «کپی نشانک» و "
+                                 "دستی به نشانک‌ها اضافه کن).") + '</div>'
+                    '<div>' + TX("app.br_s2",
+                                 "۲) به سایتِ مانهوا برو، کپچا را خودت رد کن، فصلِ "
+                                 "دلخواه را باز کن و تا آخرِ صفحه اسکرول کن تا "
+                                 "همهٔ عکس‌ها لود بشن.") + '</div>'
+                    '<div>' + TX("app.br_s3",
+                                 "۳) روی نشانکِ «🖼 استخراج عکس» کلیک کن — لینکِ "
+                                 "همهٔ عکس‌های فصل خودکار در فیلدِ بالا می‌نشیند؛ "
+                                 "بعد فقط «شروع ترجمه» را بزن.") + '</div>'
+                    '<div style="margin:10px 0 2px;display:flex;gap:8px;'
+                    'flex-wrap:wrap;align-items:center">'
+                    '<a id="mt_bmk" href="#" draggable="true" rel="noopener" '
+                    'style="display:inline-block;background:linear-gradient(135deg,'
+                    '#f59e0b,#ea580c);color:#fff;font-weight:800;font-size:.95em;'
+                    'padding:8px 16px;border-radius:10px;text-decoration:none;'
+                    'cursor:grab;box-shadow:0 2px 8px rgba(234,88,12,.35)">'
+                    '🖼 ' + TX("app.br_bm", "استخراج عکس مانهوا") + '</a>'
+                    '<button id="mt_bmk_copy" type="button" '
+                    'style="background:transparent;border:1px solid rgba(148,163,'
+                    '184,.4);color:inherit;border-radius:10px;padding:7px 14px;'
+                    'font-size:.88em;cursor:pointer">📋 ' + TX("app.br_copy",
+                                                               "کپی نشانک") +
+                    '</button><span id="mt_bmk_done" style="color:#7fd18a;'
+                    'display:none;font-size:.85em">✔ ' + TX("app.br_done",
+                                                            "کپی شد") + '</span>'
+                    '</div>'
+                    '<div style="opacity:.7;font-size:.88em">' +
+                    TX("app.br_note",
+                       "نشانک فقط در مرورگرِ خودِ تو اجرا میشود — پسورد و "
+                       "کوکی هیچ‌وقت به این اپ نمی‌رسد. اپِ اندروید: دکمهٔ 🌐 "
+                       "داخلِ خودِ اپ مرورگرِ داخلی دارد.") + '</div>'
+                    '</div></details>')
             _pc_local = not _web_host()
             with gr.Row(visible=_pc_local, elem_id="mt_browser_row") as browser_row:
                 mt_ibtn = gr.Button(
