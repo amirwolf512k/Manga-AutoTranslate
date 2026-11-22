@@ -1426,24 +1426,54 @@ _MT_BROWSER_WIN_JS = r"""(function(){
         +'.mtmenu .mtmi:hover{background:#2d3649}'
         +'.mtfold{position:fixed;z-index:2147483647;direction:rtl;'
         +'top:50%;left:50%;transform:translate(-50%,-50%);'
-        +'background:rgba(20,22,28,.98);border:1px solid #273043;'
-        +'border-radius:14px;padding:14px;box-shadow:0 14px 38px rgba(0,0,0,.6);'
-        +'display:flex;flex-direction:column;gap:10px;'
-        +'font-family:Tahoma,Arial,sans-serif;max-width:min(540px,94vw);'
-        +'max-height:72vh;box-sizing:border-box}'
-        +'.mtfold .mtfh{font-weight:800;font-size:14px;color:#e7ebf3;'
-        +'padding:0 2px}'
+        +'background:linear-gradient(180deg,#171b24,#10141c);'
+        +'border:1px solid #2a3242;'
+        +'border-radius:18px;padding:16px;box-shadow:0 24px 60px rgba(0,0,0,.7);'
+        +'display:flex;flex-direction:column;gap:12px;'
+        +'font-family:Tahoma,Arial,sans-serif;width:min(640px,94vw);'
+        +'max-height:78vh;box-sizing:border-box}'
+        +'.mtfold .mtfh{font-weight:800;font-size:15px;color:#e7ebf3;'
+        +'display:flex;align-items:center;gap:8px;padding:0 2px}'
+        +'.mtfold .mtfh .tt{flex:1;min-width:0}'
+        +'.mtfold .mtfh .sub{font-weight:400;font-size:11.5px;color:#8a93a8;'
+        +'margin-top:2px}'
+        +'.mtfold .mtsub{border:0;background:#2d3649;color:#c8ceda;'
+        +'font-family:inherit;font-size:11.5px;font-weight:700;'
+        +'border-radius:10px;padding:5px 10px;cursor:pointer;flex:none}'
         +'.mtfold .mtfl{overflow:auto;display:flex;flex-direction:column;'
-        +'gap:6px;min-width:300px;padding:2px}'
-        +'.mtfold .mtfr{display:flex;align-items:flex-start;gap:10px;'
-        +'background:#1a1f2b;border-radius:10px;padding:10px 12px;'
-        +'color:#e7ebf3;font-size:12.5px;cursor:pointer;'
+        +'gap:8px;min-width:0;padding:2px}'
+        +'.mtfold .frow{background:#1a1f2b;border:1px solid #232b3b;'
+        +'border-radius:14px;padding:10px 12px;display:flex;'
+        +'flex-direction:column;gap:8px;cursor:pointer;'
         +'font-family:inherit}'
-        +'.mtfold .mtfr:hover{background:#2d3649}'
-        +'.mtfold .mtfr input{accent-color:#ff4a3d;width:16px;height:16px;'
-        +'flex:none;margin-top:2px}'
-        +'.mtfold .mtfr span{word-break:break-all;text-align:right;'
-        +'line-height:1.7}'
+        +'.mtfold .frow:hover{background:#212839}'
+        +'.mtfold .frow.on{border-color:#ff4a3d;background:#231d18}'
+        +'.mtfold .frow .top{display:flex;align-items:center;gap:10px}'
+        +'.mtfold .frow input{accent-color:#ff4a3d;width:17px;height:17px;'
+        +'flex:none}'
+        +'.mtfold .frow .name{flex:1;min-width:0;direction:ltr;'
+        +'text-align:left;color:#e7ebf3;font-size:12.5px;'
+        +'word-break:break-all;line-height:1.6}'
+        +'.mtfold .frow .cnt2{flex:none;background:#2d3649;border-radius:10px;'
+        +'color:#fff;font-size:11.5px;font-weight:700;padding:3px 10px}'
+        +'.mtfold .frow .exp{flex:none;border:0;background:#2d3649;'
+        +'color:#c8ceda;font-family:inherit;font-size:11.5px;font-weight:700;'
+        +'border-radius:10px;padding:5px 10px;cursor:pointer}'
+        +'.mtfold .frow .thumbs{display:flex;gap:6px;overflow:hidden}'
+        +'.mtfold .frow .thumbs .th{width:58px;height:58px;border-radius:10px;'
+        +'background:#232b3b center/cover no-repeat;flex:none;'
+        +'border:1px solid #2a3242}'
+        +'.mtfold .frow .grid{display:grid;'
+        +'grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:6px}'
+        +'.mtfold .frow .grid .th{width:100%;aspect-ratio:2/3;'
+        +'border-radius:10px;background:#232b3b center/cover no-repeat;'
+        +'border:2px solid transparent;opacity:.35;'
+        +'transition:opacity .15s,border-color .15s;cursor:pointer;'
+        +'position:relative}'
+        +'.mtfold .frow .grid .th.on{opacity:1;border-color:#ff4a3d}'
+        +'.mtfold .frow .grid .th .no{position:absolute;bottom:3px;left:3px;'
+        +'background:rgba(0,0,0,.65);color:#fff;font-size:10px;'
+        +'border-radius:6px;padding:1px 5px}'
         +'.mtfold .mtfb{display:flex;gap:8px;padding:0 2px}'
         +'.mtfold .mtfb button{border:0;cursor:pointer;font-weight:700;'
         +'font-size:13px;color:#fff;border-radius:10px;padding:10px 18px;'
@@ -1741,44 +1771,143 @@ _MT_BROWSER_WIN_JS = r"""(function(){
 
   function showFolders(order, folders){
     closeAll();
+    var picks = {};
+    for(var i=0;i<order.length;i++) picks[order[i]] = {};
+    function addAll(fk){
+      var a = folders[fk];
+      for(var j=0;j<a.length;j++) picks[fk][a[j]] = 1;
+    }
+    var anyDefault = false;
+    for(var i2=0;i2<order.length;i2++){
+      if(folders[order[i2]].length >= 2){ addAll(order[i2]); anyDefault = true; }
+    }
+    if(!anyDefault && order.length) addAll(order[0]);
+    function imgSafe(u){ return String(u).split("'").join('%27'); }
     fold = document.createElement('div'); fold.className = 'mtfold';
     var h = document.createElement('div'); h.className = 'mtfh';
-    h.textContent = 'پوشه‌های عکس (' + order.length + ') — انتخاب کن';
+    var tt = document.createElement('div'); tt.className = 'tt';
+    var t1 = document.createElement('div');
+    t1.textContent = 'پوشه‌های عکس (' + order.length + ')';
+    var t2 = document.createElement('div'); t2.className = 'sub';
+    t2.textContent = 'با «پیش‌نمایش» عکس‌ها را تک‌تک ببین و انتخاب کن';
+    tt.appendChild(t1); tt.appendChild(t2); h.appendChild(tt);
+    function mkH(txt, fn){
+      var b = document.createElement('button');
+      b.type = 'button'; b.className = 'mtsub'; b.textContent = txt;
+      b.onclick = function(ev){
+        ev.stopPropagation();
+        for(var q=0;q<order.length;q++) picks[order[q]] = {};
+        if(fn) fn();
+        refresh();
+      };
+      return b;
+    }
+    h.appendChild(mkH('هیچ', null));
+    h.appendChild(mkH('همه', function(){
+      for(var q2=0;q2<order.length;q2++) addAll(order[q2]);
+    }));
     fold.appendChild(h);
     var listEl = document.createElement('div'); listEl.className = 'mtfl';
-    var cbs = [], keys = [];
-    for(var i=0;i<order.length;i++){
-      (function(fi){
-        var row = document.createElement('label'); row.className = 'mtfr';
-        var cb = document.createElement('input'); cb.type = 'checkbox';
-        cb.checked = folders[order[fi]].length >= 2;
-        var sp = document.createElement('span');
-        sp.textContent = '\u200E' + shortFolder(order[fi]) +
-          '  —  ' + folders[order[fi]].length + ' عکس';
-        row.appendChild(cb); row.appendChild(sp);
-        listEl.appendChild(row);
-        cbs.push(cb); keys.push(order[fi]);
-      })(i);
+    var rows = [];
+    function refresh(){
+      for(var r=0;r<rows.length;r++){
+        var rw = rows[r]; var n = 0;
+        var a = folders[rw.fk];
+        for(var z=0;z<a.length;z++) if(picks[rw.fk][a[z]]) n++;
+        rw.cb.checked = n > 0;
+        if(n > 0){ rw.row.classList.add('on'); }
+        else{ rw.row.classList.remove('on'); }
+        rw.cnt2.textContent = (n === a.length)
+          ? (a.length + ' عکس') : (n + '/' + a.length);
+      }
     }
-    var any = false;
-    for(var j=0;j<cbs.length;j++) if(cbs[j].checked) any = true;
-    if(!any && cbs.length) cbs[0].checked = true;
+    for(var i3=0;i3<order.length;i3++){
+      (function(fi){
+        var fk = order[fi];
+        var arr = folders[fk];
+        var row = document.createElement('div'); row.className = 'frow';
+        var top = document.createElement('div'); top.className = 'top';
+        var cb = document.createElement('input'); cb.type = 'checkbox';
+        var name = document.createElement('div'); name.className = 'name';
+        name.textContent = '\u200E' + shortFolder(fk);
+        var cnt2 = document.createElement('div'); cnt2.className = 'cnt2';
+        var exp = document.createElement('button'); exp.type = 'button';
+        exp.className = 'exp'; exp.textContent = 'پیش‌نمایش';
+        top.appendChild(cb); top.appendChild(name);
+        top.appendChild(cnt2); top.appendChild(exp);
+        row.appendChild(top);
+        var strip = document.createElement('div'); strip.className = 'thumbs';
+        for(var s=0;s<arr.length && s<4;s++){
+          var d = document.createElement('div'); d.className = 'th';
+          try{ d.style.backgroundImage = "url('" + imgSafe(arr[s]) + "')"; }catch(e){}
+          strip.appendChild(d);
+        }
+        row.appendChild(strip);
+        var grid = document.createElement('div'); grid.className = 'grid';
+        grid.style.display = 'none';
+        var gsel = [];
+        for(var g=0;g<arr.length;g++){
+          (function(gi){
+            var dd = document.createElement('div'); dd.className = 'th';
+            try{ dd.style.backgroundImage = "url('" + imgSafe(arr[gi]) + "')"; }catch(e){}
+            var no = document.createElement('span'); no.className = 'no';
+            no.textContent = String(gi + 1); dd.appendChild(no);
+            if(picks[fk][arr[gi]]) dd.classList.add('on');
+            dd.onclick = function(ev){
+              ev.stopPropagation();
+              if(picks[fk][arr[gi]]){ delete picks[fk][arr[gi]]; dd.classList.remove('on'); }
+              else{ picks[fk][arr[gi]] = 1; dd.classList.add('on'); }
+              refresh();
+            };
+            grid.appendChild(dd); gsel.push(dd);
+          })(g);
+        }
+        row.appendChild(grid);
+        exp.onclick = function(ev){
+          ev.stopPropagation();
+          var open = grid.style.display === 'none';
+          grid.style.display = open ? 'grid' : 'none';
+          strip.style.display = open ? 'none' : 'flex';
+          exp.textContent = open ? 'بستن' : 'پیش‌نمایش';
+        };
+        cb.onclick = function(ev){ ev.stopPropagation(); };
+        cb.onchange = function(){
+          picks[fk] = {};
+          if(cb.checked) addAll(fk);
+          for(var z2=0;z2<arr.length;z2++){
+            if(picks[fk][arr[z2]]) gsel[z2].classList.add('on');
+            else gsel[z2].classList.remove('on');
+          }
+          refresh();
+        };
+        row.onclick = function(){
+          cb.checked = !cb.checked;
+          if(cb.onchange) cb.onchange();
+        };
+        listEl.appendChild(row);
+        rows.push({fk: fk, cb: cb, cnt2: cnt2, row: row});
+      })(i3);
+    }
+    refresh();
     fold.appendChild(listEl);
     var btns = document.createElement('div'); btns.className = 'mtfb';
     var ok = document.createElement('button');
     ok.type = 'button'; ok.className = 'mtok'; ok.textContent = 'ادامه';
     ok.onclick = function(){
       var sel = [];
-      for(var q=0;q<cbs.length;q++)
-        if(cbs[q].checked) sel = sel.concat(folders[keys[q]]);
+      for(var q3=0;q3<order.length;q3++){
+        var a2 = folders[order[q3]];
+        for(var z3=0;z3<a2.length;z3++)
+          if(picks[order[q3]][a2[z3]]) sel.push(a2[z3]);
+      }
       closeAll();
-      if(!sel.length){ alert('هیچ پوشه‌ای انتخاب نشد'); return; }
+      if(!sel.length){ alert('هیچ عکسی انتخاب نشد'); return; }
       showModeMenu(sel);
     };
-    var no = document.createElement('button');
-    no.type = 'button'; no.className = 'mtno'; no.textContent = 'انصراف';
-    no.onclick = closeAll;
-    btns.appendChild(ok); btns.appendChild(no);
+    var no2 = document.createElement('button');
+    no2.type = 'button'; no2.className = 'mtno'; no2.textContent = 'انصراف';
+    no2.onclick = closeAll;
+    btns.appendChild(ok); btns.appendChild(no2);
     fold.appendChild(btns);
     (document.documentElement || document.body).appendChild(fold);
   }
@@ -3075,7 +3204,9 @@ def _browser_extract_js() -> str:
           // وبِ میزبانی‌شده (هاست/HF): مرورگرِ داخلی فقط در اپِ کلود و
           // اپِ واقعی است — در مرورگرِ کاربر گزینه‌ای نمایش داده نمیشود؛
           // راهِ استخراجِ وب، بلوکِ نشانک (سایت‌های کپچادار) است.
-          if (__WEB_HOST__) return;
+          // استثنا: پوستهٔ Neutralino (کلودِ لینوکس) — همان مرورگرِ داخلیِ وب.
+          const neutr = !!(window.neutralino);
+          if (__WEB_HOST__ && !neutr) return;
           const pw = !!(window.pywebview && window.pywebview.api
                        && window.pywebview.api.openBrowser);
           const wv2 = !!(window.chrome && window.chrome.webview
@@ -3152,21 +3283,53 @@ def _browser_extract_js() -> str:
             + "flex:0 1 auto}"
             + "#mtWbrFold{position:fixed;top:50%;left:50%;"
             + "transform:translate(-50%,-50%);z-index:2147483700;"
-            + "background:rgba(20,22,28,.98);border:1px solid #273043;"
-            + "border-radius:14px;padding:14px;box-shadow:0 14px 38px rgba(0,0,0,.6);"
-            + "display:flex;flex-direction:column;gap:10px;direction:rtl;"
-            + "font-family:Tahoma,Arial,sans-serif;max-width:min(540px,94vw);"
-            + "max-height:72vh;box-sizing:border-box}"
-            + "#mtWbrFold .fh{font-weight:800;font-size:14px;color:#e7ebf3;padding:0 2px}"
+            + "background:linear-gradient(180deg,#171b24,#10141c);"
+            + "border:1px solid #2a3242;"
+            + "border-radius:18px;padding:16px;box-shadow:0 24px 60px rgba(0,0,0,.7);"
+            + "display:flex;flex-direction:column;gap:12px;direction:rtl;"
+            + "font-family:Tahoma,Arial,sans-serif;width:min(640px,94vw);"
+            + "max-height:80vh;box-sizing:border-box}"
+            + "#mtWbrFold .fh{font-weight:800;font-size:15px;color:#e7ebf3;"
+            + "display:flex;align-items:center;gap:8px;padding:0 2px}"
+            + "#mtWbrFold .fh .tt{flex:1;min-width:0}"
+            + "#mtWbrFold .fh .sub{font-weight:400;font-size:11.5px;color:#8a93a8;"
+            + "margin-top:2px}"
+            + "#mtWbrFold .fh .subbtn{border:0;background:#2d3649;color:#c8ceda;"
+            + "font-family:inherit;font-size:11.5px;font-weight:700;"
+            + "border-radius:10px;padding:5px 10px;cursor:pointer;flex:none}"
             + "#mtWbrFold .fl{overflow:auto;display:flex;flex-direction:column;"
-            + "gap:6px;min-width:300px;padding:2px}"
-            + "#mtWbrFold .fr{display:flex;align-items:flex-start;gap:10px;"
-            + "background:#1a1f2b;border-radius:10px;padding:10px 12px;"
-            + "color:#e7ebf3;font-size:12.5px;cursor:pointer}"
-            + "#mtWbrFold .fr:hover{background:#2d3649}"
-            + "#mtWbrFold .fr input{accent-color:#e8590c;width:16px;height:16px;"
-            + "flex:none;margin-top:2px}"
-            + "#mtWbrFold .fr span{word-break:break-all;text-align:right;line-height:1.7}"
+            + "gap:8px;min-width:0;padding:2px}"
+            + "#mtWbrFold .frow{background:#1a1f2b;border:1px solid #232b3b;"
+            + "border-radius:14px;padding:10px 12px;display:flex;"
+            + "flex-direction:column;gap:8px;cursor:pointer}"
+            + "#mtWbrFold .frow:hover{background:#212839}"
+            + "#mtWbrFold .frow.on{border-color:#e8590c;background:#231d18}"
+            + "#mtWbrFold .frow .top{display:flex;align-items:center;gap:10px}"
+            + "#mtWbrFold .frow input{accent-color:#e8590c;width:17px;height:17px;"
+            + "flex:none}"
+            + "#mtWbrFold .frow .name{flex:1;min-width:0;direction:ltr;"
+            + "text-align:left;color:#e7ebf3;font-size:12.5px;"
+            + "word-break:break-all;line-height:1.6}"
+            + "#mtWbrFold .frow .cnt2{flex:none;background:#2d3649;border-radius:10px;"
+            + "color:#fff;font-size:11.5px;font-weight:700;padding:3px 10px}"
+            + "#mtWbrFold .frow .exp{flex:none;border:0;background:#2d3649;"
+            + "color:#c8ceda;font-family:inherit;font-size:11.5px;font-weight:700;"
+            + "border-radius:10px;padding:5px 10px;cursor:pointer}"
+            + "#mtWbrFold .frow .thumbs{display:flex;gap:6px;overflow:hidden}"
+            + "#mtWbrFold .frow .thumbs .th{width:58px;height:58px;border-radius:10px;"
+            + "background:#232b3b center/cover no-repeat;flex:none;"
+            + "border:1px solid #2a3242}"
+            + "#mtWbrFold .frow .grid{display:grid;"
+            + "grid-template-columns:repeat(auto-fill,minmax(74px,1fr));gap:6px}"
+            + "#mtWbrFold .frow .grid .th{width:100%;aspect-ratio:2/3;"
+            + "border-radius:10px;background:#232b3b center/cover no-repeat;"
+            + "border:2px solid transparent;opacity:.35;"
+            + "transition:opacity .15s,border-color .15s;cursor:pointer;"
+            + "position:relative}"
+            + "#mtWbrFold .frow .grid .th.on{opacity:1;border-color:#e8590c}"
+            + "#mtWbrFold .frow .grid .th .no{position:absolute;bottom:3px;left:3px;"
+            + "background:rgba(0,0,0,.65);color:#fff;font-size:10px;"
+            + "border-radius:6px;padding:1px 5px}"
             + "#mtWbrFold .fb{display:flex;gap:8px;padding:0 2px}"
             + "#mtWbrFold .fb button{border:0;cursor:pointer;font-weight:700;"
             + "font-size:13px;color:#fff;border-radius:10px;padding:10px 18px;"
@@ -3629,31 +3792,141 @@ def _browser_extract_js() -> str:
                 folders[f].push(u);
               }
               order.sort((a, b) => folders[b].length - folders[a].length);
+              const picks = {};
+              order.forEach((fk) => { picks[fk] = new Set(); });
+              const addAll = (fk) => {
+                folders[fk].forEach((u) => picks[fk].add(u));
+              };
+              let anyDefault = false;
+              order.forEach((fk) => {
+                if (folders[fk].length >= 2) { addAll(fk); anyDefault = true; }
+              });
+              if (!anyDefault && order.length) addAll(order[0]);
+              const imgSafe = (u) => String(u).split("'").join("%27");
               foldEl = document.createElement("div");
               foldEl.id = "mtWbrFold";
               const h = document.createElement("div");
               h.className = "fh";
-              h.textContent = "پوشه‌های عکس (" + order.length + ") — انتخاب کن";
+              const tt = document.createElement("div");
+              tt.className = "tt";
+              const t1 = document.createElement("div");
+              t1.textContent = "پوشه‌های عکس (" + order.length + ")";
+              const t2 = document.createElement("div");
+              t2.className = "sub";
+              t2.textContent = "با «پیش‌نمایش» عکس‌ها را تک‌تک ببین و انتخاب کن";
+              tt.appendChild(t1); tt.appendChild(t2);
+              h.appendChild(tt);
+              const mkHBtn = (txt, fn) => {
+                const b = document.createElement("button");
+                b.type = "button"; b.className = "subbtn"; b.textContent = txt;
+                b.onclick = (ev) => {
+                  ev.stopPropagation();
+                  order.forEach((fk) => picks[fk].clear());
+                  if (txt === "همه") order.forEach((fk) => addAll(fk));
+                  refresh();
+                };
+                return b;
+              };
+              h.appendChild(mkHBtn("هیچ"));
+              h.appendChild(mkHBtn("همه"));
               foldEl.appendChild(h);
               const listEl = document.createElement("div");
               listEl.className = "fl";
-              const cbs = [], keys = [];
+              const rows = [];
+              const refresh = () => {
+                rows.forEach((r) => {
+                  const n = picks[r.fk].size;
+                  const tot = folders[r.fk].length;
+                  r.cb.checked = n > 0;
+                  r.row.classList.toggle("on", n > 0);
+                  r.cnt2.textContent = (n === tot)
+                    ? (tot + " عکس") : (n + "/" + tot);
+                });
+              };
               order.forEach((fk) => {
-                const row = document.createElement("label");
-                row.className = "fr";
+                const row = document.createElement("div");
+                row.className = "frow";
+                const top = document.createElement("div");
+                top.className = "top";
                 const cb = document.createElement("input");
                 cb.type = "checkbox";
-                cb.checked = folders[fk].length >= 2;
-                const sp = document.createElement("span");
-                sp.textContent = "\u200E" + shortFolder(fk)
-                  + "  —  " + folders[fk].length + " عکس";
-                row.appendChild(cb); row.appendChild(sp);
+                const name = document.createElement("div");
+                name.className = "name";
+                name.textContent = "\u200E" + shortFolder(fk);
+                const cnt2 = document.createElement("div");
+                cnt2.className = "cnt2";
+                const exp = document.createElement("button");
+                exp.type = "button"; exp.className = "exp";
+                exp.textContent = "پیش‌نمایش";
+                top.appendChild(cb); top.appendChild(name);
+                top.appendChild(cnt2); top.appendChild(exp);
+                row.appendChild(top);
+                const strip = document.createElement("div");
+                strip.className = "thumbs";
+                folders[fk].slice(0, 4).forEach((u) => {
+                  const d = document.createElement("div");
+                  d.className = "th";
+                  try {
+                    d.style.backgroundImage =
+                      "url('" + imgSafe(u) + "')";
+                  } catch (e) {}
+                  strip.appendChild(d);
+                });
+                row.appendChild(strip);
+                const grid = document.createElement("div");
+                grid.className = "grid";
+                grid.style.display = "none";
+                folders[fk].forEach((u, i) => {
+                  const d = document.createElement("div");
+                  d.className = "th";
+                  try {
+                    d.style.backgroundImage =
+                      "url('" + imgSafe(u) + "')";
+                  } catch (e) {}
+                  const no = document.createElement("span");
+                  no.className = "no"; no.textContent = String(i + 1);
+                  d.appendChild(no);
+                  if (picks[fk].has(u)) d.classList.add("on");
+                  d.addEventListener("click", (ev) => {
+                    ev.stopPropagation();
+                    if (picks[fk].has(u)) {
+                      picks[fk].delete(u); d.classList.remove("on");
+                    } else {
+                      picks[fk].add(u); d.classList.add("on");
+                    }
+                    refresh();
+                  });
+                  grid.appendChild(d);
+                });
+                row.appendChild(grid);
+                const syncGrid = () => {
+                  const ds = grid.querySelectorAll(".th");
+                  folders[fk].forEach((u, i) => {
+                    ds[i].classList.toggle("on", picks[fk].has(u));
+                  });
+                };
+                exp.addEventListener("click", (ev) => {
+                  ev.stopPropagation();
+                  const open = grid.style.display === "none";
+                  grid.style.display = open ? "grid" : "none";
+                  strip.style.display = open ? "none" : "flex";
+                  exp.textContent = open ? "بستن" : "پیش‌نمایش";
+                });
+                cb.addEventListener("click", (ev) => ev.stopPropagation());
+                cb.addEventListener("change", () => {
+                  picks[fk].clear();
+                  if (cb.checked) addAll(fk);
+                  syncGrid();
+                  refresh();
+                });
+                row.addEventListener("click", () => {
+                  cb.checked = !cb.checked;
+                  cb.dispatchEvent(new Event("change"));
+                });
                 listEl.appendChild(row);
-                cbs.push(cb); keys.push(fk);
+                rows.push({ fk, cb, cnt2, row });
               });
-              let any = false;
-              cbs.forEach((c) => { if (c.checked) any = true; });
-              if (!any && cbs.length) cbs[0].checked = true;
+              refresh();
               foldEl.appendChild(listEl);
               const btns = document.createElement("div");
               btns.className = "fb";
@@ -3662,11 +3935,14 @@ def _browser_extract_js() -> str:
               ok.textContent = "ادامه";
               ok.onclick = () => {
                 let sel = [];
-                for (let q = 0; q < cbs.length; q++)
-                  if (cbs[q].checked) sel = sel.concat(folders[keys[q]]);
+                order.forEach((fk) => {
+                  folders[fk].forEach((u) => {
+                    if (picks[fk].has(u)) sel.push(u);
+                  });
+                });
                 closeFold();
                 if (!sel.length) {
-                  try { alert("هیچ پوشه‌ای انتخاب نشد"); } catch (e) {}
+                  try { alert("هیچ عکسی انتخاب نشد"); } catch (e) {}
                   return;
                 }
                 showModeMenu(sel);

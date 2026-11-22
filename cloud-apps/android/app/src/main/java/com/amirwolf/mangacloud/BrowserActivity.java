@@ -952,51 +952,7 @@ public class BrowserActivity extends Activity {
                             Toast.LENGTH_LONG).show();
                     return;
                 }
-                java.util.LinkedHashMap<String, java.util.List<String>> folders =
-                        new java.util.LinkedHashMap<>();
-                for (String u : all) {
-                    String f = folderOf(u);
-                    if (!folders.containsKey(f))
-                        folders.put(f, new java.util.ArrayList<>());
-                    folders.get(f).add(u);
-                }
-                java.util.List<java.util.Map.Entry<String, java.util.List<String>>>
-                        entries = new java.util.ArrayList<>(folders.entrySet());
-                entries.sort((a, b) -> Integer.compare(
-                        b.getValue().size(), a.getValue().size()));
-                int nf = entries.size();
-                CharSequence[] labels = new CharSequence[nf];
-                boolean[] checked = new boolean[nf];
-                for (int i = 0; i < nf; i++) {
-                    labels[i] = "\u200E" + shortFolder(entries.get(i).getKey())
-                            + "  —  " + entries.get(i).getValue().size()
-                            + " عکس";
-                    checked[i] = entries.get(i).getValue().size() >= 2;
-                }
-                boolean anyChecked = false;
-                for (boolean c : checked) if (c) { anyChecked = true; break; }
-                if (!anyChecked && nf > 0) checked[0] = true;
-                final boolean[] checkedF = checked;
-                android.app.AlertDialog.Builder b =
-                        new android.app.AlertDialog.Builder(this);
-                b.setTitle("پوشه‌های عکس (" + nf + ") — انتخاب کن");
-                b.setMultiChoiceItems(labels, checkedF,
-                        (dialog, which, isChecked) -> checkedF[which] = isChecked);
-                b.setPositiveButton("ادامه", (dialog, which) -> {
-                    java.util.ArrayList<String> sel = new java.util.ArrayList<>();
-                    for (int i = 0; i < nf; i++) {
-                        if (checkedF[i]) sel.addAll(entries.get(i).getValue());
-                    }
-                    if (sel.isEmpty()) {
-                        Toast.makeText(BrowserActivity.this,
-                                "هیچ پوشه‌ای انتخاب نشد",
-                                Toast.LENGTH_SHORT).show();
-                        return;
-                    }
-                    showLinkDownloadChoice(sel);
-                });
-                b.setNegativeButton("انصراف", null);
-                b.show();
+                showFolderDialog(all);
             } catch (final Exception e) {
                 Toast.makeText(BrowserActivity.this,
                         "خطا در استخراج: " + e.getMessage(),
@@ -1006,15 +962,724 @@ public class BrowserActivity extends Activity {
     }
 
     private void showLinkDownloadChoice(final java.util.List<String> sel) {
-        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this);
-        b.setTitle("استخراج (" + sel.size() + " عکس)");
-        b.setItems(new String[]{"استخراج با لینک", "استخراج با دانلود"},
-                (dialog, which) -> {
-                    if (which == 0) finishWithLinks(sel);
-                    else downloadSelected(sel);
+        try {
+            showLinkDownloadChoiceImpl(sel);
+        } catch (Exception e) {
+            android.app.AlertDialog.Builder b =
+                    new android.app.AlertDialog.Builder(this);
+            b.setTitle("استخراج (" + sel.size() + " عکس)");
+            b.setItems(new String[]{"استخراج با لینک", "استخراج با دانلود"},
+                    (dialog, which) -> {
+                        if (which == 0) finishWithLinks(sel);
+                        else downloadSelected(sel);
+                    });
+            b.setNegativeButton("انصراف", null);
+            b.show();
+        }
+    }
+
+    private void showLinkDownloadChoiceImpl(final java.util.List<String> sel) {
+        final android.app.Dialog dlg = new android.app.Dialog(this);
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(16), dp(16), dp(14));
+        GradientDrawable rootBg = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.parseColor("#171b24"), Color.parseColor("#10141c")});
+        rootBg.setCornerRadius(dp(18));
+        rootBg.setStroke(dp(1), Color.parseColor("#2a3242"));
+        root.setBackground(rootBg);
+
+        TextView title = new TextView(this);
+        title.setText("استخراج (" + sel.size() + " عکس)");
+        title.setTextColor(Color.parseColor("#e7ebf3"));
+        title.setTextSize(15);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        root.addView(title);
+
+        TextView sub = new TextView(this);
+        sub.setText("روشِ استخراج را انتخاب کن");
+        sub.setTextColor(Color.parseColor("#8a93a8"));
+        sub.setTextSize(11.5f);
+        android.widget.LinearLayout.LayoutParams subLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        subLp.topMargin = dp(2);
+        subLp.bottomMargin = dp(10);
+        root.addView(sub, subLp);
+
+        final String[][] items = {
+                {"🖼", "استخراج با لینک",
+                        "فقط لینک‌ها در فیلدِ ورودی می‌نشینند"},
+                {"⬇", "استخراج با دانلود",
+                        "عکس‌ها همین‌جا دانلود و به سرور می‌روند"}};
+        for (int i = 0; i < items.length; i++) {
+            final int idx = i;
+            LinearLayout card = new LinearLayout(this);
+            card.setOrientation(LinearLayout.HORIZONTAL);
+            card.setGravity(Gravity.CENTER_VERTICAL);
+            card.setPadding(dp(14), dp(12), dp(14), dp(12));
+            GradientDrawable cardBg = new GradientDrawable();
+            cardBg.setColor(Color.parseColor("#1a1f2b"));
+            cardBg.setCornerRadius(dp(14));
+            cardBg.setStroke(dp(1), Color.parseColor("#232b3b"));
+            card.setBackground(cardBg);
+
+            TextView ico = new TextView(this);
+            ico.setText(items[i][0]);
+            ico.setTextSize(22);
+            ico.setPadding(0, 0, dp(12), 0);
+            card.addView(ico, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+
+            LinearLayout txts = new LinearLayout(this);
+            txts.setOrientation(LinearLayout.VERTICAL);
+            TextView t1 = new TextView(this);
+            t1.setText(items[i][1]);
+            t1.setTextColor(Color.parseColor("#e7ebf3"));
+            t1.setTextSize(14);
+            t1.setTypeface(Typeface.DEFAULT_BOLD);
+            TextView t2 = new TextView(this);
+            t2.setText(items[i][2]);
+            t2.setTextColor(Color.parseColor("#8a93a8"));
+            t2.setTextSize(11.5f);
+            txts.addView(t1);
+            txts.addView(t2);
+            card.addView(txts, new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+
+            card.setOnClickListener(v -> {
+                try { dlg.dismiss(); } catch (Exception ignored) {}
+                if (idx == 0) finishWithLinks(sel);
+                else downloadSelected(sel);
+            });
+            LinearLayout.LayoutParams cardLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            cardLp.bottomMargin = dp(8);
+            root.addView(card, cardLp);
+        }
+
+        TextView cancel = new TextView(this);
+        cancel.setText("انصراف");
+        cancel.setTextColor(Color.parseColor("#c8ceda"));
+        cancel.setTextSize(13);
+        cancel.setTypeface(Typeface.DEFAULT_BOLD);
+        cancel.setGravity(Gravity.CENTER);
+        cancel.setPadding(dp(10), dp(11), dp(10), dp(11));
+        GradientDrawable cBg = new GradientDrawable();
+        cBg.setColor(Color.parseColor("#2d3649"));
+        cBg.setCornerRadius(dp(12));
+        cancel.setBackground(cBg);
+        cancel.setOnClickListener(v -> {
+            try { dlg.dismiss(); } catch (Exception ignored) {}
+        });
+        root.addView(cancel, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        dlg.setContentView(root);
+        dlg.show();
+        android.view.Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                    Color.TRANSPARENT));
+            w.setLayout(Math.min(
+                    getResources().getDisplayMetrics().widthPixels - dp(32),
+                    dp(440)), ViewGroup.LayoutParams.WRAP_CONTENT);
+        }
+    }
+
+    private static final android.util.LruCache<String, android.graphics.Bitmap>
+            THUMB_CACHE = new android.util.LruCache<String,
+            android.graphics.Bitmap>(24 * 1024 * 1024) {
+        @Override
+        protected int sizeOf(String k, android.graphics.Bitmap v) {
+            try {
+                return v.getByteCount();
+            } catch (Exception e) {
+                return 1;
+            }
+        }
+    };
+    private static final java.util.Set<String> THUMB_FAILED =
+            java.util.Collections.synchronizedSet(
+                    new java.util.HashSet<String>());
+    private static final java.util.concurrent.ExecutorService THUMB_POOL =
+            java.util.concurrent.Executors.newFixedThreadPool(3);
+
+    private void loadThumb(final android.widget.ImageView iv, final String u) {
+        try {
+            iv.setTag(u);
+            android.graphics.Bitmap b = THUMB_CACHE.get(u);
+            if (b != null) {
+                iv.setImageBitmap(b);
+                iv.setVisibility(View.VISIBLE);
+                return;
+            }
+            if (THUMB_FAILED.contains(u)) {
+                iv.setVisibility(View.INVISIBLE);
+                return;
+            }
+            iv.setImageDrawable(null);
+            THUMB_POOL.execute(() -> {
+                android.graphics.Bitmap bmp = null;
+                try {
+                    java.net.HttpURLConnection c =
+                            (java.net.HttpURLConnection) new java.net.URL(u)
+                                    .openConnection();
+                    c.setConnectTimeout(9000);
+                    c.setReadTimeout(16000);
+                    c.setRequestProperty("User-Agent", UA_STR);
+                    try {
+                        String ck = CookieManager.getInstance().getCookie(u);
+                        if (ck != null && !ck.isEmpty())
+                            c.setRequestProperty("Cookie", ck);
+                    } catch (Exception ignored) {
+                    }
+                    try {
+                        String ref = null;
+                        try {
+                            ref = web.getUrl();
+                        } catch (Exception ignored0) {
+                        }
+                        if (ref != null && ref.startsWith("http"))
+                            c.setRequestProperty("Referer", ref);
+                    } catch (Exception ignored) {
+                    }
+                    int code = c.getResponseCode();
+                    if (code >= 200 && code < 300) {
+                        java.io.ByteArrayOutputStream bo =
+                                new java.io.ByteArrayOutputStream();
+                        try (java.io.InputStream in = c.getInputStream()) {
+                            byte[] buf = new byte[16384];
+                            int n;
+                            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                        }
+                        byte[] data = bo.toByteArray();
+                        c.disconnect();
+                        if (data.length > 0 && data.length < 25 * 1024 * 1024) {
+                            android.graphics.BitmapFactory.Options o =
+                                    new android.graphics.BitmapFactory.Options();
+                            o.inJustDecodeBounds = true;
+                            android.graphics.BitmapFactory.decodeByteArray(
+                                    data, 0, data.length, o);
+                            int maxDim = Math.max(o.outWidth, o.outHeight);
+                            int sc = 1;
+                            while (maxDim / sc > 260) sc *= 2;
+                            android.graphics.BitmapFactory.Options o2 =
+                                    new android.graphics.BitmapFactory.Options();
+                            o2.inSampleSize = sc;
+                            bmp = android.graphics.BitmapFactory.decodeByteArray(
+                                    data, 0, data.length, o2);
+                        }
+                    } else {
+                        c.disconnect();
+                    }
+                } catch (Exception ignored) {
+                }
+                if (bmp == null) {
+                    THUMB_FAILED.add(u);
+                    runOnUiThread(() -> {
+                        try {
+                            if (u.equals(iv.getTag()))
+                                iv.setVisibility(View.INVISIBLE);
+                        } catch (Exception ignored) {
+                        }
+                    });
+                    return;
+                }
+                THUMB_CACHE.put(u, bmp);
+                runOnUiThread(() -> {
+                    try {
+                        if (u.equals(iv.getTag())) {
+                            iv.setImageBitmap(bmp);
+                            iv.setVisibility(View.VISIBLE);
+                        }
+                    } catch (Exception ignored) {
+                    }
                 });
+            });
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void showFolderDialog(final java.util.List<String> all) {
+        try {
+            showFolderDialogImpl(all);
+        } catch (Exception e) {
+            showFolderDialogFallback(all);
+        }
+    }
+
+    private void showFolderDialogFallback(final java.util.List<String> all) {
+        java.util.LinkedHashMap<String, java.util.List<String>> folders =
+                new java.util.LinkedHashMap<>();
+        for (String u : all) {
+            String f = folderOf(u);
+            if (!folders.containsKey(f))
+                folders.put(f, new java.util.ArrayList<>());
+            folders.get(f).add(u);
+        }
+        java.util.List<java.util.Map.Entry<String, java.util.List<String>>> entries =
+                new java.util.ArrayList<>(folders.entrySet());
+        entries.sort((a, b) -> Integer.compare(b.getValue().size(), a.getValue().size()));
+        int nf = entries.size();
+        CharSequence[] labels = new CharSequence[nf];
+        boolean[] checked = new boolean[nf];
+        for (int i = 0; i < nf; i++) {
+            labels[i] = "\u200E" + shortFolder(entries.get(i).getKey())
+                    + "  —  " + entries.get(i).getValue().size() + " عکس";
+            checked[i] = entries.get(i).getValue().size() >= 2;
+        }
+        boolean anyChecked = false;
+        for (boolean c : checked) if (c) { anyChecked = true; break; }
+        if (!anyChecked && nf > 0) checked[0] = true;
+        final boolean[] checkedF = checked;
+        android.app.AlertDialog.Builder b = new android.app.AlertDialog.Builder(this);
+        b.setTitle("پوشه‌های عکس (" + nf + ") — انتخاب کن");
+        b.setMultiChoiceItems(labels, checkedF,
+                (dialog, which, isChecked) -> checkedF[which] = isChecked);
+        b.setPositiveButton("ادامه", (dialog, which) -> {
+            java.util.ArrayList<String> sel = new java.util.ArrayList<>();
+            for (int i = 0; i < nf; i++) {
+                if (checkedF[i]) sel.addAll(entries.get(i).getValue());
+            }
+            if (sel.isEmpty()) {
+                Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            showLinkDownloadChoice(sel);
+        });
         b.setNegativeButton("انصراف", null);
         b.show();
+    }
+
+    private void showFolderDialogImpl(final java.util.List<String> all) {
+        java.util.LinkedHashMap<String, java.util.List<String>> folders =
+                new java.util.LinkedHashMap<>();
+        for (String u : all) {
+            String f = folderOf(u);
+            if (!folders.containsKey(f))
+                folders.put(f, new java.util.ArrayList<>());
+            folders.get(f).add(u);
+        }
+        java.util.List<java.util.Map.Entry<String, java.util.List<String>>> entries =
+                new java.util.ArrayList<>(folders.entrySet());
+        entries.sort((a, b) -> Integer.compare(b.getValue().size(), a.getValue().size()));
+        final java.util.List<String> order = new java.util.ArrayList<>();
+        for (java.util.Map.Entry<String, java.util.List<String>> e : entries)
+            order.add(e.getKey());
+
+        final java.util.HashMap<String, java.util.LinkedHashSet<String>> picks =
+                new java.util.HashMap<>();
+        final java.util.HashMap<String, java.util.List<View>> grids =
+                new java.util.HashMap<>();
+        final java.util.HashMap<String, TextView> cntViews = new java.util.HashMap<>();
+        final java.util.HashMap<String, android.widget.CheckBox> cbViews =
+                new java.util.HashMap<>();
+        final java.util.HashMap<String, GradientDrawable> rowBgs =
+                new java.util.HashMap<>();
+
+        final android.app.Dialog dlg = new android.app.Dialog(this);
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setPadding(dp(16), dp(16), dp(16), dp(12));
+        GradientDrawable rootBg = new GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                new int[]{Color.parseColor("#171b24"), Color.parseColor("#10141c")});
+        rootBg.setCornerRadius(dp(18));
+        rootBg.setStroke(dp(1), Color.parseColor("#2a3242"));
+        root.setBackground(rootBg);
+
+        LinearLayout head = new LinearLayout(this);
+        head.setOrientation(LinearLayout.HORIZONTAL);
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout headTxt = new LinearLayout(this);
+        headTxt.setOrientation(LinearLayout.VERTICAL);
+        TextView t1 = new TextView(this);
+        t1.setText("پوشه‌های عکس (" + order.size() + ")");
+        t1.setTextColor(Color.parseColor("#e7ebf3"));
+        t1.setTextSize(15);
+        t1.setTypeface(Typeface.DEFAULT_BOLD);
+        TextView t2 = new TextView(this);
+        t2.setText("با «پیش‌نمایش» عکس‌ها را تک‌تک ببین و انتخاب کن");
+        t2.setTextColor(Color.parseColor("#8a93a8"));
+        t2.setTextSize(11.5f);
+        headTxt.addView(t1);
+        headTxt.addView(t2);
+        head.addView(headTxt, new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        TextView allBtn = makeMiniBtn("همه");
+        TextView noneBtn = makeMiniBtn("هیچ");
+        head.addView(allBtn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        android.widget.LinearLayout.LayoutParams nbLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.WRAP_CONTENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        nbLp.leftMargin = dp(6);
+        head.addView(noneBtn, nbLp);
+        root.addView(head);
+
+        android.widget.ScrollView scroll = new android.widget.ScrollView(this);
+        scroll.setVerticalScrollBarEnabled(false);
+        LinearLayout list = new LinearLayout(this);
+        list.setOrientation(LinearLayout.VERTICAL);
+        final int topPad = dp(10);
+        list.setPadding(0, topPad, 0, 0);
+        scroll.addView(list, new android.view.ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        root.addView(scroll, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f));
+
+        int screenW = getResources().getDisplayMetrics().widthPixels;
+        int cell = dp(76);
+        int cols = Math.max(3, Math.min(8,
+                (Math.min(screenW - dp(120), dp(560))) / (cell + dp(6))));
+
+        boolean anyDefault = false;
+        for (String fk : order) {
+            if (folders.get(fk).size() >= 2) anyDefault = true;
+        }
+        for (int oi = 0; oi < order.size(); oi++) {
+            String fk = order.get(oi);
+            picks.put(fk, new java.util.LinkedHashSet<>());
+            if (folders.get(fk).size() >= 2
+                    || (!anyDefault && oi == 0)) {
+                picks.get(fk).addAll(folders.get(fk));
+            }
+        }
+
+        final Runnable refresh = () -> {
+            for (String fk : order) {
+                java.util.LinkedHashSet<String> p = picks.get(fk);
+                java.util.List<String> arr = folders.get(fk);
+                android.widget.CheckBox cb = cbViews.get(fk);
+                TextView cnt = cntViews.get(fk);
+                GradientDrawable rbg = rowBgs.get(fk);
+                if (p == null || arr == null) continue;
+                boolean on = !p.isEmpty();
+                if (cb != null) cb.setChecked(on);
+                if (cnt != null)
+                    cnt.setText(p.size() == arr.size()
+                            ? arr.size() + " عکس"
+                            : p.size() + "/" + arr.size());
+                if (rbg != null) rbg.setStroke(dp(2), Color.parseColor(
+                        on ? "#e8590c" : "#232b3b"));
+                java.util.List<View> cells = grids.get(fk);
+                if (cells != null) {
+                    for (int i = 0; i < arr.size() && i < cells.size(); i++) {
+                        View c = cells.get(i);
+                        boolean sel = p.contains(arr.get(i));
+                        c.setAlpha(sel ? 1f : 0.35f);
+                    }
+                }
+            }
+        };
+
+        for (final String fk : order) {
+            final java.util.List<String> arr = folders.get(fk);
+
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(dp(12), dp(10), dp(12), dp(10));
+            GradientDrawable rowBg = new GradientDrawable();
+            rowBg.setColor(Color.parseColor("#1a1f2b"));
+            rowBg.setCornerRadius(dp(14));
+            rowBg.setStroke(dp(2), Color.parseColor("#232b3b"));
+            row.setBackground(rowBg);
+            rowBgs.put(fk, rowBg);
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT);
+            rowLp.bottomMargin = dp(8);
+            row.setLayoutParams(rowLp);
+
+            LinearLayout topRow = new LinearLayout(this);
+            topRow.setOrientation(LinearLayout.HORIZONTAL);
+            topRow.setGravity(Gravity.CENTER_VERTICAL);
+            final android.widget.CheckBox cb = new android.widget.CheckBox(this);
+            try {
+                cb.setButtonTintList(android.content.res.ColorStateList.valueOf(
+                        Color.parseColor("#e8590c")));
+            } catch (Exception ignored) {
+            }
+            cbViews.put(fk, cb);
+            TextView name = new TextView(this);
+            name.setText("\u200E" + shortFolder(fk));
+            name.setTextColor(Color.parseColor("#e7ebf3"));
+            name.setTextSize(12.5f);
+            name.setGravity(Gravity.LEFT);
+            LinearLayout.LayoutParams nameLp = new LinearLayout.LayoutParams(
+                    0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+            nameLp.leftMargin = dp(8);
+            nameLp.rightMargin = dp(8);
+            topRow.addView(cb);
+            topRow.addView(name, nameLp);
+            TextView cnt = new TextView(this);
+            cnt.setTextColor(Color.WHITE);
+            cnt.setTextSize(11.5f);
+            cnt.setTypeface(Typeface.DEFAULT_BOLD);
+            GradientDrawable cntBg = new GradientDrawable();
+            cntBg.setColor(Color.parseColor("#2d3649"));
+            cntBg.setCornerRadius(dp(10));
+            cnt.setBackground(cntBg);
+            cnt.setPadding(dp(10), dp(3), dp(10), dp(3));
+            cntViews.put(fk, cnt);
+            topRow.addView(cnt, new LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT));
+            TextView exp = makeMiniBtn("پیش‌نمایش");
+            android.widget.LinearLayout.LayoutParams expLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            expLp.leftMargin = dp(8);
+            topRow.addView(exp, expLp);
+            row.addView(topRow);
+
+            LinearLayout strip = new LinearLayout(this);
+            strip.setOrientation(LinearLayout.HORIZONTAL);
+            android.widget.LinearLayout.LayoutParams stripLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            stripLp.topMargin = dp(8);
+            strip.setLayoutParams(stripLp);
+            for (int s = 0; s < arr.size() && s < 4; s++) {
+                android.widget.ImageView iv = new android.widget.ImageView(this);
+                iv.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+                GradientDrawable ivBg = new GradientDrawable();
+                ivBg.setColor(Color.parseColor("#232b3b"));
+                ivBg.setCornerRadius(dp(10));
+                ivBg.setStroke(dp(1), Color.parseColor("#2a3242"));
+                iv.setBackground(ivBg);
+                iv.setClipToOutline(true);
+                LinearLayout.LayoutParams ivLp = new LinearLayout.LayoutParams(
+                        dp(58), dp(58));
+                if (s > 0) ivLp.leftMargin = dp(6);
+                strip.addView(iv, ivLp);
+                loadThumb(iv, arr.get(s));
+            }
+            row.addView(strip);
+
+            final android.widget.GridLayout grid = new android.widget.GridLayout(this);
+            grid.setColumnCount(cols);
+            grid.setAlpha(1f);
+            grid.setVisibility(View.GONE);
+            android.widget.LinearLayout.LayoutParams gridLp =
+                    new android.widget.LinearLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT);
+            gridLp.topMargin = dp(8);
+            grid.setLayoutParams(gridLp);
+            java.util.List<View> cells = new java.util.ArrayList<>();
+            for (int g = 0; g < arr.size(); g++) {
+                final String u = arr.get(g);
+                final android.widget.FrameLayout cellBox =
+                        new android.widget.FrameLayout(this);
+                android.widget.GridLayout.LayoutParams clp =
+                        new android.widget.GridLayout.LayoutParams();
+                clp.width = cell;
+                clp.height = cell * 3 / 2;
+                android.widget.GridLayout.Spec colSpec =
+                        android.widget.GridLayout.spec(g % cols);
+                android.widget.GridLayout.Spec rowSpec =
+                        android.widget.GridLayout.spec(g / cols);
+                clp.columnSpec = colSpec;
+                clp.rowSpec = rowSpec;
+                int mm = dp(3);
+                clp.setMargins(mm, mm, mm, mm);
+                cellBox.setLayoutParams(clp);
+
+                android.widget.ImageView iv = new android.widget.ImageView(this);
+                iv.setScaleType(android.widget.ImageView.ScaleType.CENTER_CROP);
+                GradientDrawable ivBg = new GradientDrawable();
+                ivBg.setColor(Color.parseColor("#232b3b"));
+                ivBg.setCornerRadius(dp(10));
+                iv.setBackground(ivBg);
+                iv.setClipToOutline(true);
+                cellBox.addView(iv, new android.widget.FrameLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT));
+                loadThumb(iv, u);
+
+                TextView no = new TextView(this);
+                no.setText(String.valueOf(g + 1));
+                no.setTextColor(Color.WHITE);
+                no.setTextSize(10);
+                no.setBackgroundColor(Color.parseColor("#a6000000"));
+                no.setPadding(dp(5), dp(1), dp(5), dp(1));
+                android.widget.FrameLayout.LayoutParams noLp =
+                        new android.widget.FrameLayout.LayoutParams(
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                ViewGroup.LayoutParams.WRAP_CONTENT,
+                                Gravity.BOTTOM | Gravity.START);
+                noLp.leftMargin = dp(3);
+                noLp.bottomMargin = dp(3);
+                cellBox.addView(no, noLp);
+
+                cellBox.setOnClickListener(v -> {
+                    try {
+                        java.util.LinkedHashSet<String> pp = picks.get(fk);
+                        if (pp == null) return;
+                        if (pp.contains(u)) pp.remove(u);
+                        else pp.add(u);
+                        refresh.run();
+                    } catch (Exception ignored) {
+                    }
+                });
+                grid.addView(cellBox);
+                cells.add(cellBox);
+            }
+            grids.put(fk, cells);
+            row.addView(grid);
+
+            exp.setOnClickListener(v -> {
+                try {
+                    boolean open = grid.getVisibility() != View.VISIBLE;
+                    grid.setVisibility(open ? View.VISIBLE : View.GONE);
+                    strip.setVisibility(open ? View.GONE : View.VISIBLE);
+                    exp.setText(open ? "بستن" : "پیش‌نمایش");
+                } catch (Exception ignored) {
+                }
+            });
+            View.OnClickListener rowClick = v -> {
+                try {
+                    java.util.LinkedHashSet<String> pp = picks.get(fk);
+                    if (pp == null) return;
+                    boolean turnOn = pp.isEmpty();
+                    pp.clear();
+                    if (turnOn) pp.addAll(arr);
+                    refresh.run();
+                } catch (Exception ignored) {
+                }
+            };
+            row.setOnClickListener(rowClick);
+            cb.setOnClickListener(v -> {
+                try {
+                    java.util.LinkedHashSet<String> pp = picks.get(fk);
+                    if (pp == null) return;
+                    pp.clear();
+                    if (cb.isChecked()) pp.addAll(arr);
+                    refresh.run();
+                } catch (Exception ignored) {
+                }
+            });
+            list.addView(row);
+        }
+
+        refresh.run();
+
+        LinearLayout btns = new LinearLayout(this);
+        btns.setOrientation(LinearLayout.HORIZONTAL);
+        btns.setGravity(Gravity.CENTER_VERTICAL);
+        android.widget.LinearLayout.LayoutParams btnsLp =
+                new android.widget.LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.WRAP_CONTENT);
+        btnsLp.topMargin = dp(4);
+        btns.setLayoutParams(btnsLp);
+        TextView okBtn = new TextView(this);
+        okBtn.setText("ادامه");
+        okBtn.setTextColor(Color.WHITE);
+        okBtn.setTextSize(13.5f);
+        okBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        okBtn.setGravity(Gravity.CENTER);
+        okBtn.setPadding(dp(24), dp(11), dp(24), dp(11));
+        GradientDrawable okBg = new GradientDrawable(
+                GradientDrawable.Orientation.TL_BR,
+                new int[]{Color.parseColor("#ff4a3d"), Color.parseColor("#c9271c")});
+        okBg.setCornerRadius(dp(12));
+        okBtn.setBackground(okBg);
+        TextView noBtn = new TextView(this);
+        noBtn.setText("انصراف");
+        noBtn.setTextColor(Color.parseColor("#c8ceda"));
+        noBtn.setTextSize(13.5f);
+        noBtn.setTypeface(Typeface.DEFAULT_BOLD);
+        noBtn.setGravity(Gravity.CENTER);
+        noBtn.setPadding(dp(24), dp(11), dp(24), dp(11));
+        GradientDrawable noBg = new GradientDrawable();
+        noBg.setColor(Color.parseColor("#2d3649"));
+        noBg.setCornerRadius(dp(12));
+        noBtn.setBackground(noBg);
+        btns.addView(noBtn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT));
+        LinearLayout.LayoutParams okLp = new LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        okLp.leftMargin = dp(8);
+        btns.addView(okBtn, okLp);
+        root.addView(btns);
+
+        allBtn.setOnClickListener(v -> {
+            for (String fk : order) {
+                picks.get(fk).clear();
+                picks.get(fk).addAll(folders.get(fk));
+            }
+            refresh.run();
+        });
+        noneBtn.setOnClickListener(v -> {
+            for (String fk : order) picks.get(fk).clear();
+            refresh.run();
+        });
+        okBtn.setOnClickListener(v -> {
+            java.util.ArrayList<String> sel = new java.util.ArrayList<>();
+            for (String fk : order) {
+                java.util.List<String> arr = folders.get(fk);
+                for (String u : arr) if (picks.get(fk).contains(u)) sel.add(u);
+            }
+            if (sel.isEmpty()) {
+                Toast.makeText(this, "هیچ عکسی انتخاب نشد",
+                        Toast.LENGTH_SHORT).show();
+                return;
+            }
+            try {
+                dlg.dismiss();
+            } catch (Exception ignored) {
+            }
+            showLinkDownloadChoice(sel);
+        });
+        noBtn.setOnClickListener(v -> {
+            try {
+                dlg.dismiss();
+            } catch (Exception ignored) {
+            }
+        });
+
+        dlg.setContentView(root);
+        dlg.show();
+        android.view.Window w = dlg.getWindow();
+        if (w != null) {
+            w.setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(
+                    Color.TRANSPARENT));
+            int dw = Math.min(screenW - dp(24), dp(600));
+            w.setLayout(dw, (int) (getResources().getDisplayMetrics().heightPixels
+                    * 0.82));
+        }
+    }
+
+    private TextView makeMiniBtn(String txt) {
+        TextView b = new TextView(this);
+        b.setText(txt);
+        b.setTextColor(Color.parseColor("#c8ceda"));
+        b.setTextSize(11.5f);
+        b.setTypeface(Typeface.DEFAULT_BOLD);
+        b.setPadding(dp(10), dp(5), dp(10), dp(5));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor("#2d3649"));
+        bg.setCornerRadius(dp(10));
+        b.setBackground(bg);
+        return b;
     }
 
     private void finishWithLinks(final java.util.List<String> sel) {
@@ -1031,14 +1696,21 @@ public class BrowserActivity extends Activity {
                     return;
                 }
             }
-            StringBuilder links = new StringBuilder();
-            for (int i = 0; i < sel.size(); i++) {
-                if (i > 0) links.append('\n');
-                links.append(sel.get(i));
+            java.util.List<String> out = sel;
+            if (out.size() > 400) {
+                out = new java.util.ArrayList<>(out.subList(0, 400));
+                Toast.makeText(BrowserActivity.this,
+                        "برای پایداری فقط ۴۰۰ لینکِ اول منتقل شد",
+                        Toast.LENGTH_SHORT).show();
             }
-            Intent out = new Intent();
-            out.putExtra(EXTRA_LINKS, links.toString());
-            setResult(RESULT_OK, out);
+            StringBuilder links = new StringBuilder();
+            for (int i = 0; i < out.size(); i++) {
+                if (i > 0) links.append('\n');
+                links.append(out.get(i));
+            }
+            Intent res = new Intent();
+            res.putExtra(EXTRA_LINKS, links.toString());
+            setResult(RESULT_OK, res);
             Toast.makeText(BrowserActivity.this,
                     "✅ " + sel.size() + " لینک عکس گرفته شد",
                     Toast.LENGTH_SHORT).show();

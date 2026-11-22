@@ -319,6 +319,17 @@ tick()
 (function(){try{window.__MT_FOUND={};window.__MT_ORDER=[];window.__MT_BLOBS={};try{window.__MT_T0=(window.performance&&performance.now)?performance.now():0}catch(e){window.__MT_T0=0}}catch(e){}})()
         """
 
+        private val THUMB_CACHE =
+            object : android.util.LruCache<String, android.graphics.Bitmap>(
+                24 * 1024 * 1024) {
+                override fun sizeOf(k: String, v: android.graphics.Bitmap): Int {
+                    return try { v.byteCount } catch (_: Exception) { 1 }
+                }
+            }
+        private val THUMB_FAILED: java.util.Set<String> =
+            java.util.Collections.synchronizedSet(HashSet<String>())
+        private val THUMB_POOL: java.util.concurrent.ExecutorService =
+            java.util.concurrent.Executors.newFixedThreadPool(3)
     }
 
     private val BG = Color.parseColor("#060607")
@@ -834,38 +845,7 @@ tick()
                         Toast.LENGTH_LONG).show()
                     return@extractWithScroll
                 }
-                val folders = LinkedHashMap<String, MutableList<String>>()
-                for (u in all) {
-                    folders.getOrPut(folderOf(u)) { mutableListOf() }.add(u)
-                }
-                val entries = folders.entries.sortedByDescending { it.value.size }
-                val labels = Array(entries.size) { i ->
-                    "\u200E" + shortFolder(entries[i].key) +
-                            "  —  " + entries[i].value.size + " عکس"
-                }
-                val checked = BooleanArray(entries.size) { i ->
-                    entries[i].value.size >= 2
-                }
-                if (checked.none { it } && entries.isNotEmpty()) checked[0] = true
-                val b = android.app.AlertDialog.Builder(this)
-                b.setTitle("پوشه‌های عکس (${entries.size}) — انتخاب کن")
-                b.setMultiChoiceItems(labels, checked) { _, which, isChecked ->
-                    checked[which] = isChecked
-                }
-                b.setPositiveButton("ادامه") { _, _ ->
-                    val sel = ArrayList<String>()
-                    for (i in entries.indices) {
-                        if (checked[i]) sel.addAll(entries[i].value)
-                    }
-                    if (sel.isEmpty()) {
-                        Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
-                            Toast.LENGTH_SHORT).show()
-                        return@setPositiveButton
-                    }
-                    showLinkDownloadChoice(sel)
-                }
-                b.setNegativeButton("انصراف", null)
-                b.show()
+                showFolderDialog(all)
             } catch (e: Exception) {
                 Toast.makeText(this, "خطا در استخراج: ${e.message}",
                     Toast.LENGTH_LONG).show()
@@ -873,14 +853,624 @@ tick()
         }
     }
 
+    private fun makeMiniBtn(txt: String): TextView {
+        val b = TextView(this)
+        b.text = txt
+        b.setTextColor(Color.parseColor("#c8ceda"))
+        b.textSize = 11.5f
+        b.typeface = Typeface.DEFAULT_BOLD
+        b.setPadding(dp(10), dp(5), dp(10), dp(5))
+        val bg = GradientDrawable()
+        bg.setColor(Color.parseColor("#2d3649"))
+        bg.cornerRadius = dp(10).toFloat()
+        b.background = bg
+        return b
+    }
+
     private fun showLinkDownloadChoice(sel: List<String>) {
+        try {
+            showLinkDownloadChoiceImpl(sel)
+        } catch (e: Exception) {
+            val b = android.app.AlertDialog.Builder(this)
+            b.setTitle("استخراج (${sel.size} عکس)")
+            b.setItems(arrayOf("استخراج با لینک", "استخراج با دانلود")) { _, which ->
+                if (which == 0) finishWithLinks(sel) else downloadSelected(sel)
+            }
+            b.setNegativeButton("انصراف", null)
+            b.show()
+        }
+    }
+
+    private fun showLinkDownloadChoiceImpl(sel: List<String>) {
+        val dlg = android.app.Dialog(this)
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setPadding(dp(16), dp(16), dp(16), dp(14))
+        val rootBg = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.parseColor("#171b24"), Color.parseColor("#10141c")))
+        rootBg.cornerRadius = dp(18).toFloat()
+        rootBg.setStroke(dp(1), Color.parseColor("#2a3242"))
+        root.background = rootBg
+
+        val title = TextView(this)
+        title.text = "استخراج (${sel.size} عکس)"
+        title.setTextColor(Color.parseColor("#e7ebf3"))
+        title.textSize = 15f
+        title.typeface = Typeface.DEFAULT_BOLD
+        root.addView(title)
+
+        val sub = TextView(this)
+        sub.text = "روشِ استخراج را انتخاب کن"
+        sub.setTextColor(Color.parseColor("#8a93a8"))
+        sub.textSize = 11.5f
+        val subLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+        subLp.topMargin = dp(2)
+        subLp.bottomMargin = dp(10)
+        root.addView(sub, subLp)
+
+        val items = arrayOf(
+            Triple("🖼", "استخراج با لینک", "فقط لینک‌ها در فیلدِ ورودی می‌نشینند"),
+            Triple("⬇", "استخراج با دانلود", "عکس‌ها همین‌جا دانلود و ذخیره می‌شوند"))
+        items.forEachIndexed { idx, it ->
+            val card = LinearLayout(this)
+            card.orientation = LinearLayout.HORIZONTAL
+            card.gravity = Gravity.CENTER_VERTICAL
+            card.setPadding(dp(14), dp(12), dp(14), dp(12))
+            val cardBg = GradientDrawable()
+            cardBg.setColor(Color.parseColor("#1a1f2b"))
+            cardBg.cornerRadius = dp(14).toFloat()
+            cardBg.setStroke(dp(1), Color.parseColor("#232b3b"))
+            card.background = cardBg
+
+            val ico = TextView(this)
+            ico.text = it.first
+            ico.textSize = 22f
+            ico.setPadding(0, 0, dp(12), 0)
+            card.addView(ico, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT))
+
+            val txts = LinearLayout(this)
+            txts.orientation = LinearLayout.VERTICAL
+            val t1 = TextView(this)
+            t1.text = it.second
+            t1.setTextColor(Color.parseColor("#e7ebf3"))
+            t1.textSize = 14f
+            t1.typeface = Typeface.DEFAULT_BOLD
+            val t2 = TextView(this)
+            t2.text = it.third
+            t2.setTextColor(Color.parseColor("#8a93a8"))
+            t2.textSize = 11.5f
+            txts.addView(t1)
+            txts.addView(t2)
+            card.addView(txts, LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+
+            card.setOnClickListener {
+                try { dlg.dismiss() } catch (_: Exception) {}
+                if (idx == 0) finishWithLinks(sel) else downloadSelected(sel)
+            }
+            val cardLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+            cardLp.bottomMargin = dp(8)
+            root.addView(card, cardLp)
+        }
+
+        val cancel = TextView(this)
+        cancel.text = "انصراف"
+        cancel.setTextColor(Color.parseColor("#c8ceda"))
+        cancel.textSize = 13f
+        cancel.typeface = Typeface.DEFAULT_BOLD
+        cancel.gravity = Gravity.CENTER
+        cancel.setPadding(dp(10), dp(11), dp(10), dp(11))
+        val cBg = GradientDrawable()
+        cBg.setColor(Color.parseColor("#2d3649"))
+        cBg.cornerRadius = dp(12).toFloat()
+        cancel.background = cBg
+        cancel.setOnClickListener {
+            try { dlg.dismiss() } catch (_: Exception) {}
+        }
+        root.addView(cancel, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
+
+        dlg.setContentView(root)
+        dlg.show()
+        dlg.window?.let { w ->
+            w.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            w.setLayout(Math.min(
+                resources.displayMetrics.widthPixels - dp(32), dp(440)),
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+        }
+    }
+
+    private fun showFolderDialog(all: List<String>) {
+        try {
+            showFolderDialogImpl(all)
+        } catch (e: Exception) {
+            showFolderDialogFallback(all)
+        }
+    }
+
+    private fun showFolderDialogFallback(all: List<String>) {
+        val folders = LinkedHashMap<String, MutableList<String>>()
+        for (u in all) {
+            folders.getOrPut(folderOf(u)) { mutableListOf() }.add(u)
+        }
+        val entries = folders.entries.sortedByDescending { it.value.size }
+        val labels = Array(entries.size) { i ->
+            "\u200E" + shortFolder(entries[i].key) +
+                    "  —  " + entries[i].value.size + " عکس"
+        }
+        val checked = BooleanArray(entries.size) { i ->
+            entries[i].value.size >= 2
+        }
+        if (checked.none { it } && entries.isNotEmpty()) checked[0] = true
         val b = android.app.AlertDialog.Builder(this)
-        b.setTitle("استخراج (${sel.size} عکس)")
-        b.setItems(arrayOf("استخراج با لینک", "استخراج با دانلود")) { _, which ->
-            if (which == 0) finishWithLinks(sel) else downloadSelected(sel)
+        b.setTitle("پوشه‌های عکس (${entries.size}) — انتخاب کن")
+        b.setMultiChoiceItems(labels, checked) { _, which, isChecked ->
+            checked[which] = isChecked
+        }
+        b.setPositiveButton("ادامه") { _, _ ->
+            val sel = ArrayList<String>()
+            for (i in entries.indices) {
+                if (checked[i]) sel.addAll(entries[i].value)
+            }
+            if (sel.isEmpty()) {
+                Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
+                    Toast.LENGTH_SHORT).show()
+                return@setPositiveButton
+            }
+            showLinkDownloadChoice(sel)
         }
         b.setNegativeButton("انصراف", null)
         b.show()
+    }
+
+    private fun showFolderDialogImpl(all: List<String>) {
+        val folders = LinkedHashMap<String, MutableList<String>>()
+        for (u in all) {
+            folders.getOrPut(folderOf(u)) { mutableListOf() }.add(u)
+        }
+        val order = folders.entries.sortedByDescending { it.value.size }
+            .map { it.key }
+
+        val picks = HashMap<String, LinkedHashSet<String>>()
+        val grids = HashMap<String, List<View>>()
+        val cntViews = HashMap<String, TextView>()
+        val cbViews = HashMap<String, android.widget.CheckBox>()
+        val rowBgs = HashMap<String, GradientDrawable>()
+
+        val dlg = android.app.Dialog(this)
+        dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+
+        val root = LinearLayout(this)
+        root.orientation = LinearLayout.VERTICAL
+        root.setPadding(dp(16), dp(16), dp(16), dp(12))
+        val rootBg = GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(Color.parseColor("#171b24"), Color.parseColor("#10141c")))
+        rootBg.cornerRadius = dp(18).toFloat()
+        rootBg.setStroke(dp(1), Color.parseColor("#2a3242"))
+        root.background = rootBg
+
+        val head = LinearLayout(this)
+        head.orientation = LinearLayout.HORIZONTAL
+        head.gravity = Gravity.CENTER_VERTICAL
+        val headTxt = LinearLayout(this)
+        headTxt.orientation = LinearLayout.VERTICAL
+        val t1 = TextView(this)
+        t1.text = "پوشه‌های عکس (${order.size})"
+        t1.setTextColor(Color.parseColor("#e7ebf3"))
+        t1.textSize = 15f
+        t1.typeface = Typeface.DEFAULT_BOLD
+        val t2 = TextView(this)
+        t2.text = "با «پیش‌نمایش» عکس‌ها را تک‌تک ببین و انتخاب کن"
+        t2.setTextColor(Color.parseColor("#8a93a8"))
+        t2.textSize = 11.5f
+        headTxt.addView(t1)
+        headTxt.addView(t2)
+        head.addView(headTxt, LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
+        val allBtn = makeMiniBtn("همه")
+        val noneBtn = makeMiniBtn("هیچ")
+        head.addView(allBtn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
+        val nbLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+        nbLp.leftMargin = dp(6)
+        head.addView(noneBtn, nbLp)
+        root.addView(head)
+
+        val scroll = android.widget.ScrollView(this)
+        scroll.isVerticalScrollBarEnabled = false
+        val list = LinearLayout(this)
+        list.orientation = LinearLayout.VERTICAL
+        list.setPadding(0, dp(10), 0, 0)
+        scroll.addView(list, android.view.ViewGroup.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
+        root.addView(scroll, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        val screenW = resources.displayMetrics.widthPixels
+        val cell = dp(76)
+        val cols = Math.max(3, Math.min(8,
+            (Math.min(screenW - dp(120), dp(560))) / (cell + dp(6))))
+
+        var anyDefault = false
+        for (fk in order) if (folders[fk]!!.size >= 2) anyDefault = true
+        for (oi in order.indices) {
+            val fk = order[oi]
+            picks[fk] = LinkedHashSet()
+            if (folders[fk]!!.size >= 2 || (!anyDefault && oi == 0)) {
+                picks[fk]!!.addAll(folders[fk]!!)
+            }
+        }
+
+        val refresh = {
+            for (fk in order) {
+                val p = picks[fk] ?: continue
+                val arr = folders[fk] ?: continue
+                val on = p.isNotEmpty()
+                cbViews[fk]?.isChecked = on
+                cntViews[fk]?.text = if (p.size == arr.size)
+                    "${arr.size} عکس" else "${p.size}/${arr.size}"
+                rowBgs[fk]?.setStroke(dp(2), Color.parseColor(
+                    if (on) "#e8590c" else "#232b3b"))
+                grids[fk]?.let { cells ->
+                    for (i in 0 until Math.min(arr.size, cells.size)) {
+                        cells[i].alpha = if (p.contains(arr[i])) 1f else 0.35f
+                    }
+                }
+            }
+        }
+
+        for (fk in order) {
+            val arr = folders[fk]!!
+
+            val row = LinearLayout(this)
+            row.orientation = LinearLayout.VERTICAL
+            row.setPadding(dp(12), dp(10), dp(12), dp(10))
+            val rowBg = GradientDrawable()
+            rowBg.setColor(Color.parseColor("#1a1f2b"))
+            rowBg.cornerRadius = dp(14).toFloat()
+            rowBg.setStroke(dp(2), Color.parseColor("#232b3b"))
+            row.background = rowBg
+            rowBgs[fk] = rowBg
+            val rowLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+            rowLp.bottomMargin = dp(8)
+            row.layoutParams = rowLp
+
+            val topRow = LinearLayout(this)
+            topRow.orientation = LinearLayout.HORIZONTAL
+            topRow.gravity = Gravity.CENTER_VERTICAL
+            val cb = android.widget.CheckBox(this)
+            try {
+                cb.buttonTintList = android.content.res.ColorStateList.valueOf(
+                    Color.parseColor("#e8590c"))
+            } catch (_: Exception) {}
+            cbViews[fk] = cb
+            val name = TextView(this)
+            name.text = "\u200E" + shortFolder(fk)
+            name.setTextColor(Color.parseColor("#e7ebf3"))
+            name.textSize = 12.5f
+            name.gravity = Gravity.LEFT
+            val nameLp = LinearLayout.LayoutParams(
+                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            nameLp.leftMargin = dp(8)
+            nameLp.rightMargin = dp(8)
+            topRow.addView(cb)
+            topRow.addView(name, nameLp)
+            val cnt = TextView(this)
+            cnt.setTextColor(Color.WHITE)
+            cnt.textSize = 11.5f
+            cnt.typeface = Typeface.DEFAULT_BOLD
+            val cntBg = GradientDrawable()
+            cntBg.setColor(Color.parseColor("#2d3649"))
+            cntBg.cornerRadius = dp(10).toFloat()
+            cnt.background = cntBg
+            cnt.setPadding(dp(10), dp(3), dp(10), dp(3))
+            cntViews[fk] = cnt
+            topRow.addView(cnt, LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT))
+            val exp = makeMiniBtn("پیش‌نمایش")
+            val expLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+            expLp.leftMargin = dp(8)
+            topRow.addView(exp, expLp)
+            row.addView(topRow)
+
+            val strip = LinearLayout(this)
+            strip.orientation = LinearLayout.HORIZONTAL
+            val stripLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+            stripLp.topMargin = dp(8)
+            strip.layoutParams = stripLp
+            for (s in 0 until Math.min(arr.size, 4)) {
+                val iv = android.widget.ImageView(this)
+                iv.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                val ivBg = GradientDrawable()
+                ivBg.setColor(Color.parseColor("#232b3b"))
+                ivBg.cornerRadius = dp(10).toFloat()
+                ivBg.setStroke(dp(1), Color.parseColor("#2a3242"))
+                iv.background = ivBg
+                iv.clipToOutline = true
+                val ivLp = LinearLayout.LayoutParams(dp(58), dp(58))
+                if (s > 0) ivLp.leftMargin = dp(6)
+                strip.addView(iv, ivLp)
+                loadThumb(iv, arr[s])
+            }
+            row.addView(strip)
+
+            val grid = android.widget.GridLayout(this)
+            grid.columnCount = cols
+            grid.visibility = View.GONE
+            val gridLp = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT)
+            gridLp.topMargin = dp(8)
+            grid.layoutParams = gridLp
+            val cells = ArrayList<View>()
+            for (g in arr.indices) {
+                val u = arr[g]
+                val cellBox = android.widget.FrameLayout(this)
+                val clp = android.widget.GridLayout.LayoutParams()
+                clp.width = cell
+                clp.height = cell * 3 / 2
+                clp.columnSpec = android.widget.GridLayout.spec(g % cols)
+                clp.rowSpec = android.widget.GridLayout.spec(g / cols)
+                val mm = dp(3)
+                clp.setMargins(mm, mm, mm, mm)
+                cellBox.layoutParams = clp
+
+                val iv = android.widget.ImageView(this)
+                iv.scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+                val ivBg = GradientDrawable()
+                ivBg.setColor(Color.parseColor("#232b3b"))
+                ivBg.cornerRadius = dp(10).toFloat()
+                iv.background = ivBg
+                iv.clipToOutline = true
+                cellBox.addView(iv, android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT))
+                loadThumb(iv, u)
+
+                val no = TextView(this)
+                no.text = "${g + 1}"
+                no.setTextColor(Color.WHITE)
+                no.textSize = 10f
+                no.setBackgroundColor(Color.parseColor("#a6000000"))
+                no.setPadding(dp(5), dp(1), dp(5), dp(1))
+                val noLp = android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.BOTTOM or Gravity.START)
+                noLp.leftMargin = dp(3)
+                noLp.bottomMargin = dp(3)
+                cellBox.addView(no, noLp)
+
+                cellBox.setOnClickListener {
+                    try {
+                        val pp = picks[fk] ?: return@setOnClickListener
+                        if (pp.contains(u)) pp.remove(u) else pp.add(u)
+                        refresh()
+                    } catch (_: Exception) {}
+                }
+                grid.addView(cellBox)
+                cells.add(cellBox)
+            }
+            grids[fk] = cells
+            row.addView(grid)
+
+            exp.setOnClickListener {
+                try {
+                    val open = grid.visibility != View.VISIBLE
+                    grid.visibility = if (open) View.VISIBLE else View.GONE
+                    strip.visibility = if (open) View.GONE else View.VISIBLE
+                    exp.text = if (open) "بستن" else "پیش‌نمایش"
+                } catch (_: Exception) {}
+            }
+            row.setOnClickListener {
+                try {
+                    val pp = picks[fk] ?: return@setOnClickListener
+                    val turnOn = pp.isEmpty()
+                    pp.clear()
+                    if (turnOn) pp.addAll(arr)
+                    refresh()
+                } catch (_: Exception) {}
+            }
+            cb.setOnClickListener {
+                try {
+                    val pp = picks[fk] ?: return@setOnClickListener
+                    pp.clear()
+                    if (cb.isChecked) pp.addAll(arr)
+                    refresh()
+                } catch (_: Exception) {}
+            }
+            list.addView(row)
+        }
+
+        refresh()
+
+        val btns = LinearLayout(this)
+        btns.orientation = LinearLayout.HORIZONTAL
+        btns.gravity = Gravity.CENTER_VERTICAL
+        val btnsLp = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT)
+        btnsLp.topMargin = dp(4)
+        btns.layoutParams = btnsLp
+        val okBtn = TextView(this)
+        okBtn.text = "ادامه"
+        okBtn.setTextColor(Color.WHITE)
+        okBtn.textSize = 13.5f
+        okBtn.typeface = Typeface.DEFAULT_BOLD
+        okBtn.gravity = Gravity.CENTER
+        okBtn.setPadding(dp(24), dp(11), dp(24), dp(11))
+        val okBg = GradientDrawable(
+            GradientDrawable.Orientation.TL_BR,
+            intArrayOf(Color.parseColor("#ff4a3d"), Color.parseColor("#c9271c")))
+        okBg.cornerRadius = dp(12).toFloat()
+        okBtn.background = okBg
+        val noBtn = TextView(this)
+        noBtn.text = "انصراف"
+        noBtn.setTextColor(Color.parseColor("#c8ceda"))
+        noBtn.textSize = 13.5f
+        noBtn.typeface = Typeface.DEFAULT_BOLD
+        noBtn.gravity = Gravity.CENTER
+        noBtn.setPadding(dp(24), dp(11), dp(24), dp(11))
+        val noBg = GradientDrawable()
+        noBg.setColor(Color.parseColor("#2d3649"))
+        noBg.cornerRadius = dp(12).toFloat()
+        noBtn.background = noBg
+        btns.addView(noBtn, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT,
+            ViewGroup.LayoutParams.WRAP_CONTENT))
+        val okLp = LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        okLp.leftMargin = dp(8)
+        btns.addView(okBtn, okLp)
+        root.addView(btns)
+
+        allBtn.setOnClickListener {
+            for (fk in order) {
+                picks[fk]?.clear()
+                picks[fk]?.addAll(folders[fk]!!)
+            }
+            refresh()
+        }
+        noneBtn.setOnClickListener {
+            for (fk in order) picks[fk]?.clear()
+            refresh()
+        }
+        okBtn.setOnClickListener {
+            val sel = ArrayList<String>()
+            for (fk in order) {
+                for (u in folders[fk]!!) if (picks[fk]?.contains(u) == true)
+                    sel.add(u)
+            }
+            if (sel.isEmpty()) {
+                Toast.makeText(this, "هیچ عکسی انتخاب نشد",
+                    Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            try { dlg.dismiss() } catch (_: Exception) {}
+            showLinkDownloadChoice(sel)
+        }
+        noBtn.setOnClickListener {
+            try { dlg.dismiss() } catch (_: Exception) {}
+        }
+
+        dlg.setContentView(root)
+        dlg.show()
+        dlg.window?.let { w ->
+            w.setBackgroundDrawable(
+                android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+            val dw = Math.min(screenW - dp(24), dp(600))
+            w.setLayout(dw,
+                (resources.displayMetrics.heightPixels * 0.82).toInt())
+        }
+    }
+
+    private fun loadThumb(iv: android.widget.ImageView, u: String) {
+        try {
+            iv.tag = u
+            THUMB_CACHE.get(u)?.let { b ->
+                iv.setImageBitmap(b)
+                iv.visibility = View.VISIBLE
+                return
+            }
+            if (THUMB_FAILED.contains(u)) {
+                iv.visibility = View.INVISIBLE
+                return
+            }
+            iv.setImageDrawable(null)
+            THUMB_POOL.execute {
+                var bmp: android.graphics.Bitmap? = null
+                try {
+                    val c = java.net.URL(u).openConnection() as
+                            java.net.HttpURLConnection
+                    c.connectTimeout = 9000
+                    c.readTimeout = 16000
+                    c.setRequestProperty("User-Agent",
+                        "Mozilla/5.0 (Linux; Android 10; Pixel 7) " +
+                        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                        "Chrome/120.0.0.0 Mobile Safari/537.36")
+                    try {
+                        val ck = CookieManager.getInstance().getCookie(u)
+                        if (!ck.isNullOrEmpty())
+                            c.setRequestProperty("Cookie", ck)
+                    } catch (_: Exception) {}
+                    try {
+                        val ref = try { web.url } catch (_: Exception) { null }
+                        if (ref != null && ref.startsWith("http"))
+                            c.setRequestProperty("Referer", ref)
+                    } catch (_: Exception) {}
+                    val code = c.responseCode
+                    if (code in 200..299) {
+                        val bo = java.io.ByteArrayOutputStream()
+                        c.inputStream.use { ins ->
+                            val buf = ByteArray(16384)
+                            var n = ins.read(buf)
+                            while (n > 0) {
+                                bo.write(buf, 0, n)
+                                n = ins.read(buf)
+                            }
+                        }
+                        val data = bo.toByteArray()
+                        c.disconnect()
+                        if (data.isNotEmpty() && data.size < 25 * 1024 * 1024) {
+                            val o = android.graphics.BitmapFactory.Options()
+                            o.inJustDecodeBounds = true
+                            android.graphics.BitmapFactory.decodeByteArray(
+                                data, 0, data.size, o)
+                            var sc = 1
+                            val maxDim = Math.max(o.outWidth, o.outHeight)
+                            while (maxDim / sc > 260) sc *= 2
+                            val o2 = android.graphics.BitmapFactory.Options()
+                            o2.inSampleSize = sc
+                            bmp = android.graphics.BitmapFactory.decodeByteArray(
+                                data, 0, data.size, o2)
+                        }
+                    } else {
+                        c.disconnect()
+                    }
+                } catch (_: Exception) {}
+                val b2 = bmp
+                if (b2 == null) {
+                    THUMB_FAILED.add(u)
+                    runOnUiThread {
+                        try {
+                            if (u == iv.tag) iv.visibility = View.INVISIBLE
+                        } catch (_: Exception) {}
+                    }
+                    return@execute
+                }
+                THUMB_CACHE.put(u, b2)
+                runOnUiThread {
+                    try {
+                        if (u == iv.tag) {
+                            iv.setImageBitmap(b2)
+                            iv.visibility = View.VISIBLE
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
     }
 
     private fun finishWithLinks(sel: List<String>) {
@@ -894,11 +1484,18 @@ tick()
                     Toast.LENGTH_LONG).show()
                 return
             }
+            var outList = sel
+            if (outList.size > 400) {
+                outList = outList.subList(0, 400)
+                Toast.makeText(this,
+                    "برای پایداری فقط ۴۰۰ لینکِ اول منتقل شد",
+                    Toast.LENGTH_SHORT).show()
+            }
             val out = Intent()
-            out.putExtra(EXTRA_LINKS, sel.joinToString("\n"))
+            out.putExtra(EXTRA_LINKS, outList.joinToString("\n"))
             setResult(RESULT_OK, out)
             Toast.makeText(this,
-                "✅ ${sel.size} لینک عکس گرفته شد",
+                "✅ ${outList.size} لینک عکس گرفته شد",
                 Toast.LENGTH_SHORT).show()
             finish()
         } catch (e: Exception) {

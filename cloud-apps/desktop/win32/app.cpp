@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <cmath>
 #include <cstdint>
+#include <set>
 #include <string>
 #include <vector>
 #include "WebView2.h"
@@ -80,6 +81,13 @@ static HWND g_btnSysBr = NULL;
 static HWND g_btnRetry = NULL;
 static BOOL g_failMode = FALSE;
 static BOOL g_readerMode = FALSE;
+static BOOL g_recording = FALSE;
+static std::vector<std::wstring> g_recNet;
+static std::set<std::wstring> g_recNetSeen;
+static std::vector<std::wstring> g_foundStore;
+static std::set<std::wstring> g_foundSeen;
+static std::vector<std::wstring> g_selUrls;
+static int g_netShown = -1;
 static std::vector<std::wstring> g_dlUrls;
 static std::vector<std::wstring> g_dlData;
 static int g_dlSlotIdx[3] = {-1, -1, -1};
@@ -816,6 +824,212 @@ static std::wstring MtSearchOrUrl(const std::wstring &s) {
            + MtWideFromAscii(MtUrlEncode(s));
 }
 
+static BOOL MtHasI(const std::wstring &hay, const wchar_t *needle) {
+    if (needle == NULL || *needle == 0)
+        return TRUE;
+    size_t nl = wcslen(needle);
+    if (hay.size() < nl)
+        return FALSE;
+    for (size_t i = 0; i + nl <= hay.size(); i++) {
+        size_t k = 0;
+        while (k < nl) {
+            wchar_t a = hay[i + k];
+            wchar_t b = needle[k];
+            if (a >= L'A' && a <= L'Z') a = a - L'A' + L'a';
+            if (b >= L'A' && b <= L'Z') b = b - L'A' + L'a';
+            if (a != b)
+                break;
+            k++;
+        }
+        if (k == nl)
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static std::wstring MtUrlBase(const std::wstring &u) {
+    size_t h = u.find_first_of(L"#?");
+    return (h == std::wstring::npos) ? u : u.substr(0, h);
+}
+
+static BOOL MtEndsWithI(const std::wstring &b, const wchar_t *ext) {
+    size_t el = wcslen(ext);
+    if (b.size() < el)
+        return FALSE;
+    return _wcsicmp(b.c_str() + (b.size() - el), ext) == 0;
+}
+
+static BOOL MtDimTag(const std::wstring &b) {
+    for (size_t i = 1; i + 6 < b.size(); i++) {
+        if (b[i - 1] != L'-' && b[i - 1] != L'_')
+            continue;
+        size_t p = i;
+        int d1 = 0;
+        while (p < b.size() && b[p] >= L'0' && b[p] <= L'9' && d1 < 4) {
+            p++; d1++;
+        }
+        if (d1 < 2 || p >= b.size() || b[p] != L'x')
+            continue;
+        p++;
+        int d2 = 0;
+        while (p < b.size() && b[p] >= L'0' && b[p] <= L'9' && d2 < 4) {
+            p++; d2++;
+        }
+        if (d2 < 2)
+            continue;
+        if (p < b.size() && (b[p] == L'.' || b[p] == L'/' || b[p] == L'\\'
+                             || b[p] == L'-' || b[p] == L'_'))
+            return TRUE;
+    }
+    return FALSE;
+}
+
+static int MtQuerySize(const std::wstring &u) {
+    static const wchar_t *names[] = {
+        L"type=", L"size=", L"w=", L"h=", L"width=", L"height=", NULL };
+    for (int ni = 0; names[ni]; ni++) {
+        size_t nl = wcslen(names[ni]) - 1;
+        for (size_t i = 0; i + nl < u.size(); i++) {
+            if (u[i] != L'?' && u[i] != L'&')
+                continue;
+            size_t nvStart = i + 1;
+            if (_wcsnicmp(u.c_str() + nvStart, names[ni], nl + 1) != 0)
+                continue;
+            size_t p = nvStart + nl + 1;
+            BOOL fFlag = FALSE;
+            if (p < u.size() && (u[p] == L'f' || u[p] == L'F')) {
+                fFlag = TRUE;
+                p++;
+            }
+            int d1 = 0;
+            long v1 = 0;
+            while (p < u.size() && u[p] >= L'0' && u[p] <= L'9' && d1 < 4) {
+                v1 = v1 * 10 + (u[p] - L'0');
+                p++; d1++;
+            }
+            if (d1 == 0)
+                continue;
+            long v2 = 0;
+            int d2 = 0;
+            if (p < u.size() && (u[p] == L'_' || u[p] == L'x'
+                                 || u[p] == L'X')) {
+                size_t q2 = p + 1;
+                while (q2 < u.size() && u[q2] >= L'0' && u[q2] <= L'9'
+                       && d2 < 4) {
+                    v2 = v2 * 10 + (u[q2] - L'0');
+                    q2++; d2++;
+                }
+            }
+            if (d2 > 0)
+                return (int)((v1 > v2) ? v1 : v2);
+            if (fFlag && d1 > 0)
+                return (int)v1;
+        }
+    }
+    return 0;
+}
+
+static BOOL MtJunkUrl(const std::wstring &uRaw) {
+    if (uRaw.empty())
+        return TRUE;
+    if (_wcsnicmp(uRaw.c_str(), L"data:", 5) == 0)
+        return TRUE;
+    if (_wcsnicmp(uRaw.c_str(), L"blob:", 5) == 0)
+        return FALSE;
+    if (_wcsnicmp(uRaw.c_str(), L"http://", 7) != 0
+            && _wcsnicmp(uRaw.c_str(), L"https://", 8) != 0)
+        return TRUE;
+    std::wstring b = MtUrlBase(uRaw);
+    static const wchar_t *badExt[] = {
+        L".svg", L".ico", L".gif", L".css", L".js", L".mjs", L".json",
+        L".html", L".htm", L".xml", L".txt", L".pdf", L".zip", L".rar",
+        L".7z", L".gz", L".mp4", L".webm", L".mp3", L".m4a", L".ogg",
+        L".wav", L".woff", L".woff2", L".ttf", L".otf", L".eot", L".map",
+        NULL };
+    for (int i = 0; badExt[i]; i++)
+        if (MtEndsWithI(b, badExt[i]))
+            return TRUE;
+    if (MtDimTag(b))
+        return TRUE;
+    if (MtHasI(b, L"login") || MtHasI(b, L"signin")
+            || MtHasI(b, L"signup") || MtHasI(b, L"register")
+            || MtHasI(b, L"servicelogin") || MtHasI(b, L"oauth"))
+        return TRUE;
+    int q = MtQuerySize(uRaw);
+    if (q > 0 && q <= 400)
+        return TRUE;
+    static const wchar_t *junkWords[] = {
+        L"logo", L"icon", L"avatar", L"banner", L"sprite", L"favicon",
+        L"badge", L"flag", L"button", L"emoji", L"thumb", L"thumbnail",
+        L"thumbnails", L"placeholder", L"blank", L"spacer", L"transparen",
+        L"loading", L"spinner", L"pixel", L"profile", L"rating", L"share",
+        L"follow", L"comment", L"credits", NULL };
+    for (int i = 0; junkWords[i]; i++)
+        if (MtHasI(b, junkWords[i]))
+            return TRUE;
+    static const wchar_t *junkDirs[] = {
+        L"/covers/", L"/cover/", L"/thumbs/", L"/thumb/", L"/thumbnails/",
+        L"/avatars/", L"/avatar/", L"/banners/", L"/banner/",
+        L"/creatives/", L"/gifs/", L"/decorations/", L"/emojis/",
+        L"/smileys/", L"/stickers/", NULL };
+    for (int i = 0; junkDirs[i]; i++)
+        if (MtHasI(b, junkDirs[i]))
+            return TRUE;
+    static const wchar_t *adHosts[] = {
+        L"pubadx", L"adservice", L"adserver", L"doubleclick", L"adnxs",
+        L"propellerads", L"onclck", L"adcash", L"adsterra", L"hilltopads",
+        L"clickadu", L"sovrn", L"taboola", L"outbrain", L"zedo",
+        L"buysellads", L"sharethrough", L"smartadserver", L"openx",
+        L"rubicon", L"criteo", L"pubmatic", L"media.net", NULL };
+    for (int i = 0; adHosts[i]; i++)
+        if (MtHasI(b, adHosts[i]))
+            return TRUE;
+    return FALSE;
+}
+
+static int MtRecCount(void) {
+    std::set<std::wstring> all;
+    all.insert(g_recNet.begin(), g_recNet.end());
+    all.insert(g_foundStore.begin(), g_foundStore.end());
+    return (int)all.size();
+}
+
+static void MtFoundAdd(const std::wstring &u) {
+    try {
+        if (u.empty())
+            return;
+        if (!g_foundSeen.insert(u).second)
+            return;
+        g_foundStore.push_back(u);
+    } catch (...) {
+    }
+}
+
+static void MtRecAdd(const std::wstring &u) {
+    try {
+        if (u.empty())
+            return;
+        if (!g_recNetSeen.insert(u).second)
+            return;
+        g_recNet.push_back(u);
+        int n = MtRecCount();
+        if (n != g_netShown) {
+            g_netShown = n;
+            if (g_lblStatus != NULL)
+                SetWindowTextW(g_lblStatus,
+                    (L"\u25CF " + std::to_wstring(n)
+                     + L" \u0639\u06A9\u0633 \u0636\u0628\u0637 \u0634\u062F")
+                        .c_str());
+        }
+    } catch (...) {
+    }
+}
+
+static void MtResetRecordUi(void);
+static void MtFillFieldAndClose(const std::vector<std::wstring> &links);
+static void MtStartDownload(const std::vector<std::wstring> &urls);
+static void MtShowFolderOverlay(void);
+static void MtOnExtractBtn(void);
 static void LayoutApp(void);
 static void LayoutBrowser(void);
 static void MtCloseExtractMenu(void);
@@ -888,6 +1102,7 @@ static MtExecHandler g_execDlStepB(13);
 static MtExecHandler g_execDlStepC(14);
 static MtExecHandler g_execUpPoll(12);
 static MtExecHandler g_execNoop(11);
+static MtExecHandler g_execCollectStore(15);
 
 struct MtNoopScriptHandler
         : MtHandlerBase<
@@ -975,6 +1190,139 @@ struct MtSrcChangedHandler : MtHandlerBase<ICoreWebView2SourceChangedEventHandle
 static MtNavStartHandler g_navStartHandler;
 static MtNavDoneHandler g_navDoneHandler;
 static MtSrcChangedHandler g_srcHandler;
+
+struct MtResReqHandler
+        : MtHandlerBase<ICoreWebView2WebResourceRequestedEventHandler> {
+    virtual HRESULT STDMETHODCALLTYPE Invoke(
+            ICoreWebView2 *sender,
+            ICoreWebView2WebResourceRequestedEventArgs *args) {
+#if MT_HAS_SEH
+        __try {
+            return Impl(sender, args);
+        } __except (MtSehLog("resReq", GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return Impl(sender, args);
+#endif
+    }
+    static HRESULT Impl(ICoreWebView2 *sender,
+                        ICoreWebView2WebResourceRequestedEventArgs *args);
+};
+
+struct MtMsgHandler
+        : MtHandlerBase<ICoreWebView2WebMessageReceivedEventHandler> {
+    virtual HRESULT STDMETHODCALLTYPE Invoke(
+            ICoreWebView2 *sender,
+            ICoreWebView2WebMessageReceivedEventArgs *args) {
+#if MT_HAS_SEH
+        __try {
+            return Impl(sender, args);
+        } __except (MtSehLog("webMsg", GetExceptionInformation())) {
+            return S_OK;
+        }
+#else
+        return Impl(sender, args);
+#endif
+    }
+    static HRESULT Impl(ICoreWebView2 *sender,
+                        ICoreWebView2WebMessageReceivedEventArgs *args);
+};
+
+static MtResReqHandler g_resReqHandler;
+static MtMsgHandler g_msgHandler;
+static EventRegistrationToken g_evTokResReq;
+static EventRegistrationToken g_evTokMsg;
+
+HRESULT MtResReqHandler::Impl(
+        ICoreWebView2 *sender,
+        ICoreWebView2WebResourceRequestedEventArgs *args) {
+    (void)sender;
+    if (!g_recording || args == NULL)
+        return S_OK;
+    try {
+        ICoreWebView2WebResourceRequest *req = NULL;
+        if (FAILED(args->get_Request(&req)) || req == NULL)
+            return S_OK;
+        LPWSTR uri = NULL;
+        BOOL img = FALSE;
+        if (SUCCEEDED(req->get_Uri(&uri)) && uri != NULL) {
+            std::wstring u(uri);
+            CoTaskMemFree(uri);
+            std::wstring b = MtUrlBase(u);
+            if (MtEndsWithI(b, L".jpg") || MtEndsWithI(b, L".jpeg")
+                    || MtEndsWithI(b, L".png") || MtEndsWithI(b, L".webp")
+                    || MtEndsWithI(b, L".avif") || MtEndsWithI(b, L".bmp")
+                    || MtEndsWithI(b, L".tiff") || MtEndsWithI(b, L".tif"))
+                img = TRUE;
+            if (!img) {
+                ICoreWebView2HttpRequestHeaders *hdrs = NULL;
+                if (SUCCEEDED(req->get_Headers(&hdrs)) && hdrs != NULL) {
+                    LPWSTR v = NULL;
+                    if (SUCCEEDED(hdrs->GetHeader(L"sec-fetch-dest", &v))
+                            && v != NULL) {
+                        if (_wcsicmp(v, L"image") == 0)
+                            img = TRUE;
+                        CoTaskMemFree(v);
+                    }
+                    if (!img) {
+                        LPWSTR acc = NULL;
+                        if (SUCCEEDED(hdrs->GetHeader(L"accept", &acc))
+                                && acc != NULL) {
+                            std::wstring a(acc);
+                            CoTaskMemFree(acc);
+                            for (size_t i = 0; i < a.size(); i++) {
+                                wchar_t c = a[i];
+                                if (c >= L'A' && c <= L'Z')
+                                    a[i] = c - L'A' + L'a';
+                            }
+                            if (a.find(L"image/") != std::wstring::npos
+                                    && a.find(L"text/html")
+                                       == std::wstring::npos)
+                                img = TRUE;
+                        }
+                    }
+                    hdrs->Release();
+                }
+            }
+            if (img && !MtJunkUrl(u))
+                MtRecAdd(u);
+        }
+        req->Release();
+    } catch (...) {
+    }
+    return S_OK;
+}
+
+HRESULT MtMsgHandler::Impl(
+        ICoreWebView2 *sender,
+        ICoreWebView2WebMessageReceivedEventArgs *args) {
+    (void)sender;
+    try {
+        if (args == NULL)
+            return S_OK;
+        LPWSTR msg = NULL;
+        if (FAILED(args->get_TryGetWebMessageAsString(&msg))
+                || msg == NULL)
+            return S_OK;
+        std::vector<std::wstring> links;
+        std::wstring m(msg);
+        CoTaskMemFree(msg);
+        MtParseMaybeWrapped(m.c_str(), links);
+        if (links.empty())
+            return S_OK;
+        g_selUrls = links;
+        MtLog("webMsg: folder selection received");
+        if (g_lblStatus != NULL)
+            SetWindowTextW(g_lblStatus,
+                (std::to_wstring(links.size())
+                 + L" عکس انتخا"
+                   L"ب شد").c_str());
+        MtShowExtractMenu();
+    } catch (...) {
+    }
+    return S_OK;
+}
 
 HRESULT MtNavStartHandler::NavStartImpl(
         ICoreWebView2 *sender, ICoreWebView2NavigationStartingEventArgs *args) {
@@ -1076,6 +1424,25 @@ struct MtCtlHandler : MtHandlerBase<ICoreWebView2CreateCoreWebView2ControllerCom
             wv->add_NavigationStarting(&g_navStartHandler, &g_evTokBrNav);
             wv->add_NavigationCompleted(&g_navDoneHandler, &g_evTokBrDone);
             wv->add_SourceChanged(&g_srcHandler, &g_evTokBrSrc);
+            wv->AddScriptToExecuteOnDocumentCreated(
+                L"try{window.__mtWv2=(window.chrome"
+                L"&&window.chrome.webview)||null}catch(e){}",
+                &g_noopScript);
+            wv->add_WebMessageReceived(&g_msgHandler, &g_evTokMsg);
+            ICoreWebView2_2 *wv2 = NULL;
+            if (SUCCEEDED(wv->QueryInterface(__uuidof(ICoreWebView2_2),
+                                             (void **)&wv2))
+                    && wv2 != NULL) {
+                HRESULT hrF = wv2->AddWebResourceRequestedFilter(
+                    L"*", COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL);
+                MtLogHr("resReq filter", hrF);
+                if (SUCCEEDED(hrF))
+                    wv2->add_WebResourceRequested(&g_resReqHandler,
+                                                  &g_evTokResReq);
+                wv2->Release();
+            } else {
+                MtLog("ICoreWebView2_2 not available");
+            }
             MtLog("br webview created");
             PostMessage(g_hwnd, WM_APP_BRREADY, 0, 0);
             return S_OK;
@@ -1325,7 +1692,7 @@ static void LayoutBrowser(void) {
     int m = 10, gap = 8;
     int bh = 34, by = (BR_BAR_H - bh) / 2;
     int bwNav = 42, bwGo = 64;
-    int bwExt = (w < 700) ? 84 : 104;
+    int bwExt = (w < 700) ? 100 : 118;
     int bwCnt = (w < 1000) ? 0 : 110;
 
     int xR = w - m;
@@ -1741,7 +2108,12 @@ static LRESULT MenuWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (HIWORD(wp) == 0
                 && (id == ID_MITEM_LINK || id == ID_MITEM_DL)) {
             DestroyWindow(hwnd);
-            if (g_webBr != NULL) {
+            if (!g_selUrls.empty()) {
+                if (id == ID_MITEM_LINK)
+                    MtFillFieldAndClose(g_selUrls);
+                else
+                    MtStartDownload(g_selUrls);
+            } else if (g_webBr != NULL) {
                 if (id == ID_MITEM_LINK)
                     g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
                 else
@@ -1865,9 +2237,9 @@ static void MtBrCreateControls(HWND hwnd) {
         WS_CHILD | WS_VISIBLE | SS_RIGHT | SS_CENTERIMAGE | SS_ENDELLIPSIS,
         0, 0, 110, 34, hwnd, (HMENU)(INT_PTR)ID_LBL_STATUS, hInst, NULL);
     g_btnExtract = CreateWindowExW(0, L"BUTTON",
-        L"\u0627\u0633\u062A\u062E\u0631\u0627\u062C",
+        L"\u25B6 \u0634\u0631\u0648\u0639 \u0636\u0628\u0637",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-        0, 0, 104, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
+        0, 0, 118, 34, hwnd, (HMENU)(INT_PTR)ID_BTN_EXTRACT, hInst, NULL);
 
     SendMessageW(g_editUrl, WM_SETFONT, (WPARAM)g_font, TRUE);
     g_editProc = (WNDPROC)SetWindowLongPtrW(g_editUrl, GWLP_WNDPROC,
@@ -1917,7 +2289,7 @@ static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                 return 0;
             }
             if (id == ID_BTN_EXTRACT) {
-                MtShowExtractMenu();
+                MtOnExtractBtn();
                 return 0;
             }
         }
@@ -2238,7 +2610,331 @@ static void MtFillFieldAndClose(const std::vector<std::wstring> &links) {
                           L"catch(e){return 0}})()";
         g_webApp->ExecuteScript(js.c_str(), &g_execFill);
     }
+    MtResetRecordUi();
     MtHideBrowser();
+}
+
+static void MtResetRecordUi(void) {
+    g_recording = FALSE;
+    g_netShown = -1;
+    if (g_btnExtract != NULL)
+        SetWindowTextW(g_btnExtract,
+            L"\u25B6 \u0634\u0631\u0648\u0639 \u0636\u0628\u0637");
+}
+
+static void MtOnExtractBtn(void) {
+    MtCloseExtractMenu();
+    if (g_webBr == NULL || g_btnExtract == NULL)
+        return;
+    if (!g_recording) {
+        g_recording = TRUE;
+        g_recNet.clear();
+        g_recNetSeen.clear();
+        g_foundStore.clear();
+        g_foundSeen.clear();
+        g_selUrls.clear();
+        g_netShown = -1;
+        SetWindowTextW(g_btnExtract, L"\U0001F5BC \u0627\u0633\u062A\u062E\u0631\u0627\u062C");
+        if (g_lblStatus != NULL)
+            SetWindowTextW(g_lblStatus, L"\u062F\u0631 \u062D\u0627\u0644 \u0636\u0628\u0637\u2026 \u0635\u0641\u062D\u0647 \u0641\u0635\u0644 \u0631\u0627 \u0648\u0631\u0642 \u0628\u0632\u0646");
+        MtLog("recording started");
+        g_webBr->Reload();
+        return;
+    }
+    if (g_lblStatus != NULL)
+        SetWindowTextW(g_lblStatus, L"\u2026 \u062F\u0631 \u062D\u0627\u0644 \u0622\u0645\u0627\u062F\u0647\u200C\u0633\u0627\u0632\u06CC");
+    if (MtIsMangaPlusUrl(g_lastSite)) {
+        std::vector<std::wstring> one;
+        one.push_back(g_lastSite);
+        MtFillFieldAndClose(one);
+        return;
+    }
+    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execCollectStore);
+}
+
+static const wchar_t *MT_FOLDER_OVERLAY_JS =
+L"(function(){"
+L"try{"
+L"var URLS=__MT_URLS__;"
+L"var old=document.getElementById('mtFoldOv');"
+L"if(old&&old.parentNode)old.parentNode.removeChild(old);"
+L"function folderOf(u){"
+L"if(String(u).indexOf('blob:')===0)return 'blob:';"
+L"try{var a=document.createElement('a');a.href=u;"
+L"var p=a.pathname||'/';var c=p.lastIndexOf('/');"
+L"p=c>=0?p.slice(0,c+1):'/';"
+L"return a.protocol+'//'+a.hostname+p;"
+L"}catch(e){return String(u).split('#')[0].split('?')[0]}}"
+L"function shortF(f){"
+L"if(f==='blob:')return '\u062F\u0631\u0648\u0646 \u0635\u0641\u062D\u0647 (\u0631\u0645\u0632\u06AF\u0634\u0627\u06CC\u06CC\u200C\u0634\u062F\u0647)';"
+L"f=String(f).replace(/^https?:\\/\\//,'');"
+L"if(f.length>46)f=f.slice(0,20)+'\u2026'+f.slice(-24);"
+L"return f}"
+L"var folders={},order=[];"
+L"for(var i=0;i<URLS.length;i++){"
+L"var f=folderOf(URLS[i]);"
+L"if(!folders[f]){folders[f]=[];order.push(f)}"
+L"folders[f].push(URLS[i])}"
+L"order.sort(function(a,b){return folders[b].length-folders[a].length});"
+L"var picks={};"
+L"for(var j=0;j<order.length;j++)picks[order[j]]={};"
+L"function addAll(fk){var a=folders[fk];"
+L"for(var k=0;k<a.length;k++)picks[fk][a[k]]=1}"
+L"var anyDef=false;"
+L"for(var j2=0;j2<order.length;j2++){"
+L"if(folders[order[j2]].length>=2){addAll(order[j2]);anyDef=true}}"
+L"if(!anyDef&&order.length)addAll(order[0]);"
+L"function mk(t){return document.createElement(t)}"
+L"function imgSafe(u){return String(u).split(String.fromCharCode(39)).join('%27')}"
+L"var ov=mk('div');ov.id='mtFoldOv';"
+L"ov.style.position='fixed';ov.style.top='0';ov.style.left='0';"
+L"ov.style.right='0';ov.style.bottom='0';"
+L"ov.style.zIndex='2147483645';"
+L"ov.style.background='rgba(0,0,0,.55)';"
+L"ov.style.fontFamily='Tahoma,Arial,sans-serif';"
+L"ov.style.display='flex';ov.style.alignItems='center';"
+L"ov.style.justifyContent='center';ov.style.direction='rtl';"
+L"var box=mk('div');"
+L"box.style.background='linear-gradient(180deg,#171b24,#10141c)';"
+L"box.style.border='1px solid #2a3242';"
+L"box.style.borderRadius='18px';box.style.padding='16px';"
+L"box.style.boxShadow='0 24px 60px rgba(0,0,0,.7)';"
+L"box.style.display='flex';box.style.flexDirection='column';"
+L"box.style.gap='12px';box.style.width='min(640px,94vw)';"
+L"box.style.maxHeight='80vh';box.style.boxSizing='border-box';"
+L"var h=mk('div');"
+L"h.style.display='flex';h.style.alignItems='center';h.style.gap='8px';"
+L"var tt=mk('div');tt.style.flex='1';tt.style.minWidth='0';"
+L"var t1=mk('div');"
+L"t1.textContent='\u067E\u0648\u0634\u0647\u200C\u0647\u0627\u06CC \u0639\u06A9\u0633 ('+order.length+')';"
+L"t1.style.fontWeight='800';t1.style.fontSize='15px';"
+L"t1.style.color='#e7ebf3';"
+L"var t2=mk('div');"
+L"t2.textContent='\u0628\u0627 \u00AB\u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634\u00BB \u0639\u06A9\u0633\u200C\u0647\u0627 \u0631\u0627 \u062A\u06A9\u200C\u062A\u06A9 \u0628\u0628\u06CC\u0646 \u0648 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646';"
+L"t2.style.fontSize='11.5px';t2.style.color='#8a93a8';"
+L"t2.style.marginTop='2px';"
+L"tt.appendChild(t1);tt.appendChild(t2);h.appendChild(tt);"
+L"function mkBtn(txt){var b=mk('button');b.type='button';"
+L"b.textContent=txt;b.style.border='0';b.style.background='#2d3649';"
+L"b.style.color='#c8ceda';b.style.fontFamily='inherit';"
+L"b.style.fontSize='11.5px';b.style.fontWeight='700';"
+L"b.style.borderRadius='10px';b.style.padding='5px 10px';"
+L"b.style.cursor='pointer';return b}"
+L"var allB=mkBtn('\u0647\u0645\u0647'),nonB=mkBtn('\u0647\u06CC\u0686');"
+L"allB.style.marginLeft='6px';"
+L"h.appendChild(allB);h.appendChild(nonB);"
+L"box.appendChild(h);"
+L"var listEl=mk('div');"
+L"listEl.style.overflow='auto';listEl.style.display='flex';"
+L"listEl.style.flexDirection='column';listEl.style.gap='8px';"
+L"listEl.style.paddingTop='10px';listEl.style.minWidth='0';"
+L"box.appendChild(listEl);"
+L"var rows=[];"
+L"for(var fi=0;fi<order.length;fi++){"
+L"(function(idx){"
+L"var fk=order[idx];var arr=folders[fk];"
+L"var row=mk('div');"
+L"row.style.background='#1a1f2b';row.style.border='2px solid #232b3b';"
+L"row.style.borderRadius='14px';row.style.padding='10px 12px';"
+L"row.style.display='flex';row.style.flexDirection='column';"
+L"row.style.gap='8px';row.style.cursor='pointer';"
+L"row.style.boxSizing='border-box';"
+L"var top=mk('div');"
+L"top.style.display='flex';top.style.alignItems='center';"
+L"top.style.gap='10px';"
+L"var cb=mk('input');cb.type='checkbox';"
+L"cb.style.width='17px';cb.style.height='17px';"
+L"cb.style.accentColor='#ff4a3d';cb.style.flex='none';"
+L"var name=mk('div');"
+L"name.textContent=String.fromCharCode(0x200E)+shortF(fk);"
+L"name.style.flex='1';name.style.minWidth='0';"
+L"name.style.direction='ltr';name.style.textAlign='left';"
+L"name.style.color='#e7ebf3';name.style.fontSize='12.5px';"
+L"name.style.wordBreak='break-all';name.style.lineHeight='1.6';"
+L"var cnt=mk('div');cnt.style.background='#2d3649';"
+L"cnt.style.borderRadius='10px';cnt.style.color='#fff';"
+L"cnt.style.fontSize='11.5px';cnt.style.fontWeight='700';"
+L"cnt.style.padding='3px 10px';cnt.style.flex='none';"
+L"var exp=mkBtn('\u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634');exp.style.flex='none';"
+L"top.appendChild(cb);top.appendChild(name);"
+L"top.appendChild(cnt);top.appendChild(exp);"
+L"row.appendChild(top);"
+L"var strip=mk('div');"
+L"strip.style.display='flex';strip.style.gap='6px';"
+L"strip.style.overflow='hidden';"
+L"for(var s=0;s<arr.length&&s<4;s++){"
+L"var d=mk('div');"
+L"d.style.width='58px';d.style.height='58px';d.style.flex='none';"
+L"d.style.borderRadius='10px';"
+L"d.style.background='#232b3b url('+imgSafe(arr[s])+') center/cover no-repeat';"
+L"d.style.border='1px solid #2a3242';"
+L"strip.appendChild(d)}"
+L"row.appendChild(strip);"
+L"var grid=mk('div');"
+L"grid.style.display='none';"
+L"grid.style.gridTemplateColumns='repeat(auto-fill,minmax(74px,1fr))';"
+L"grid.style.gap='6px';"
+L"var cells=[];"
+L"for(var g=0;g<arr.length;g++){"
+L"(function(gi){"
+L"var dd=mk('div');"
+L"dd.style.width='100%';dd.style.aspectRatio='2/3';"
+L"dd.style.borderRadius='10px';"
+L"dd.style.background='#232b3b url('+imgSafe(arr[gi])+') center/cover no-repeat';"
+L"dd.style.border='2px solid transparent';dd.style.opacity='0.35';"
+L"dd.style.cursor='pointer';dd.style.position='relative';"
+L"dd.style.boxSizing='border-box';"
+L"var no=mk('span');no.textContent=String(gi+1);"
+L"no.style.position='absolute';no.style.bottom='3px';"
+L"no.style.left='3px';no.style.background='rgba(0,0,0,.65)';"
+L"no.style.color='#fff';no.style.fontSize='10px';"
+L"no.style.borderRadius='6px';no.style.padding='1px 5px';"
+L"dd.appendChild(no);"
+L"dd.onclick=function(ev){ev.stopPropagation();"
+L"if(picks[fk][arr[gi]]){delete picks[fk][arr[gi]]}"
+L"else{picks[fk][arr[gi]]=1}"
+L"refreshAll()};"
+L"grid.appendChild(dd);cells.push(dd)}"
+L")(g)}"
+L"row.appendChild(grid);"
+L"exp.onclick=function(ev){ev.stopPropagation();"
+L"var open=grid.style.display==='none';"
+L"grid.style.display=open?'grid':'none';"
+L"strip.style.display=open?'none':'flex';"
+L"exp.textContent=open?'\u0628\u0633\u062A\u0646':'\u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634'};"
+L"cb.onclick=function(ev){ev.stopPropagation()};"
+L"cb.onchange=function(){picks[fk]={};"
+L"if(cb.checked)addAll(fk);refreshAll()};"
+L"row.onclick=function(){cb.checked=!cb.checked;"
+L"if(cb.onchange)cb.onchange()};"
+L"listEl.appendChild(row);"
+L"rows.push({fk:fk,cb:cb,cnt:cnt,row:row,cells:cells,arr:arr})"
+L"})(fi)}"
+L"function refreshAll(){"
+L"for(var r=0;r<rows.length;r++){"
+L"var rw=rows[r];var n=0;var a=rw.arr;"
+L"for(var z=0;z<a.length;z++)if(picks[rw.fk][a[z]])n++;"
+L"rw.cb.checked=n>0;"
+L"rw.row.style.borderColor=(n>0)?'#ff4a3d':'#232b3b';"
+L"rw.cnt.textContent=(n===a.length)?(a.length+' \u0639\u06A9\u0633'):(n+'/'+a.length);"
+L"for(var z2=0;z2<a.length&&z2<rw.cells.length;z2++){"
+L"var on=!!picks[rw.fk][a[z2]];"
+L"rw.cells[z2].style.opacity=on?'1':'0.35';"
+L"rw.cells[z2].style.borderColor=on?'#ff4a3d':'transparent'}}}"
+L"refreshAll();"
+L"var btns=mk('div');"
+L"btns.style.display='flex';btns.style.gap='8px';"
+L"var okB=mk('button');okB.type='button';okB.textContent='\u0627\u062F\u0627\u0645\u0647';"
+L"okB.style.border='0';okB.style.cursor='pointer';"
+L"okB.style.fontWeight='700';okB.style.fontSize='13px';"
+L"okB.style.color='#fff';okB.style.borderRadius='10px';"
+L"okB.style.padding='10px 18px';okB.style.fontFamily='inherit';"
+L"okB.style.background='linear-gradient(135deg,#ff4a3d,#c9271c)';"
+L"okB.style.flex='1';"
+L"var noB=mk('button');noB.type='button';noB.textContent='\u0627\u0646\u0635\u0631\u0627\u0641';"
+L"noB.style.border='0';noB.style.cursor='pointer';"
+L"noB.style.fontWeight='700';noB.style.fontSize='13px';"
+L"noB.style.color='#c8ceda';noB.style.borderRadius='10px';"
+L"noB.style.padding='10px 18px';noB.style.fontFamily='inherit';"
+L"noB.style.background='#2d3649';"
+L"btns.appendChild(noB);btns.appendChild(okB);"
+L"box.appendChild(btns);"
+L"ov.appendChild(box);"
+L"(document.body||document.documentElement).appendChild(ov);"
+L"function closeOv(){try{if(ov.parentNode)"
+L"ov.parentNode.removeChild(ov)}catch(e){}}"
+L"allB.onclick=function(ev){ev.stopPropagation();"
+L"for(var q=0;q<order.length;q++){picks[order[q]]={};"
+L"addAll(order[q])}"
+L"refreshAll()};"
+L"nonB.onclick=function(ev){ev.stopPropagation();"
+L"for(var q2=0;q2<order.length;q2++)picks[order[q2]]={};"
+L"refreshAll()};"
+L"okB.onclick=function(){"
+L"var sel=[];"
+L"for(var q3=0;q3<order.length;q3++){"
+L"var a2=folders[order[q3]];"
+L"for(var z3=0;z3<a2.length;z3++)"
+L"if(picks[order[q3]][a2[z3]])sel.push(a2[z3])}"
+L"if(!sel.length){try{alert('\u0647\u06CC\u0686 \u0639\u06A9\u0633\u06CC \u0627\u0646\u062A\u062E\u0627\u0628 \u0646\u0634\u062F')}catch(e){}return}"
+L"var sent=false;"
+L"try{if(window.__mtWv2&&window.__mtWv2.postMessage){"
+L"window.__mtWv2.postMessage(JSON.stringify(sel));sent=true}}catch(e2){}"
+L"if(!sent){try{alert('\u0627\u06CC\u0646 \u0635\u0641\u062D\u0647 \u0627\u062C\u0627\u0632\u0647\u0654 \u06AF\u0641\u062A\u06AF\u0648 \u0628\u0627 \u0627\u067E \u0631\u0627 \u0646\u0645\u06CC\u200C\u062F\u0647\u062F')}"
+L"catch(e3){}return}"
+L"closeOv()};"
+L"noB.onclick=closeOv;"
+L"ov.onclick=function(ev){if(ev.target===ov)closeOv()};"
+L"}catch(e){try{if(window.__mtWv2&&window.__mtWv2.postMessage)"
+L"window.__mtWv2.postMessage('[]')}catch(e2){}}"
+L"})()";
+
+static std::wstring MtFolderOverlayJs(
+        const std::vector<std::wstring> &urls) {
+    std::wstring arr = L"[";
+    for (size_t i = 0; i < urls.size(); i++) {
+        if (i)
+            arr += L",";
+        arr += MtJsQuote(urls[i]);
+    }
+    arr += L"]";
+    std::wstring js = MT_FOLDER_OVERLAY_JS;
+    const std::wstring ph = L"__MT_URLS__";
+    size_t p = js.find(ph);
+    if (p != std::wstring::npos)
+        js.replace(p, ph.size(), arr);
+    return js;
+}
+
+static void MtShowFolderOverlay(void) {
+    if (g_webBr == NULL)
+        return;
+    std::vector<std::wstring> all;
+    {
+        std::set<std::wstring> seen;
+        for (size_t i = 0; i < g_recNet.size(); i++)
+            if (seen.insert(g_recNet[i]).second)
+                all.push_back(g_recNet[i]);
+        for (size_t i = 0; i < g_foundStore.size(); i++)
+            if (seen.insert(g_foundStore[i]).second)
+                all.push_back(g_foundStore[i]);
+    }
+    if (all.empty()) {
+        MessageBoxW(g_hwnd,
+            L"\u0647\u06CC\u0686 \u0639\u06A9\u0633\u06CC \u0636\u0628\u0637 \u0646\u0634\u062F \u2014 \u0627\u0648\u0644 \u00AB\u0634\u0631\u0648\u0639 \u0636\u0628\u0637\u00BB \u0631\u0627 \u0628\u0632\u0646\u060C \u0635\u0641\u062D\u0647 \u0641\u0635\u0644 \u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646 \u0648 \u0648\u0631\u0642 \u0628\u0632\u0646",
+            L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+            MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+        if (g_lblStatus != NULL)
+            SetWindowTextW(g_lblStatus, L"\u2014");
+        return;
+    }
+    std::wstring js = MtFolderOverlayJs(all);
+    g_webBr->ExecuteScript(js.c_str(), &g_execNoop);
+    MtLog("folder overlay injected");
+}
+
+static void MtStartDownload(const std::vector<std::wstring> &urls) {
+    g_dlUrls = urls;
+    g_dlData.assign(urls.size(), L"");
+    g_dlNext = 0;
+    g_dlDone = 0;
+    g_dlOk = 0;
+    g_dlBad = 0;
+    g_dlSlotIdx[0] = -1;
+    g_dlSlotIdx[1] = -1;
+    g_dlSlotIdx[2] = -1;
+    if (g_lblStatus != NULL)
+        SetWindowTextW(g_lblStatus, L"\u2B07 0/\u2026");
+    for (int s = 0; s < 3 && g_webBr != NULL; s++) {
+        if (g_dlNext >= g_dlUrls.size())
+            break;
+        g_dlSlotIdx[s] = (int)g_dlNext;
+        g_webBr->ExecuteScript(
+            MtDlOneJs(MtJsQuote(g_dlUrls[g_dlNext])).c_str(),
+            s == 0 ? &g_execDlStep
+            : (s == 1 ? &g_execDlStepB : &g_execDlStepC));
+        g_dlNext++;
+    }
 }
 
 HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
@@ -2259,7 +2955,18 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
     if (mode == 2) {
         std::vector<std::wstring> links;
         MtParseMaybeWrapped(resultObjectAsJson, links);
-        MtSetStatusCount((int)links.size());
+        if (g_recording) {
+            for (size_t i = 0; i < links.size(); i++)
+                MtFoundAdd(links[i]);
+            int n = MtRecCount();
+            if (g_lblStatus != NULL)
+                SetWindowTextW(g_lblStatus,
+                    (L"\u25CF " + std::to_wstring(n)
+                     + L" \u0639\u06A9\u0633 \u0636\u0628\u0637"
+                       L" \u0634\u062F").c_str());
+        } else {
+            MtSetStatusCount((int)links.size());
+        }
         return S_OK;
     }
     if (mode == 3) {
@@ -2322,27 +3029,15 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
             MtFillFieldAndClose(links);
             return S_OK;
         }
-        g_dlUrls = links;
-        g_dlData.assign(links.size(), L"");
-        g_dlNext = 0;
-        g_dlDone = 0;
-        g_dlOk = 0;
-        g_dlBad = 0;
-        g_dlSlotIdx[0] = -1;
-        g_dlSlotIdx[1] = -1;
-        g_dlSlotIdx[2] = -1;
-        if (g_lblStatus != NULL)
-            SetWindowTextW(g_lblStatus, L"\u2B07 0/\u2026");
-        for (int s = 0; s < 3 && g_webBr != NULL; s++) {
-            if (g_dlNext >= g_dlUrls.size())
-                break;
-            g_dlSlotIdx[s] = (int)g_dlNext;
-            g_webBr->ExecuteScript(
-                MtDlOneJs(MtJsQuote(g_dlUrls[g_dlNext])).c_str(),
-                s == 0 ? &g_execDlStep
-                : (s == 1 ? &g_execDlStepB : &g_execDlStepC));
-            g_dlNext++;
-        }
+        MtStartDownload(links);
+        return S_OK;
+    }
+    if (mode == 15) {
+        std::vector<std::wstring> links;
+        MtParseMaybeWrapped(resultObjectAsJson, links);
+        for (size_t i = 0; i < links.size(); i++)
+            MtFoundAdd(links[i]);
+        MtShowFolderOverlay();
         return S_OK;
     }
     if (mode == 10 || mode == 13 || mode == 14) {
@@ -2397,6 +3092,7 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
                 L"\u0646\u0644\u0648\u062F \u0646\u0634\u062F",
                 L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
                 MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+            MtResetRecordUi();
             MtHideBrowser();
         }
         return S_OK;
@@ -2418,6 +3114,7 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         if (ok >= g_dlOk || g_upPolls >= 1500) {
             if (g_webApp != NULL)
                 g_webApp->ExecuteScript(MT_UP_FILL_JS, &g_execNoop);
+            MtResetRecordUi();
             MtHideBrowser();
         } else {
             if (ok >= g_upFired)
@@ -2454,7 +3151,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.345 (flat toolbar, dark button corners via WM_CTLCOLORBTN, single extract button with choice menu)");
+    MtLog("WinMain — MangaCloud v1.14.385 (record flow: net capture + folder overlay with previews + link/dl choice)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
