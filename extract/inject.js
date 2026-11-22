@@ -1,13 +1,5 @@
 (function () {
   'use strict'
-  function injectTag() {
-    try {
-      const s = document.createElement('script')
-      s.src = chrome.runtime.getURL('page-hook.js')
-      s.async = false
-      ;(document.head || document.documentElement).appendChild(s)
-    } catch (err) {}
-  }
   function ping() {
     let ok = false
     const onMsg = function (ev) {
@@ -24,7 +16,6 @@
       }
     }, 700)
   }
-  injectTag()
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () { ping() }, { once: true })
   } else {

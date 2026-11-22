@@ -140,9 +140,31 @@ jobs:
             dist/MangaTranslator-arm64.apk
             dist/MangaTranslator-armv7a.apk
             dist/MangaTranslator-universal.apk
-            dist/manga-autoextract.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Remove extension ZIP from release `apk`
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          aid=$(gh api "repos/amirwolf512k/Manga-AutoTranslate/releases/tags/apk" \
+            --jq ".assets[] | select(.name == \"manga-autoextract.zip\") | .id" || true)
+          if [ -n "$aid" ]; then
+            gh api -X DELETE "repos/amirwolf512k/Manga-AutoTranslate/releases/assets/$aid" || true
+          fi
+
+      - name: Attach extension ZIP to release `models`
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          aid=$(gh api "repos/amirwolf512k/Manga-AutoTranslate/releases/tags/models" \
+            --jq ".assets[] | select(.name == \"manga-autoextract.zip\") | .id" || true)
+          if [ -n "$aid" ]; then
+            gh api -X DELETE "repos/amirwolf512k/Manga-AutoTranslate/releases/assets/$aid" || true
+          fi
+          gh release upload models dist/manga-autoextract.zip \
+            --repo amirwolf512k/Manga-AutoTranslate --clobber
 
       - name: Attach to amirwolf5122 release `apks`
         env:

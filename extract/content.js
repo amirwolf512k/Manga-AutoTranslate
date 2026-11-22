@@ -676,13 +676,20 @@
         ev.stopPropagation()
         const sel = []
         for (let r = 0; r < entries.length; r++) {
-          if (picked.has(entries[r].idx)) sel.push(entries[r].it.show)
+          if (picked.has(entries[r].idx)) sel.push(entries[r].it)
         }
         if (!sel.length) {
           toast('هیچ عکسی در این پوشه انتخاب نشده')
           return
         }
-        copyText(sel.join('\n')).then(function (ok) {
+        const nb = sel.filter(function (it) { return it.kind === 'blob' }).length
+        if (nb > 0) {
+          toast('این عکس‌ها داخل مرورگر رمزگشایی شده‌اند (' + nb + ' عکس) — به‌جای لینک، خودکار دانلود می‌کنم')
+          closePanel()
+          startDownload(sel)
+          return
+        }
+        copyText(sel.map(function (it) { return it.show }).join('\n')).then(function (ok) {
           toast(ok ? sel.length + ' لینک کپی شد' : 'کپی نشد — از حالت متنی کپی کن')
         })
       })
@@ -771,6 +778,13 @@
       const sel = getSel()
       if (!sel.length) {
         toast('هیچ عکسی انتخاب نشد')
+        return
+      }
+      const nb = sel.filter(function (it) { return it.kind === 'blob' }).length
+      if (nb > 0) {
+        toast('این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند (' + nb + ' عکس) — به‌جای لینک، خودکار دانلود می‌کنم')
+        closePanel()
+        startDownload(sel)
         return
       }
       copyText(sel.map(function (it) { return it.show }).join('\n')).then(function (ok) {
@@ -888,6 +902,17 @@
     return null
   }
 
+  async function csFetch(url) {
+    try {
+      const r = await fetch(url, { credentials: 'include' })
+      if (!r || !r.ok) return null
+      const ct = r.headers.get('content-type') || ''
+      const buf = await r.arrayBuffer()
+      if (!buf || !buf.byteLength) return null
+      return { u8: new Uint8Array(buf), ct: ct }
+    } catch (err) { return null }
+  }
+
   async function itemBytes(item) {
     if (item.kind === 'blob') {
       const p = waitPage('blobData', function (d) { return d.url === item.show }, 25000)
@@ -895,13 +920,16 @@
       const d = await p
       if (d && d.buf) return { u8: new Uint8Array(d.buf), ct: d.type || '' }
       const pf = await pageFetch(item.show)
-      return pf
+      if (pf) return pf
+      return csFetch(item.show)
     }
     try {
       const r = await bg({ type: 'MT_FETCH', url: item.fetch }, 90000)
       if (r && r.b64) return { u8: b64ToU8(r.b64), ct: r.ct || '' }
     } catch (err) {}
-    return pageFetch(item.fetch)
+    const pf = await pageFetch(item.fetch)
+    if (pf) return pf
+    return csFetch(item.fetch)
   }
 
   function zipName(count) {

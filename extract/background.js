@@ -5,6 +5,26 @@ let flushTimer = null
 const pendingNet = []
 const selfFetch = new Set()
 
+async function ensurePageHook() {
+  try {
+    await chrome.scripting.unregisterContentScripts({ ids: ['mt-page-hook'] })
+  } catch (err) {}
+  try {
+    await chrome.scripting.registerContentScripts([{
+      id: 'mt-page-hook',
+      js: ['page-hook.js'],
+      matches: ['http://*/*', 'https://*/*'],
+      runAt: 'document_start',
+      world: 'MAIN',
+      allFrames: false
+    }])
+  } catch (err) {}
+}
+ensurePageHook()
+try {
+  chrome.runtime.onInstalled.addListener(function () { ensurePageHook() })
+} catch (err) {}
+
 function ensureRestore() {
   if (!restorePromise) {
     restorePromise = (async function () {
