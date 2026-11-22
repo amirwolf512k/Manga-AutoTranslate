@@ -7,9 +7,19 @@
 <style>
 *{box-sizing:border-box;font-family:Tahoma,"Segoe UI",system-ui,sans-serif}
 body{width:340px;margin:0;background:#0f0f15;color:#e8e8ec;padding:16px}
-h1{font-size:16px;color:#fff;margin:0 0 4px}
-p{font-size:12px;color:#9a9aa5;margin:0 0 14px}
-ol{margin:0;padding-right:18px;font-size:13px;line-height:2;color:#d4d4dc}
+.hdr{display:flex;align-items:center;justify-content:space-between;gap:10px;padding-bottom:12px;border-bottom:1px solid #23232e}
+.hdr h1{font-size:16px;color:#fff;margin:0 0 3px}
+.hdr p{font-size:11.5px;color:#9a9aa5;margin:0}
+.sw{position:relative;display:flex;align-items:center;gap:7px;cursor:pointer;flex:0 0 auto;user-select:none;-webkit-user-select:none}
+.sw input{position:absolute;opacity:0;width:0;height:0}
+.sw .track{width:46px;height:26px;border-radius:13px;background:#2a2a35;border:1px solid #3a3a48;transition:background .18s,border-color .18s;position:relative;flex:0 0 auto}
+.sw .track::after{content:"";position:absolute;top:2px;right:2px;width:20px;height:20px;border-radius:50%;background:#8a8a93;transition:transform .18s,background .18s}
+.sw input:checked + .track{background:#dc2626;border-color:#ef4444}
+.sw input:checked + .track::after{transform:translateX(-20px);background:#fff}
+.sw .txt{font-size:13px;font-weight:bold;color:#9a9aa5;min-width:34px;text-align:center}
+.sw input:checked ~ .txt{color:#f87171}
+.status{margin-top:10px;font-size:12.5px;color:#fbbf24;min-height:18px;font-weight:bold}
+ol{margin:12px 0 0;padding-right:18px;font-size:13px;line-height:2;color:#d4d4dc}
 .sec{margin-top:14px;border-top:1px solid #23232e;padding-top:12px}
 .sec h2{font-size:13px;color:#fbbf24;margin:0 0 6px}
 .sec p{margin:0;font-size:12px;line-height:1.8}
@@ -18,10 +28,20 @@ code{font-family:Consolas,monospace;direction:ltr;display:inline-block;backgroun
 </style>
 </head>
 <body>
+<div class="hdr">
+<div>
 <h1>Manga AutoExtract</h1>
 <p>استخراج عکس مانگا و مانها از هر سایت</p>
+</div>
+<label class="sw" aria-label="کلید ضبط">
+<input type="checkbox" id="tog" aria-label="ضبط روشن یا خاموش">
+<span class="track"></span>
+<span class="txt" id="togtxt">خاموش</span>
+</label>
+</div>
+<div class="status" id="status"></div>
 <ol>
-<li>دکمهٔ شروع ضبط را بزن — صفحه بازخوانی می‌شود</li>
+<li>کلید روشن/خاموش بالا یا دکمهٔ شروع ضبط پایین صفحه را بزن — صفحه بازخوانی می‌شود</li>
 <li>فصل را تا آخر اسکرول کن تا همهٔ عکس‌ها لود شوند</li>
 <li>می‌توانی فصل یا سایت دیگری را باز کنی — ضبط ادامه می‌یابد</li>
 <li>استخراج را بزن، عکس‌های دلخواه را تیک بزن و لینک یا دانلود ZIP را انتخاب کن</li>

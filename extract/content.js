@@ -429,10 +429,9 @@
     '</style>' +
     '<div class="mtfab"><span class="mtdot"></span><span class="mtlabel">شروع ضبط</span><span class="mtbadge">0</span></div>' +
     '<div class="mtmenu">' +
-    '<button data-mt="link">استخراج با لینک</button>' +
-    '<button data-mt="dl">استخراج با دانلود (ZIP)</button>' +
+    '<button data-mt="ext">استخراج</button>' +
     '<div class="mtsep"></div>' +
-    '<button data-mt="stop" class="mtdanger">توقف ضبط</button>' +
+    '<button data-mt="stop" class="mtdanger">متوقف ضبط</button>' +
     '</div>' +
     '<div class="mtpanel">' +
     '<div class="mtphead">' +
@@ -596,8 +595,7 @@
     const t = e.target && e.target.getAttribute && e.target.getAttribute('data-mt')
     if (!t) return
     closeMenu()
-    if (t === 'link' && gathered) showLinks(gathered)
-    if (t === 'dl' && gathered) showLinks(gathered)
+    if (t === 'ext' && gathered) showLinks(gathered)
     if (t === 'stop') stopRecording()
   })
 
@@ -632,11 +630,15 @@
         const gr = groupRows[g]
         let n = 0
         for (let r = 0; r < gr.entries.length; r++) {
-          if (picked.has(gr.entries[r].idx)) n++
+          const ent = gr.entries[r]
+          const on = picked.has(ent.idx)
+          if (ent.cb) ent.cb.checked = on
+          if (on) n++
         }
         total += n
         gr.cnt.textContent = (n === gr.entries.length) ? (gr.entries.length + ' عکس') : (n + '/' + gr.entries.length)
-        gr.cb.checked = n > 0
+        gr.cb.checked = n > 0 && n === gr.entries.length
+        try { gr.cb.indeterminate = n > 0 && n < gr.entries.length } catch (err) {}
       }
       panelSelCnt.textContent = total + ' انتخاب‌شده'
       panelText.value = getSel().map(function (it) { return it.show }).join('\n')
@@ -689,7 +691,6 @@
       gh.appendChild(cnt)
       gh.appendChild(cp)
       grp.appendChild(gh)
-      const rowCbs = []
       for (let r = 0; r < entries.length; r++) {
         const ent = entries[r]
         const it = ent.it
@@ -738,7 +739,7 @@
         }
         row.addEventListener('click', function () { fullView(it) })
         grp.appendChild(row)
-        rowCbs.push(cb)
+        ent.cb = cb
       }
       panelBody.appendChild(grp)
       groupRows.push({ cb: gcb, cnt: cnt, entries: entries })
@@ -1046,6 +1047,21 @@
       })
     } catch (err) {}
   }
+
+  try {
+    chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
+      if (!msg || !msg.type) return
+      if (msg.type === 'MT_POPUP_START') {
+        startRecording()
+        sendResponse({ ok: true })
+        return
+      }
+      if (msg.type === 'MT_POPUP_STOP') {
+        stopRecording()
+        sendResponse({ ok: true })
+      }
+    })
+  } catch (err) {}
 
   init()
 })()

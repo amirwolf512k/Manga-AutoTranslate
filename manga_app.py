@@ -8818,7 +8818,7 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                     'flex-wrap:wrap;align-items:center">'
                     '<a id="mt_ext_dl" '
                     'href="https://github.com/amirwolf5122/Manga-AutoTranslate/'
-                    'releases/download/apks/manga-autoextract.zip" '
+                    'releases/download/models/manga-autoextract.zip" '
                     'rel="noopener" target="_blank" '
                     'style="display:inline-block;background:linear-gradient('
                     '135deg,#f59e0b,#ea580c);color:#fff;font-weight:800;'
