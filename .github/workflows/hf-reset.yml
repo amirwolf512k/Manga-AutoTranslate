@@ -18,13 +18,29 @@ jobs:
           set -e
           git config --global user.name "amirwolf512"
           git config --global user.email "amirwolf512@users.noreply.github.com"
+          VER=$(sed -n 's/^versionName=//p' VERSION | tr -d '[:space:]')
           rm -rf hf && mkdir hf && cd hf
           git clone "https://amirwolf512:${HF_TOKEN}@huggingface.co/spaces/amirwolf512/manga-autotranslate" .
           DEFBR=$(git symbolic-ref --short HEAD)
           echo "default branch: $DEFBR"
           echo "=== BEFORE ==="
           ls -la
-          cp "$GITHUB_WORKSPACE/manga_app.py" app.py
+          cp "$GITHUB_WORKSPACE/hf_stub.py" app.py
+          cat > README.md <<EOF
+          ---
+          title: Manga AutoTranslate
+          emoji: 📖
+          colorFrom: red
+          colorTo: gray
+          sdk: gradio
+          sdk_version: 6.32.0
+          python_version: '3.12'
+          app_file: app.py
+          pinned: false
+          ---
+
+          نسخه: v${VER} (کد از مخزن 5122 در زمان اجرا گرفته می‌شود)
+          EOF
           find . -mindepth 1 -maxdepth 1 \
             ! -name '.git' ! -name 'app.py' ! -name 'README.md' \
             ! -name '.gitattributes' -exec rm -rf {} +
