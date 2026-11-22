@@ -326,7 +326,7 @@ tick()
                     return try { v.byteCount } catch (_: Exception) { 1 }
                 }
             }
-        private val THUMB_FAILED: java.util.Set<String> =
+        private val THUMB_FAILED =
             java.util.Collections.synchronizedSet(HashSet<String>())
         private val THUMB_POOL: java.util.concurrent.ExecutorService =
             java.util.concurrent.Executors.newFixedThreadPool(3)
