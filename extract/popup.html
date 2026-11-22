@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manga AutoExtract</title>
+<style>
+*{box-sizing:border-box;font-family:Tahoma,"Segoe UI",system-ui,sans-serif}
+body{width:340px;margin:0;background:#0f0f15;color:#e8e8ec;padding:16px}
+h1{font-size:16px;color:#fff;margin:0 0 4px}
+p{font-size:12px;color:#9a9aa5;margin:0 0 14px}
+ol{margin:0;padding-right:18px;font-size:13px;line-height:2;color:#d4d4dc}
+.sec{margin-top:14px;border-top:1px solid #23232e;padding-top:12px}
+.sec h2{font-size:13px;color:#fbbf24;margin:0 0 6px}
+.sec p{margin:0;font-size:12px;line-height:1.8}
+code{font-family:Consolas,monospace;direction:ltr;display:inline-block;background:#0a0a0f;border:1px solid #23232e;border-radius:4px;padding:1px 6px;font-size:11px;color:#fbbf24}
+.ver{margin-top:14px;text-align:center;font-size:11px;color:#6a6a75}
+</style>
+</head>
+<body>
+<h1>Manga AutoExtract</h1>
+<p>استخراج عکس مانگا و مانها از هر سایت</p>
+<ol>
+<li>دکمهٔ شروع ضبط را بزن — صفحه بازخوانی می‌شود</li>
+<li>فصل را تا آخر اسکرول کن تا همهٔ عکس‌ها لود شوند</li>
+<li>می‌توانی فصل یا سایت دیگری را باز کنی — ضبط ادامه می‌یابد</li>
+<li>استخراج را بزن، عکس‌های دلخواه را تیک بزن و لینک یا دانلود ZIP را انتخاب کن</li>
+</ol>
+<div class="sec">
+<h2>محل ذخیره</h2>
+<p>ویندوز و لینوکس: <code>Download/MangaAuto</code> داخل پوشهٔ دانلود مرورگر</p>
+<p>اندروید: <code>/storage/emulated/0/Download/</code></p>
+</div>
+<div class="sec">
+<h2>نکته</h2>
+<p>عکس‌ها به ترتیب نمایش در HTML شماره می‌خورند: 1.jpg، 2.jpg و...</p>
+<p>فایل‌ها داخل یک فایل ZIP جمع می‌شوند و مسیرش نمایش داده می‌شود.</p>
+</div>
+<div class="ver" id="ver"></div>
+<script src="popup.js"></script>
+</body>
+</html>
