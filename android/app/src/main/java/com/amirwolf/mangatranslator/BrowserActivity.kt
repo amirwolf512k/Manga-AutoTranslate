@@ -76,7 +76,6 @@ return 0}
 function keyOf(u){
 var s=String(u);
 var b=s.split(/[?#]/)[0];
-/* پروکسی‌ها (…/img-proxy?url=…2.webp): پسوند در مسیر نیست — کلِ URL کلید است */
 if(!/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))return s.split('#')[0];
 return b.replace(/[-_]\d{2,4}x\d{2,4}\./i,'.')}
 function bkey(u){return String(u).split('#')[0]}
@@ -182,8 +181,6 @@ for(var j2=0;j2<ns.length;j2++)grabTree(ns[j2])
 });
 obs.observe(document.documentElement||document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['src','srcset']})
 }catch(e){}
-/* مشاهده‌گرِ عملکرد: عکس‌های پروکسی‌شده (Service Worker / canvas / shadow DOM)
-   مثلِ cdn.mangareader.pro/img-proxy?url=…%2F2.webp */
 try{
 if(!W.__mtPO){W.__mtPO=1;
 var po=new PerformanceObserver(function(list){
@@ -200,7 +197,6 @@ if(/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)||t==='img'||
 }catch(e){}});
 po.observe({entryTypes:['resource'],buffered:true})
 }}catch(e){}
-/* قلابِ شبکه: عکس‌هایی که با fetch/XHR می‌آیند (حتی بدون پسوند) */
 try{
 var _f=W.fetch;
 if(typeof _f==='function'&&!W.__mtFH){W.__mtFH=1;
@@ -398,7 +394,6 @@ tick()
 
     private val reImgExt = Regex(
         "\\.(jpe?g|png|webp|avif|bmp|tiff?)$", RegexOption.IGNORE_CASE)
-    /* پروکسی‌های عکس: …/img-proxy?url=…%2F115%2F2.webp — پسوند در آخرِ کلِ URL */
     private val reImgExtFull = Regex(
         "\\.(jpe?g|png|webp|avif|bmp|tiff?)([&#]|$)", RegexOption.IGNORE_CASE)
     private val reBadExt = Regex(
@@ -899,7 +894,6 @@ tick()
     private fun showExtractChoice() {
         val cur = try { web.url ?: "" } catch (_: Exception) { "" }
         if (cur.isNotEmpty() && isMangaPlusViewerUrl(cur)) {
-            /* مانگاپلاس: اول منوی «لینک/دانلود» نشان بده — بعد به صفحهٔ اصلی برگرد */
             showLinkDownloadChoice(listOf(cur), mpMode = true)
             return
         }
@@ -1450,7 +1444,6 @@ tick()
             refresh()
         }
         okBtn.setOnClickListener {
-            /* انتخاب به ترتیبِ سند — عکس ۱، ۲، … */
             val sel = ArrayList<String>()
             for (u in all) {
                 val fk = folderOf(u)
@@ -1641,7 +1634,6 @@ tick()
         } catch (_: Exception) {}
     }
 
-    /* بارگذاریِ پيش‌نمايش از داخلِ خودِ صفحه (کوکی و رفرِ سایت + پشتيبانی blob) */
     private fun loadPreviewViaJs(u: String) {
         try {
             val q = JSONObject.quote(u)
@@ -1796,7 +1788,6 @@ tick()
                             if (previewIv === iv) previewLd?.visibility = View.GONE
                             iv.setImageBitmap(b)
                         } else {
-                            /* شبکه رد شد — از داخلِ خودِ صفحه امتحان کن */
                             if (previewIv === iv) loadPreviewViaJs(u)
                         }
                     } catch (_: Exception) {}
@@ -1900,7 +1891,6 @@ tick()
         return false
     }
 
-    /* مرتب‌سازی به ترتیبِ سندِ HTML — عکسی که بالاتر در صفحه است اول می‌آید */
     private fun rankByDom(urls: List<String>, then: (List<String>) -> Unit) {
         if (urls.isEmpty()) { then(urls); return }
         try {

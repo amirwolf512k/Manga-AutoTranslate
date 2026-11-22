@@ -1521,8 +1521,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
   function keyOf(u){
     var s = String(u);
     var b = s.split(/[?#]/)[0];
-    /* پروکسی‌ها (…/img-proxy?url=…2.webp): پسوند در مسیر نیست — کلِ URL (بدون فرگمنت) کلید است
-       وگرنه همهٔ صفحات یک کلید می‌شدند و فقط عکسِ اول می‌ماند! */
     if(!/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))
       return s.split('#')[0];
     return b.replace(/[-_]\d{2,4}x\d{2,4}\./i, '.');
@@ -1566,7 +1564,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       }catch(e){}
     }
     function domPass(){
-      /* يک گذرِ واحد به ترتيبِ سند — ترتيبِ عکس‌ها همان ترتيبِ HTML مي‌شود */
       try{
         var els = document.querySelectorAll('img,source,a[href],[style*="url("]');
         for(var i=0;i<els.length;i++){
@@ -1617,7 +1614,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
           if(/\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)){ add(n); continue; }
           if(t === 'img') add(n);
           else if(t === 'fetch' || t === 'xmlhttprequest' || t === 'other'){
-            /* عکس‌های پروکسی‌شده: …/img-proxy?url=…%2F115%2F2.webp */
             if(/\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)) add(n);
           }
         }
@@ -1667,7 +1663,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     try{ sessionStorage.removeItem(ACC_KEY); }catch(e){}
   }
 
-  /* ضبطِ شبکه‌ای: عکس‌هایی که با fetch/XHR از سرور می‌آیند (حتی بی‌پسوند) */
   function netRec(u){
     try{
       if(!rec) return;
@@ -1687,8 +1682,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
   }
   function netHook(){
     if (window.__mtNetHook) return; window.__mtNetHook = 1;
-    /* مشاهده‌گرِ عملکرد: هر درخواستِ عکس (حتی از Service Worker / canvas / shadow DOM)
-       در resource-timing دیده می‌شود — مثلِ img-proxy مانگاریدر */
     try{
       var _po = new PerformanceObserver(function(list){
         try{
@@ -1765,7 +1758,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     var acc = accLoad();
     var page = collectPage();
     var seen = {}, out = [], i, u, k;
-    /* اول ترتيبِ سندِ HTML (بالاي صفحه = عکس ۱، بعدی = ۲ و …)، بعدِ آنچه فقط در شبکه ضبط شده */
     for(i=0;i<page.length;i++){
       u = page[i]; k = (u.indexOf('blob:') === 0) ? u.split('#')[0] : keyOf(u);
       if(!seen[k]){ seen[k] = 1; out.push(u); }
@@ -1837,7 +1829,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       }
     }
   });
-  /* با کلیک روی نوار آدرس همه‌اش انتخاب می‌شود (مثل کروم) */
   url.addEventListener('focus', function(){
     try{ setTimeout(function(){ try{ url.select(); }catch(e){} }, 0); }catch(e){}
   });
@@ -1922,7 +1913,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     }
     if(!anyDefault && order.length) addAll(order[0]);
     function imgSafe(u){ return String(u).split("'").join('%27'); }
-    /* بندانگشتی با <img> — با خطا، یک‌بار بدونِ رفر دوباره تلاش می‌کند */
     function thImg(d, u){
       try{
         d.style.overflow = 'hidden';
@@ -1996,7 +1986,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
         ld.style.display = 'none'; errm.style.display = 'none';
         try{ im.style.display = ''; }catch(e){}
       };
-      /* اگر پلِ اپ در دسترس باشد، از خودِ اپ با رفرِ درست می‌گیریم */
       function hostFetch(){
         try{
           if(window.pywebview && window.pywebview.api &&
@@ -2015,14 +2004,12 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       }
       im.onerror = function(){
         stg++;
-        /* ۱) دوباره بدونِ رفر (بیشترِ سایت‌ها فقط رفر را چک می‌کنند) */
         if(stg === 1){
           ld.textContent = '… تلاش مجدد';
           try{ im.referrerPolicy = 'no-referrer'; }catch(e){}
           try{ im.src = String(u); }catch(e){ hostFetch(); }
           return;
         }
-        /* ۲) فچ از خودِ صفحه */
         if(stg === 2){
           ld.textContent = '… تلاش مجدد';
           try{
@@ -2091,7 +2078,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
                      'mouseup','mouseleave','touchend','touchcancel'];
         for(var k=0;k<kills.length;k++)
           el.addEventListener(kills[k], kill);
-        /* لمسِ طولانی (اندروید) یا کلیکِ راست = پيش‌نمايش */
         el.addEventListener('contextmenu', function(ev){
           try{ ev.preventDefault(); }catch(e){}
           try{ ev.stopPropagation(); }catch(e){}
@@ -2218,7 +2204,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     var ok = document.createElement('button');
     ok.type = 'button'; ok.className = 'mtok'; ok.textContent = 'ادامه';
     ok.onclick = function(){
-      /* انتخاب به ترتیبِ سند (عکس ۱، ۲، …) — نه به ترتیبِ پوشه */
       var sel = [];
       for(var q3=0;q3<flat.length;q3++){
         var u3 = flat[q3];
@@ -2293,7 +2278,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       clearRec();
       mainBtn.textContent = '▶ شروع ضبط';
     }catch(e){
-      /* پلِ اپ در دسترس نیست — لینک‌ها را کپی کن تا در فیلد ورودی بچسبانی */
       try{
         var txt = sel.join('\n');
         navigator.clipboard.writeText(txt).then(function(){
@@ -2516,7 +2500,6 @@ class _DesktopApi:
                 if u and str(u).lower().startswith(("http://", "https://")):
                     self._last_site = str(u)
                 if self._br_fresh:
-                    # بازشدنِ تازهٔ پنجرهٔ مرورگر = ریستِ دکمهٔ «شروع ضبط»
                     self._br_fresh = False
                     try:
                         self._br_win.evaluate_js(
@@ -2567,7 +2550,6 @@ class _DesktopApi:
             print(f"[!] استخراجِ مرورگرِ داخلی: خطا — {e}")
 
     def fetchImg(self, u, ref):
-        """پیش‌نمایش: اگر سایت اجازهٔ نمایش مستقیم نداد، خودِ اپ می‌گیرد."""
         try:
             import base64 as _b64
             import requests as _rq
@@ -3644,10 +3626,6 @@ def _browser_extract_js() -> str:
       const installWebBrowser = () => {
         try {
           if (window.__mtWebFabInst) return;
-          // وبِ میزبانی‌شده (هاست/HF): مرورگرِ داخلی فقط در اپِ کلود و
-          // اپِ واقعی است — در مرورگرِ کاربر گزینه‌ای نمایش داده نمیشود؛
-          // راهِ استخراجِ وب، بلوکِ نشانک (سایت‌های کپچادار) است.
-          // استثنا: پوستهٔ Neutralino (کلودِ لینوکس) — همان مرورگرِ داخلیِ وب.
           const neutr = !!(window.neutralino);
           if (__WEB_HOST__ && !neutr) return;
           const pw = !!(window.pywebview && window.pywebview.api
@@ -5008,11 +4986,11 @@ html,body{background:#000;color:#e8e6e1;font-family:system-ui,-apple-system,sans
 .zbtn{background:#161619;color:#e8e6e1;border:1px solid #2a2a2e;border-radius:8px;padding:7px 11px;font-size:.85rem;cursor:pointer;font-family:inherit;flex:none;min-height:36px;min-width:36px}
 .zbtn:active{background:#2a2a30}
 .zv{color:#97948c;font-size:.78rem;min-width:42px;text-align:center;flex:none;font-variant-numeric:tabular-nums}
-#vport{width:100%;overflow-x:clip}/* سند هرگز افقی سرریز نمیکند؛ پنِ افقیِ زوم فقط با transform روی wrap — نوارِ بالایی (sticky) با چپ‌وراست‌کردن کنار نمی‌رود */
+#vport{width:100%;overflow-x:clip}
 #wrap{max-width:min(100%,900px);margin:0 auto;width:100%}
 .c{position:relative;width:100%}
 .c.hide{display:none}
-.c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none}/* content-visibility:auto حذف شد: تصویرِ دیده‌نشده با ارتفاعِ غلطِ ۱۲۰۰px چیده می‌شد و وقت ورود به دید می‌پرید — عاملِ «هی می‌پره میاد» و لگِ زوم */
+.c img{display:block;width:100%;height:auto;user-select:none;-webkit-user-drag:none;pointer-events:none}
 .slotw{width:100%}
 .slotw img{background:#0b0b0d}
 .dslot{position:relative;width:100%}
@@ -5522,10 +5500,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     });
   }
 
-  // نسبتِ واقعیِ صفحه از اولین تصویرِ لودشده یاد گرفته میشود و روی
-  // placeholderهای بعدی اعمال میشود — وگرنه placeholder با نسبتِ ثابتِ
-  // ۲:3 جایگزینِ تصویرِ واقعی می‌شد و محتوای زیرش با هر استخراج جابه‌جا
-  // می‌شد (همان «هی می‌پره»). صفحاتِ یک فصل معمولاً هم‌نسبت‌اند.
   var phAR = '';
   function phApply(d){
     if (phAR) { try { d.style.aspectRatio = phAR; } catch (e) {} }
@@ -6073,9 +6047,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       }
     };
     if (mode) {
-      // در حالتِ دیباگ، اول تصویرِ دیباگِ همان صفحه چک میشود —
-      // تا هم‌زمان با استخراج (قبل از پایانِ کل کار) دیده شود؛
-      // اگر نبود، تصویرِ نهایی (baked) به‌عنوان جایگزین.
       fetch(P + DBG + 'live_' + pad(a + 1) + '_base.jpg',
             { method: 'HEAD', cache: 'no-store' })
         .then(function(r){
@@ -6236,10 +6207,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
                   else { im.src = u; }
                 })
                 .catch(function(){});
-              // تعویضِ اتمیِ اورلی: قبلاً svgها بلافاصله حذف و ۴۵۰ms بعد
-              // دوباره ساخته می‌شدند — با هر استخراج، کادرهای دیباگ محو و
-              // برمی‌گشتند («می‌ره میاد»). حالا اورلیِ تازه وقتی می‌آید که
-              // json آماده است و در همان لحظه جایگزین می‌شود — بدون خلأ.
               var ojU = P + DBG + 'live_' + pad(slot) + '.json';
               ovlMem.delete(ojU);
               (function(el2, u2){
@@ -6324,11 +6291,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   var wrap = document.getElementById('wrap');
   var z = 1, panX = 0;
   var baseW = function(){ return Math.max(200, Math.min(900, window.innerWidth || 360)); };
-  // زومِ درست در صفحهٔ RTL: سند هیچ سرریزِ افقی ندارد (#vport با
-  // overflow-x:clip میبُرد) و جابه‌جاییِ افقیِ محتوای زوم‌شده فقط با
-  // transform روی wrap انجام میشود. لنگرِ زوم (نقطهٔ زیرِ انگشت) به‌صورتِ
-  // «کسری از عرضِ wrap» محاسبه میشود که جهت‌آزاد است — قبلاً فرمول
-  // مبتنی بر scrollX با فرضِ LTR بود و در RTL زوم می‌پرید پایین‌سمت‌راست.
   var applyZoom = function(nz, cx, cy){
     nz = Math.min(4, Math.max(0.5, +nz || 1));
     var vw = window.innerWidth || 360;
@@ -6372,12 +6334,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
     else if (e.key === '-' || e.key === '_') applyZoom(z * 0.87);
     else if (e.key === '0') applyZoom(1);
   });
-  // زومِ لمسی (اندروید/موبایل): دوانگشت = زوم، یک‌انگشت وقتی زوم
-  // است = جابه‌جایی، دوضربه = زومِ روشن/خاموش — با touch-action:pan-y
-  // روی body، مرورگر ژستِ pinch را به دستِ همین کد میسپارد.
-  // applyZoom در هر touchmove اجرا می‌شد (چندبار در هر فریم) و هر بار
-  // relayout کاملِ صفحه می‌داد — روی گوشی لگ می‌گرفت. حالا با rAF
-  // در هر فریم فقط یک‌بار (آخرین مقدار) اعمال می‌شود.
   var _zqArg = null, _zqRaf = 0;
   var applyZoomQ = function(nz, cx, cy){
     _zqArg = [nz, cx, cy];
@@ -7427,10 +7383,6 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
   let z = 1, panX = 0;
   const MIN = 0.5, MAX = 4;
   const baseWidth = () => Math.max(200, Math.min(900, window.innerWidth || 360));
-  // مانند ریدر زنده: سند هیچ سرریزِ افقی ندارد (.rdrS با overflow-x:
-  // clip میبُرد)؛ پنِ افقی با transform و لنگرِ زومِ جهت‌آزاد (کسری از
-  // عرض) — در RTL دیگر زوم نمیپرد و نوارِ بالایی با چپ‌وراست‌کردن
-  // خراب نمیشود.
   const applyZoom = (nz, cx, cy) => {
     nz = Math.min(MAX, Math.max(MIN, +nz || 1));
     const vw = window.innerWidth || 360;

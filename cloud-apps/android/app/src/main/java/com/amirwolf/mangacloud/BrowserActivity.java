@@ -77,7 +77,6 @@ public class BrowserActivity extends Activity {
             java.util.regex.Pattern.compile(
                     "\\.(jpe?g|png|webp|avif|bmp|tiff?)$",
                     java.util.regex.Pattern.CASE_INSENSITIVE);
-    /* پروکسی‌های عکس: …/img-proxy?url=…%2F115%2F2.webp — پسوند در آخرِ کلِ URL */
     private static final java.util.regex.Pattern RE_IMG_EXT_FULL =
             java.util.regex.Pattern.compile(
                     "\\.(jpe?g|png|webp|avif|bmp|tiff?)([&#]|$)",
@@ -703,7 +702,6 @@ public class BrowserActivity extends Activity {
         return false;
     }
 
-    /* مرتب‌سازی به ترتیبِ سندِ HTML — عکسی که بالاتر در صفحه است اول می‌آید */
     private void rankByDom(final java.util.List<String> urls,
                            final java.util.function.Consumer<java.util.List<String>> then) {
         if (urls.isEmpty()) { then.accept(urls); return; }
@@ -1113,7 +1111,6 @@ public class BrowserActivity extends Activity {
         try { cur = web.getUrl() != null ? web.getUrl() : ""; }
         catch (Exception e) { cur = ""; }
         if (!cur.isEmpty() && isMangaPlusViewer(cur)) {
-            /* مانگاپلاس: اول منوی «لینک/دانلود» نشان بده — بعد به صفحهٔ اصلی برگرد */
             showLinkDownloadChoice(java.util.Collections.singletonList(cur), true);
             return;
         }
@@ -1484,7 +1481,6 @@ public class BrowserActivity extends Activity {
         }
     }
 
-    /* بارگذاریِ پیش‌نمایش از داخلِ خودِ صفحه (کوکی و رفرِ سایت + پشتیبانی blob) */
     private void loadPreviewViaJs(final String u) {
         try {
             final String q = org.json.JSONObject.quote(u);
@@ -1650,7 +1646,6 @@ public class BrowserActivity extends Activity {
                                 previewLd.setVisibility(View.GONE);
                             iv.setImageBitmap(b);
                         } else {
-                            /* شبکه رد شد — از داخلِ خودِ صفحه امتحان کن */
                             if (previewIv == iv) loadPreviewViaJs(u);
                         }
                     } catch (Exception ignored) {
@@ -2101,7 +2096,6 @@ public class BrowserActivity extends Activity {
             refresh.run();
         });
         okBtn.setOnClickListener(v -> {
-            /* انتخاب به ترتیبِ سند — عکس ۱، ۲، … */
             java.util.ArrayList<String> sel = new java.util.ArrayList<>();
             for (String u : all) {
                 String fk = folderOf(u);
