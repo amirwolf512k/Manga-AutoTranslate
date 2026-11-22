@@ -919,7 +919,7 @@ public class BrowserActivity extends Activity {
     }
 
     private void showExtractChoice() {
-        final String cur;
+        String cur;
         try { cur = web.getUrl() != null ? web.getUrl() : ""; }
         catch (Exception e) { cur = ""; }
         if (!cur.isEmpty() && isMangaPlusViewer(cur)) {
