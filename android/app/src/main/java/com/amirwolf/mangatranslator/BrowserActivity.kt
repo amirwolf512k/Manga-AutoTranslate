@@ -179,6 +179,25 @@ for(var j2=0;j2<ns.length;j2++)grabTree(ns[j2])
 });
 obs.observe(document.documentElement||document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['src','srcset']})
 }catch(e){}
+/* قلابِ شبکه: عکس‌هایی که با fetch/XHR می‌آیند (حتی بدون پسوند) */
+try{
+var _f=W.fetch;
+if(typeof _f==='function'&&!W.__mtFH){W.__mtFH=1;
+W.fetch=function(){var p;try{p=_f.apply(this,arguments)}catch(e){throw e}
+try{var a0=arguments[0];var u0='';
+if(a0){if(typeof a0==='string')u0=a0;else if(a0.url)u0=String(a0.url)}
+p.then(function(r){try{var ct=(r.headers&&r.headers.get('content-type'))||'';
+if(/^image\//i.test(String(ct).trim()))cap(u0)}catch(e){}}).catch(function(){})
+}catch(e){}return p}}
+var _o=XMLHttpRequest.prototype.open,_s=XMLHttpRequest.prototype.send;
+XMLHttpRequest.prototype.open=function(m,u){try{this.__mtU=String(u||'')}catch(e){}return _o.apply(this,arguments)};
+XMLHttpRequest.prototype.send=function(){try{var x=this;
+x.addEventListener('loadend',function(){try{var ct='';
+try{ct=x.getResponseHeader('content-type')||''}catch(e){}
+var ru='';try{ru=x.responseURL||x.__mtU||''}catch(e){}
+if(/^image\//i.test(String(ct).trim()))cap(ru)}catch(e){}})}catch(e){}
+return _s.apply(this,arguments)}
+}catch(e){}
 }
 function scanDoc(doc){
 try{
@@ -834,14 +853,8 @@ tick()
     private fun showExtractChoice() {
         val cur = try { web.url ?: "" } catch (_: Exception) { "" }
         if (cur.isNotEmpty() && isMangaPlusViewerUrl(cur)) {
-            val out = Intent()
-            out.putExtra(EXTRA_LINKS, cur)
-            setResult(RESULT_OK, out)
-            Toast.makeText(this,
-                "لینک فصل مانگاپلاس گرفته شد — " +
-                "موتور خودش عکس‌ها را از API رسمی می‌گیرد",
-                Toast.LENGTH_LONG).show()
-            finish()
+            /* مانگاپلاس: اول منوی «لینک/دانلود» نشان بده — بعد به صفحهٔ اصلی برگرد */
+            showLinkDownloadChoice(listOf(cur), mpMode = true)
             return
         }
         extractBtn.text = "… در حال آماده‌سازی"
@@ -884,21 +897,22 @@ tick()
         return b
     }
 
-    private fun showLinkDownloadChoice(sel: List<String>) {
+    private fun showLinkDownloadChoice(sel: List<String>, mpMode: Boolean = false) {
         try {
-            showLinkDownloadChoiceImpl(sel)
+            showLinkDownloadChoiceImpl(sel, mpMode)
         } catch (e: Exception) {
             val b = android.app.AlertDialog.Builder(this)
-            b.setTitle("استخراج (${sel.size} عکس)")
+            b.setTitle(if (mpMode) "فصلِ مانگاپلاس"
+                       else "استخراج (${sel.size} عکس)")
             b.setItems(arrayOf("استخراج با لینک", "استخراج با دانلود")) { _, which ->
-                if (which == 0) finishWithLinks(sel) else downloadSelected(sel)
+                if (mpMode || which == 0) finishWithLinks(sel) else downloadSelected(sel)
             }
             b.setNegativeButton("انصراف", null)
             b.show()
         }
     }
 
-    private fun showLinkDownloadChoiceImpl(sel: List<String>) {
+    private fun showLinkDownloadChoiceImpl(sel: List<String>, mpMode: Boolean = false) {
         val dlg = android.app.Dialog(this)
         dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
         val root = LinearLayout(this)
@@ -912,14 +926,16 @@ tick()
         root.background = rootBg
 
         val title = TextView(this)
-        title.text = "استخراج (${sel.size} عکس)"
+        title.text = if (mpMode) "فصلِ مانگاپلاس" else "استخراج (${sel.size} عکس)"
         title.setTextColor(Color.parseColor("#e7ebf3"))
         title.textSize = 15f
         title.typeface = Typeface.DEFAULT_BOLD
         root.addView(title)
 
         val sub = TextView(this)
-        sub.text = "روشِ استخراج را انتخاب کن"
+        sub.text = if (mpMode)
+            "موتور خودش عکس‌ها را از API رسمی می‌گیرد و رمزگشایی می‌کند"
+        else "روشِ استخراج را انتخاب کن"
         sub.setTextColor(Color.parseColor("#8a93a8"))
         sub.textSize = 11.5f
         val subLp = LinearLayout.LayoutParams(
@@ -929,7 +945,10 @@ tick()
         subLp.bottomMargin = dp(10)
         root.addView(sub, subLp)
 
-        val items = arrayOf(
+        val items = if (mpMode) arrayOf(
+            Triple("🖼", "استخراج با لینک", "لینکِ فصل در فیلدِ ورودی می‌نشیند"),
+            Triple("⬇", "استخراج با دانلود", "همان لینک — موتور عکس‌ها را می‌گیرد"))
+        else arrayOf(
             Triple("🖼", "استخراج با لینک", "فقط لینک‌ها در فیلدِ ورودی می‌نشینند"),
             Triple("⬇", "استخراج با دانلود", "عکس‌ها همین‌جا دانلود و ذخیره می‌شوند"))
         items.forEachIndexed { idx, it ->
@@ -969,7 +988,8 @@ tick()
 
             card.setOnClickListener {
                 try { dlg.dismiss() } catch (_: Exception) {}
-                if (idx == 0) finishWithLinks(sel) else downloadSelected(sel)
+                if (mpMode || idx == 0) finishWithLinks(sel)
+                else downloadSelected(sel)
             }
             val cardLp = LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,

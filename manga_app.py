@@ -1658,6 +1658,77 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     try{ sessionStorage.removeItem(ACC_KEY); }catch(e){}
   }
 
+  /* ضبطِ شبکه‌ای: عکس‌هایی که با fetch/XHR از سرور می‌آیند (حتی بی‌پسوند) */
+  function netRec(u){
+    try{
+      if(!rec) return;
+      if(!u) return;
+      u = String(u).trim();
+      if(u.indexOf('data:') === 0) return;
+      if(!/^https?:/i.test(u)) return;
+      var au = abs(u);
+      if(!au) return;
+      if(junk(au)) return;
+      var a = accLoad();
+      var k = keyOf(au);
+      for(var i=0;i<a.length;i++){ if(keyOf(a[i]) === k) return; }
+      a.push(au);
+      accSave(a);
+    }catch(e){}
+  }
+  function netHook(){
+    if (window.__mtNetHook) return; window.__mtNetHook = 1;
+    try{
+      var _f = window.fetch;
+      if (typeof _f === 'function' && !window.__mtFH){
+        window.__mtFH = 1;
+        window.fetch = function(){
+          var p;
+          try{ p = _f.apply(this, arguments); }catch(e){ throw e; }
+          try{
+            var a0 = arguments[0];
+            var u0 = '';
+            if (a0){
+              if (typeof a0 === 'string') u0 = a0;
+              else if (a0.url) u0 = String(a0.url);
+            }
+            p.then(function(r){
+              try{
+                var ct = (r.headers && r.headers.get('content-type')) || '';
+                if (/^image\//i.test(String(ct).trim())) netRec(u0);
+              }catch(e){}
+            }).catch(function(){});
+          }catch(e){}
+          return p;
+        };
+      }
+    }catch(e){}
+    try{
+      var _o = XMLHttpRequest.prototype.open;
+      var _s = XMLHttpRequest.prototype.send;
+      XMLHttpRequest.prototype.open = function(m, u){
+        try{ this.__mtU = String(u || ''); }catch(e){}
+        return _o.apply(this, arguments);
+      };
+      XMLHttpRequest.prototype.send = function(){
+        try{
+          var x = this;
+          x.addEventListener('loadend', function(){
+            try{
+              var ct = '';
+              try{ ct = x.getResponseHeader('content-type') || ''; }catch(e){}
+              var ru = '';
+              try{ ru = x.responseURL || x.__mtU || ''; }catch(e){}
+              if (/^image\//i.test(String(ct).trim())) netRec(ru);
+            }catch(e){}
+          });
+        }catch(e){}
+        return _s.apply(this, arguments);
+      };
+    }catch(e){}
+  }
+  netHook();
+
   function collectAll(){
     var mp = mpViewer();
     if(mp){ accClear(); return [mp]; }
@@ -1728,8 +1799,33 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     }catch(e){}
   }
   url.addEventListener('keydown', function(ev){
-    if(ev.key === 'Enter' || ev.keyCode === 13){ ev.preventDefault(); go(); }
+    if(ev.key === 'Enter' || ev.keyCode === 13){ ev.preventDefault(); go(); return; }
+    if(ev.ctrlKey || ev.metaKey){
+      if(ev.key === 'a' || ev.key === 'A' || ev.keyCode === 65){
+        ev.preventDefault(); ev.stopPropagation();
+        try{ url.select(); }catch(e){}
+      }
+    }
   });
+  /* با کلیک روی نوار آدرس همه‌اش انتخاب می‌شود (مثل کروم) */
+  url.addEventListener('focus', function(){
+    try{ setTimeout(function(){ try{ url.select(); }catch(e){} }, 0); }catch(e){}
+  });
+  try{
+    window.addEventListener('keydown', function(ev){
+      try{
+        if(ev.target !== url) return;
+        if(ev.ctrlKey || ev.metaKey){
+          var kk = ev.key || '';
+          if(kk === 'a' || kk === 'A' || ev.keyCode === 65){
+            try{ ev.preventDefault(); }catch(e){}
+            try{ ev.stopPropagation(); }catch(e){}
+            try{ url.select(); }catch(e){}
+          }
+        }
+      }catch(e){}
+    }, true);
+  }catch(e){}
   var goBtn = document.createElement('button');
   goBtn.type = 'button'; goBtn.className = 'mtgo'; goBtn.textContent = 'برو';
   goBtn.onclick = go;
@@ -1759,7 +1855,9 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       return;
     }
     if(list.length === 1 && mpViewer()){
-      doLinks(list);
+      showModeMenu(list,
+        'فصلِ مانگاپلاس: موتور خودش عکس‌ها را از API رسمی می‌گیرد و رمزگشایی می‌کند',
+        true);
       return;
     }
     var rank = {};
@@ -1794,6 +1892,31 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     }
     if(!anyDefault && order.length) addAll(order[0]);
     function imgSafe(u){ return String(u).split("'").join('%27'); }
+    /* بندانگشتی با <img> — با خطا، یک‌بار بدونِ رفر دوباره تلاش می‌کند */
+    function thImg(d, u){
+      try{
+        d.style.overflow = 'hidden';
+        d.style.position = 'relative';
+        var im = document.createElement('img');
+        im.loading = 'lazy'; im.decoding = 'async';
+        im.alt = '';
+        im.style.cssText = 'position:absolute;top:0;left:0;width:100%;height:100%;'
+          + 'object-fit:cover;border-radius:10px;display:block;background:#232b3b;';
+        im.onerror = function(){
+          try{
+            if(!im.__r){
+              im.__r = 1;
+              im.referrerPolicy = 'no-referrer';
+              im.src = u;
+            }
+          }catch(e){}
+        };
+        im.src = u;
+        d.appendChild(im);
+      }catch(e){
+        try{ d.style.backgroundImage = "url('" + imgSafe(u) + "')"; }catch(e2){}
+      }
+    }
     function showFull(u){
       var old = document.getElementById('mtFullOv');
       try{ if(old && old.parentNode) old.parentNode.removeChild(old); }catch(e){}
@@ -1824,7 +1947,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       tip.style.cssText = 'position:fixed;bottom:12px;left:0;right:0;text-align:center;'
         + 'color:#8a93a8;font-size:11.5px;z-index:2147483647;';
       var bornAt = Date.now();
-      var retried = false;
+      var stg = 0;
       function closeFv(){ try{ if(fv.parentNode) fv.parentNode.removeChild(fv); }catch(e){} }
       function failMsg(){
         ld.style.display = 'none';
@@ -1832,28 +1955,67 @@ _MT_BROWSER_WIN_JS = r"""(function(){
         errm.textContent = 'تصویر بارگذاری نشد — سایت اجازه‌ی نمایش مستقیم نمی‌دهد';
         errm.style.display = '';
       }
+      function setSrc(s){
+        im.onload = function(){
+          ld.style.display = 'none'; errm.style.display = 'none';
+          try{ im.style.display = ''; }catch(e){}
+        };
+        im.src = s;
+      }
       im.onload = function(){
         ld.style.display = 'none'; errm.style.display = 'none';
         try{ im.style.display = ''; }catch(e){}
       };
-      im.onerror = function(){
-        if(retried){ failMsg(); return; }
-        retried = true;
-        ld.textContent = '… تلاش مجدد';
+      /* اگر پلِ اپ در دسترس باشد، از خودِ اپ با رفرِ درست می‌گیریم */
+      function hostFetch(){
         try{
-          fetch(String(u), { credentials: 'include' }).then(function(r){
-            return r.ok ? r.blob() : null;
-          }).then(function(b){
-            if(!b) throw 0;
-            var ur = URL.createObjectURL(b);
-            im.onload = function(){
-              ld.style.display = 'none';
-              try{ URL.revokeObjectURL(ur); }catch(e){}
-            };
-            im.onerror = failMsg;
-            im.src = ur;
-          }).catch(failMsg);
-        }catch(e){ failMsg(); }
+          if(window.pywebview && window.pywebview.api &&
+             window.pywebview.api.fetchImg){
+            ld.textContent = '… در حالِ دریافت از اپ';
+            var ref = '';
+            try{ ref = String(location.href || ''); }catch(e){}
+            window.pywebview.api.fetchImg(String(u), ref).then(function(d){
+              if(d && String(d).indexOf('data:image') === 0){ setSrc(String(d)); }
+              else failMsg();
+            }).catch(function(){ failMsg(); });
+            return;
+          }
+        }catch(e){}
+        failMsg();
+      }
+      im.onerror = function(){
+        stg++;
+        /* ۱) دوباره بدونِ رفر (بیشترِ سایت‌ها فقط رفر را چک می‌کنند) */
+        if(stg === 1){
+          ld.textContent = '… تلاش مجدد';
+          try{ im.referrerPolicy = 'no-referrer'; }catch(e){}
+          try{ im.src = String(u); }catch(e){ hostFetch(); }
+          return;
+        }
+        /* ۲) فچ از خودِ صفحه */
+        if(stg === 2){
+          ld.textContent = '… تلاش مجدد';
+          try{
+            fetch(String(u), { credentials: 'include' }).then(function(r){
+              return r.ok ? r.blob() : null;
+            }).then(function(b){
+              if(!b) throw 0;
+              return new Promise(function(res){
+                try{
+                  var f = new FileReader();
+                  f.onload = function(){ res(String(f.result || '')); };
+                  f.onerror = function(){ res(''); };
+                  f.readAsDataURL(b);
+                }catch(e){ res(''); }
+              });
+            }).then(function(d){
+              if(d && String(d).indexOf('data:image') === 0) setSrc(d);
+              else hostFetch();
+            }).catch(function(){ hostFetch(); });
+          }catch(e){ hostFetch(); }
+          return;
+        }
+        hostFetch();
       };
       fv.onclick = function(){
         if(Date.now() - bornAt < 350) return;
@@ -1967,7 +2129,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
         for(var s=0;s<arr.length && s<4;s++){
           (function(si){
             var d = document.createElement('div'); d.className = 'th';
-            try{ d.style.backgroundImage = "url('" + imgSafe(arr[si]) + "')"; }catch(e){}
+            thImg(d, arr[si]);
             armHold(d, arr[si]);
             strip.appendChild(d);
           })(s);
@@ -1979,7 +2141,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
         for(var g=0;g<arr.length;g++){
           (function(gi){
             var dd = document.createElement('div'); dd.className = 'th';
-            try{ dd.style.backgroundImage = "url('" + imgSafe(arr[gi]) + "')"; }catch(e){}
+            thImg(dd, arr[gi]);
             var no = document.createElement('span'); no.className = 'no';
             no.textContent = String(rank[arr[gi]] || (gi + 1)); dd.appendChild(no);
             if(picks[fk][arr[gi]]) dd.classList.add('on');
@@ -2045,9 +2207,18 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     (document.documentElement || document.body).appendChild(fold);
   }
 
-  function showModeMenu(sel){
+  function showModeMenu(sel, note, linkOnly){
     closeAll();
     menu = document.createElement('div'); menu.className = 'mtmenu';
+    if(note){
+      try{
+        var nt = document.createElement('div');
+        nt.style.cssText = 'color:#8a93a8;font-size:11.5px;line-height:1.9;'
+          + 'padding:2px 6px 6px;direction:rtl;text-align:right;max-width:230px;';
+        nt.textContent = note;
+        menu.appendChild(nt);
+      }catch(e){}
+    }
     var mi1 = document.createElement('button');
     mi1.type = 'button'; mi1.className = 'mtmi';
     mi1.textContent = 'استخراج با لینک';
@@ -2055,7 +2226,10 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     var mi2 = document.createElement('button');
     mi2.type = 'button'; mi2.className = 'mtmi';
     mi2.textContent = 'استخراج با دانلود';
-    mi2.onclick = function(ev){ ev.stopPropagation(); closeAll(); doDl(sel); };
+    mi2.onclick = function(ev){
+      ev.stopPropagation(); closeAll();
+      if(linkOnly) doLinks(sel); else doDl(sel);
+    };
     menu.appendChild(mi2); menu.appendChild(mi1);
     try{
       var r = mainBtn.getBoundingClientRect();
@@ -2083,10 +2257,27 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     }
     cnt.textContent = sel.length + ' عکس — در حالِ انتقال…';
     try{
+      if(!window.pywebview || !window.pywebview.api ||
+         !window.pywebview.api.onExtract) throw 0;
       window.pywebview.api.onExtract(JSON.stringify(sel));
       clearRec();
       mainBtn.textContent = '▶ شروع ضبط';
-    }catch(e){ alert('خطا در ارسال به اپ: ' + e); }
+    }catch(e){
+      /* پلِ اپ در دسترس نیست — لینک‌ها را کپی کن تا در فیلد ورودی بچسبانی */
+      try{
+        var txt = sel.join('\n');
+        navigator.clipboard.writeText(txt).then(function(){
+          clearRec();
+          mainBtn.textContent = '▶ شروع ضبط';
+          alert('پلِ اپ در دسترس نیست — ' + sel.length +
+                ' لینک کپی شد؛ در فیلدِ ورودیِ اپ بچسبان');
+        }, function(){
+          prompt(sel.length + ' لینک — اینجا کپی کن:', txt);
+        });
+      }catch(e2){
+        alert('خطا در ارسال به اپ: ' + e2);
+      }
+    }
   }
 
   function doDl(sel){
@@ -2199,6 +2390,7 @@ class _DesktopApi:
         self._main_win = None
         self._br_win = None
         self._last_site = None
+        self._br_fresh = False
 
     def _br_target(self, raw):
         s = str(raw or "").strip()
@@ -2234,6 +2426,7 @@ class _DesktopApi:
                     self._br_win.destroy()
             except Exception:
                 pass
+            self._br_fresh = True
             self._br_win = webview.create_window(
                 "مرورگر داخلی — استخراج عکس مانهوا", u,
                 width=1150, height=840, min_size=(760, 520),
@@ -2260,6 +2453,16 @@ class _DesktopApi:
                         u = None
                 if u and str(u).lower().startswith(("http://", "https://")):
                     self._last_site = str(u)
+                if self._br_fresh:
+                    # بازشدنِ تازهٔ پنجرهٔ مرورگر = ریستِ دکمهٔ «شروع ضبط»
+                    self._br_fresh = False
+                    try:
+                        self._br_win.evaluate_js(
+                            "(function(){try{sessionStorage.removeItem('mtRec');"
+                            "sessionStorage.removeItem('mtAcc')}catch(e){}"
+                            "return 1})()")
+                    except Exception:
+                        pass
                 self._br_win.evaluate_js(_MT_BROWSER_WIN_JS)
         except Exception:
             pass
@@ -2300,6 +2503,51 @@ class _DesktopApi:
             self._br_win = None
         except Exception as e:
             print(f"[!] استخراجِ مرورگرِ داخلی: خطا — {e}")
+
+    def fetchImg(self, u, ref):
+        """پیش‌نمایش: اگر سایت اجازهٔ نمایش مستقیم نداد، خودِ اپ می‌گیرد."""
+        try:
+            import base64 as _b64
+            import requests as _rq
+            u = str(u or "").strip()
+            ref = str(ref or "").strip()
+            if not u.startswith(("http://", "https://")):
+                return ""
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/125.0.0.0 Safari/537.36"),
+            }
+            if ref:
+                headers["Referer"] = ref
+            r = _rq.get(u, headers=headers, timeout=25)
+            if r.status_code != 200 or not r.content:
+                return ""
+            if len(r.content) > 48 * 1024 * 1024:
+                return ""
+            ct = (r.headers.get("content-type") or "").lower()
+            content = r.content
+            mt = ""
+            if "image/" in ct:
+                mt = ct.split(";")[0].strip()
+            else:
+                if content[:3] == b"\xff\xd8\xff":
+                    mt = "image/jpeg"
+                elif content[:8] == b"\x89PNG\r\n\x1a\n":
+                    mt = "image/png"
+                elif content[:4] == b"RIFF" and content[8:12] == b"WEBP":
+                    mt = "image/webp"
+                elif content[:12] == b"\x00\x00\x00\x0cjP ":
+                    mt = "image/jp2"
+                else:
+                    return ""
+            if not mt.startswith("image/"):
+                return ""
+            b64 = _b64.b64encode(content).decode("ascii")
+            return "data:%s;base64,%s" % (mt, b64)
+        except Exception:
+            return ""
 
     def onDlOne(self, idx, total, data_url):
         try:

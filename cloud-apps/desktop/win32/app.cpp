@@ -286,6 +286,46 @@ L"if(!res.length)res=dedupe(all);"
 L"return res;"
 L"})()";
 
+static const wchar_t *MT_NET_HOOK_JS =
+L"(function(){try{"
+L"if(window.__mtNetHook)return;window.__mtNetHook=1;"
+L"function post(u){try{"
+L"if(!u)return;u=String(u);"
+L"if(u.indexOf('data:')===0)return;"
+L"if(!/^https?:/i.test(u))return;"
+L"if(window.__mtWv2&&window.__mtWv2.postMessage)"
+L"window.__mtWv2.postMessage('MTIMG '+u)"
+L"}catch(e){}}"
+L"var _f=window.fetch;"
+L"if(typeof _f==='function'&&!window.__mtFH){"
+L"window.__mtFH=1;"
+L"window.fetch=function(){"
+L"var p;try{p=_f.apply(this,arguments)}catch(e){throw e}"
+L"try{"
+L"var a0=arguments[0];var u0='';"
+L"if(a0){if(typeof a0==='string')u0=a0;"
+L"else if(a0.url)u0=String(a0.url)}"
+L"p.then(function(r){try{"
+L"var ct=(r.headers&&r.headers.get('content-type'))||'';"
+L"if(/^image\//i.test(String(ct).trim()))post(u0)"
+L"}catch(e){}}).catch(function(){})"
+L"}catch(e){}"
+L"return p}}"
+L"var _o=XMLHttpRequest.prototype.open,_s=XMLHttpRequest.prototype.send;"
+L"XMLHttpRequest.prototype.open=function(m,u){"
+L"try{this.__mtU=String(u||'')}catch(e){}"
+L"return _o.apply(this,arguments)};"
+L"XMLHttpRequest.prototype.send=function(){"
+L"try{var x=this;"
+L"x.addEventListener('loadend',function(){try{"
+L"var ct='';try{ct=x.getResponseHeader('content-type')||''}catch(e){}"
+L"var ru='';try{ru=x.responseURL||x.__mtU||''}catch(e){}"
+L"if(/^image\//i.test(String(ct).trim()))post(ru)"
+L"}catch(e){}})}"
+L"catch(e){}"
+L"return _s.apply(this,arguments)}"
+L"}catch(e){}})()";
+
 static const wchar_t *MT_PRELOAD_JS =
 L"(function(){try{var _a=window.alert;window.alert=function(m){"
 L"try{var s=String(m);"
@@ -1339,6 +1379,13 @@ HRESULT MtMsgHandler::Impl(
         std::vector<std::wstring> links;
         std::wstring m(msg);
         CoTaskMemFree(msg);
+        /* پیام‌های قلابِ شبکه — عکس‌های fetch/XHR با نوعِ محتوای image/* */
+        if (m.compare(0, 6, L"MTIMG ") == 0) {
+            std::wstring u = m.size() > 6 ? m.substr(6) : L"";
+            if (g_recording && !u.empty() && !MtJunkUrl(u))
+                MtRecAdd(u);
+            return S_OK;
+        }
         MtParseMaybeWrapped(m.c_str(), links);
         if (links.empty())
             return S_OK;
@@ -1781,6 +1828,11 @@ static LRESULT MtEditProcInner(HWND h, UINT m, WPARAM w, LPARAM l) {
         OnGo();
         return 0;
     }
+    /* Ctrl+A در نوارِ آدرس = انتخابِ همه */
+    if (m == WM_CHAR && w == 1) {
+        SendMessageW(h, EM_SETSEL, 0, -1);
+        return 0;
+    }
     return CallWindowProcW(g_editProc, h, m, w, l);
 }
 static LRESULT CALLBACK MtEditProc(HWND h, UINT m, WPARAM w, LPARAM l) {
@@ -2147,6 +2199,9 @@ static LRESULT MenuWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_DRAWITEM:
         return MtOnDrawItem(wp, lp);
     case WM_KILLFOCUS:
+        /* دکمه‌های منو خودشان فوکوس می‌گیرند — منو نباید بسته شود (باگِ «دکمه کار نمیکند») */
+        if (wp != 0 && IsChild(hwnd, (HWND)wp))
+            return 0;
         DestroyWindow(hwnd);
         return 0;
     case WM_ACTIVATE:
@@ -2285,6 +2340,14 @@ static LRESULT BrWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         MtBrCreateControls(hwnd);
         return 0;
     case WM_CLOSE:
+        /* بستنِ مرورگر = ریستِ ضبط — دکمه از «شروع ضبط» شروع می‌کند */
+        MtResetRecordUi();
+        g_recNet.clear();
+        g_recNetSeen.clear();
+        g_foundStore.clear();
+        g_foundSeen.clear();
+        g_domOrder.clear();
+        g_selUrls.clear();
         MtHideBrowser();
         return 0;
     case WM_COMMAND: {
@@ -2442,6 +2505,9 @@ static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int choice = (int)wp;
         MtCloseExtractMenu();
         if (!g_selUrls.empty()) {
+            /* مانگاپلاس: دانلودِ مستقیم عکس‌های رمزشده بی‌معنی است — لینک بده */
+            if (g_selUrls.size() == 1 && MtIsMangaPlusUrl(g_selUrls[0]))
+                choice = 1;
             if (choice == 1)
                 MtFillFieldAndClose(g_selUrls);
             else
@@ -2790,15 +2856,24 @@ static void MtOnExtractBtn(void) {
         if (g_lblStatus != NULL)
             SetWindowTextW(g_lblStatus, L"\u062F\u0631 \u062D\u0627\u0644 \u0636\u0628\u0637\u2026 \u0635\u0641\u062D\u0647 \u0641\u0635\u0644 \u0631\u0627 \u0648\u0631\u0642 \u0628\u0632\u0646");
         MtLog("recording started");
+        g_webBr->AddScriptToExecuteOnDocumentCreated(MT_NET_HOOK_JS,
+                                                      &g_noopScript);
         g_webBr->Reload();
         return;
     }
     if (g_lblStatus != NULL)
         SetWindowTextW(g_lblStatus, L"\u2026 \u062F\u0631 \u062D\u0627\u0644 \u0622\u0645\u0627\u062F\u0647\u200C\u0633\u0627\u0632\u06CC");
     if (MtIsMangaPlusUrl(g_lastSite)) {
+        /* مانگاپلاس: منوی «لینک/دانلود» نشان بده — هر دو از API رسمی می‌گیرند */
         std::vector<std::wstring> one;
         one.push_back(g_lastSite);
-        MtFillFieldAndClose(one);
+        g_selUrls = one;
+        if (g_lblStatus != NULL)
+            SetWindowTextW(g_lblStatus,
+                L"\u0641\u0635\u0644\u0650 \u0645\u0627\u0646\u06AF\u0627\u067E\u0644\u0627\u0633 \u2014 "
+                L"\u0631\u0648\u0634\u0650 \u0627\u0633\u062A\u062E\u0631\u0627\u062C "
+                L"\u0631\u0627 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646");
+        PostMessage(g_hwnd, WM_APP_MENU_SHOW, 0, 0);
         return;
     }
     g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execCollectStore);
@@ -2883,7 +2958,7 @@ L"tip.style.left='0';tip.style.right='0';"
 L"tip.style.textAlign='center';tip.style.color='#8a93a8';"
 L"tip.style.fontSize='11.5px';tip.style.zIndex='2147483647';"
 L"tip.style.fontFamily='Tahoma,Arial,sans-serif';"
-L"var bornAt=Date.now();var retried=false;"
+L"var bornAt=Date.now();var stg=0;"
 L"function closeFv(){try{if(fv.parentNode)fv.parentNode.removeChild(fv)}catch(e){}}"
 L"function failMsg(){ld.style.display='none';"
 L"try{im.style.display='none'}catch(e){}"
@@ -2891,8 +2966,13 @@ L"errm.textContent='\u062A\u0635\u0648\u06CC\u0631 \u0628\u0627\u0631\u06AF\u063
 L"errm.style.display=''}"
 L"im.onload=function(){ld.style.display='none';errm.style.display='none'};"
 L"im.onerror=function(){"
-L"if(retried){failMsg();return}"
-L"retried=true;"
+L"stg++;"
+L"if(stg===1){"
+L"ld.textContent='\u2026 \u062A\u0644\u0627\u0634 \u0645\u062C\u062F\u062F';"
+L"try{im.referrerPolicy='no-referrer'}catch(e){}"
+L"try{im.src=String(u)}catch(e){failMsg()}"
+L"return}"
+L"if(stg===2){"
 L"ld.textContent='\u2026 \u062A\u0644\u0627\u0634 \u0645\u062C\u062F\u062F';"
 L"try{"
 L"fetch(String(u),{credentials:'include'}).then(function(r){"
@@ -2903,7 +2983,9 @@ L"im.onload=function(){ld.style.display='none';"
 L"try{URL.revokeObjectURL(ur)}catch(e){}};"
 L"im.onerror=failMsg;"
 L"im.src=ur}).catch(failMsg)"
-L"}catch(e){failMsg()}};"
+L"}catch(e){failMsg()}"
+L"return}"
+L"failMsg()};"
 L"fv.onclick=function(){"
 L"if(Date.now()-bornAt<350)return;"
 L"closeFv()};"
@@ -2942,6 +3024,18 @@ L"fire()});"
 L"el.addEventListener('dragstart',function(ev){"
 L"try{ev.preventDefault()}catch(e){}});"
 L"}catch(e){}}"
+L"function thumb(el,u){try{"
+L"el.style.position='relative';el.style.overflow='hidden';"
+L"var tim=mk('img');tim.loading='lazy';tim.decoding='async';"
+L"tim.style.position='absolute';tim.style.top='0';tim.style.left='0';"
+L"tim.style.width='100%';tim.style.height='100%';"
+L"tim.style.objectFit='cover';tim.style.borderRadius='10px';"
+L"tim.style.background='#232b3b';tim.style.display='block';"
+L"tim.onerror=function(){try{"
+L"if(!tim.__r){tim.__r=1;tim.referrerPolicy='no-referrer';tim.src=u}"
+L"}catch(e){}};"
+L"try{tim.src=String(u)}catch(e){}"
+L"el.appendChild(tim)}catch(e){}}"
 L"var ov=mk('div');ov.id='mtFoldOv';"
 L"ov.style.position='fixed';ov.style.top='0';ov.style.left='0';"
 L"ov.style.right='0';ov.style.bottom='0';"
@@ -3023,8 +3117,9 @@ L"(function(si){"
 L"var d=mk('div');"
 L"d.style.width='58px';d.style.height='58px';d.style.flex='none';"
 L"d.style.borderRadius='10px';"
-L"d.style.background='#232b3b url(\"'+imgSafe(arr[si])+'\") center/cover no-repeat';"
+L"d.style.background='#232b3b';"
 L"d.style.border='1px solid #2a3242';"
+L"thumb(d,arr[si]);"
 L"armHold(d,arr[si]);"
 L"strip.appendChild(d)"
 L"})(s)}"
@@ -3039,7 +3134,8 @@ L"(function(gi){"
 L"var dd=mk('div');"
 L"dd.style.width='100%';dd.style.aspectRatio='2/3';"
 L"dd.style.borderRadius='10px';"
-L"dd.style.background='#232b3b url(\"'+imgSafe(arr[gi])+'\") center/cover no-repeat';"
+L"dd.style.background='#232b3b';"
+L"thumb(dd,arr[gi]);"
 L"dd.style.border='2px solid transparent';dd.style.opacity='0.35';"
 L"dd.style.cursor='pointer';dd.style.position='relative';"
 L"dd.style.boxSizing='border-box';"
