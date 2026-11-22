@@ -26,6 +26,7 @@ import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import org.json.JSONArray
+import org.json.JSONObject
 
 class BrowserActivity : Activity() {
 
@@ -701,6 +702,11 @@ tick()
                 fun done(total: Int) {
                     onDlDone(total)
                 }
+
+                @android.webkit.JavascriptInterface
+                fun prev(dataUrl: String?) {
+                    onPreviewData(dataUrl ?: "")
+                }
             }, "MtDl")
         } catch (_: Exception) {}
     }
@@ -1030,9 +1036,9 @@ tick()
         }
         b.setPositiveButton("ادامه") { _, _ ->
             val sel = ArrayList<String>()
-            for (i in entries.indices) {
-                if (checked[i]) sel.addAll(entries[i].value)
-            }
+            val checkedKeys = HashSet<String>()
+            for (i in entries.indices) if (checked[i]) checkedKeys.add(entries[i].key)
+            for (u in all) if (checkedKeys.contains(folderOf(u))) sel.add(u)
             if (sel.isEmpty()) {
                 Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
                     Toast.LENGTH_SHORT).show()
@@ -1051,6 +1057,8 @@ tick()
         }
         val order = folders.entries.sortedByDescending { it.value.size }
             .map { it.key }
+        val rankOf = HashMap<String, Int>()
+        for (i in all.indices) rankOf[all[i]] = i + 1
 
         val picks = HashMap<String, LinkedHashSet<String>>()
         val grids = HashMap<String, List<View>>()
@@ -1264,7 +1272,7 @@ tick()
                 loadThumb(iv, u)
 
                 val no = TextView(this)
-                no.text = "${g + 1}"
+                no.text = "${rankOf[u] ?: (g + 1)}"
                 no.setTextColor(Color.WHITE)
                 no.textSize = 10f
                 no.setBackgroundColor(Color.parseColor("#a6000000"))
@@ -1376,10 +1384,11 @@ tick()
             refresh()
         }
         okBtn.setOnClickListener {
+            /* انتخاب به ترتیبِ سند — عکس ۱، ۲، … */
             val sel = ArrayList<String>()
-            for (fk in order) {
-                for (u in folders[fk]!!) if (picks[fk]?.contains(u) == true)
-                    sel.add(u)
+            for (u in all) {
+                val fk = folderOf(u)
+                if (picks[fk]?.contains(u) == true) sel.add(u)
             }
             if (sel.isEmpty()) {
                 Toast.makeText(this, "هیچ عکسی انتخاب نشد",
@@ -1491,6 +1500,11 @@ tick()
         } catch (_: Exception) {}
     }
 
+    private var previewIv: android.widget.ImageView? = null
+    private var previewTag: String? = null
+    private var previewLd: TextView? = null
+    private var previewErr: TextView? = null
+
     private fun showFullPreview(u: String) {
         try {
             val dlg = android.app.Dialog(this)
@@ -1502,6 +1516,26 @@ tick()
             root.addView(iv, android.widget.FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT))
+            val ld = TextView(this)
+            ld.text = "… در حال بارگذاری"
+            ld.setTextColor(Color.parseColor("#8a93a8"))
+            ld.textSize = 12.5f
+            ld.gravity = Gravity.CENTER
+            root.addView(ld, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.TOP or Gravity.CENTER_HORIZONTAL))
+            val errm = TextView(this)
+            errm.text = "تصویر بارگذاری نشد — سایت اجازه‌ی نمایش مستقیم نمی‌دهد"
+            errm.setTextColor(Color.parseColor("#ffb4ad"))
+            errm.textSize = 12.5f
+            errm.gravity = Gravity.CENTER
+            errm.setPadding(dp(24), 0, dp(24), 0)
+            errm.visibility = View.GONE
+            root.addView(errm, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.CENTER))
             val tip = TextView(this)
             tip.text = "برای بستن لمس کن"
             tip.setTextColor(Color.parseColor("#8a93a8"))
@@ -1515,6 +1549,9 @@ tick()
             tLp.bottomMargin = dp(14)
             tip.layoutParams = tLp
             root.setOnClickListener {
+                previewIv = null
+                previewLd = null
+                previewErr = null
                 try { dlg.dismiss() } catch (_: Exception) {}
             }
             dlg.setContentView(root)
@@ -1524,9 +1561,111 @@ tick()
                 w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT)
             }
+            iv.tag = "full:$u"
+            previewIv = iv
+            previewTag = "full:$u"
+            previewLd = ld
+            previewErr = errm
             dlg.show()
-            loadFullInto(iv, u)
+            if (u.startsWith("blob:")) {
+                loadPreviewViaJs(u)
+            } else {
+                loadFullInto(iv, u)
+            }
         } catch (_: Exception) {}
+    }
+
+    /* بارگذاریِ پيش‌نمايش از داخلِ خودِ صفحه (کوکی و رفرِ سایت + پشتيبانی blob) */
+    private fun loadPreviewViaJs(u: String) {
+        try {
+            val q = JSONObject.quote(u)
+            val js = "(function(){" +
+                "try{" +
+                "var U=" + q + ";" +
+                "function done(d){try{window.MtDl.prev(d||'')}catch(e){}}" +
+                "try{" +
+                "fetch(U,{credentials:'include'}).then(function(r){return r.ok?r.blob():null})" +
+                ".then(function(b){" +
+                "if(!b){done('');return}" +
+                "var fr=new FileReader();" +
+                "fr.onload=function(){" +
+                "try{" +
+                "var s=String(fr.result||'');" +
+                "if(s.length<2500000){done(s);return}" +
+                "var img=new Image();" +
+                "img.onload=function(){" +
+                "try{" +
+                "var cv=document.createElement('canvas');" +
+                "var mw=img.width||1,mh=img.height||1;" +
+                "var sc=Math.min(1,1800/Math.max(mw,mh));" +
+                "cv.width=Math.max(1,Math.round(mw*sc));" +
+                "cv.height=Math.max(1,Math.round(mh*sc));" +
+                "cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);" +
+                "done(cv.toDataURL('image/jpeg',0.88))" +
+                "}catch(e){done(s)}" +
+                "};" +
+                "img.onerror=function(){done(s)};" +
+                "img.src=s" +
+                "}catch(e){done(s)}" +
+                "};" +
+                "fr.onerror=function(){done('')};" +
+                "fr.readAsDataURL(b)" +
+                "}).catch(function(){done('')})" +
+                "}catch(e){done('')}" +
+                "}catch(e){try{window.MtDl.prev('')}catch(e2){}}" +
+                "})()"
+            web.evaluateJavascript(js, null)
+        } catch (_: Exception) {
+            onPreviewData("")
+        }
+    }
+
+    private fun onPreviewData(dataUrl: String) {
+        runOnUiThread {
+            val iv = previewIv
+            val tag = previewTag
+            val ld = previewLd
+            val errm = previewErr
+            if (iv == null || tag == null || iv.tag != tag) return@runOnUiThread
+            if (dataUrl.length < 64) {
+                ld?.visibility = View.GONE
+                errm?.visibility = View.VISIBLE
+                return@runOnUiThread
+            }
+            THUMB_POOL.execute {
+                var bmp: android.graphics.Bitmap? = null
+                try {
+                    val b64 = dataUrl.substring(dataUrl.indexOf(',') + 1)
+                    val bytes = android.util.Base64.decode(
+                        b64, android.util.Base64.DEFAULT)
+                    if (bytes.isNotEmpty()) {
+                        val o = android.graphics.BitmapFactory.Options()
+                        o.inJustDecodeBounds = true
+                        android.graphics.BitmapFactory.decodeByteArray(
+                            bytes, 0, bytes.size, o)
+                        var sc = 1
+                        val maxDim = Math.max(o.outWidth, o.outHeight)
+                        while (maxDim / sc > 2200) sc *= 2
+                        val o2 = android.graphics.BitmapFactory.Options()
+                        o2.inSampleSize = sc
+                        bmp = android.graphics.BitmapFactory.decodeByteArray(
+                            bytes, 0, bytes.size, o2)
+                    }
+                } catch (_: Exception) {}
+                val b = bmp
+                runOnUiThread {
+                    try {
+                        ld?.visibility = View.GONE
+                        if (b != null) {
+                            errm?.visibility = View.GONE
+                            iv.setImageBitmap(b)
+                        } else {
+                            errm?.visibility = View.VISIBLE
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        }
     }
 
     private fun loadFullInto(iv: android.widget.ImageView, u: String) {
@@ -1586,8 +1725,13 @@ tick()
                 val b = bmp
                 runOnUiThread {
                     try {
-                        if (b != null && iv.tag == "full:$u") {
+                        if (iv.tag != "full:$u") return@runOnUiThread
+                        if (b != null) {
+                            if (previewIv === iv) previewLd?.visibility = View.GONE
                             iv.setImageBitmap(b)
+                        } else {
+                            /* شبکه رد شد — از داخلِ خودِ صفحه امتحان کن */
+                            if (previewIv === iv) loadPreviewViaJs(u)
                         }
                     } catch (_: Exception) {}
                 }
@@ -1690,6 +1834,101 @@ tick()
         return false
     }
 
+    /* مرتب‌سازی به ترتیبِ سندِ HTML — عکسی که بالاتر در صفحه است اول می‌آید */
+    private fun rankByDom(urls: List<String>, then: (List<String>) -> Unit) {
+        if (urls.isEmpty()) { then(urls); return }
+        try {
+            val sb = StringBuilder("[")
+            urls.forEachIndexed { i, u ->
+                if (i > 0) sb.append(',')
+                sb.append(JSONObject.quote(u))
+            }
+            sb.append(']')
+            val js = "(function(){" +
+                "try{" +
+                "var KNOWN=" + sb + ";" +
+                "function keyOf(u){var b=String(u).split(/[?#]/)[0];" +
+                "return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}" +
+                "function ukey(u){return String(u).indexOf('blob:')===0?" +
+                "String(u).split('#')[0]:keyOf(u)}" +
+                "var byKey={};" +
+                "for(var i=0;i<KNOWN.length;i++)byKey[ukey(KNOWN[i])]=KNOWN[i];" +
+                "var out=[],seen={};" +
+                "function radd(u){" +
+                "try{" +
+                "if(!u)return;" +
+                "u=String(u).trim();" +
+                "if(u.indexOf('data:')===0)return;" +
+                "if(u.indexOf('blob:')!==0){" +
+                "try{var a=document.createElement('a');a.href=u;u=a.href}catch(e){}}" +
+                "var k=ukey(u);" +
+                "if(!k||seen[k])return;" +
+                "if(!Object.prototype.hasOwnProperty.call(byKey,k))return;" +
+                "seen[k]=1;out.push(byKey[k])" +
+                "}catch(e){}}" +
+                "var DTS=['data-src','data-lazy-src','data-original','data-original-src'," +
+                "'data-orig-src','data-lazy','data-url','data-image','data-echo','data-cfsrc'," +
+                "'data-hi-res-src','data-full-src','data-full_image','data-large-src'," +
+                "'data-file','data-path','data-actualsrc'];" +
+                "function best(ss){try{var p=String(ss).split(','),b='',w=0;" +
+                "for(var k=0;k<p.length;k++){var tk=p[k].trim().split(/\\s+/);" +
+                "var u0=tk[0]||'';var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;" +
+                "if(u0&&w0>=w){w=w0;b=u0}}return b}catch(e){return ''}}" +
+                "var els=[];" +
+                "try{els=document.querySelectorAll('img,source,a[href],[style*=\"url(\"]')}catch(e){}" +
+                "for(var j=0;j<els.length;j++){" +
+                "var el=els[j],tg=el.tagName;" +
+                "if(tg==='A'){radd(el.getAttribute('href')||'');continue}" +
+                "if(tg!=='IMG'&&tg!=='SOURCE'){" +
+                "try{var mm=String(el.getAttribute('style')||'')." +
+                "match(/url\\((['\"]?)([^'\")]+)\\1\\)/i);if(mm&&mm[2])radd(mm[2])}catch(e){}" +
+                "continue}" +
+                "try{radd(el.currentSrc||el.src||'')}catch(e){}" +
+                "try{var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');" +
+                "if(ss){var bs=best(ss);if(bs)radd(bs)}}catch(e){}" +
+                "for(var d=0;d<DTS.length;d++){" +
+                "try{var v=el.getAttribute(DTS[d]);if(v&&v.length>4)radd(v)}catch(e){}}" +
+                "}" +
+                "return out" +
+                "}catch(e){return []}" +
+                "})()"
+            web.evaluateJavascript(js) { raw ->
+                val ranked = ArrayList<String>()
+                try {
+                    val arr = parseLinksRaw(raw)
+                    if (arr != null) {
+                        for (i in 0 until arr.length()) ranked.add(arr.optString(i))
+                    }
+                } catch (_: Exception) {}
+                if (ranked.isEmpty()) { then(urls); return@evaluateJavascript }
+                val seen = HashSet<String>()
+                val out = ArrayList<String>(urls.size)
+                for (u in ranked) if (seen.add(u)) out.add(u)
+                for (u in urls) if (seen.add(u)) out.add(u)
+                then(out)
+            }
+        } catch (_: Exception) {
+            then(urls)
+        }
+    }
+
+    private fun finishWithDomOrder(snap: JSONArray, then: (JSONArray?) -> Unit) {
+        try {
+            val urls = ArrayList<String>()
+            for (i in 0 until snap.length()) {
+                val u = snap.optString(i)
+                if (u.isNotBlank()) urls.add(u)
+            }
+            rankByDom(urls) { ranked ->
+                val out = JSONArray()
+                for (u in ranked) out.put(u)
+                then(out)
+            }
+        } catch (_: Exception) {
+            then(snap)
+        }
+    }
+
     private fun extractWithScroll(then: (JSONArray?) -> Unit) {
         try {
             syncChapterKey()
@@ -1699,7 +1938,7 @@ tick()
                     mergeFound(arr)
                     val snapshot = storeSnapshot()
                     if (snapshot.length() > 0 && !hasBlobs(snapshot)) {
-                        then(snapshot)
+                        finishWithDomOrder(snapshot, then)
                         return@runOnUiThread
                     }
                     countLbl.text = "… در حال آماده‌سازی صفحه (اسکرول خودکار)"
@@ -1710,11 +1949,11 @@ tick()
                                 runOnUiThread {
                                     val arr2 = parseLinksRaw(raw2)
                                     mergeFound(arr2)
-                                    then(storeSnapshot())
+                                    finishWithDomOrder(storeSnapshot(), then)
                                 }
                             }
                         } catch (_: Exception) {
-                            then(storeSnapshot())
+                            finishWithDomOrder(storeSnapshot(), then)
                         }
                     }
                 }

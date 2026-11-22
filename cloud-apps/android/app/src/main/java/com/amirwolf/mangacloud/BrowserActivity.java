@@ -485,6 +485,11 @@ public class BrowserActivity extends Activity {
                 public void done(final int total) {
                     onDlDone(total);
                 }
+
+                @android.webkit.JavascriptInterface
+                public void prev(final String dataUrl) {
+                    onPreviewData(dataUrl == null ? "" : dataUrl);
+                }
             }, "MtDl");
         } catch (Exception ignored) {
         }
@@ -692,6 +697,105 @@ public class BrowserActivity extends Activity {
         return false;
     }
 
+    /* مرتب‌سازی به ترتیبِ سندِ HTML — عکسی که بالاتر در صفحه است اول می‌آید */
+    private void rankByDom(final java.util.List<String> urls,
+                           final java.util.function.Consumer<java.util.List<String>> then) {
+        if (urls.isEmpty()) { then.accept(urls); return; }
+        try {
+            StringBuilder sb = new StringBuilder("[");
+            for (int i = 0; i < urls.size(); i++) {
+                if (i > 0) sb.append(',');
+                sb.append(org.json.JSONObject.quote(urls.get(i)));
+            }
+            sb.append(']');
+            final String knownJson = sb.toString();
+            StringBuilder js = new StringBuilder("(function(){");
+            js.append("try{");
+            js.append("var KNOWN=").append(knownJson).append(";");
+            js.append("function keyOf(u){var b=String(u).split(/[?#]/)[0];")
+                    .append("return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')}");
+            js.append("function ukey(u){return String(u).indexOf('blob:')===0?")
+                    .append("String(u).split('#')[0]:keyOf(u)}");
+            js.append("var byKey={};");
+            js.append("for(var i=0;i<KNOWN.length;i++)byKey[ukey(KNOWN[i])]=KNOWN[i];");
+            js.append("var out=[],seen={};");
+            js.append("function radd(u){");
+            js.append("try{");
+            js.append("if(!u)return;");
+            js.append("u=String(u).trim();");
+            js.append("if(u.indexOf('data:')===0)return;");
+            js.append("if(u.indexOf('blob:')!==0){")
+                    .append("try{var a=document.createElement('a');a.href=u;u=a.href}catch(e){}}");
+            js.append("var k=ukey(u);");
+            js.append("if(!k||seen[k])return;");
+            js.append("if(!Object.prototype.hasOwnProperty.call(byKey,k))return;");
+            js.append("seen[k]=1;out.push(byKey[k])");
+            js.append("}catch(e){}}");
+            js.append("var DTS=['data-src','data-lazy-src','data-original','data-original-src',")
+                    .append("'data-orig-src','data-lazy','data-url','data-image','data-echo','data-cfsrc',")
+                    .append("'data-hi-res-src','data-full-src','data-full_image','data-large-src',")
+                    .append("'data-file','data-path','data-actualsrc'];");
+            js.append("function best(ss){try{var p=String(ss).split(','),b='',w=0;")
+                    .append("for(var k=0;k<p.length;k++){var tk=p[k].trim().split(/\\s+/);")
+                    .append("var u0=tk[0]||'';var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0;")
+                    .append("if(u0&&w0>=w){w=w0;b=u0}}return b}catch(e){return ''}}");
+            js.append("var els=[];");
+            js.append("try{els=document.querySelectorAll('img,source,a[href],[style*=\"url(\"]')}catch(e){}");
+            js.append("for(var j=0;j<els.length;j++){");
+            js.append("var el=els[j],tg=el.tagName;");
+            js.append("if(tg==='A'){radd(el.getAttribute('href')||'');continue}");
+            js.append("if(tg!=='IMG'&&tg!=='SOURCE'){");
+            js.append("try{var mm=String(el.getAttribute('style')||'')")
+                    .append(".match(/url\\((['\"]?)([^'\")]+)\\1\\)/i);if(mm&&mm[2])radd(mm[2])}catch(e){}");
+            js.append("continue}");
+            js.append("try{radd(el.currentSrc||el.src||'')}catch(e){}");
+            js.append("try{var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset');")
+                    .append("if(ss){var bs=best(ss);if(bs)radd(bs)}}catch(e){}");
+            js.append("for(var d=0;d<DTS.length;d++){");
+            js.append("try{var v=el.getAttribute(DTS[d]);if(v&&v.length>4)radd(v)}catch(e){}}");
+            js.append("}");
+            js.append("return out");
+            js.append("}catch(e){return []}");
+            js.append("})()");
+            web.evaluateJavascript(js.toString(), raw -> {
+                java.util.ArrayList<String> ranked = new java.util.ArrayList<>();
+                try {
+                    JSONArray arr = parseLinksRaw(raw);
+                    if (arr != null) {
+                        for (int i = 0; i < arr.length(); i++)
+                            ranked.add(arr.optString(i));
+                    }
+                } catch (Exception ignored) {
+                }
+                if (ranked.isEmpty()) { then.accept(urls); return; }
+                java.util.HashSet<String> seen = new java.util.HashSet<>();
+                java.util.ArrayList<String> out = new java.util.ArrayList<>(urls.size());
+                for (String u : ranked) if (seen.add(u)) out.add(u);
+                for (String u : urls) if (seen.add(u)) out.add(u);
+                then.accept(out);
+            });
+        } catch (Exception e) {
+            then.accept(urls);
+        }
+    }
+
+    private void finishWithDomOrder(final JSONArray snap, final ArrCallback then) {
+        try {
+            final java.util.ArrayList<String> urls = new java.util.ArrayList<>();
+            for (int i = 0; i < snap.length(); i++) {
+                String u = snap.optString(i);
+                if (u != null && !u.trim().isEmpty()) urls.add(u);
+            }
+            rankByDom(urls, ranked -> {
+                JSONArray out = new JSONArray();
+                for (String u : ranked) out.put(u);
+                then.onResult(out);
+            });
+        } catch (Exception e) {
+            then.onResult(snap);
+        }
+    }
+
     private void extractWithScroll(final ArrCallback then) {
         try {
             syncChapterKey();
@@ -700,7 +804,7 @@ public class BrowserActivity extends Activity {
                 mergeFound(arr);
                 final JSONArray snapshot = storeSnapshot();
                 if (snapshot.length() > 0 && !hasBlobs(snapshot)) {
-                    then.onResult(snapshot);
+                    finishWithDomOrder(snapshot, then);
                     return;
                 }
                 countLbl.setText("… در حال آماده‌سازی صفحه (اسکرول خودکار)");
@@ -710,10 +814,10 @@ public class BrowserActivity extends Activity {
                         web.evaluateJavascript(EXTRACT_JS, v2 -> runOnUiThread(() -> {
                             JSONArray arr2 = parseLinksRaw(v2);
                             mergeFound(arr2);
-                            then.onResult(storeSnapshot());
+                            finishWithDomOrder(storeSnapshot(), then);
                         }));
                     } catch (Exception e) {
-                        runOnUiThread(() -> then.onResult(storeSnapshot()));
+                        runOnUiThread(() -> finishWithDomOrder(storeSnapshot(), then));
                     }
                 });
             }));
@@ -1263,6 +1367,11 @@ public class BrowserActivity extends Activity {
         }
     }
 
+    private android.widget.ImageView previewIv = null;
+    private String previewTag = null;
+    private TextView previewLd = null;
+    private TextView previewErr = null;
+
     private void showFullPreview(final String u) {
         try {
             final android.app.Dialog dlg = new android.app.Dialog(this);
@@ -1274,6 +1383,26 @@ public class BrowserActivity extends Activity {
             root.addView(iv, new android.widget.FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT,
                     ViewGroup.LayoutParams.MATCH_PARENT));
+            final TextView ld = new TextView(this);
+            ld.setText("… در حال بارگذاری");
+            ld.setTextColor(Color.parseColor("#8a93a8"));
+            ld.setTextSize(12.5f);
+            ld.setGravity(Gravity.CENTER);
+            root.addView(ld, new android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP | Gravity.CENTER_HORIZONTAL));
+            final TextView errm = new TextView(this);
+            errm.setText("تصویر بارگذاری نشد — سایت اجازه‌ی نمایش مستقیم نمی‌دهد");
+            errm.setTextColor(Color.parseColor("#ffb4ad"));
+            errm.setTextSize(12.5f);
+            errm.setGravity(Gravity.CENTER);
+            errm.setPadding(dp(24), 0, dp(24), 0);
+            errm.setVisibility(View.GONE);
+            root.addView(errm, new android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT,
+                    Gravity.CENTER));
             TextView tip = new TextView(this);
             tip.setText("برای بستن لمس کن");
             tip.setTextColor(Color.parseColor("#8a93a8"));
@@ -1287,6 +1416,9 @@ public class BrowserActivity extends Activity {
             tipLp.bottomMargin = dp(14);
             root.addView(tip, tipLp);
             root.setOnClickListener(v -> {
+                previewIv = null;
+                previewLd = null;
+                previewErr = null;
                 try { dlg.dismiss(); } catch (Exception ignored) {}
             });
             dlg.setContentView(root);
@@ -1298,10 +1430,118 @@ public class BrowserActivity extends Activity {
                         ViewGroup.LayoutParams.MATCH_PARENT,
                         ViewGroup.LayoutParams.MATCH_PARENT);
             }
+            final String tag = "full:" + u;
+            iv.setTag(tag);
+            previewIv = iv;
+            previewTag = tag;
+            previewLd = ld;
+            previewErr = errm;
             dlg.show();
-            loadFullInto(iv, u);
+            if (u.startsWith("blob:")) {
+                loadPreviewViaJs(u);
+            } else {
+                loadFullInto(iv, u);
+            }
         } catch (Exception ignored) {
         }
+    }
+
+    /* بارگذاریِ پیش‌نمایش از داخلِ خودِ صفحه (کوکی و رفرِ سایت + پشتیبانی blob) */
+    private void loadPreviewViaJs(final String u) {
+        try {
+            final String q = org.json.JSONObject.quote(u);
+            final StringBuilder js = new StringBuilder("(function(){");
+            js.append("try{");
+            js.append("var U=").append(q).append(";");
+            js.append("function done(d){try{window.MtDl.prev(d||'')}catch(e){}}");
+            js.append("try{");
+            js.append("fetch(U,{credentials:'include'})")
+                    .append(".then(function(r){return r.ok?r.blob():null})");
+            js.append(".then(function(b){");
+            js.append("if(!b){done('');return}");
+            js.append("var fr=new FileReader();");
+            js.append("fr.onload=function(){");
+            js.append("try{");
+            js.append("var s=String(fr.result||'');");
+            js.append("if(s.length<2500000){done(s);return}");
+            js.append("var img=new Image();");
+            js.append("img.onload=function(){");
+            js.append("try{");
+            js.append("var cv=document.createElement('canvas');");
+            js.append("var mw=img.width||1,mh=img.height||1;");
+            js.append("var sc=Math.min(1,1800/Math.max(mw,mh));");
+            js.append("cv.width=Math.max(1,Math.round(mw*sc));");
+            js.append("cv.height=Math.max(1,Math.round(mh*sc));");
+            js.append("cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);");
+            js.append("done(cv.toDataURL('image/jpeg',0.88))");
+            js.append("}catch(e){done(s)}");
+            js.append("};");
+            js.append("img.onerror=function(){done(s)};");
+            js.append("img.src=s");
+            js.append("}catch(e){done(s)}");
+            js.append("};");
+            js.append("fr.onerror=function(){done('')};");
+            js.append("fr.readAsDataURL(b)");
+            js.append("}).catch(function(){done('')})");
+            js.append("}catch(e){done('')}");
+            js.append("}catch(e){try{window.MtDl.prev('')}catch(e2){}}");
+            js.append("})()");
+            web.evaluateJavascript(js.toString(), null);
+        } catch (Exception e) {
+            onPreviewData("");
+        }
+    }
+
+    private void onPreviewData(final String dataUrl) {
+        runOnUiThread(() -> {
+            final android.widget.ImageView iv = previewIv;
+            final String tag = previewTag;
+            final TextView ld = previewLd;
+            final TextView errm = previewErr;
+            if (iv == null || tag == null || !tag.equals(iv.getTag())) return;
+            if (dataUrl.length() < 64) {
+                if (ld != null) ld.setVisibility(View.GONE);
+                if (errm != null) errm.setVisibility(View.VISIBLE);
+                return;
+            }
+            THUMB_POOL.execute(() -> {
+                android.graphics.Bitmap bmp = null;
+                try {
+                    String b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+                    byte[] bytes = android.util.Base64.decode(
+                            b64, android.util.Base64.DEFAULT);
+                    if (bytes.length > 0) {
+                        android.graphics.BitmapFactory.Options o =
+                                new android.graphics.BitmapFactory.Options();
+                        o.inJustDecodeBounds = true;
+                        android.graphics.BitmapFactory.decodeByteArray(
+                                bytes, 0, bytes.length, o);
+                        int sc = 1;
+                        int maxDim = Math.max(o.outWidth, o.outHeight);
+                        while (maxDim / sc > 2200) sc *= 2;
+                        android.graphics.BitmapFactory.Options o2 =
+                                new android.graphics.BitmapFactory.Options();
+                        o2.inSampleSize = sc;
+                        bmp = android.graphics.BitmapFactory.decodeByteArray(
+                                bytes, 0, bytes.length, o2);
+                    }
+                } catch (Exception ignored) {
+                }
+                final android.graphics.Bitmap b = bmp;
+                runOnUiThread(() -> {
+                    try {
+                        if (ld != null) ld.setVisibility(View.GONE);
+                        if (b != null) {
+                            if (errm != null) errm.setVisibility(View.GONE);
+                            iv.setImageBitmap(b);
+                        } else {
+                            if (errm != null) errm.setVisibility(View.VISIBLE);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                });
+            });
+        });
     }
 
     private void loadFullInto(final android.widget.ImageView iv, final String u) {
@@ -1366,8 +1606,14 @@ public class BrowserActivity extends Activity {
                 final android.graphics.Bitmap b = bmp;
                 runOnUiThread(() -> {
                     try {
-                        if (b != null && tag.equals(iv.getTag())) {
+                        if (!tag.equals(iv.getTag())) return;
+                        if (b != null) {
+                            if (previewIv == iv && previewLd != null)
+                                previewLd.setVisibility(View.GONE);
                             iv.setImageBitmap(b);
+                        } else {
+                            /* شبکه رد شد — از داخلِ خودِ صفحه امتحان کن */
+                            if (previewIv == iv) loadPreviewViaJs(u);
                         }
                     } catch (Exception ignored) {
                     }
@@ -1415,9 +1661,11 @@ public class BrowserActivity extends Activity {
                 (dialog, which, isChecked) -> checkedF[which] = isChecked);
         b.setPositiveButton("ادامه", (dialog, which) -> {
             java.util.ArrayList<String> sel = new java.util.ArrayList<>();
-            for (int i = 0; i < nf; i++) {
-                if (checkedF[i]) sel.addAll(entries.get(i).getValue());
-            }
+            java.util.HashSet<String> checkedKeys = new java.util.HashSet<>();
+            for (int i = 0; i < nf; i++)
+                if (checkedF[i]) checkedKeys.add(entries.get(i).getKey());
+            for (String u : all)
+                if (checkedKeys.contains(folderOf(u))) sel.add(u);
             if (sel.isEmpty()) {
                 Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
                         Toast.LENGTH_SHORT).show();
@@ -1438,6 +1686,8 @@ public class BrowserActivity extends Activity {
                 folders.put(f, new java.util.ArrayList<>());
             folders.get(f).add(u);
         }
+        java.util.HashMap<String, Integer> rankOf = new java.util.HashMap<>();
+        for (int i = 0; i < all.size(); i++) rankOf.put(all.get(i), i + 1);
         java.util.List<java.util.Map.Entry<String, java.util.List<String>>> entries =
                 new java.util.ArrayList<>(folders.entrySet());
         entries.sort((a, b) -> Integer.compare(b.getValue().size(), a.getValue().size()));
@@ -1689,7 +1939,8 @@ public class BrowserActivity extends Activity {
                 loadThumb(iv, u);
 
                 TextView no = new TextView(this);
-                no.setText(String.valueOf(g + 1));
+                Integer rk = rankOf.get(u);
+                no.setText(String.valueOf(rk != null ? rk : (g + 1)));
                 no.setTextColor(Color.WHITE);
                 no.setTextSize(10);
                 no.setBackgroundColor(Color.parseColor("#a6000000"));
@@ -1812,10 +2063,12 @@ public class BrowserActivity extends Activity {
             refresh.run();
         });
         okBtn.setOnClickListener(v -> {
+            /* انتخاب به ترتیبِ سند — عکس ۱، ۲، … */
             java.util.ArrayList<String> sel = new java.util.ArrayList<>();
-            for (String fk : order) {
-                java.util.List<String> arr = folders.get(fk);
-                for (String u : arr) if (picks.get(fk).contains(u)) sel.add(u);
+            for (String u : all) {
+                String fk = folderOf(u);
+                java.util.HashSet<String> p = picks.get(fk);
+                if (p != null && p.contains(u)) sel.add(u);
             }
             if (sel.isEmpty()) {
                 Toast.makeText(this, "هیچ عکسی انتخاب نشد",

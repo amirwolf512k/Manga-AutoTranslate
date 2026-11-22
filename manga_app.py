@@ -1561,10 +1561,26 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       }catch(e){}
     }
     function domPass(){
+      /* يک گذرِ واحد به ترتيبِ سند — ترتيبِ عکس‌ها همان ترتيبِ HTML مي‌شود */
       try{
-        var els = document.querySelectorAll('img,source');
+        var els = document.querySelectorAll('img,source,a[href],[style*="url("]');
         for(var i=0;i<els.length;i++){
           var el = els[i];
+          var tg = el.tagName;
+          if(tg === 'A'){
+            try{
+              var h = el.getAttribute('href') || '';
+              if(/^https?:/i.test(h) && /\.(jpe?g|png|webp|avif|bmp)([?#]|$)/i.test(h)) add(h);
+            }catch(e){}
+            continue;
+          }
+          if(tg !== 'IMG' && tg !== 'SOURCE'){
+            try{
+              var mm = String(el.getAttribute('style')||'').match(/url\((['"]?)([^'")]+)\1\)/i);
+              if(mm && mm[2]) add(mm[2]);
+            }catch(e){}
+            continue;
+          }
           var nw=0, nh=0, loaded=false;
           try{ loaded = !!(el.complete && el.naturalWidth>0);
                nw = el.naturalWidth||0; nh = el.naturalHeight||0; }catch(e){}
@@ -1581,20 +1597,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
             try{ var v = el.getAttribute(DATA_ATTS[j]);
                  if(v && v.length>4) add(v); }catch(e){}
           }
-        }
-      }catch(e){}
-      try{
-        var as = document.querySelectorAll('a[href]');
-        for(var i2=0;i2<as.length;i2++){
-          var h = as[i2].getAttribute('href') || '';
-          if(/^https?:/i.test(h) && /\.(jpe?g|png|webp|avif|bmp)([?#]|$)/i.test(h)) add(h);
-        }
-      }catch(e){}
-      try{
-        var sty = document.querySelectorAll('[style*="url("]');
-        for(var i3=0;i3<sty.length;i3++){
-          var mm = String(sty[i3].getAttribute('style')||'').match(/url\((['"]?)([^'")]+)\1\)/i);
-          if(mm && mm[2]) add(mm[2]);
         }
       }catch(e){}
     }
@@ -1662,12 +1664,13 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     var acc = accLoad();
     var page = collectPage();
     var seen = {}, out = [], i, u, k;
-    for(i=0;i<acc.length;i++){
-      u = acc[i]; k = keyOf(u);
-      if(!seen[k]){ seen[k] = 1; out.push(u); }
-    }
+    /* اول ترتيبِ سندِ HTML (بالاي صفحه = عکس ۱، بعدی = ۲ و …)، بعدِ آنچه فقط در شبکه ضبط شده */
     for(i=0;i<page.length;i++){
       u = page[i]; k = (u.indexOf('blob:') === 0) ? u.split('#')[0] : keyOf(u);
+      if(!seen[k]){ seen[k] = 1; out.push(u); }
+    }
+    for(i=0;i<acc.length;i++){
+      u = acc[i]; k = keyOf(u);
       if(!seen[k]){ seen[k] = 1; out.push(u); }
     }
     var keep = [];
@@ -1759,6 +1762,8 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       doLinks(list);
       return;
     }
+    var rank = {};
+    for(var r0=0;r0<list.length;r0++) rank[list[r0]] = r0 + 1;
     var folders = {}, order = [];
     for(var i=0;i<list.length;i++){
       var f = folderOf(list[i]);
@@ -1766,11 +1771,17 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       folders[f].push(list[i]);
     }
     order.sort(function(a,b){ return folders[b].length - folders[a].length; });
-    showFolders(order, folders);
+    showFolders(order, folders, rank);
   }
 
-  function showFolders(order, folders){
+  function showFolders(order, folders, rank){
     closeAll();
+    rank = rank || {};
+    var flat = [];
+    for(var f0=0;f0<order.length;f0++)
+      for(var f1=0;f1<folders[order[f0]].length;f1++)
+        flat.push(folders[order[f0]][f1]);
+    if(!flat.length){ return; }
     var picks = {};
     for(var i=0;i<order.length;i++) picks[order[i]] = {};
     function addAll(fk){
@@ -1788,12 +1799,22 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       try{ if(old && old.parentNode) old.parentNode.removeChild(old); }catch(e){}
       var fv = document.createElement('div'); fv.id = 'mtFullOv';
       fv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;'
-        + 'z-index:2147483647;background:rgba(4,6,10,.95);display:flex;'
+        + 'z-index:2147483647;background:rgba(4,6,10,.96);display:flex;'
         + 'align-items:center;justify-content:center;';
+      var wrap = document.createElement('div');
+      wrap.style.cssText = 'position:relative;max-width:96vw;max-height:92vh;'
+        + 'display:flex;align-items:center;justify-content:center;';
       var im = document.createElement('img');
-      im.src = String(u);
+      im.decoding = 'async';
       im.style.cssText = 'max-width:96vw;max-height:92vh;object-fit:contain;'
         + 'border-radius:10px;background:#10141c;box-shadow:0 24px 70px rgba(0,0,0,.85);';
+      var ld = document.createElement('div');
+      ld.textContent = '… در حال بارگذاری';
+      ld.style.cssText = 'position:absolute;top:10px;left:0;right:0;text-align:center;'
+        + 'color:#8a93a8;font-size:12.5px;direction:rtl;';
+      var errm = document.createElement('div');
+      errm.style.cssText = 'display:none;color:#ffb4ad;font-size:12.5px;'
+        + 'text-align:center;max-width:82vw;padding:10px;direction:rtl;line-height:2;';
       var x = document.createElement('button'); x.type = 'button'; x.textContent = '✕';
       x.style.cssText = 'position:fixed;top:14px;left:14px;width:42px;height:42px;'
         + 'border-radius:12px;border:1px solid #2a3242;background:rgba(23,27,36,.92);'
@@ -1802,31 +1823,87 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       tip.textContent = 'برای بستن اینجا کلیک کن';
       tip.style.cssText = 'position:fixed;bottom:12px;left:0;right:0;text-align:center;'
         + 'color:#8a93a8;font-size:11.5px;z-index:2147483647;';
+      var bornAt = Date.now();
+      var retried = false;
       function closeFv(){ try{ if(fv.parentNode) fv.parentNode.removeChild(fv); }catch(e){} }
-      fv.onclick = closeFv;
+      function failMsg(){
+        ld.style.display = 'none';
+        try{ im.style.display = 'none'; }catch(e){}
+        errm.textContent = 'تصویر بارگذاری نشد — سایت اجازه‌ی نمایش مستقیم نمی‌دهد';
+        errm.style.display = '';
+      }
+      im.onload = function(){
+        ld.style.display = 'none'; errm.style.display = 'none';
+        try{ im.style.display = ''; }catch(e){}
+      };
+      im.onerror = function(){
+        if(retried){ failMsg(); return; }
+        retried = true;
+        ld.textContent = '… تلاش مجدد';
+        try{
+          fetch(String(u), { credentials: 'include' }).then(function(r){
+            return r.ok ? r.blob() : null;
+          }).then(function(b){
+            if(!b) throw 0;
+            var ur = URL.createObjectURL(b);
+            im.onload = function(){
+              ld.style.display = 'none';
+              try{ URL.revokeObjectURL(ur); }catch(e){}
+            };
+            im.onerror = failMsg;
+            im.src = ur;
+          }).catch(failMsg);
+        }catch(e){ failMsg(); }
+      };
+      fv.onclick = function(){
+        if(Date.now() - bornAt < 350) return;
+        closeFv();
+      };
       x.onclick = function(ev){ ev.stopPropagation(); closeFv(); };
       im.onclick = function(ev){ ev.stopPropagation(); };
-      fv.appendChild(im); fv.appendChild(x); fv.appendChild(tip);
+      wrap.appendChild(im); wrap.appendChild(ld); wrap.appendChild(errm);
+      fv.appendChild(wrap); fv.appendChild(x); fv.appendChild(tip);
       (document.body || document.documentElement).appendChild(fv);
+      im.src = String(u);
     }
     function armHold(el, u){
       var ht = null;
       function kill(){ if(ht){ clearTimeout(ht); ht = null; } }
+      function fire(){
+        kill();
+        try{ el.__held = 1; }catch(e){}
+        showFull(u);
+      }
+      function down(){
+        kill();
+        ht = setTimeout(fire, 320);
+      }
       try{
+        el.style.webkitUserSelect = 'none';
+        el.style.userSelect = 'none';
+        el.style.webkitTouchCallout = 'none';
+        try{ el.style.touchAction = 'pan-y'; }catch(e){}
         el.addEventListener('pointerdown', function(ev){
-          kill();
+          try{ if(ev.button != null && ev.button !== 0) return; }catch(e){}
           try{ ev.stopPropagation(); }catch(e){}
-          ht = setTimeout(function(){
-            ht = null;
-            try{ el.__held = 1; }catch(e2){}
-            showFull(u);
-          }, 420);
+          down();
         });
-        el.addEventListener('pointerup', kill);
-        el.addEventListener('pointerleave', kill);
-        el.addEventListener('pointercancel', kill);
+        if(!window.PointerEvent){
+          el.addEventListener('mousedown', function(ev){
+            try{ if(ev.button !== 0) return; }catch(e){}
+            down();
+          });
+          el.addEventListener('touchstart', function(){ down(); }, { passive: true });
+        }
+        var kills = ['pointerup','pointerleave','pointercancel',
+                     'mouseup','mouseleave','touchend','touchcancel'];
+        for(var k=0;k<kills.length;k++)
+          el.addEventListener(kills[k], kill);
+        /* لمسِ طولانی (اندروید) یا کلیکِ راست = پيش‌نمايش */
         el.addEventListener('contextmenu', function(ev){
           try{ ev.preventDefault(); }catch(e){}
+          try{ ev.stopPropagation(); }catch(e){}
+          fire();
         });
         el.addEventListener('dragstart', function(ev){
           try{ ev.preventDefault(); }catch(e){}
@@ -1904,7 +1981,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
             var dd = document.createElement('div'); dd.className = 'th';
             try{ dd.style.backgroundImage = "url('" + imgSafe(arr[gi]) + "')"; }catch(e){}
             var no = document.createElement('span'); no.className = 'no';
-            no.textContent = String(gi + 1); dd.appendChild(no);
+            no.textContent = String(rank[arr[gi]] || (gi + 1)); dd.appendChild(no);
             if(picks[fk][arr[gi]]) dd.classList.add('on');
             dd.onclick = function(ev){
               ev.stopPropagation();
@@ -1949,11 +2026,12 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     var ok = document.createElement('button');
     ok.type = 'button'; ok.className = 'mtok'; ok.textContent = 'ادامه';
     ok.onclick = function(){
+      /* انتخاب به ترتیبِ سند (عکس ۱، ۲، …) — نه به ترتیبِ پوشه */
       var sel = [];
-      for(var q3=0;q3<order.length;q3++){
-        var a2 = folders[order[q3]];
-        for(var z3=0;z3<a2.length;z3++)
-          if(picks[order[q3]][a2[z3]]) sel.push(a2[z3]);
+      for(var q3=0;q3<flat.length;q3++){
+        var u3 = flat[q3];
+        var f3 = folderOf(u3);
+        if(picks[f3] && picks[f3][u3]) sel.push(u3);
       }
       closeAll();
       if(!sel.length){ alert('هیچ عکسی انتخاب نشد'); return; }
