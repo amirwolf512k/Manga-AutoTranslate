@@ -307,7 +307,7 @@ L"if(a0){if(typeof a0==='string')u0=a0;"
 L"else if(a0.url)u0=String(a0.url)}"
 L"p.then(function(r){try{"
 L"var ct=(r.headers&&r.headers.get('content-type'))||'';"
-L"if(/^image\//i.test(String(ct).trim()))post(u0)"
+L"if(/^image\\//i.test(String(ct).trim()))post(u0)"
 L"}catch(e){}}).catch(function(){})"
 L"}catch(e){}"
 L"return p}}"
@@ -320,7 +320,7 @@ L"try{var x=this;"
 L"x.addEventListener('loadend',function(){try{"
 L"var ct='';try{ct=x.getResponseHeader('content-type')||''}catch(e){}"
 L"var ru='';try{ru=x.responseURL||x.__mtU||''}catch(e){}"
-L"if(/^image\//i.test(String(ct).trim()))post(ru)"
+L"if(/^image\\//i.test(String(ct).trim()))post(ru)"
 L"}catch(e){}})}"
 L"catch(e){}"
 L"return _s.apply(this,arguments)}"
@@ -1095,6 +1095,7 @@ static void MtRecAdd(const std::wstring &u) {
 }
 
 static void MtResetRecordUi(void);
+static BOOL MtIsMangaPlusUrl(const std::wstring &u);
 static void MtFillFieldAndClose(const std::vector<std::wstring> &links);
 static void MtStartDownload(const std::vector<std::wstring> &urls);
 static void MtShowFolderOverlay(void);
