@@ -38,6 +38,17 @@ static const WCHAR APP_TITLE[] =
 
 #define WM_APP_CREATCTL (WM_APP + 1)
 #define WM_APP_BRREADY  (WM_APP + 2)
+#define WM_APP_MENU_SHOW  (WM_APP + 3)
+#define WM_APP_DO_EXTRACT (WM_APP + 4)
+#define WM_APP_FILL_DONE  (WM_APP + 5)
+#define WM_APP_NAV_FILL   (WM_APP + 6)
+#define WM_APP_DL_STEP    (WM_APP + 7)
+#define WM_APP_UP_START   (WM_APP + 8)
+#define WM_APP_UP_POLL    (WM_APP + 9)
+#define WM_APP_UP_FINISH  (WM_APP + 10)
+#define WM_APP_DL_FAIL    (WM_APP + 11)
+#define WM_APP_DL_EMPTY   (WM_APP + 12)
+#define WM_APP_SHOW_FOLDERS (WM_APP + 13)
 
 #define BR_BAR_H     52
 #define PROG_H        3
@@ -61,6 +72,7 @@ static BOOL g_brPending = FALSE;
 static BOOL g_smokeBrowser = FALSE;
 static std::wstring g_brTarget;
 static std::wstring g_fillUrl;
+static int g_fillCount = 0;
 static std::wstring g_lastSite;
 
 static HWND g_editUrl = NULL;
@@ -432,10 +444,15 @@ typedef struct MtMiniDumpExcInfo {
 
 static BOOL g_inCrash = FALSE;
 
+static int g_dumpCount = 0;
+
 static void MtWriteMinidump(EXCEPTION_POINTERS *ep) {
+    if (g_dumpCount >= 8)
+        return;
     HMODULE db = LoadLibraryW(L"dbghelp.dll");
     if (db == NULL)
         return;
+    g_dumpCount++;
     MtMiniDumpFn fn = (MtMiniDumpFn)(void *)(uintptr_t)GetProcAddress(
         db, "MiniDumpWriteDump");
     if (fn == NULL)
@@ -1012,15 +1029,6 @@ static void MtRecAdd(const std::wstring &u) {
         if (!g_recNetSeen.insert(u).second)
             return;
         g_recNet.push_back(u);
-        int n = MtRecCount();
-        if (n != g_netShown) {
-            g_netShown = n;
-            if (g_lblStatus != NULL)
-                SetWindowTextW(g_lblStatus,
-                    (L"\u25CF " + std::to_wstring(n)
-                     + L" \u0639\u06A9\u0633 \u0636\u0628\u0637 \u0634\u062F")
-                        .c_str());
-        }
     } catch (...) {
     }
 }
@@ -1034,6 +1042,7 @@ static void MtShowExtractMenu(void);
 static void LayoutApp(void);
 static void LayoutBrowser(void);
 static void MtCloseExtractMenu(void);
+static void MtFireUploadBatch(void);
 static void Wv2Recount(void);
 static void MtOpenBrowserUi(void);
 static void MtShowBrowser(void);
@@ -1314,12 +1323,7 @@ HRESULT MtMsgHandler::Impl(
             return S_OK;
         g_selUrls = links;
         MtLog("webMsg: folder selection received");
-        if (g_lblStatus != NULL)
-            SetWindowTextW(g_lblStatus,
-                (std::to_wstring(links.size())
-                 + L" عکس انتخا"
-                   L"ب شد").c_str());
-        MtShowExtractMenu();
+        PostMessage(g_hwnd, WM_APP_MENU_SHOW, 0, 0);
     } catch (...) {
     }
     return S_OK;
@@ -2109,17 +2113,8 @@ static LRESULT MenuWndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (HIWORD(wp) == 0
                 && (id == ID_MITEM_LINK || id == ID_MITEM_DL)) {
             DestroyWindow(hwnd);
-            if (!g_selUrls.empty()) {
-                if (id == ID_MITEM_LINK)
-                    MtFillFieldAndClose(g_selUrls);
-                else
-                    MtStartDownload(g_selUrls);
-            } else if (g_webBr != NULL) {
-                if (id == ID_MITEM_LINK)
-                    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
-                else
-                    g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execDlList);
-            }
+            PostMessage(g_hwnd, WM_APP_DO_EXTRACT,
+                        (WPARAM)(id == ID_MITEM_LINK ? 1 : 2), 0);
             return 0;
         }
         break;
@@ -2413,6 +2408,129 @@ static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     }
+    case WM_APP_MENU_SHOW: {
+        if (!g_selUrls.empty() && g_lblStatus != NULL)
+            SetWindowTextW(g_lblStatus,
+                (std::to_wstring(g_selUrls.size())
+                 + L" \u0639\u06A9\u0633 \u0627\u0646\u062A\u062E\u0627\u0628"
+                   L" \u0634\u062F").c_str());
+        MtShowExtractMenu();
+        return 0;
+    }
+    case WM_APP_DO_EXTRACT: {
+        int choice = (int)wp;
+        MtCloseExtractMenu();
+        if (!g_selUrls.empty()) {
+            if (choice == 1)
+                MtFillFieldAndClose(g_selUrls);
+            else
+                MtStartDownload(g_selUrls);
+        } else if (g_webBr != NULL) {
+            if (choice == 1)
+                g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execExtract);
+            else
+                g_webBr->ExecuteScript(MT_COLLECT_JS, &g_execDlList);
+        }
+        return 0;
+    }
+    case WM_APP_FILL_DONE: {
+        MtHideBrowser();
+        if (wp == 1 && g_fillCount > 0) {
+            wchar_t mb[96];
+            swprintf(mb, 96,
+                L"%d \u0644\u06CC\u0646\u06A9 \u0639\u06A9\u0633 \u062F\u0631"
+                L" \u0641\u06CC\u0644\u062F\u0650 \u0648\u0631\u0648\u062F\u06CC"
+                L" \u0646\u0634\u0633\u062A \u2014 \u00AB\u0634\u0631\u0648\u0639"
+                L" \u062A\u0631\u062C\u0645\u0647\u00BB \u0631\u0627 \u0628\u0632\u0646",
+                g_fillCount);
+            MessageBoxW(g_hwnd, mb,
+                L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+                MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+        }
+        return 0;
+    }
+    case WM_APP_NAV_FILL: {
+        if (g_webApp != NULL && !g_fillUrl.empty())
+            g_webApp->Navigate(g_fillUrl.c_str());
+        return 0;
+    }
+    case WM_APP_DL_STEP: {
+        int slot = (int)wp;
+        if (slot >= 0 && slot < 3 && g_webBr != NULL
+                && g_dlNext < g_dlUrls.size()) {
+            g_dlSlotIdx[slot] = (int)g_dlNext;
+            g_webBr->ExecuteScript(
+                MtDlOneJs(MtJsQuote(g_dlUrls[g_dlNext])).c_str(),
+                slot == 0 ? &g_execDlStep
+                : (slot == 1 ? &g_execDlStepB : &g_execDlStepC));
+            g_dlNext++;
+        }
+        return 0;
+    }
+    case WM_APP_UP_START: {
+        if (g_dlOk > 0 && g_webApp != NULL) {
+            g_upPolls = 0;
+            g_upFired = 0;
+            g_upNextIdx = 0;
+            g_webApp->ExecuteScript(
+                L"(function(){try{window.__mtUp={ok:0,paths:[]}}"
+                L"catch(e){}})()",
+                &g_execNoop);
+            SetWindowTextW(g_lblStatus,
+                L"\u2B06 \u062F\u0631 \u062D\u0627\u0644\u0650 "
+                L"\u0622\u067E\u0644\u0648\u062F \u0628\u0647 "
+                L"\u0633\u0631\u0648\u0631\u2026");
+            MtFireUploadBatch();
+            g_webApp->ExecuteScript(MtUpPollJs(g_dlOk).c_str(),
+                                    &g_execUpPoll);
+        }
+        return 0;
+    }
+    case WM_APP_UP_POLL: {
+        int ok = (int)wp;
+        if (g_webApp == NULL)
+            return 0;
+        if (ok >= g_dlOk || g_upPolls >= 1500) {
+            PostMessage(g_hwnd, WM_APP_UP_FINISH, 0, 0);
+        } else {
+            if (ok >= g_upFired)
+                MtFireUploadBatch();
+            g_webApp->ExecuteScript(MtUpPollJs(g_dlOk).c_str(),
+                                    &g_execUpPoll);
+        }
+        return 0;
+    }
+    case WM_APP_UP_FINISH: {
+        if (g_webApp != NULL)
+            g_webApp->ExecuteScript(MT_UP_FILL_JS, &g_execNoop);
+        MtResetRecordUi();
+        MtHideBrowser();
+        return 0;
+    }
+    case WM_APP_DL_FAIL: {
+        MessageBoxW(g_hwnd,
+            L"\u0647\u06CC\u0686 \u0639\u06A9\u0633\u06CC \u062F\u0627"
+            L"\u0646\u0644\u0648\u062F \u0646\u0634\u062F",
+            L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+            MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+        MtResetRecordUi();
+        MtHideBrowser();
+        return 0;
+    }
+    case WM_APP_DL_EMPTY: {
+        MessageBoxW(g_hwnd,
+            L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u2014 "
+            L"\u0627\u0648\u0644 \u0641\u0635\u0644 \u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646 "
+            L"\u0648 \u062A\u0627 \u0622\u062E\u0631\u0650 \u0635\u0641\u062D\u0647 "
+            L"\u0627\u0633\u06A9\u0631\u0648\u0644 \u06A9\u0646",
+            L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
+            MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+        return 0;
+    }
+    case WM_APP_SHOW_FOLDERS: {
+        MtShowFolderOverlay();
+        return 0;
+    }
     case WM_COMMAND: {
         int id = LOWORD(wp);
         int code = HIWORD(wp);
@@ -2482,8 +2600,20 @@ static LRESULT WndProcInner(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                              SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
             if (g_webBr != NULL && g_hwndBr != NULL
-                    && IsWindowVisible(g_hwndBr) && !g_loading)
-                Wv2Recount();
+                    && IsWindowVisible(g_hwndBr)) {
+                if (g_recording && g_lblStatus != NULL) {
+                    int n = MtRecCount();
+                    if (n != g_netShown) {
+                        g_netShown = n;
+                        SetWindowTextW(g_lblStatus,
+                            (L"\u25CF " + std::to_wstring(n)
+                             + L" \u0639\u06A9\u0633 \u0636\u0628\u0637"
+                               L" \u0634\u062F").c_str());
+                    }
+                }
+                if (!g_loading)
+                    Wv2Recount();
+            }
             return 0;
         }
         if (wp == TIMER_SMOKE_BR) {
@@ -2601,18 +2731,17 @@ static void MtFillFieldAndClose(const std::vector<std::wstring> &links) {
             payload += L'\n';
         payload += links[i];
     }
+    g_fillCount = (int)links.size();
     g_fillUrl = std::wstring(APP_URL) + L"#imgs="
                 + MtWideFromAscii(MtUrlEncode(payload));
     if (g_webApp != NULL) {
         std::wstring js = L"(function(){try{if(window.__mtFillLinks){"
                           L"window.__mtFillLinks(" + MtJsQuote(payload) + L");"
-                          L"alert('__MT_FILLED__" + std::to_wstring(links.size())
-                          + L"__MT_FILLED2__');return 1}return 0}"
+                          L"return 1}return 0}"
                           L"catch(e){return 0}})()";
         g_webApp->ExecuteScript(js.c_str(), &g_execFill);
     }
     MtResetRecordUi();
-    MtHideBrowser();
 }
 
 static void MtResetRecordUi(void) {
@@ -2687,6 +2816,60 @@ L"if(folders[order[j2]].length>=2){addAll(order[j2]);anyDef=true}}"
 L"if(!anyDef&&order.length)addAll(order[0]);"
 L"function mk(t){return document.createElement(t)}"
 L"function imgSafe(u){return String(u).split(String.fromCharCode(39)).join('%27')}"
+L"function showFull(u){"
+L"var old=document.getElementById('mtFullOv');"
+L"if(old&&old.parentNode)old.parentNode.removeChild(old);"
+L"var fv=mk('div');fv.id='mtFullOv';"
+L"fv.style.position='fixed';fv.style.top='0';fv.style.left='0';"
+L"fv.style.right='0';fv.style.bottom='0';"
+L"fv.style.zIndex='2147483647';"
+L"fv.style.background='rgba(4,6,10,.95)';"
+L"fv.style.display='flex';fv.style.alignItems='center';"
+L"fv.style.justifyContent='center';"
+L"var im=mk('img');"
+L"im.src=String(u);"
+L"im.style.maxWidth='96vw';im.style.maxHeight='92vh';"
+L"im.style.objectFit='contain';"
+L"im.style.borderRadius='10px';"
+L"im.style.boxShadow='0 24px 70px rgba(0,0,0,.85)';"
+L"im.style.background='#10141c';"
+L"var x=mk('button');x.type='button';x.textContent='\u2715';"
+L"x.style.position='fixed';x.style.top='14px';x.style.left='14px';"
+L"x.style.width='42px';x.style.height='42px';"
+L"x.style.borderRadius='12px';x.style.border='1px solid #2a3242';"
+L"x.style.background='rgba(23,27,36,.92)';x.style.color='#e7ebf3';"
+L"x.style.fontSize='17px';x.style.fontWeight='700';"
+L"x.style.cursor='pointer';x.style.fontFamily='Tahoma,Arial,sans-serif';"
+L"var tip=mk('div');"
+L"tip.textContent='\u0628\u0631\u0627\u06CC \u0628\u0633\u062A\u0646 \u0627\u06CC\u0646\u062C\u0627 \u06A9\u0644\u06CC\u06A9 \u06A9\u0646';"
+L"tip.style.position='fixed';tip.style.bottom='12px';"
+L"tip.style.left='0';tip.style.right='0';"
+L"tip.style.textAlign='center';tip.style.color='#8a93a8';"
+L"tip.style.fontSize='11.5px';tip.style.zIndex='2147483647';"
+L"tip.style.fontFamily='Tahoma,Arial,sans-serif';"
+L"function closeFv(){try{if(fv.parentNode)fv.parentNode.removeChild(fv)}catch(e){}}"
+L"fv.onclick=closeFv;"
+L"x.onclick=function(ev){ev.stopPropagation();closeFv()};"
+L"im.onclick=function(ev){ev.stopPropagation()};"
+L"fv.appendChild(im);fv.appendChild(x);fv.appendChild(tip);"
+L"(document.body||document.documentElement).appendChild(fv)}"
+L"function armHold(el,u){"
+L"var ht=null;"
+L"function kill(){if(ht){clearTimeout(ht);ht=null}}"
+L"try{"
+L"el.addEventListener('pointerdown',function(ev){"
+L"kill();"
+L"try{ev.stopPropagation()}catch(e){}"
+L"ht=setTimeout(function(){ht=null;"
+L"try{el.__held=1}catch(e2){}showFull(u)},420);});"
+L"el.addEventListener('pointerup',kill);"
+L"el.addEventListener('pointerleave',kill);"
+L"el.addEventListener('pointercancel',kill);"
+L"el.addEventListener('contextmenu',function(ev){"
+L"try{ev.preventDefault()}catch(e){}});"
+L"el.addEventListener('dragstart',function(ev){"
+L"try{ev.preventDefault()}catch(e){}});"
+L"}catch(e){}}"
 L"var ov=mk('div');ov.id='mtFoldOv';"
 L"ov.style.position='fixed';ov.style.top='0';ov.style.left='0';"
 L"ov.style.right='0';ov.style.bottom='0';"
@@ -2711,7 +2894,7 @@ L"t1.textContent='\u067E\u0648\u0634\u0647\u200C\u0647\u0627\u06CC \u0639\u06A9\
 L"t1.style.fontWeight='800';t1.style.fontSize='15px';"
 L"t1.style.color='#e7ebf3';"
 L"var t2=mk('div');"
-L"t2.textContent='\u0628\u0627 \u00AB\u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634\u00BB \u0639\u06A9\u0633\u200C\u0647\u0627 \u0631\u0627 \u062A\u06A9\u200C\u062A\u06A9 \u0628\u0628\u06CC\u0646 \u0648 \u0627\u0646\u062A\u062E\u0627\u0628 \u06A9\u0646';"
+L"t2.textContent='\u06A9\u0644\u06CC\u06A9 = \u0627\u0646\u062A\u062E\u0627\u0628 \u2022 \u0646\u06AF\u0647\u200C\u062F\u0627\u0634\u062A\u0646 \u0631\u0648\u06CC \u0639\u06A9\u0633 = \u067E\u06CC\u0634\u200C\u0646\u0645\u0627\u06CC\u0634 \u06A9\u0627\u0645\u0644';"
 L"t2.style.fontSize='11.5px';t2.style.color='#8a93a8';"
 L"t2.style.marginTop='2px';"
 L"tt.appendChild(t1);tt.appendChild(t2);h.appendChild(tt);"
@@ -2764,16 +2947,19 @@ L"var strip=mk('div');"
 L"strip.style.display='flex';strip.style.gap='6px';"
 L"strip.style.overflow='hidden';"
 L"for(var s=0;s<arr.length&&s<4;s++){"
+L"(function(si){"
 L"var d=mk('div');"
 L"d.style.width='58px';d.style.height='58px';d.style.flex='none';"
 L"d.style.borderRadius='10px';"
-L"d.style.background='#232b3b url('+imgSafe(arr[s])+') center/cover no-repeat';"
+L"d.style.background='#232b3b url('+imgSafe(arr[si])+') center/cover no-repeat';"
 L"d.style.border='1px solid #2a3242';"
-L"strip.appendChild(d)}"
+L"armHold(d,arr[si]);"
+L"strip.appendChild(d)"
+L"})(s)}"
 L"row.appendChild(strip);"
 L"var grid=mk('div');"
 L"grid.style.display='none';"
-L"grid.style.gridTemplateColumns='repeat(auto-fill,minmax(74px,1fr))';"
+L"grid.style.gridTemplateColumns='repeat(auto-fill,minmax(86px,1fr))';"
 L"grid.style.gap='6px';"
 L"var cells=[];"
 L"for(var g=0;g<arr.length;g++){"
@@ -2792,9 +2978,11 @@ L"no.style.color='#fff';no.style.fontSize='10px';"
 L"no.style.borderRadius='6px';no.style.padding='1px 5px';"
 L"dd.appendChild(no);"
 L"dd.onclick=function(ev){ev.stopPropagation();"
+L"if(dd.__held){dd.__held=0;return}"
 L"if(picks[fk][arr[gi]]){delete picks[fk][arr[gi]]}"
 L"else{picks[fk][arr[gi]]=1}"
 L"refreshAll()};"
+L"armHold(dd,arr[gi]);"
 L"grid.appendChild(dd);cells.push(dd)}"
 L")(g)}"
 L"row.appendChild(grid);"
@@ -2941,8 +3129,10 @@ static void MtStartDownload(const std::vector<std::wstring> &urls) {
 HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
                                   LPCWSTR resultObjectAsJson) {
     if (FAILED(errorCode)) {
-        if (mode == 4 && g_webApp != NULL && !g_fillUrl.empty())
-            g_webApp->Navigate(g_fillUrl.c_str());
+        if (mode == 4 && !g_fillUrl.empty()) {
+            PostMessage(g_hwnd, WM_APP_NAV_FILL, 0, 0);
+            PostMessage(g_hwnd, WM_APP_FILL_DONE, 0, 0);
+        }
         if (mode == 3) {
             g_brTarget = g_lastSite.empty() ? BROWSER_HOME : g_lastSite;
             MtShowBrowser();
@@ -2992,9 +3182,11 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
     }
     if (mode == 4) {
         const wchar_t *s = resultObjectAsJson ? resultObjectAsJson : L"0";
-        if (wcsstr(s, L"1") == NULL && g_webApp != NULL
-                && !g_fillUrl.empty()) {
-            g_webApp->Navigate(g_fillUrl.c_str());
+        if (wcsstr(s, L"1") != NULL) {
+            PostMessage(g_hwnd, WM_APP_FILL_DONE, 1, 0);
+        } else if (!g_fillUrl.empty()) {
+            PostMessage(g_hwnd, WM_APP_NAV_FILL, 0, 0);
+            PostMessage(g_hwnd, WM_APP_FILL_DONE, 0, 0);
         }
         return S_OK;
     }
@@ -3016,21 +3208,15 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         std::vector<std::wstring> links;
         if (!MtParseMaybeWrapped(resultObjectAsJson, links)
                 || links.empty()) {
-            MessageBoxW(g_hwnd,
-                L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 "
-                L"\u0646\u0634\u062F \u2014 \u0627\u0648\u0644 \u0641\u0635\u0644 "
-                L"\u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646 \u0648 \u062A\u0627 "
-                L"\u0622\u062E\u0631\u0650 \u0635\u0641\u062D\u0647 \u0627\u0633"
-                L"\u06A9\u0631\u0648\u0644 \u06A9\u0646",
-                L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
-                MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+            PostMessage(g_hwnd, WM_APP_DL_EMPTY, 0, 0);
             return S_OK;
         }
+        g_selUrls = links;
         if (links.size() == 1 && MtIsMangaPlusUrl(links[0])) {
-            MtFillFieldAndClose(links);
+            PostMessage(g_hwnd, WM_APP_DO_EXTRACT, 1, 0);
             return S_OK;
         }
-        MtStartDownload(links);
+        PostMessage(g_hwnd, WM_APP_DO_EXTRACT, 2, 0);
         return S_OK;
     }
     if (mode == 15) {
@@ -3038,7 +3224,7 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         MtParseMaybeWrapped(resultObjectAsJson, links);
         for (size_t i = 0; i < links.size(); i++)
             MtFoundAdd(links[i]);
-        MtShowFolderOverlay();
+        PostMessage(g_hwnd, WM_APP_SHOW_FOLDERS, 0, 0);
         return S_OK;
     }
     if (mode == 10 || mode == 13 || mode == 14) {
@@ -3060,41 +3246,15 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         if (g_lblStatus != NULL)
             SetWindowTextW(g_lblStatus, sb);
         if (g_dlNext < g_dlUrls.size()) {
-            if (g_webBr != NULL) {
-                g_dlSlotIdx[slot] = (int)g_dlNext;
-                g_webBr->ExecuteScript(
-                    MtDlOneJs(MtJsQuote(g_dlUrls[g_dlNext])).c_str(),
-                    slot == 0 ? &g_execDlStep
-                    : (slot == 1 ? &g_execDlStepB : &g_execDlStepC));
-                g_dlNext++;
-            }
+            PostMessage(g_hwnd, WM_APP_DL_STEP, (WPARAM)slot, 0);
             return S_OK;
         }
         if ((size_t)g_dlDone < g_dlUrls.size())
             return S_OK;
         if (g_dlOk > 0 && g_webApp != NULL) {
-            g_upPolls = 0;
-            g_upFired = 0;
-            g_upNextIdx = 0;
-            g_webApp->ExecuteScript(
-                L"(function(){try{window.__mtUp={ok:0,paths:[]}}"
-                L"catch(e){}})()",
-                &g_execNoop);
-            SetWindowTextW(g_lblStatus,
-                L"\u2B06 \u062F\u0631 \u062D\u0627\u0644\u0650 "
-                L"\u0622\u067E\u0644\u0648\u062F \u0628\u0647 "
-                L"\u0633\u0631\u0648\u0631\u2026");
-            MtFireUploadBatch();
-            g_webApp->ExecuteScript(MtUpPollJs(g_dlOk).c_str(),
-                                    &g_execUpPoll);
+            PostMessage(g_hwnd, WM_APP_UP_START, 0, 0);
         } else {
-            MessageBoxW(g_hwnd,
-                L"\u0647\u06CC\u0686 \u0639\u06A9\u0633\u06CC \u062F\u0627"
-                L"\u0646\u0644\u0648\u062F \u0646\u0634\u062F",
-                L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
-                MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
-            MtResetRecordUi();
-            MtHideBrowser();
+            PostMessage(g_hwnd, WM_APP_DL_FAIL, 0, 0);
         }
         return S_OK;
     }
@@ -3112,36 +3272,18 @@ HRESULT MtExecHandler::MtExecImpl(int mode, HRESULT errorCode,
         swprintf(sb, 64, L"\u2B06 %d/%d", ok, g_dlOk);
         if (g_lblStatus != NULL)
             SetWindowTextW(g_lblStatus, sb);
-        if (ok >= g_dlOk || g_upPolls >= 1500) {
-            if (g_webApp != NULL)
-                g_webApp->ExecuteScript(MT_UP_FILL_JS, &g_execNoop);
-            MtResetRecordUi();
-            MtHideBrowser();
-        } else {
-            if (ok >= g_upFired)
-                MtFireUploadBatch();
-            if (g_webApp != NULL)
-                g_webApp->ExecuteScript(MtUpPollJs(total).c_str(),
-                                        &g_execUpPoll);
-        }
+        PostMessage(g_hwnd, WM_APP_UP_POLL, (WPARAM)ok, (LPARAM)total);
         return S_OK;
     }
     if (mode != 0 || g_webApp == NULL)
         return S_OK;
     std::vector<std::wstring> links;
     if (!MtParseMaybeWrapped(resultObjectAsJson, links) || links.empty()) {
-        MessageBoxW(g_hwnd,
-            L"\u0639\u06A9\u0633\u06CC \u067E\u06CC\u062F\u0627 \u0646\u0634\u062F \u2014 "
-            L"\u0627\u0648\u0644 \u0641\u0635\u0644 \u0631\u0627 \u0628\u0627\u0632 \u06A9\u0646 "
-            L"\u0648 \u062A\u0627 \u0622\u062E\u0631\u0650 \u0635\u0641\u062D\u0647 "
-            L"\u0627\u0633\u06A9\u0631\u0648\u0644 \u06A9\u0646 \u062A\u0627 "
-            L"\u0639\u06A9\u0633\u200C\u0647\u0627\u06CC \u062A\u0646\u0628\u0644 "
-            L"\u0644\u0648\u062F \u0628\u0634\u0646",
-            L"\u0645\u0627\u0646\u06AF\u0627 \u06A9\u0644\u0648\u062F",
-            MB_OK | MB_ICONINFORMATION | MB_RTLREADING | MB_RIGHT);
+        PostMessage(g_hwnd, WM_APP_DL_EMPTY, 0, 0);
         return S_OK;
     }
-    MtFillFieldAndClose(links);
+    g_selUrls = links;
+    PostMessage(g_hwnd, WM_APP_DO_EXTRACT, 1, 0);
     return S_OK;
 }
 
@@ -3152,7 +3294,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.385 (record flow: net capture + folder overlay with previews + link/dl choice)");
+    MtLog("WinMain — MangaCloud v1.14.386 (fix extract crash: deferred WebView2 ops + SEH dispatch + hold-to-fullscreen preview)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
@@ -3292,8 +3434,17 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MSG msg;
     while (GetMessageW(&msg, NULL, 0, 0) > 0) {
+#if MT_HAS_SEH
+        __try {
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        } __except (MtSehLog("dispatch", GetExceptionInformation())) {
+            MtLog("dispatch: exception swallowed — continuing");
+        }
+#else
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
+#endif
     }
     MtLog("exit");
     return (int)msg.wParam;

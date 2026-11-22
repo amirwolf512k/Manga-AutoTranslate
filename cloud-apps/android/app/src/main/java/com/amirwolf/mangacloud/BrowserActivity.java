@@ -64,6 +64,8 @@ public class BrowserActivity extends Activity {
     private int dlDone = 0;
     private int dlOk = 0;
     private int dlSeq = 0;
+    private final java.util.HashMap<Integer, StringBuilder> dlParts =
+            new java.util.HashMap<>();
     private final java.util.LinkedHashSet<String> foundStore =
             new java.util.LinkedHashSet<>();
     private final java.util.LinkedHashSet<String> netLog =
@@ -468,6 +470,18 @@ public class BrowserActivity extends Activity {
                 }
 
                 @android.webkit.JavascriptInterface
+                public void chunk(final int idx, final int ci, final int cn,
+                                  final String piece) {
+                    onDlChunk(idx, ci, cn, piece);
+                }
+
+                @android.webkit.JavascriptInterface
+                public void commit(final int idx, final int total,
+                                   final String srcUrl) {
+                    onDlCommit(idx, total, srcUrl);
+                }
+
+                @android.webkit.JavascriptInterface
                 public void done(final int total) {
                     onDlDone(total);
                 }
@@ -840,6 +854,39 @@ public class BrowserActivity extends Activity {
         }
     }
 
+    private void onDlChunk(final int idx, final int ci, final int cn,
+                           final String piece) {
+        try {
+            if (ci == 0) dlParts.remove(idx);
+            StringBuilder sb = dlParts.get(idx);
+            if (sb == null) {
+                sb = new StringBuilder();
+                dlParts.put(idx, sb);
+            }
+            sb.append(piece == null ? "" : piece);
+            if (sb.length() > 40 * 1024 * 1024) {
+                sb.setLength(0);
+                sb.append("!!OVERSIZE");
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void onDlCommit(final int idx, final int total,
+                             final String srcUrl) {
+        String dataUrl = "";
+        try {
+            StringBuilder sb = dlParts.remove(idx);
+            if (sb != null) {
+                dataUrl = sb.toString();
+                if (dataUrl.startsWith("!!OVERSIZE")) dataUrl = "";
+            }
+        } catch (Exception e) {
+            dataUrl = "";
+        }
+        onDlItem(idx, total, dataUrl, srcUrl);
+    }
+
     private void onDlDone(final int total) {
         runOnUiThread(() -> {
             try {
@@ -874,6 +921,7 @@ public class BrowserActivity extends Activity {
             dlDone = 0;
             dlOk = 0;
             dlSeq = 0;
+            dlParts.clear();
         } catch (Exception e) {
             Toast.makeText(this, "خطا در آماده‌سازی دانلود: " + e.getMessage(),
                     Toast.LENGTH_LONG).show();
@@ -899,15 +947,22 @@ public class BrowserActivity extends Activity {
            .append("f.onload=function(){res(String(f.result||''))};")
            .append("f.onerror=function(){res('')};f.readAsDataURL(b)}")
            .append("catch(e){res('')}})})}");
+        js.append("var CH=262144;");
+        js.append("function send(idx,total,u,d){")
+           .append("try{d=String(d||'');")
+           .append("if(d.length<=CH){try{window.MtDl.recv(idx,total,d,u)}catch(e){}return}")
+           .append("var n=Math.ceil(d.length/CH);")
+           .append("for(var c=0;c<n;c++){")
+           .append("try{window.MtDl.chunk(idx,c,n,d.substr(c*CH,CH))}catch(e){}}")
+           .append("try{window.MtDl.commit(idx,total,u)}catch(e){}}")
+           .append("catch(e){try{window.MtDl.recv(idx,total,'',u)}catch(e2){}}}");
         js.append("var i=0,pending=0;function step(){")
            .append("if(i>=urls.length){if(pending<=0){try{window.MtDl.done(urls.length)}catch(e){}}return}")
            .append("var idx=i;var u=urls[i];i++;pending++;")
            .append("toData(u).then(function(d){")
-           .append("try{window.MtDl.recv(idx,urls.length,d||'',u)}catch(e){}")
-           .append("pending--;step()})")
+           .append("send(idx,urls.length,u,d);pending--;step()})")
            .append(".catch(function(){")
-           .append("try{window.MtDl.recv(idx,urls.length,'',u)}catch(e){}")
-           .append("pending--;step()})};");
+           .append("send(idx,urls.length,u,'');pending--;step()})};");
         js.append("step();step();step();");
         js.append("}catch(e){try{window.MtDl.done(0)}catch(e2){}}})()");
         try {
@@ -1208,6 +1263,120 @@ public class BrowserActivity extends Activity {
         }
     }
 
+    private void showFullPreview(final String u) {
+        try {
+            final android.app.Dialog dlg = new android.app.Dialog(this);
+            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE);
+            android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+            root.setBackgroundColor(Color.parseColor("#F204060A"));
+            final android.widget.ImageView iv = new android.widget.ImageView(this);
+            iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+            root.addView(iv, new android.widget.FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT));
+            TextView tip = new TextView(this);
+            tip.setText("برای بستن لمس کن");
+            tip.setTextColor(Color.parseColor("#8a93a8"));
+            tip.setTextSize(11.5f);
+            tip.setGravity(Gravity.CENTER);
+            android.widget.FrameLayout.LayoutParams tipLp =
+                    new android.widget.FrameLayout.LayoutParams(
+                            ViewGroup.LayoutParams.MATCH_PARENT,
+                            ViewGroup.LayoutParams.WRAP_CONTENT,
+                            Gravity.BOTTOM | Gravity.CENTER_HORIZONTAL);
+            tipLp.bottomMargin = dp(14);
+            root.addView(tip, tipLp);
+            root.setOnClickListener(v -> {
+                try { dlg.dismiss(); } catch (Exception ignored) {}
+            });
+            dlg.setContentView(root);
+            if (dlg.getWindow() != null) {
+                dlg.getWindow().setBackgroundDrawable(
+                        new android.graphics.drawable.ColorDrawable(
+                                Color.TRANSPARENT));
+                dlg.getWindow().setLayout(
+                        ViewGroup.LayoutParams.MATCH_PARENT,
+                        ViewGroup.LayoutParams.MATCH_PARENT);
+            }
+            dlg.show();
+            loadFullInto(iv, u);
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void loadFullInto(final android.widget.ImageView iv, final String u) {
+        try {
+            final String tag = "full:" + u;
+            iv.setTag(tag);
+            THUMB_POOL.execute(() -> {
+                android.graphics.Bitmap bmp = null;
+                try {
+                    java.net.HttpURLConnection c =
+                            (java.net.HttpURLConnection)
+                                    new java.net.URL(u).openConnection();
+                    c.setConnectTimeout(12000);
+                    c.setReadTimeout(25000);
+                    c.setRequestProperty("User-Agent",
+                            "Mozilla/5.0 (Linux; Android 10; Pixel 7) "
+                            + "AppleWebKit/537.36 (KHTML, like Gecko) "
+                            + "Chrome/120.0.0.0 Mobile Safari/537.36");
+                    try {
+                        String ck = android.webkit.CookieManager
+                                .getInstance().getCookie(u);
+                        if (ck != null && !ck.isEmpty())
+                            c.setRequestProperty("Cookie", ck);
+                    } catch (Exception ignored) {}
+                    try {
+                        String ref = null;
+                        try { ref = web.getUrl(); } catch (Exception ignored) {}
+                        if (ref != null && ref.startsWith("http"))
+                            c.setRequestProperty("Referer", ref);
+                    } catch (Exception ignored) {}
+                    int code = c.getResponseCode();
+                    if (code >= 200 && code < 300) {
+                        java.io.ByteArrayOutputStream bo =
+                                new java.io.ByteArrayOutputStream();
+                        java.io.InputStream in = c.getInputStream();
+                        byte[] buf = new byte[16384];
+                        int n;
+                        while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                        in.close();
+                        byte[] data = bo.toByteArray();
+                        c.disconnect();
+                        if (data.length > 0 && data.length < 30 * 1024 * 1024) {
+                            android.graphics.BitmapFactory.Options o =
+                                    new android.graphics.BitmapFactory.Options();
+                            o.inJustDecodeBounds = true;
+                            android.graphics.BitmapFactory.decodeByteArray(
+                                    data, 0, data.length, o);
+                            int sc = 1;
+                            int maxDim = Math.max(o.outWidth, o.outHeight);
+                            while (maxDim / sc > 1600) sc *= 2;
+                            android.graphics.BitmapFactory.Options o2 =
+                                    new android.graphics.BitmapFactory.Options();
+                            o2.inSampleSize = sc;
+                            bmp = android.graphics.BitmapFactory.decodeByteArray(
+                                    data, 0, data.length, o2);
+                        }
+                    } else {
+                        c.disconnect();
+                    }
+                } catch (Exception ignored) {
+                }
+                final android.graphics.Bitmap b = bmp;
+                runOnUiThread(() -> {
+                    try {
+                        if (b != null && tag.equals(iv.getTag())) {
+                            iv.setImageBitmap(b);
+                        }
+                    } catch (Exception ignored) {
+                    }
+                });
+            });
+        } catch (Exception ignored) {
+        }
+    }
+
     private void showFolderDialog(final java.util.List<String> all) {
         try {
             showFolderDialogImpl(all);
@@ -1310,7 +1479,7 @@ public class BrowserActivity extends Activity {
         t1.setTextSize(15);
         t1.setTypeface(Typeface.DEFAULT_BOLD);
         TextView t2 = new TextView(this);
-        t2.setText("با «پیش‌نمایش» عکس‌ها را تک‌تک ببین و انتخاب کن");
+        t2.setText("کلیک = انتخاب • نگه‌داشتن روی عکس = پیش‌نمایش کامل");
         t2.setTextColor(Color.parseColor("#8a93a8"));
         t2.setTextSize(11.5f);
         headTxt.addView(t1);
@@ -1470,6 +1639,11 @@ public class BrowserActivity extends Activity {
                 if (s > 0) ivLp.leftMargin = dp(6);
                 strip.addView(iv, ivLp);
                 loadThumb(iv, arr.get(s));
+                final String su = arr.get(s);
+                iv.setOnLongClickListener(v -> {
+                    showFullPreview(su);
+                    return true;
+                });
             }
             row.addView(strip);
 
@@ -1538,6 +1712,10 @@ public class BrowserActivity extends Activity {
                         refresh.run();
                     } catch (Exception ignored) {
                     }
+                });
+                cellBox.setOnLongClickListener(v -> {
+                    showFullPreview(u);
+                    return true;
                 });
                 grid.addView(cellBox);
                 cells.add(cellBox);
@@ -1687,13 +1865,13 @@ public class BrowserActivity extends Activity {
         try {
             for (String u : sel) {
                 if (u.startsWith("blob:")) {
-                    countLbl.setText(sel.size()
-                            + " عکس آماده — گزینه «استخراج با دانلود» را بزن");
+                    countLbl.setText(sel.size() + " عکس — در حال دانلود…");
                     Toast.makeText(BrowserActivity.this,
                             "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند "
-                                    + "(" + sel.size() + " صفحه آماده) — "
-                                    + "از گزینه «استخراج با دانلود» استفاده کن",
+                                    + "(" + sel.size() + " صفحه) — "
+                                    + "به‌جای لینک، خودکار دانلود می‌کنم",
                             Toast.LENGTH_LONG).show();
+                    downloadSelected(sel);
                     return;
                 }
             }

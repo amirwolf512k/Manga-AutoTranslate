@@ -708,6 +708,11 @@ class _MangaTranslatorBody_60:
 
         _t_dl = time.time()
         os.makedirs(dest_dir, exist_ok=True)
+        try:
+            _ou = urlparse(url)
+            _referer = f"{_ou.scheme or 'https'}://{_ou.netloc}/"
+        except Exception:
+            _referer = url
         headers = {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -716,7 +721,7 @@ class _MangaTranslatorBody_60:
             ),
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
             "Accept-Language": "en-US,en;q=0.9",
-            "Referer": url,
+            "Referer": _referer,
         }
         url = MangaTranslator._normalize_image_url(url)
 

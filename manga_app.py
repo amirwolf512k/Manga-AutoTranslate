@@ -1783,13 +1783,63 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     }
     if(!anyDefault && order.length) addAll(order[0]);
     function imgSafe(u){ return String(u).split("'").join('%27'); }
+    function showFull(u){
+      var old = document.getElementById('mtFullOv');
+      try{ if(old && old.parentNode) old.parentNode.removeChild(old); }catch(e){}
+      var fv = document.createElement('div'); fv.id = 'mtFullOv';
+      fv.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;'
+        + 'z-index:2147483647;background:rgba(4,6,10,.95);display:flex;'
+        + 'align-items:center;justify-content:center;';
+      var im = document.createElement('img');
+      im.src = String(u);
+      im.style.cssText = 'max-width:96vw;max-height:92vh;object-fit:contain;'
+        + 'border-radius:10px;background:#10141c;box-shadow:0 24px 70px rgba(0,0,0,.85);';
+      var x = document.createElement('button'); x.type = 'button'; x.textContent = '✕';
+      x.style.cssText = 'position:fixed;top:14px;left:14px;width:42px;height:42px;'
+        + 'border-radius:12px;border:1px solid #2a3242;background:rgba(23,27,36,.92);'
+        + 'color:#e7ebf3;font-size:17px;font-weight:700;cursor:pointer;z-index:2147483647;';
+      var tip = document.createElement('div');
+      tip.textContent = 'برای بستن اینجا کلیک کن';
+      tip.style.cssText = 'position:fixed;bottom:12px;left:0;right:0;text-align:center;'
+        + 'color:#8a93a8;font-size:11.5px;z-index:2147483647;';
+      function closeFv(){ try{ if(fv.parentNode) fv.parentNode.removeChild(fv); }catch(e){} }
+      fv.onclick = closeFv;
+      x.onclick = function(ev){ ev.stopPropagation(); closeFv(); };
+      im.onclick = function(ev){ ev.stopPropagation(); };
+      fv.appendChild(im); fv.appendChild(x); fv.appendChild(tip);
+      (document.body || document.documentElement).appendChild(fv);
+    }
+    function armHold(el, u){
+      var ht = null;
+      function kill(){ if(ht){ clearTimeout(ht); ht = null; } }
+      try{
+        el.addEventListener('pointerdown', function(ev){
+          kill();
+          try{ ev.stopPropagation(); }catch(e){}
+          ht = setTimeout(function(){
+            ht = null;
+            try{ el.__held = 1; }catch(e2){}
+            showFull(u);
+          }, 420);
+        });
+        el.addEventListener('pointerup', kill);
+        el.addEventListener('pointerleave', kill);
+        el.addEventListener('pointercancel', kill);
+        el.addEventListener('contextmenu', function(ev){
+          try{ ev.preventDefault(); }catch(e){}
+        });
+        el.addEventListener('dragstart', function(ev){
+          try{ ev.preventDefault(); }catch(e){}
+        });
+      }catch(e){}
+    }
     fold = document.createElement('div'); fold.className = 'mtfold';
     var h = document.createElement('div'); h.className = 'mtfh';
     var tt = document.createElement('div'); tt.className = 'tt';
     var t1 = document.createElement('div');
     t1.textContent = 'پوشه‌های عکس (' + order.length + ')';
     var t2 = document.createElement('div'); t2.className = 'sub';
-    t2.textContent = 'با «پیش‌نمایش» عکس‌ها را تک‌تک ببین و انتخاب کن';
+    t2.textContent = 'کلیک = انتخاب • نگه‌داشتن روی عکس = پیش‌نمایش کامل';
     tt.appendChild(t1); tt.appendChild(t2); h.appendChild(tt);
     function mkH(txt, fn){
       var b = document.createElement('button');
@@ -1838,9 +1888,12 @@ _MT_BROWSER_WIN_JS = r"""(function(){
         row.appendChild(top);
         var strip = document.createElement('div'); strip.className = 'thumbs';
         for(var s=0;s<arr.length && s<4;s++){
-          var d = document.createElement('div'); d.className = 'th';
-          try{ d.style.backgroundImage = "url('" + imgSafe(arr[s]) + "')"; }catch(e){}
-          strip.appendChild(d);
+          (function(si){
+            var d = document.createElement('div'); d.className = 'th';
+            try{ d.style.backgroundImage = "url('" + imgSafe(arr[si]) + "')"; }catch(e){}
+            armHold(d, arr[si]);
+            strip.appendChild(d);
+          })(s);
         }
         row.appendChild(strip);
         var grid = document.createElement('div'); grid.className = 'grid';
@@ -1855,10 +1908,12 @@ _MT_BROWSER_WIN_JS = r"""(function(){
             if(picks[fk][arr[gi]]) dd.classList.add('on');
             dd.onclick = function(ev){
               ev.stopPropagation();
+              if(dd.__held){ dd.__held = 0; return; }
               if(picks[fk][arr[gi]]){ delete picks[fk][arr[gi]]; dd.classList.remove('on'); }
               else{ picks[fk][arr[gi]] = 1; dd.classList.add('on'); }
               refresh();
             };
+            armHold(dd, arr[gi]);
             grid.appendChild(dd); gsel.push(dd);
           })(g);
         }
@@ -1943,8 +1998,8 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     for(var i=0;i<sel.length;i++){
       if(String(sel[i]).indexOf('blob:') === 0){
         alert('این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند ' +
-              '(' + sel.length + ' صفحه آماده) — ' +
-              'از گزینه «استخراج با دانلود» استفاده کن');
+              '(' + sel.length + ' صفحه) — به‌جای لینک، خودکار دانلود می‌کنم');
+        doDl(sel);
         return;
       }
     }
@@ -3993,9 +4048,9 @@ def _browser_extract_js() -> str:
                 if (String(u).indexOf("blob:") === 0) {
                   try {
                     alert("این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند ("
-                      + sel.length + " صفحه آماده) — از گزینه «استخراج با دانلود»"
-                      + " استفاده کن");
+                      + sel.length + " صفحه) — به‌جای لینک، خودکار دانلود می‌کنم");
                   } catch (e) {}
+                  doDlWeb(sel);
                   return;
                 }
               }

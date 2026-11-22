@@ -352,6 +352,7 @@ tick()
     private var dlDir: java.io.File? = null
     private var dlDone = 0
     private var dlOk = 0
+    private val dlParts = HashMap<Int, StringBuilder>()
 
     private val reImgExt = Regex(
         "\\.(jpe?g|png|webp|avif|bmp|tiff?)$", RegexOption.IGNORE_CASE)
@@ -684,6 +685,16 @@ tick()
                 @android.webkit.JavascriptInterface
                 fun recv(idx: Int, total: Int, dataUrl: String?, srcUrl: String?) {
                     onDlItem(idx, total, dataUrl ?: "", srcUrl ?: "")
+                }
+
+                @android.webkit.JavascriptInterface
+                fun chunk(idx: Int, ci: Int, cn: Int, piece: String?) {
+                    onDlChunk(idx, ci, cn, piece ?: "")
+                }
+
+                @android.webkit.JavascriptInterface
+                fun commit(idx: Int, total: Int, srcUrl: String?) {
+                    onDlCommit(idx, total, srcUrl ?: "")
                 }
 
                 @android.webkit.JavascriptInterface
@@ -1071,7 +1082,7 @@ tick()
         t1.textSize = 15f
         t1.typeface = Typeface.DEFAULT_BOLD
         val t2 = TextView(this)
-        t2.text = "با «پیش‌نمایش» عکس‌ها را تک‌تک ببین و انتخاب کن"
+        t2.text = "کلیک = انتخاب • نگه‌داشتن روی عکس = پیش‌نمایش کامل"
         t2.setTextColor(Color.parseColor("#8a93a8"))
         t2.textSize = 11.5f
         headTxt.addView(t1)
@@ -1213,6 +1224,9 @@ tick()
                 if (s > 0) ivLp.leftMargin = dp(6)
                 strip.addView(iv, ivLp)
                 loadThumb(iv, arr[s])
+                iv.setOnLongClickListener {
+                    showFullPreview(arr[s]); true
+                }
             }
             row.addView(strip)
 
@@ -1269,6 +1283,10 @@ tick()
                         if (pp.contains(u)) pp.remove(u) else pp.add(u)
                         refresh()
                     } catch (_: Exception) {}
+                }
+                cellBox.setOnLongClickListener {
+                    showFullPreview(u)
+                    true
                 }
                 grid.addView(cellBox)
                 cells.add(cellBox)
@@ -1473,15 +1491,119 @@ tick()
         } catch (_: Exception) {}
     }
 
+    private fun showFullPreview(u: String) {
+        try {
+            val dlg = android.app.Dialog(this)
+            dlg.requestWindowFeature(android.view.Window.FEATURE_NO_TITLE)
+            val root = android.widget.FrameLayout(this)
+            root.setBackgroundColor(Color.parseColor("#F204060A"))
+            val iv = android.widget.ImageView(this)
+            iv.scaleType = android.widget.ImageView.ScaleType.FIT_CENTER
+            root.addView(iv, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT))
+            val tip = TextView(this)
+            tip.text = "برای بستن لمس کن"
+            tip.setTextColor(Color.parseColor("#8a93a8"))
+            tip.textSize = 11.5f
+            tip.gravity = Gravity.CENTER
+            root.addView(tip, android.widget.FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT,
+                Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL))
+            val tLp = tip.layoutParams as android.widget.FrameLayout.LayoutParams
+            tLp.bottomMargin = dp(14)
+            tip.layoutParams = tLp
+            root.setOnClickListener {
+                try { dlg.dismiss() } catch (_: Exception) {}
+            }
+            dlg.setContentView(root)
+            dlg.window?.let { w ->
+                w.setBackgroundDrawable(
+                    android.graphics.drawable.ColorDrawable(Color.TRANSPARENT))
+                w.setLayout(ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+            dlg.show()
+            loadFullInto(iv, u)
+        } catch (_: Exception) {}
+    }
+
+    private fun loadFullInto(iv: android.widget.ImageView, u: String) {
+        try {
+            iv.tag = "full:$u"
+            THUMB_POOL.execute {
+                var bmp: android.graphics.Bitmap? = null
+                try {
+                    val c = java.net.URL(u).openConnection() as
+                            java.net.HttpURLConnection
+                    c.connectTimeout = 12000
+                    c.readTimeout = 25000
+                    c.setRequestProperty("User-Agent",
+                        "Mozilla/5.0 (Linux; Android 10; Pixel 7) " +
+                        "AppleWebKit/537.36 (KHTML, like Gecko) " +
+                        "Chrome/120.0.0.0 Mobile Safari/537.36")
+                    try {
+                        val ck = CookieManager.getInstance().getCookie(u)
+                        if (!ck.isNullOrEmpty())
+                            c.setRequestProperty("Cookie", ck)
+                    } catch (_: Exception) {}
+                    try {
+                        val ref = try { web.url } catch (_: Exception) { null }
+                        if (ref != null && ref.startsWith("http"))
+                            c.setRequestProperty("Referer", ref)
+                    } catch (_: Exception) {}
+                    val code = c.responseCode
+                    if (code in 200..299) {
+                        val bo = java.io.ByteArrayOutputStream()
+                        c.inputStream.use { ins ->
+                            val buf = ByteArray(16384)
+                            var n = ins.read(buf)
+                            while (n > 0) {
+                                bo.write(buf, 0, n)
+                                n = ins.read(buf)
+                            }
+                        }
+                        val data = bo.toByteArray()
+                        c.disconnect()
+                        if (data.isNotEmpty() && data.size < 30 * 1024 * 1024) {
+                            val o = android.graphics.BitmapFactory.Options()
+                            o.inJustDecodeBounds = true
+                            android.graphics.BitmapFactory.decodeByteArray(
+                                data, 0, data.size, o)
+                            var sc = 1
+                            val maxDim = Math.max(o.outWidth, o.outHeight)
+                            while (maxDim / sc > 1600) sc *= 2
+                            val o2 = android.graphics.BitmapFactory.Options()
+                            o2.inSampleSize = sc
+                            bmp = android.graphics.BitmapFactory.decodeByteArray(
+                                data, 0, data.size, o2)
+                        }
+                    } else {
+                        c.disconnect()
+                    }
+                } catch (_: Exception) {}
+                val b = bmp
+                runOnUiThread {
+                    try {
+                        if (b != null && iv.tag == "full:$u") {
+                            iv.setImageBitmap(b)
+                        }
+                    } catch (_: Exception) {}
+                }
+            }
+        } catch (_: Exception) {}
+    }
+
     private fun finishWithLinks(sel: List<String>) {
         try {
             if (sel.any { it.startsWith("blob:") }) {
-                countLbl.text = "${sel.size} عکس آماده — گزینه «استخراج با دانلود» را انتخاب کن"
+                countLbl.text = "${sel.size} عکس — در حال دانلود…"
                 Toast.makeText(this,
                     "این سایت عکس‌ها را داخل مرورگر رمزگشایی می‌کند " +
-                    "(${sel.size} صفحه آماده) — " +
-                    "از گزینه «استخراج با دانلود» استفاده کن",
+                    "(${sel.size} صفحه) — به‌جای لینک، خودکار دانلود می‌کنم",
                     Toast.LENGTH_LONG).show()
+                downloadSelected(sel)
                 return
             }
             var outList = sel
@@ -1714,6 +1836,32 @@ tick()
         } catch (_: Exception) {}
     }
 
+    private fun onDlChunk(idx: Int, ci: Int, cn: Int, piece: String) {
+        try {
+            if (ci == 0) dlParts.remove(idx)
+            val sb = dlParts.getOrPut(idx) { StringBuilder() }
+            sb.append(piece)
+            if (sb.length > 40 * 1024 * 1024) {
+                sb.setLength(0)
+                sb.append("!!OVERSIZE")
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun onDlCommit(idx: Int, total: Int, srcUrl: String) {
+        var dataUrl = ""
+        try {
+            val sb = dlParts.remove(idx)
+            if (sb != null) {
+                dataUrl = sb.toString()
+                if (dataUrl.startsWith("!!OVERSIZE")) dataUrl = ""
+            }
+        } catch (_: Exception) {
+            dataUrl = ""
+        }
+        onDlItem(idx, total, dataUrl, srcUrl)
+    }
+
     private fun onDlDone(total: Int) {
         runOnUiThread {
             try {
@@ -1741,6 +1889,7 @@ tick()
             dlDir?.mkdirs()
             dlDone = 0
             dlOk = 0
+            dlParts.clear()
         } catch (e: Exception) {
             Toast.makeText(this, "خطا در آماده‌سازی دانلود: ${e.message}",
                 Toast.LENGTH_LONG).show()
@@ -1766,13 +1915,22 @@ tick()
             append("f.onload=function(){res(String(f.result||''))};")
             append("f.onerror=function(){res('')};f.readAsDataURL(b)}")
             append("catch(e){res('')}})})}")
+            append("var CH=262144;")
+            append("function send(idx,total,u,d){")
+            append("try{d=String(d||'');")
+            append("if(d.length<=CH){try{window.MtDl.recv(idx,total,d,u)}catch(e){}return}")
+            append("var n=Math.ceil(d.length/CH);")
+            append("for(var c=0;c<n;c++){")
+            append("try{window.MtDl.chunk(idx,c,n,d.substr(c*CH,CH))}catch(e){}}")
+            append("try{window.MtDl.commit(idx,total,u)}catch(e){}}")
+            append("catch(e){try{window.MtDl.recv(idx,total,'',u)}catch(e2){}}}")
             append("var i=0;function step(){")
             append("if(i>=urls.length){try{window.MtDl.done(urls.length)}catch(e){}return}")
             append("var idx=i;var u=urls[i];i++;")
             append("toData(u).then(function(d){")
-            append("try{window.MtDl.recv(idx,urls.length,d||'',u)}catch(e){}step()})")
+            append("send(idx,urls.length,u,d);step()})")
             append(".catch(function(){")
-            append("try{window.MtDl.recv(idx,urls.length,'',u)}catch(e){}step()})}")
+            append("send(idx,urls.length,u,'');step()})}")
             append("step()}catch(e){try{window.MtDl.done(0)}catch(e2){}}})()")
         }
         try {
