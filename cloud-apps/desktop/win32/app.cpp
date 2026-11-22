@@ -3294,7 +3294,7 @@ int WINAPI WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmdLine, int nCmdShow
 
     MtInitLogPath();
     SetUnhandledExceptionFilter(MtCrashFilter);
-    MtLog("WinMain — MangaCloud v1.14.386 (fix extract crash: deferred WebView2 ops + SEH dispatch + hold-to-fullscreen preview)");
+    MtLog("WinMain — MangaCloud v1.14.386 (extract fix: deferred WebView2 ops + SEH dispatch + hold-to-fullscreen preview)");
     {
         WCHAR mv[16];
         DWORD mn = GetEnvironmentVariableW(L"MANGA_SMOKE", mv, 15);
