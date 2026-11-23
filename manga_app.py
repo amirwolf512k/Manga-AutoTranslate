@@ -2100,6 +2100,35 @@ _MT_BROWSER_WIN_JS = r"""(function(){
           + 'object-fit:cover;border-radius:10px;display:block;background:#232b3b;';
         im.onerror = function(){
           try{
+            if(String(u).indexOf('blob:') === 0 && !im.__m){
+              im.__m = 1;
+              var mb = window.__MT_BLOBS[String(u).split('#')[0]];
+              if(mb && mb !== 1){
+                try{
+                  var fr = new FileReader();
+                  fr.onload = function(){
+                    var s = String(fr.result || '');
+                    var im2 = new Image();
+                    im2.onload = function(){
+                      try{
+                        var cv = document.createElement('canvas');
+                        var mw = im2.naturalWidth || 1, mh = im2.naturalHeight || 1;
+                        var sc = Math.min(1, 240 / Math.max(mw, mh));
+                        cv.width = Math.max(1, Math.round(mw * sc));
+                        cv.height = Math.max(1, Math.round(mh * sc));
+                        cv.getContext('2d').drawImage(im2, 0, 0, cv.width, cv.height);
+                        im.src = cv.toDataURL('image/jpeg', 0.72);
+                      }catch(e3){}
+                    };
+                    im2.onerror = function(){ try{ im.src = s; }catch(e4){} };
+                    im2.src = s;
+                  };
+                  fr.onerror = function(){};
+                  fr.readAsDataURL(mb);
+                }catch(e5){}
+                return;
+              }
+            }
             if(!im.__r){
               im.__r = 1;
               im.referrerPolicy = 'no-referrer';

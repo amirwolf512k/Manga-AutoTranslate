@@ -495,6 +495,12 @@ public class BrowserActivity extends Activity {
                 public void prev(final String dataUrl) {
                     onPreviewData(dataUrl == null ? "" : dataUrl);
                 }
+
+                @android.webkit.JavascriptInterface
+                public void th(final String srcUrl, final String dataUrl) {
+                    onThumbData(srcUrl == null ? "" : srcUrl,
+                            dataUrl == null ? "" : dataUrl);
+                }
             }, "MtDl");
         } catch (Exception ignored) {
         }
@@ -1319,14 +1325,26 @@ public class BrowserActivity extends Activity {
                     new java.util.HashSet<String>());
     private static final java.util.concurrent.ExecutorService THUMB_POOL =
             java.util.concurrent.Executors.newFixedThreadPool(3);
+    private static final java.util.Map<String, java.util.List<android.widget.ImageView>> THUMB_VIEWS =
+            new java.util.concurrent.ConcurrentHashMap<>();
 
     private void loadThumb(final android.widget.ImageView iv, final String u) {
         try {
             iv.setTag(u);
+            try {
+                THUMB_VIEWS.computeIfAbsent(u,
+                        k -> java.util.Collections.synchronizedList(
+                                new java.util.ArrayList<>())).add(iv);
+            } catch (Exception ignored) {
+            }
             android.graphics.Bitmap b = THUMB_CACHE.get(u);
             if (b != null) {
                 iv.setImageBitmap(b);
                 iv.setVisibility(View.VISIBLE);
+                return;
+            }
+            if (u.startsWith("blob:")) {
+                loadThumbViaJs(u);
                 return;
             }
             if (THUMB_FAILED.contains(u)) {
@@ -1417,6 +1435,113 @@ public class BrowserActivity extends Activity {
         }
     }
 
+    private void loadThumbViaJs(final String u) {
+        try {
+            final String q = org.json.JSONObject.quote(u);
+            final StringBuilder js = new StringBuilder("(function(){");
+            js.append("try{");
+            js.append("var U=").append(q).append(";");
+            js.append("function done(d){try{window.MtDl.th(U,d||'')}catch(e){}}");
+            js.append("function finish(b){");
+            js.append("if(!b){done('');return}");
+            js.append("try{");
+            js.append("var fr=new FileReader();");
+            js.append("fr.onload=function(){");
+            js.append("try{");
+            js.append("var s=String(fr.result||'');");
+            js.append("var img=new Image();");
+            js.append("img.onload=function(){");
+            js.append("try{");
+            js.append("var cv=document.createElement('canvas');");
+            js.append("var mw=img.width||1,mh=img.height||1;");
+            js.append("var sc=Math.min(1,240/Math.max(mw,mh));");
+            js.append("cv.width=Math.max(1,Math.round(mw*sc));");
+            js.append("cv.height=Math.max(1,Math.round(mh*sc));");
+            js.append("cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);");
+            js.append("done(cv.toDataURL('image/jpeg',0.72))");
+            js.append("}catch(e){done(s)}");
+            js.append("};");
+            js.append("img.onerror=function(){done(s)};");
+            js.append("img.src=s");
+            js.append("}catch(e){done(s)}");
+            js.append("};");
+            js.append("fr.onerror=function(){done('')};");
+            js.append("fr.readAsDataURL(b)");
+            js.append("}catch(e){done('')}");
+            js.append("}");
+            js.append("var mb=null;");
+            js.append("try{mb=window.__MT_BLOBS[String(U).split('#')[0]]}catch(e){}");
+            js.append("if(mb&&mb!==1){finish(mb);return}");
+            js.append("try{");
+            js.append("fetch(U).then(function(r){return r.ok?r.blob():null})");
+            js.append(".then(function(b){finish(b)})");
+            js.append(".catch(function(){done('')})");
+            js.append("}catch(e){done('')}");
+            js.append("}catch(e){try{window.MtDl.th(U,'')}catch(e2){}}");
+            js.append("})()");
+            web.evaluateJavascript(js.toString(), null);
+        } catch (Exception e) {
+            onThumbData(u, "");
+        }
+    }
+
+    private void onThumbData(final String u, final String dataUrl) {
+        if (dataUrl.length() < 64) {
+            THUMB_FAILED.add(u);
+            return;
+        }
+        THUMB_POOL.execute(() -> {
+            android.graphics.Bitmap bmp = null;
+            try {
+                String b64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+                byte[] bytes = android.util.Base64.decode(
+                        b64, android.util.Base64.DEFAULT);
+                if (bytes.length > 0) {
+                    android.graphics.BitmapFactory.Options o =
+                            new android.graphics.BitmapFactory.Options();
+                    o.inJustDecodeBounds = true;
+                    android.graphics.BitmapFactory.decodeByteArray(
+                            bytes, 0, bytes.length, o);
+                    int sc = 1;
+                    int maxDim = Math.max(o.outWidth, o.outHeight);
+                    while (maxDim / sc > 260) sc *= 2;
+                    android.graphics.BitmapFactory.Options o2 =
+                            new android.graphics.BitmapFactory.Options();
+                    o2.inSampleSize = sc;
+                    bmp = android.graphics.BitmapFactory.decodeByteArray(
+                            bytes, 0, bytes.length, o2);
+                }
+            } catch (Exception ignored) {
+            }
+            if (bmp == null) {
+                THUMB_FAILED.add(u);
+                return;
+            }
+            THUMB_CACHE.put(u, bmp);
+            runOnUiThread(() -> {
+                try {
+                    java.util.List<android.widget.ImageView> lst =
+                            THUMB_VIEWS.get(u);
+                    if (lst != null) {
+                        synchronized (lst) {
+                            for (int i = 0; i < lst.size(); i++) {
+                                try {
+                                    android.widget.ImageView iv2 = lst.get(i);
+                                    if (iv2 != null && u.equals(iv2.getTag())) {
+                                        iv2.setImageBitmap(bmp);
+                                        iv2.setVisibility(View.VISIBLE);
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            }
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+            });
+        });
+    }
+
     private android.widget.ImageView previewIv = null;
     private String previewTag = null;
     private TextView previewLd = null;
@@ -1503,16 +1628,15 @@ public class BrowserActivity extends Activity {
             js.append("try{");
             js.append("var U=").append(q).append(";");
             js.append("function done(d){try{window.MtDl.prev(d||'')}catch(e){}}");
-            js.append("try{");
-            js.append("fetch(U,{credentials:'include'})")
-                    .append(".then(function(r){return r.ok?r.blob():null})");
-            js.append(".then(function(b){");
+            js.append("function finish(b){");
             js.append("if(!b){done('');return}");
+            js.append("try{");
             js.append("var fr=new FileReader();");
             js.append("fr.onload=function(){");
             js.append("try{");
             js.append("var s=String(fr.result||'');");
-            js.append("if(s.length<2500000){done(s);return}");
+            js.append("var big=s.length>=2500000||s.indexOf('data:image/avif')===0;");
+            js.append("if(!big){done(s);return}");
             js.append("var img=new Image();");
             js.append("img.onload=function(){");
             js.append("try{");
@@ -1531,7 +1655,16 @@ public class BrowserActivity extends Activity {
             js.append("};");
             js.append("fr.onerror=function(){done('')};");
             js.append("fr.readAsDataURL(b)");
-            js.append("}).catch(function(){done('')})");
+            js.append("}catch(e){done('')}");
+            js.append("}");
+            js.append("var mb=null;");
+            js.append("try{mb=window.__MT_BLOBS[String(U).split('#')[0]]}catch(e){}");
+            js.append("if(mb&&mb!==1){finish(mb);return}");
+            js.append("try{");
+            js.append("fetch(U,{credentials:'include'})");
+            js.append(".then(function(r){return r.ok?r.blob():null})");
+            js.append(".then(function(b){finish(b)})");
+            js.append(".catch(function(){done('')})");
             js.append("}catch(e){done('')}");
             js.append("}catch(e){try{window.MtDl.prev('')}catch(e2){}}");
             js.append("})()");

@@ -381,6 +381,8 @@ tick()
             java.util.Collections.synchronizedSet(HashSet<String>())
         private val THUMB_POOL: java.util.concurrent.ExecutorService =
             java.util.concurrent.Executors.newFixedThreadPool(3)
+        private val THUMB_VIEWS =
+            java.util.concurrent.ConcurrentHashMap<String, MutableList<android.widget.ImageView>>()
     }
 
     private val BG = Color.parseColor("#060607")
@@ -759,6 +761,11 @@ tick()
                 @android.webkit.JavascriptInterface
                 fun prev(dataUrl: String?) {
                     onPreviewData(dataUrl ?: "")
+                }
+
+                @android.webkit.JavascriptInterface
+                fun th(srcUrl: String?, dataUrl: String?) {
+                    onThumbData(srcUrl ?: "", dataUrl ?: "")
                 }
             }, "MtDl")
         } catch (_: Exception) {}
@@ -1491,9 +1498,18 @@ tick()
     private fun loadThumb(iv: android.widget.ImageView, u: String) {
         try {
             iv.tag = u
+            try {
+                THUMB_VIEWS.computeIfAbsent(u) {
+                    java.util.Collections.synchronizedList(ArrayList())
+                }.add(iv)
+            } catch (_: Exception) {}
             THUMB_CACHE.get(u)?.let { b ->
                 iv.setImageBitmap(b)
                 iv.visibility = View.VISIBLE
+                return
+            }
+            if (u.startsWith("blob:")) {
+                loadThumbViaJs(u)
                 return
             }
             if (THUMB_FAILED.contains(u)) {
@@ -1573,6 +1589,107 @@ tick()
                 }
             }
         } catch (_: Exception) {}
+    }
+
+    private fun loadThumbViaJs(u: String) {
+        try {
+            val q = JSONObject.quote(u)
+            val js = "(function(){" +
+                "try{" +
+                "var U=" + q + ";" +
+                "function done(d){try{window.MtDl.th(U,d||'')}catch(e){}}" +
+                "function finish(b){" +
+                "if(!b){done('');return}" +
+                "try{" +
+                "var fr=new FileReader();" +
+                "fr.onload=function(){" +
+                "try{" +
+                "var s=String(fr.result||'');" +
+                "var img=new Image();" +
+                "img.onload=function(){" +
+                "try{" +
+                "var cv=document.createElement('canvas');" +
+                "var mw=img.width||1,mh=img.height||1;" +
+                "var sc=Math.min(1,240/Math.max(mw,mh));" +
+                "cv.width=Math.max(1,Math.round(mw*sc));" +
+                "cv.height=Math.max(1,Math.round(mh*sc));" +
+                "cv.getContext('2d').drawImage(img,0,0,cv.width,cv.height);" +
+                "done(cv.toDataURL('image/jpeg',0.72))" +
+                "}catch(e){done(s)}" +
+                "};" +
+                "img.onerror=function(){done(s)};" +
+                "img.src=s" +
+                "}catch(e){done(s)}" +
+                "};" +
+                "fr.onerror=function(){done('')};" +
+                "fr.readAsDataURL(b)" +
+                "}catch(e){done('')}" +
+                "}" +
+                "var mb=null;" +
+                "try{mb=window.__MT_BLOBS[String(U).split('#')[0]]}catch(e){}" +
+                "if(mb&&mb!==1){finish(mb);return}" +
+                "try{" +
+                "fetch(U).then(function(r){return r.ok?r.blob():null})" +
+                ".then(function(b){finish(b)})" +
+                ".catch(function(){done('')})" +
+                "}catch(e){done('')}" +
+                "}catch(e){try{window.MtDl.th(U,'')}catch(e2){}}" +
+                "})()"
+            web.evaluateJavascript(js, null)
+        } catch (_: Exception) {
+            onThumbData(u, "")
+        }
+    }
+
+    private fun onThumbData(u: String, dataUrl: String) {
+        if (dataUrl.length < 64) {
+            THUMB_FAILED.add(u)
+            return
+        }
+        THUMB_POOL.execute {
+            var bmp: android.graphics.Bitmap? = null
+            try {
+                val b64 = dataUrl.substring(dataUrl.indexOf(',') + 1)
+                val bytes = android.util.Base64.decode(
+                    b64, android.util.Base64.DEFAULT)
+                if (bytes.isNotEmpty()) {
+                    val o = android.graphics.BitmapFactory.Options()
+                    o.inJustDecodeBounds = true
+                    android.graphics.BitmapFactory.decodeByteArray(
+                        bytes, 0, bytes.size, o)
+                    var sc = 1
+                    val maxDim = Math.max(o.outWidth, o.outHeight)
+                    while (maxDim / sc > 260) sc *= 2
+                    val o2 = android.graphics.BitmapFactory.Options()
+                    o2.inSampleSize = sc
+                    bmp = android.graphics.BitmapFactory.decodeByteArray(
+                        bytes, 0, bytes.size, o2)
+                }
+            } catch (_: Exception) {}
+            if (bmp == null) {
+                THUMB_FAILED.add(u)
+                return@execute
+            }
+            val b2 = bmp
+            THUMB_CACHE.put(u, b2)
+            runOnUiThread {
+                try {
+                    val lst = THUMB_VIEWS[u]
+                    if (lst != null) {
+                        synchronized(lst) {
+                            for (iv2 in lst) {
+                                try {
+                                    if (iv2 != null && iv2.tag == u) {
+                                        iv2.setImageBitmap(b2)
+                                        iv2.visibility = View.VISIBLE
+                                    }
+                                } catch (_: Exception) {}
+                            }
+                        }
+                    }
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     private var previewIv: android.widget.ImageView? = null
@@ -1657,15 +1774,15 @@ tick()
                 "try{" +
                 "var U=" + q + ";" +
                 "function done(d){try{window.MtDl.prev(d||'')}catch(e){}}" +
-                "try{" +
-                "fetch(U,{credentials:'include'}).then(function(r){return r.ok?r.blob():null})" +
-                ".then(function(b){" +
+                "function finish(b){" +
                 "if(!b){done('');return}" +
+                "try{" +
                 "var fr=new FileReader();" +
                 "fr.onload=function(){" +
                 "try{" +
                 "var s=String(fr.result||'');" +
-                "if(s.length<2500000){done(s);return}" +
+                "var big=s.length>=2500000||s.indexOf('data:image/avif')===0;" +
+                "if(!big){done(s);return}" +
                 "var img=new Image();" +
                 "img.onload=function(){" +
                 "try{" +
@@ -1684,7 +1801,15 @@ tick()
                 "};" +
                 "fr.onerror=function(){done('')};" +
                 "fr.readAsDataURL(b)" +
-                "}).catch(function(){done('')})" +
+                "}catch(e){done('')}" +
+                "}" +
+                "var mb=null;" +
+                "try{mb=window.__MT_BLOBS[String(U).split('#')[0]]}catch(e){}" +
+                "if(mb&&mb!==1){finish(mb);return}" +
+                "try{" +
+                "fetch(U,{credentials:'include'}).then(function(r){return r.ok?r.blob():null})" +
+                ".then(function(b){finish(b)})" +
+                ".catch(function(){done('')})" +
                 "}catch(e){done('')}" +
                 "}catch(e){try{window.MtDl.prev('')}catch(e2){}}" +
                 "})()"
