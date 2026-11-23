@@ -4,6 +4,7 @@
 
   const TAB = { id: -1 }
   let recording = false
+  let enabled = false
   let gathered = null
   let picked = new Set()
   let cancelFlag = false
@@ -461,6 +462,7 @@
     '<div class="mtresbtns">' +
     '<button class="mtbtn mtmain" data-mt="copypath">کپی مسیر</button>' +
     '<button class="mtbtn mtghost" data-mt="copylinks">کپی همهٔ لینک‌ها</button>' +
+    '<button class="mtbtn mtghost" data-mt="copyfails">کپی لینک‌های ناموفق</button>' +
     '<button class="mtbtn mtghost" data-mt="resclose">بستن</button>' +
     '</div>' +
     '</div>' +
@@ -515,14 +517,19 @@
     } catch (err) { return false }
   }
 
-  function setRec(on, count) {
-    recording = on
-    fab.style.display = on ? 'flex' : 'none'
-    fab.classList.toggle('mtrec', on)
-    fabLabel.textContent = 'استخراج'
-    fabBadge.style.display = on ? 'flex' : 'none'
+  function applyUI(count) {
+    fab.style.display = enabled ? 'flex' : 'none'
+    fab.classList.toggle('mtrec', recording)
+    fabLabel.textContent = recording ? 'استخراج' : 'ضبط'
+    const showBadge = recording && typeof count === 'number'
+    fabBadge.style.display = showBadge ? 'flex' : 'none'
     fabBadge.textContent = String(count || 0)
-    if (!on) gathered = null
+    if (!recording) gathered = null
+  }
+
+  function setRec(on, count) {
+    recording = !!on
+    applyUI(on ? count : 0)
   }
 
   function closeMenu() { menu.classList.remove('mtopen') }
@@ -566,6 +573,10 @@
   function onFabClick() {
     closeMenu()
     closePanel()
+    if (!recording) {
+      startRecording()
+      return
+    }
     gather().then(function (items) {
       if (!items.length) {
         toast('هیچ عکسی ضبط نشد — صفحه را اسکرول کن تا عکس‌ها لود شوند')
@@ -579,6 +590,7 @@
 
   async function startRecording() {
     try { await bg({ type: 'MT_START', tab: TAB.id }, 5000) } catch (err) {}
+    enabled = true
     try { window.postMessage({ MT_CMD: 'clear' }, '*') } catch (err) {}
     setRec(true, 0)
     toast('ضبط شروع شد — صفحه بازخوانی می‌شود')
@@ -590,7 +602,24 @@
     setRec(false, 0)
     closeMenu()
     closePanel()
-    toast('ضبط متوقف شد')
+    toast('ضبط متوقف شد — برای شروعِ تازه دکمهٔ ضبط را بزن')
+  }
+
+  async function enableExt() {
+    try { await bg({ type: 'MT_ENABLE' }, 5000) } catch (err) {}
+    enabled = true
+    applyUI()
+    toast('افزونه فعال شد — دکمهٔ ضبط پایین صفحه')
+  }
+
+  async function disableExt() {
+    try { await bg({ type: 'MT_DISABLE' }, 5000) } catch (err) {}
+    enabled = false
+    setRec(false, 0)
+    closeMenu()
+    closePanel()
+    closeProg()
+    toast('افزونه خاموش شد')
   }
 
   menu.addEventListener('click', function (e) {
@@ -910,7 +939,28 @@
     if (u8[0] === 0x47 && u8[1] === 0x49 && u8[2] === 0x46) return 'gif'
     if (u8[0] === 0x52 && u8[1] === 0x49 && u8[2] === 0x46 && u8[8] === 0x57 && u8[9] === 0x45 && u8[10] === 0x42 && u8[11] === 0x50) return 'webp'
     if (u8[4] === 0x66 && u8[5] === 0x74 && u8[6] === 0x79 && u8[7] === 0x70) return 'avif'
+    if (u8[0] === 0x42 && u8[1] === 0x4D) return 'bmp'
+    if ((u8[0] === 0x49 && u8[1] === 0x49 && u8[2] === 0x2A) || (u8[0] === 0x4D && u8[1] === 0x4D && u8[3] === 0x2A)) return 'tiff'
+    if (u8[0] === 0x00 && u8[1] === 0x00 && u8[2] === 0x00 && u8[3] === 0x0C && u8[8] === 0x6A && u8[9] === 0x50) return 'jp2'
     return ''
+  }
+
+  function looksLikeJunk(u8, ct) {
+    if (!u8 || !u8.length) return true
+    if (u8.length < 2048) return true
+    const c = String(ct || '').toLowerCase()
+    if (/^text\/|json|html|xml/.test(c)) return true
+    const e = sniffExt(u8)
+    if (e) return false
+    let texty = 0
+    const n = Math.min(u8.length, 512)
+    for (let i = 0; i < n; i++) {
+      const b = u8[i]
+      if (b === 9 || b === 10 || b === 13 || (b >= 32 && b < 127)) texty++
+    }
+    if (texty / n > 0.9) return true
+    if (u8[0] === 0x3C || u8[0] === 0x7B) return true
+    return false
   }
 
   function finalExt(item, ct, u8) {
@@ -936,7 +986,9 @@
 
   async function csFetch(url) {
     try {
-      const r = await fetch(url, { credentials: 'include' })
+      let cross = true
+      try { cross = new URL(url, location.href).origin !== location.origin } catch (err) {}
+      const r = await fetch(url, cross ? { credentials: 'omit' } : { credentials: 'include' })
       if (!r || !r.ok) return null
       const ct = r.headers.get('content-type') || ''
       const buf = await r.arrayBuffer()
@@ -950,18 +1002,28 @@
       const p = waitPage('blobData', function (d) { return d.url === item.show }, 25000)
       window.postMessage({ MT_CMD: 'pullBlobs', urls: [item.show] }, '*')
       const d = await p
-      if (d && d.buf) return { u8: new Uint8Array(d.buf), ct: d.type || '' }
+      if (d && d.buf) {
+        const u8 = new Uint8Array(d.buf)
+        if (!looksLikeJunk(u8, d.type || '')) return { u8: u8, ct: d.type || '' }
+      }
       const pf = await pageFetch(item.show)
-      if (pf) return pf
-      return csFetch(item.show)
+      if (pf && !looksLikeJunk(pf.u8, pf.ct)) return pf
+      const cf = await csFetch(item.show)
+      if (cf && !looksLikeJunk(cf.u8, cf.ct)) return cf
+      return null
     }
     try {
       const r = await bg({ type: 'MT_FETCH', url: item.fetch, ref: item.r || (location.href || '') }, 90000)
-      if (r && r.b64) return { u8: b64ToU8(r.b64), ct: r.ct || '' }
+      if (r && r.b64) {
+        const u8 = b64ToU8(r.b64)
+        if (!looksLikeJunk(u8, r.ct || '')) return { u8: u8, ct: r.ct || '' }
+      }
     } catch (err) {}
     const pf = await pageFetch(item.fetch)
-    if (pf) return pf
-    return csFetch(item.fetch)
+    if (pf && !looksLikeJunk(pf.u8, pf.ct)) return pf
+    const cf = await csFetch(item.fetch)
+    if (cf && !looksLikeJunk(cf.u8, cf.ct)) return cf
+    return null
   }
 
   function zipName(count) {
@@ -1030,6 +1092,7 @@
     prog.classList.add('mtopen')
     const zip = new MtZip()
     let ok = 0, fail = 0
+    const failed = []
     for (let i = 0; i < items.length; i++) {
       if (cancelFlag) break
       const item = items[i]
@@ -1040,22 +1103,39 @@
         let out = null
         if (ext === 'gif' || r.u8.length < 2048) {
           fail++
+          failed.push(item.show + ' — فایل گیف یا خیلی کوچک')
         } else if (ext === 'avif') {
           const j = await avifToJpeg(r.u8)
-          if (j && j.length) { out = j; ext = 'jpg' } else fail++
+          if (j && j.length) { out = j; ext = 'jpg' }
+          else { fail++; failed.push(item.show + ' — avif تبدیل نشد') }
         } else {
           out = r.u8
         }
         if (out) { zip.add((i + 1) + '.' + ext, out); ok++ }
       } else {
         fail++
+        failed.push(item.show + ' — دریافت نشد (سایت اجازه نداد)')
       }
       progOk.textContent = ok + ' موفق'
       progFail.textContent = fail + ' ناموفق'
     }
-    if (ok === 0) {
+    if (cancelFlag && ok === 0) {
       closeProg()
-      toast(cancelFlag ? 'دانلود لغو شد' : 'هیچ عکسی دانلود نشد')
+      toast('دانلود لغو شد')
+      return
+    }
+    if (ok === 0) {
+      progTitle.textContent = 'خطا — هیچ عکسی دانلود نشد'
+      progBar.style.width = '100%'
+      progCur.textContent = ''
+      progResPath.textContent = ''
+      progResPath.style.display = 'none'
+      progFailNote.textContent = 'هیچ‌کدام از ' + items.length + ' لینک قابل دریافت نبود — سایت دانلود را مسدود کرده است'
+      progFailNote.classList.add('mtopen')
+      progRes.classList.add('mtopen')
+      progRes.setAttribute('data-path', '')
+      progRes.setAttribute('data-links', items.map(function (it) { return it.show }).join('\n'))
+      progRes.setAttribute('data-fails', failed.join('\n'))
       return
     }
     progTitle.textContent = 'در حال ساخت فایل ZIP'
@@ -1067,6 +1147,7 @@
     progTitle.textContent = 'ذخیره شد'
     progBar.style.width = '100%'
     progCur.textContent = ''
+    progResPath.style.display = ''
     progResPath.textContent = r.path
     if (fail > 0) {
       progFailNote.textContent = fail + ' عکس دانلود نشد و در فایل نیست'
@@ -1075,6 +1156,7 @@
     progRes.classList.add('mtopen')
     progRes.setAttribute('data-path', r.path)
     progRes.setAttribute('data-links', items.map(function (it) { return it.show }).join('\n'))
+    progRes.setAttribute('data-fails', failed.join('\n'))
   }
 
   prog.addEventListener('click', function (e) {
@@ -1092,15 +1174,22 @@
       const l = progRes.getAttribute('data-links') || ''
       copyText(l).then(function (okres) { toast(okres ? 'لینک‌ها کپی شد' : 'کپی نشد') })
     }
+    if (t === 'copyfails') {
+      const f = progRes.getAttribute('data-fails') || ''
+      copyText(f).then(function (okres) { toast(okres ? 'لینک‌های ناموفق کپی شد' : 'کپی نشد') })
+    }
     if (t === 'resclose') closeProg()
   })
 
   async function refreshRecState() {
+    let en = false
     let on = false
     let count = 0
     try {
-      const s = await chrome.storage.session.get('mtRec')
+      const s = await chrome.storage.session.get(['mtRec', 'mtEn'])
       const e = s && s.mtRec
+      const ee = s && s.mtEn
+      if (ee && ee.on) en = true
       if (e && e.on) {
         on = true
         count = (e.urls || []).length
@@ -1108,11 +1197,14 @@
     } catch (err) {
       try {
         const r = await bg({ type: 'MT_STATE', tab: TAB.id }, 4000)
+        en = !!(r && r.en)
         on = !!(r && r.rec)
         count = (r && r.count) || 0
       } catch (err2) {}
     }
-    setRec(on, count)
+    enabled = en
+    recording = on
+    applyUI(on ? count : 0)
   }
 
   async function init() {
@@ -1123,7 +1215,8 @@
     await refreshRecState()
     try {
       chrome.storage.onChanged.addListener(function (changes, area) {
-        if (area !== 'session' || !changes.mtRec) return
+        if (area !== 'session') return
+        if (!changes.mtRec && !changes.mtEn) return
         refreshRecState()
       })
     } catch (err) {}
@@ -1132,6 +1225,16 @@
   try {
     chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
       if (!msg || !msg.type) return
+      if (msg.type === 'MT_POPUP_ENABLE') {
+        enableExt()
+        sendResponse({ ok: true })
+        return
+      }
+      if (msg.type === 'MT_POPUP_DISABLE') {
+        disableExt()
+        sendResponse({ ok: true })
+        return
+      }
       if (msg.type === 'MT_POPUP_START') {
         startRecording()
         sendResponse({ ok: true })

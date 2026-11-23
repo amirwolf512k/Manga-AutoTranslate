@@ -95,16 +95,27 @@
       }
     }
     if (d.MT_CMD === 'pageFetch') {
-      fetch(d.url, { credentials: 'include' }).then(async function (r) {
-        if (!r.ok) {
-          window.postMessage({ MT_EV: 'pageFetch', url: d.url, err: 'http ' + r.status }, '*')
-          return
-        }
-        const buf = await r.arrayBuffer()
-        window.postMessage({ MT_EV: 'pageFetch', url: d.url, buf: buf, ct: r.headers.get('content-type') || '' }, '*', [buf])
-      }).catch(function (err) {
-        window.postMessage({ MT_EV: 'pageFetch', url: d.url, err: String(err) }, '*')
-      })
+      const url = String(d.url || '')
+      let cross = true
+      try { cross = new URL(url, location.href).origin !== location.origin } catch (err) {}
+      const postErr = function (e) {
+        window.postMessage({ MT_EV: 'pageFetch', url: url, err: String(e) }, '*')
+      }
+      const attempt = function (cred, canRetry) {
+        fetch(url, { credentials: cred, referrerPolicy: 'unsafe-url' }).then(async function (r) {
+          if (!r.ok) {
+            if (canRetry) { attempt('include', false); return }
+            postErr('http ' + r.status)
+            return
+          }
+          const buf = await r.arrayBuffer()
+          window.postMessage({ MT_EV: 'pageFetch', url: url, buf: buf, ct: r.headers.get('content-type') || '' }, '*', [buf])
+        }).catch(function (err) {
+          if (canRetry) { attempt('include', false); return }
+          postErr(err)
+        })
+      }
+      attempt(cross ? 'omit' : 'include', cross)
     }
     if (d.MT_CMD === 'clear') {
       net.length = 0

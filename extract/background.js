@@ -1,9 +1,51 @@
 let restored = false
 let restorePromise = null
 const REC = { on: false, urls: [], keys: [], seen: new Set() }
+const EN = { on: false }
 let flushTimer = null
 const pendingNet = []
 const selfFetch = new Set()
+
+let dnrKey = ''
+let dnrTimer = null
+const DNR_RULE_ID = 9901
+
+async function removeRefererRule() {
+  dnrKey = ''
+  try { await chrome.declarativeNetRequest.updateSessionRules({ removeRuleIds: [DNR_RULE_ID] }) } catch (err) {}
+}
+
+async function ensureRefererRule(url, ref) {
+  try {
+    if (!chrome.declarativeNetRequest || !chrome.declarativeNetRequest.updateSessionRules) return
+    let host = ''
+    try { host = new URL(url).hostname } catch (err) { return }
+    if (!host) return
+    const key = host + '|' + (ref || '')
+    if (key === dnrKey) {
+      if (dnrTimer) clearTimeout(dnrTimer)
+      dnrTimer = setTimeout(removeRefererRule, 120000)
+      return
+    }
+    await removeRefererRule()
+    if (ref) {
+      await chrome.declarativeNetRequest.updateSessionRules({
+        addRules: [{
+          id: DNR_RULE_ID,
+          priority: 1,
+          condition: { requestDomains: [host], resourceTypes: ['xmlhttprequest'] },
+          action: {
+            type: 'modifyHeaders',
+            setRequestHeaders: [{ header: 'referer', value: ref }]
+          }
+        }]
+      })
+    }
+    dnrKey = key
+    if (dnrTimer) clearTimeout(dnrTimer)
+    dnrTimer = setTimeout(removeRefererRule, 120000)
+  } catch (err) {}
+}
 
 async function ensurePageHook() {
   try {
@@ -30,13 +72,14 @@ function ensureRestore() {
     restorePromise = (async function () {
       try { await chrome.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_AND_UNTRUSTED_CONTEXTS' }) } catch (err) {}
       try {
-        const saved = await chrome.storage.session.get(['mtRec'])
+        const saved = await chrome.storage.session.get(['mtRec', 'mtEn'])
         if (saved && saved.mtRec && saved.mtRec.on) {
           REC.on = true
           REC.urls = saved.mtRec.urls || []
           REC.keys = saved.mtRec.keys || []
           REC.seen = new Set(REC.keys)
         }
+        if (saved && saved.mtEn && saved.mtEn.on) EN.on = true
       } catch (err) {}
       restored = true
       const list = pendingNet.splice(0)
@@ -49,9 +92,11 @@ ensureRestore()
 
 function clearRec(on) {
   REC.on = !!on
-  REC.urls = []
-  REC.keys = []
-  REC.seen = new Set()
+  if (on) {
+    REC.urls = []
+    REC.keys = []
+    REC.seen = new Set()
+  }
 }
 
 function serialize() {
@@ -69,6 +114,10 @@ function persist() {
 function persistNow() {
   if (flushTimer) { clearTimeout(flushTimer); flushTimer = null }
   chrome.storage.session.set({ mtRec: serialize() }).catch(() => {})
+}
+
+function persistEn() {
+  chrome.storage.session.set({ mtEn: { on: EN.on } }).catch(() => {})
 }
 
 function decodeProxy(url) {
@@ -171,6 +220,7 @@ chrome.webRequest.onResponseStarted.addListener(function (details) {
 async function fetchBytes(url, ref) {
   selfFetch.add(url)
   setTimeout(function () { selfFetch.delete(url) }, 30000)
+  await ensureRefererRule(url, ref)
   const mk = function (cred) {
     const o = { credentials: cred }
     if (ref) { o.referrer = ref; o.referrerPolicy = 'unsafe-url' }
@@ -231,9 +281,30 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     sendResponse({ tab: sender && sender.tab ? sender.tab.id : -1 })
     return
   }
+  if (type === 'MT_ENABLE') {
+    ensureRestore().then(function () {
+      EN.on = true
+      persistEn()
+      sendResponse({ ok: true })
+    })
+    return true
+  }
+  if (type === 'MT_DISABLE') {
+    ensureRestore().then(function () {
+      EN.on = false
+      REC.on = false
+      persistEn()
+      persistNow()
+      removeRefererRule()
+      sendResponse({ ok: true })
+    })
+    return true
+  }
   if (type === 'MT_START') {
     ensureRestore().then(function () {
+      EN.on = true
       clearRec(true)
+      persistEn()
       persistNow()
       sendResponse({ ok: true })
     })
@@ -241,15 +312,16 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
   }
   if (type === 'MT_STOP') {
     ensureRestore().then(function () {
-      clearRec(false)
+      REC.on = false
       persistNow()
+      removeRefererRule()
       sendResponse({ ok: true })
     })
     return true
   }
   if (type === 'MT_STATE') {
     ensureRestore().then(function () {
-      sendResponse({ rec: REC.on, count: REC.on ? REC.urls.length : 0 })
+      sendResponse({ rec: REC.on, count: REC.on ? REC.urls.length : 0, en: EN.on })
     })
     return true
   }

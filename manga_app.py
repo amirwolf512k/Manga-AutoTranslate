@@ -2169,7 +2169,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
             ld.textContent = '… در حالِ دریافت از اپ';
             var ref = '';
             try{ ref = String(location.href || ''); }catch(e){}
-            window.pywebview.api.fetchImg(String(u), ref).then(function(d){
+            window.pywebview.api.fetchImg(String(u), ref, String(document.cookie || '')).then(function(d){
               if(d && String(d).indexOf('data:image') === 0){ setSrc(String(d)); }
               else failMsg();
             }).catch(function(){ failMsg(); });
@@ -2521,8 +2521,10 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       if(window.pywebview && window.pywebview.api &&
          window.pywebview.api.fetchImg){
         var ref = '';
+        var ck = '';
         try{ ref = String(location.href || ''); }catch(e){}
-        return window.pywebview.api.fetchImg(String(u), ref).then(function(d){
+        try{ ck = String(document.cookie || ''); }catch(e){}
+        return window.pywebview.api.fetchImg(String(u), ref, ck).then(function(d){
           d = (d && String(d).indexOf('data:image') === 0)
             ? String(d) : '';
           if(d.indexOf('data:image/avif') !== 0) return d;
@@ -2825,12 +2827,13 @@ class _DesktopApi:
         except Exception as e:
             print(f"[!] استخراجِ مرورگرِ داخلی: خطا — {e}")
 
-    def fetchImg(self, u, ref):
+    def fetchImg(self, u, ref, cookie=""):
         try:
             import base64 as _b64
             import requests as _rq
             u = str(u or "").strip()
             ref = str(ref or "").strip()
+            cookie = str(cookie or "").strip()
             if not u.startswith(("http://", "https://")):
                 return ""
             headers = {
@@ -2841,6 +2844,8 @@ class _DesktopApi:
             }
             if ref:
                 headers["Referer"] = ref
+            if cookie:
+                headers["Cookie"] = cookie
             r = _rq.get(u, headers=headers, timeout=25)
             if r.status_code != 200 or not r.content:
                 return ""

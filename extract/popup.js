@@ -9,18 +9,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
   let busy = false
 
-  function setState(on, count) {
-    tog.checked = !!on
-    togtxt.textContent = on ? 'روشن' : 'خاموش'
-    if (on) statusEl.textContent = '● ضبط فعال' + (typeof count === 'number' ? ' — ' + count + ' عکس' : '')
-    else statusEl.textContent = ''
+  function setState(en, rec, count) {
+    tog.checked = !!en
+    togtxt.textContent = en ? 'روشن' : 'خاموش'
+    if (!en) statusEl.textContent = ''
+    else if (rec) statusEl.textContent = '● ضبط فعال' + (typeof count === 'number' ? ' — ' + count + ' عکس' : '')
+    else statusEl.textContent = 'فعال — دکمهٔ «ضبط» پایین صفحه'
   }
 
   function refresh() {
     try {
       chrome.runtime.sendMessage({ type: 'MT_STATE' }, function (r) {
         if (chrome.runtime.lastError || !r) return
-        setState(r.rec, r.count)
+        setState(r.en, r.rec, r.count)
       })
     } catch (err) {}
   }
@@ -56,14 +57,14 @@ document.addEventListener('DOMContentLoaded', function () {
     busy = true
     const want = tog.checked
     const done = function () {
-      setState(want, 0)
+      setState(want, false, 0)
       busy = false
       setTimeout(refresh, 600)
     }
-    sendTab({ type: want ? 'MT_POPUP_START' : 'MT_POPUP_STOP' }).then(function (ok) {
+    sendTab({ type: want ? 'MT_POPUP_ENABLE' : 'MT_POPUP_DISABLE' }).then(function (ok) {
       if (ok) { done(); return }
-      bgCmd(want ? 'MT_START' : 'MT_STOP').then(function () {
-        if (!want) statusEl.textContent = 'ضبط متوقف شد'
+      bgCmd(want ? 'MT_ENABLE' : 'MT_DISABLE').then(function () {
+        if (!want) statusEl.textContent = 'افزونه خاموش شد'
         done()
       })
     })
@@ -71,10 +72,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
   try {
     chrome.storage.onChanged.addListener(function (changes, area) {
-      if (area !== 'session' || !changes.mtRec) return
-      const e = changes.mtRec.newValue
-      if (e && e.on) setState(true, (e.urls || []).length)
-      else setState(false, 0)
+      if (area !== 'session') return
+      if (!changes.mtRec && !changes.mtEn) return
+      refresh()
     })
   } catch (err) {}
 
