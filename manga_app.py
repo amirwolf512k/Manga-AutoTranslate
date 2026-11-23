@@ -2487,10 +2487,32 @@ _MT_BROWSER_WIN_JS = r"""(function(){
   function blobToData(b){
     return new Promise(function(res){
       try{
-        var f = new FileReader();
-        f.onload = function(){ res(String(f.result || '')); };
-        f.onerror = function(){ res(''); };
-        f.readAsDataURL(b);
+        var go = function(bb){
+          try{
+            var f = new FileReader();
+            f.onload = function(){ res(String(f.result || '')); };
+            f.onerror = function(){ res(''); };
+            f.readAsDataURL(bb);
+          }catch(e){ res(''); }
+        };
+        if(b && String(b.type || '').indexOf('avif') !== -1){
+          try{
+            createImageBitmap(b).then(function(bp){
+              try{
+                var cv = document.createElement('canvas');
+                cv.width = bp.width || 1; cv.height = bp.height || 1;
+                cv.getContext('2d').drawImage(bp, 0, 0);
+                if(cv.toBlob){
+                  cv.toBlob(function(jb){ go(jb || b); }, 'image/jpeg', 0.92);
+                  return;
+                }
+              }catch(e2){}
+              go(b);
+            }).catch(function(){ go(b); });
+            return;
+          }catch(e3){}
+        }
+        go(b);
       }catch(e){ res(''); }
     });
   }
@@ -2501,8 +2523,26 @@ _MT_BROWSER_WIN_JS = r"""(function(){
         var ref = '';
         try{ ref = String(location.href || ''); }catch(e){}
         return window.pywebview.api.fetchImg(String(u), ref).then(function(d){
-          return (d && String(d).indexOf('data:image') === 0)
+          d = (d && String(d).indexOf('data:image') === 0)
             ? String(d) : '';
+          if(d.indexOf('data:image/avif') !== 0) return d;
+          return new Promise(function(res){
+            try{
+              var im = new Image();
+              im.onload = function(){
+                try{
+                  var cv = document.createElement('canvas');
+                  cv.width = im.naturalWidth || 1;
+                  cv.height = im.naturalHeight || 1;
+                  cv.getContext('2d').drawImage(im, 0, 0);
+                  var dd = cv.toDataURL('image/jpeg', 0.92);
+                  res(dd && dd.indexOf('data:image') === 0 ? dd : d);
+                }catch(e){ res(d); }
+              };
+              im.onerror = function(){ res(d); };
+              im.src = d;
+            }catch(e){ res(d); }
+          });
         }).catch(function(){ return ''; });
       }
     }catch(e){}
@@ -2820,6 +2860,9 @@ class _DesktopApi:
                     mt = "image/webp"
                 elif content[:12] == b"\x00\x00\x00\x0cjP ":
                     mt = "image/jp2"
+                elif (len(content) >= 12 and content[4:8] == b"ftyp"
+                        and content[8:10] == b"av"):
+                    mt = "image/avif"
                 else:
                     return ""
             if not mt.startswith("image/"):
@@ -2851,8 +2894,10 @@ class _DesktopApi:
                 return
             if not content:
                 return
+            if content[:3] == b"GIF":
+                return
             ext = ".jpg"
-            m = re.search(r"data:image/(jpe?g|png|webp|bmp)", head.lower())
+            m = re.search(r"data:image/(jpe?g|png|webp|bmp|avif)", head.lower())
             if m:
                 ext = "." + ("jpg" if m.group(1) in ("jpg", "jpeg")
                              else m.group(1))

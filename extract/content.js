@@ -238,8 +238,8 @@
     return out
   }
 
-  function makeItem(fetchUrl, disp, kind, size) {
-    const it = { fetch: fetchUrl, show: disp, kind: kind, size: size || 0, folder: '', name: '', ext: '', num: 0 }
+  function makeItem(fetchUrl, disp, kind, size, ref) {
+    const it = { fetch: fetchUrl, show: disp, kind: kind, size: size || 0, folder: '', name: '', ext: '', num: 0, r: ref || '' }
     if (kind === 'blob') {
       it.folder = 'blob'
       it.name = 'page-image'
@@ -251,6 +251,7 @@
       const base = segs.pop() || 'image'
       const m = String(base).match(/\.([a-z0-9]{2,5})$/i)
       if (m) it.ext = m[1].toLowerCase()
+      if (it.ext === 'gif') return null
       it.name = base
       it.folder = u.hostname + (segs.length ? '/' + segs.join('/') : '')
     } catch (err) {
@@ -290,42 +291,43 @@
     const perfUrls = perfPass()
     const seen = new Set()
     const items = []
-    const put = function (fetchUrl, showUrl, kind, size) {
+    const put = function (fetchUrl, showUrl, kind, size, ref) {
       const disp = showUrl || fetchUrl
       if (!disp) return
       const k = keyOf(disp)
       if (seen.has(k)) return
       seen.add(k)
-      items.push(makeItem(fetchUrl, disp, kind, size))
+      const it = makeItem(fetchUrl, disp, kind, size, ref)
+      if (it) items.push(it)
     }
     for (let i = 0; i < domUrls.length; i++) {
       const u = domUrls[i]
-      if (u.indexOf('blob:') === 0) { put(u, u, 'blob', 0); continue }
+      if (u.indexOf('blob:') === 0) { put(u, u, 'blob', 0, location.href); continue }
       const dec = decodeProxy(u)
       if (junk(dec)) continue
-      put(u, dec, 'net', 0)
+      put(u, dec, 'net', 0, location.href)
     }
-    for (let i = 0; i < netItems.length; i++) put(netItems[i].u, netItems[i].d, 'net', netItems[i].s)
+    for (let i = 0; i < netItems.length; i++) put(netItems[i].u, netItems[i].d, 'net', netItems[i].s, netItems[i].r)
     for (let i = 0; i < perfUrls.length; i++) {
       const u = perfUrls[i]
-      if (u.indexOf('blob:') === 0) { put(u, u, 'blob', 0); continue }
+      if (u.indexOf('blob:') === 0) { put(u, u, 'blob', 0, location.href); continue }
       const dec = decodeProxy(u)
       if (junk(dec)) continue
-      put(u, dec, 'net', 0)
+      put(u, dec, 'net', 0, location.href)
     }
     for (let i = 0; i < netUrls.length; i++) {
       const u = netUrls[i]
-      if (u.indexOf('blob:') === 0) { put(u, u, 'blob', 0); continue }
+      if (u.indexOf('blob:') === 0) { put(u, u, 'blob', 0, location.href); continue }
       const dec = decodeProxy(u)
       if (junk(dec)) continue
-      put(u, dec, 'net', 0)
+      put(u, dec, 'net', 0, location.href)
     }
     if (!items.length) {
       const sc = scriptScan()
       for (let i = 0; i < sc.length; i++) {
         const dec = decodeProxy(sc[i])
         if (junk(dec)) continue
-        put(sc[i], dec, 'net', 0)
+        put(sc[i], dec, 'net', 0, location.href)
       }
     }
     for (let i = 0; i < blobKeys.length; i++) put(blobKeys[i].url, blobKeys[i].url, 'blob', blobKeys[i].size)
@@ -858,7 +860,7 @@
       }
       if (stage === 1 && item.kind !== 'blob') {
         stage = 2
-        bg({ type: 'MT_FETCH', url: item.fetch }, 60000).then(function (r) {
+        bg({ type: 'MT_FETCH', url: item.fetch, ref: item.r || (location.href || '') }, 60000).then(function (r) {
           if (r && r.b64) {
             viewImg.src = 'data:' + (r.ct || 'image/jpeg') + ';base64,' + r.b64
             return
@@ -888,7 +890,7 @@
     return u8
   }
 
-  const EXT_OK = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'gif', 'tiff', 'tif']
+  const EXT_OK = ['jpg', 'jpeg', 'png', 'webp', 'avif', 'bmp', 'tiff', 'tif']
 
   function extFromType(ct) {
     const c = String(ct || '').toLowerCase()
@@ -954,7 +956,7 @@
       return csFetch(item.show)
     }
     try {
-      const r = await bg({ type: 'MT_FETCH', url: item.fetch }, 90000)
+      const r = await bg({ type: 'MT_FETCH', url: item.fetch, ref: item.r || (location.href || '') }, 90000)
       if (r && r.b64) return { u8: b64ToU8(r.b64), ct: r.ct || '' }
     } catch (err) {}
     const pf = await pageFetch(item.fetch)
@@ -995,6 +997,19 @@
     return { path: p, name: name }
   }
 
+  async function avifToJpeg(u8) {
+    try {
+      const bmp = await createImageBitmap(new Blob([u8], { type: 'image/avif' }))
+      const cv = document.createElement('canvas')
+      cv.width = bmp.width || 1
+      cv.height = bmp.height || 1
+      cv.getContext('2d').drawImage(bmp, 0, 0)
+      const b = await new Promise(function (res) { cv.toBlob(res, 'image/jpeg', 0.92) })
+      if (!b) return null
+      return new Uint8Array(await b.arrayBuffer())
+    } catch (err) { return null }
+  }
+
   function setProgress(i, total, item) {
     progTitle.textContent = 'در حال دانلود عکس‌ها ' + i + ' از ' + total
     progCur.textContent = item.show
@@ -1021,9 +1036,17 @@
       setProgress(i + 1, items.length, item)
       const r = await itemBytes(item)
       if (r && r.u8 && r.u8.length) {
-        const ext = finalExt(item, r.ct, r.u8)
-        zip.add((i + 1) + '.' + ext, r.u8)
-        ok++
+        let ext = finalExt(item, r.ct, r.u8)
+        let out = null
+        if (ext === 'gif' || r.u8.length < 2048) {
+          fail++
+        } else if (ext === 'avif') {
+          const j = await avifToJpeg(r.u8)
+          if (j && j.length) { out = j; ext = 'jpg' } else fail++
+        } else {
+          out = r.u8
+        }
+        if (out) { zip.add((i + 1) + '.' + ext, out); ok++ }
       } else {
         fail++
       }

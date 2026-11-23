@@ -104,14 +104,17 @@ class _MangaTranslatorBody_60:
             if not b64 or "base64" not in head.lower():
                 return None
             ext = ".jpg"
-            m = re.search(r"data:image/(jpe?g|png|webp|bmp)", head.lower())
+            m = re.search(r"data:image/(jpe?g|png|webp|bmp|avif)", head.lower())
             if m:
-                ext = "." + ("jpg" if m.group(1) in ("jpg", "jpeg") else m.group(1))
+                ext = "." + ("jpg" if m.group(1) in ("jpg", "jpeg")
+                             else m.group(1))
             try:
                 content = base64.b64decode(b64)
             except Exception:
                 return None
             if not content:
+                return None
+            if content[:3] == b"GIF":
                 return None
             img, _reblob = MangaTranslator._decode_image_bytes(content)
             if img is None:
@@ -468,8 +471,37 @@ class _MangaTranslatorBody_60:
             pass
         return False
 
+    _avif_plugin_tried = False
+
+    @staticmethod
+    def _ensure_avif_plugin() -> bool:
+        try:
+            import pillow_avif  # noqa: F401
+            return True
+        except Exception:
+            pass
+        if MangaTranslator._avif_plugin_tried:
+            return False
+        MangaTranslator._avif_plugin_tried = True
+        if _on_android():
+            return False
+        try:
+            import subprocess as _sp, sys as _sys
+            _sp.check_call([_sys.executable, "-m", "pip", "install", "-q",
+                            "pillow-avif-plugin"])
+            import pillow_avif  # noqa: F401
+            return True
+        except Exception:
+            return False
+
     @staticmethod
     def _decode_image_bytes(content: bytes):
+        try:
+            if (len(content) >= 12 and content[4:8] == b"ftyp"
+                    and content[8:10] == b"av"):
+                MangaTranslator._ensure_avif_plugin()
+        except Exception:
+            pass
         _prefer_pillow = (_on_android()
                           and MangaTranslator._webp_avif_magic(content))
         if not _prefer_pillow:
@@ -613,6 +645,9 @@ class _MangaTranslatorBody_60:
             return ".png"
         if content[:4] == b"RIFF" and content[8:12] == b"WEBP":
             return ".webp"
+        if (len(content) >= 12 and content[4:8] == b"ftyp"
+                and content[8:10] == b"av"):
+            return ".avif"
         return None
 
     @staticmethod
@@ -693,6 +728,13 @@ class _MangaTranslatorBody_60:
                 ext = MangaTranslator._mp_ext_of(content)
                 if ext is None:
                     return None
+                if ext == ".avif":
+                    _img, _jpg = MangaTranslator._decode_image_bytes(content)
+                    if _img is None:
+                        return None
+                    if _jpg:
+                        content = _jpg
+                    ext = ".jpg"
                 out_file = os.path.join(dest_dir, f"p{idx:03d}{ext}")
                 with open(out_file, "wb") as f:
                     f.write(content)
@@ -794,9 +836,14 @@ class _MangaTranslatorBody_60:
                     ext = ".png"
                 elif content[:4] == b"RIFF" and content[8:12] == b"WEBP":
                     ext = ".webp"
+                elif (len(content) >= 12 and content[4:8] == b"ftyp"
+                        and content[8:10] == b"av"):
+                    ext = ".avif"
                 else:
                     ext = ".jpg"
 
+            if content[:3] == b"GIF":
+                return None
             img, _reblob = MangaTranslator._decode_image_bytes(content)
             if img is None:
                 return None

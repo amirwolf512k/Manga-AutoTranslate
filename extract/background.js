@@ -150,6 +150,8 @@ function handleNet(details) {
     if (n === 'content-length') cl = parseInt(h.value, 10) || 0
   }
   if (!/^image\//i.test(ct)) return
+  if (/^image\/gif/i.test(ct)) return
+  if (/\.gif([?#]|$)/i.test(details.url)) return
   if (cl > 0 && cl < 15000) return
   const dec = decodeProxy(details.url)
   if (junk(dec)) return
@@ -157,7 +159,7 @@ function handleNet(details) {
   if (REC.seen.has(k)) return
   REC.seen.add(k)
   REC.keys.push(k)
-  REC.urls.push({ u: details.url, d: dec, s: cl })
+  REC.urls.push({ u: details.url, d: dec, s: cl, r: details.documentUrl || details.initiator || '' })
   persist()
 }
 
@@ -166,11 +168,16 @@ chrome.webRequest.onResponseStarted.addListener(function (details) {
   handleNet(details)
 }, { urls: ['<all_urls>'] }, ['responseHeaders'])
 
-async function fetchBytes(url) {
+async function fetchBytes(url, ref) {
   selfFetch.add(url)
   setTimeout(function () { selfFetch.delete(url) }, 30000)
-  let res = await fetch(url, { credentials: 'omit' }).catch(() => null)
-  if (!res || !res.ok) res = await fetch(url, { credentials: 'include' }).catch(() => null)
+  const mk = function (cred) {
+    const o = { credentials: cred }
+    if (ref) { o.referrer = ref; o.referrerPolicy = 'unsafe-url' }
+    return o
+  }
+  let res = await fetch(url, mk('omit')).catch(() => null)
+  if (!res || !res.ok) res = await fetch(url, mk('include')).catch(() => null)
   if (!res || !res.ok) return { err: 'http ' + (res ? res.status : 0) }
   const buf = await res.arrayBuffer()
   const u8 = new Uint8Array(buf)
@@ -260,7 +267,8 @@ chrome.runtime.onMessage.addListener(function (msg, sender, sendResponse) {
     return true
   }
   if (type === 'MT_FETCH') {
-    fetchBytes(msg.url).then(sendResponse).catch(function (err) { sendResponse({ err: String(err) }) })
+    const ref = msg.ref || (sender && sender.tab && sender.tab.url) || ''
+    fetchBytes(msg.url, ref).then(sendResponse).catch(function (err) { sendResponse({ err: String(err) }) })
     return true
   }
   if (type === 'MT_PAGE_INJECT') {
