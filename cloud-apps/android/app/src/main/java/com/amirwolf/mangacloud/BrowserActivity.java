@@ -1518,6 +1518,7 @@ public class BrowserActivity extends Activity {
                 return;
             }
             THUMB_CACHE.put(u, bmp);
+            final android.graphics.Bitmap b2 = bmp;
             runOnUiThread(() -> {
                 try {
                     java.util.List<android.widget.ImageView> lst =
@@ -1528,7 +1529,7 @@ public class BrowserActivity extends Activity {
                                 try {
                                     android.widget.ImageView iv2 = lst.get(i);
                                     if (iv2 != null && u.equals(iv2.getTag())) {
-                                        iv2.setImageBitmap(bmp);
+                                        iv2.setImageBitmap(b2);
                                         iv2.setVisibility(View.VISIBLE);
                                     }
                                 } catch (Exception ignored) {
