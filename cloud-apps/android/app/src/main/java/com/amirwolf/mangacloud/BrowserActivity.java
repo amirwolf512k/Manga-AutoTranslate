@@ -1106,9 +1106,10 @@ public class BrowserActivity extends Activity {
     }
 
     private void showExtractChoice() {
-        String cur;
-        try { cur = web.getUrl() != null ? web.getUrl() : ""; }
-        catch (Exception e) { cur = ""; }
+        String curUrl;
+        try { curUrl = web.getUrl() != null ? web.getUrl() : ""; }
+        catch (Exception e) { curUrl = ""; }
+        final String cur = curUrl;
         extractBtn.setText("… در حال آماده‌سازی");
         extractWithScroll(arr -> {
             extractBtn.setText("🖼 استخراج");
