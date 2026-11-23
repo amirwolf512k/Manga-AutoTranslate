@@ -770,7 +770,17 @@
         th.loading = 'lazy'
         th.alt = ''
         th.referrerPolicy = 'no-referrer'
-        th.addEventListener('error', function () { th.style.visibility = 'hidden' })
+        th.addEventListener('error', function () {
+          if (it.kind === 'blob' && !th.dataset.mtpull) {
+            th.dataset.mtpull = '1'
+            blobThumb(it).then(function (dd) {
+              if (dd) { th.src = dd; th.style.visibility = '' }
+              else th.style.visibility = 'hidden'
+            })
+            return
+          }
+          th.style.visibility = 'hidden'
+        })
         th.src = it.show
         const meta = document.createElement('div')
         meta.className = 'mtmeta'
@@ -887,6 +897,14 @@
         viewImg.src = item.show
         return
       }
+      if (stage === 1 && item.kind === 'blob') {
+        stage = 2
+        blobDataUrl(item).then(function (dd) {
+          if (dd) { viewImg.src = dd; return }
+          giveUp()
+        })
+        return
+      }
       if (stage === 1 && item.kind !== 'blob') {
         stage = 2
         bg({ type: 'MT_FETCH', url: item.fetch, ref: item.r || (location.href || '') }, 60000).then(function (r) {
@@ -995,6 +1013,59 @@
       if (!buf || !buf.byteLength) return null
       return { u8: new Uint8Array(buf), ct: ct }
     } catch (err) { return null }
+  }
+
+  function u8ToB64(u8) {
+    let bin = ''
+    const CH = 32768
+    for (let i = 0; i < u8.length; i += CH) {
+      bin += String.fromCharCode.apply(null, u8.subarray(i, i + CH))
+    }
+    return btoa(bin)
+  }
+
+  async function blobDataUrl(item) {
+    try {
+      const p = waitPage('blobData', function (d) { return d.url === item.show }, 20000)
+      window.postMessage({ MT_CMD: 'pullBlobs', urls: [item.show] }, '*')
+      const d = await p
+      if (!d || d.buf == null) {
+        if (d && d.err) return ''
+        return ''
+      }
+      const u8 = new Uint8Array(d.buf)
+      if (!u8.length || u8.length < 64) return ''
+      const ct = (d.type && String(d.type).indexOf('image/') === 0) ? d.type : 'image/jpeg'
+      return 'data:' + ct + ';base64,' + u8ToB64(u8)
+    } catch (err) { return '' }
+  }
+
+  async function blobThumb(item) {
+    try {
+      const p = waitPage('blobData', function (d) { return d.url === item.show }, 20000)
+      window.postMessage({ MT_CMD: 'pullBlobs', urls: [item.show] }, '*')
+      const d = await p
+      if (!d || !d.buf) return ''
+      const u8 = new Uint8Array(d.buf)
+      if (!u8.length || u8.length < 64) return ''
+      const blob = new Blob([u8], { type: d.type || 'image/jpeg' })
+      try {
+        const bmp = await createImageBitmap(blob)
+        const w = bmp.width || 96
+        const h = bmp.height || 136
+        const sc = Math.min(120 / w, 170 / h)
+        const cv = document.createElement('canvas')
+        cv.width = Math.max(1, Math.round(w * sc))
+        cv.height = Math.max(1, Math.round(h * sc))
+        cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height)
+        try { if (bmp.close) bmp.close() } catch (err2) {}
+        const dd = cv.toDataURL('image/jpeg', 0.72)
+        return dd && dd.indexOf('data:image') === 0 ? dd : ''
+      } catch (err) {
+        const ct = (d.type && String(d.type).indexOf('image/') === 0) ? d.type : 'image/jpeg'
+        return 'data:' + ct + ';base64,' + u8ToB64(u8)
+      }
+    } catch (err) { return '' }
   }
 
   async function itemBytes(item) {
