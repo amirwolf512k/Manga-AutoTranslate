@@ -176,6 +176,17 @@ class _MangaTranslatorBody_60:
         )
 
         for part in parts:
+            _p_low = part.lower()
+            if _p_low.startswith("blob:"):
+                print("[!] لینکِ blob فقط داخل مرورگر معتبر است "
+                      "(عکس در حافظهٔ خود صفحه است) — در اپ، فصل را در "
+                      "«مرورگر داخلی» باز کن و «استخراج با دانلود» را بزن.")
+                continue
+            if (re.match(r"^[a-z][a-z0-9+.\-]*:", part)
+                    and not _p_low.startswith(("http://", "https://",
+                                               "data:image/", "file://"))):
+                print(f"[!] طرحِ لینک پشتیبانی نمی‌شود و رد شد: {part[:80]}")
+                continue
             _pair = re.match(
                 r"^(https?://[^\s<>]+?)\s*([<>])\s*(https?://[^\s<>]+)$",
                 part)
@@ -275,7 +286,7 @@ class _MangaTranslatorBody_60:
             "credits", "credit-", "watermark", "banner", "ads/", "/ad.",
             "radio", "vline", "favicon", "sprite", "emoji", "badge",
             "/static/", "data:image", ".svg", "tracking", "pixel",
-            "1x1", "blank.", "transparent", "spacer",
+            "1x1", "blank.", "transparent", "spacer", "thumb",
         )
         if any(p in low for p in junk_parts):
             return True
@@ -641,7 +652,9 @@ class _MangaTranslatorBody_60:
             body = r.content[:4096]
             if b"Account Banned" in body or b"banned" in body.lower():
                 print("    [!] مانگاپلاس این IP را مسدود کرده است "
-                      "(Account Banned) — از IP دیگری امتحان کن.")
+                      "(Account Banned) — فصل را در «مرورگر داخلی» اپ باز "
+                      "کن، ورق بزن و «استخراج با دانلود» را بزن؛ عکس‌ها از "
+                      "حافظهٔ خود صفحه گرفته می‌شوند.")
                 return []
             try:
                 data = r.json()

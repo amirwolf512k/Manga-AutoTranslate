@@ -43,7 +43,7 @@ public class BrowserActivity extends Activity {
             "Chrome/120.0.0.0 Mobile Safari/537.36";
 
     private static final String EXTRACT_JS =
-        "(function(){ var W=window; try{if(/(^|\\.)mangaplus\\.shueisha\\.co\\.jp$/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];}catch(e){} if(!W.__MT_FOUND){W.__MT_FOUND={};W.__MT_ORDER=[];} if(!W.__MT_BLOBS){W.__MT_BLOBS={};} if(typeof W.__MT_T0!=='number'){W.__MT_T0=0;} function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}} function qsz(u){ try{ var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i); if(!m)return 0; var a=parseInt(m[2],10)||0; var b=parseInt(m[3]||'0',10)||0; if(a>0&&b>0)return Math.max(a,b); if(m[1]&&a>0)return a; return 0 }catch(e){return 0}} function junk(u){ if(!u)return 1; u=String(u); if(u.indexOf('data:')===0)return 1; if(u.indexOf('blob:')===0)return 1; if(!/^https?:/i.test(u))return 1; var b=u.split(/[?#]/)[0]; if(/\\.(svg|ico|gif|css|js|mjs|json|html?|xml|txt|pdf|zip|rar|7z|gz|mp4|webm|mp3|m4a|ogg|wav|woff2?|ttf|otf|eot|map)$/i.test(b))return 1; if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp|avif)$/i.test(b))return 1; if(/\\/\\d{2,4}x\\d{2,4}\\//i.test(b))return 1; if(/(login|signin|signup|register|servicelogin|oauth)/i.test(b))return 1; var q=qsz(u); if(q>0&&q<=400)return 1; if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1; if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1; if(/\\/(covers?|thumbs?|thumbnails?|avatars?|banners?|creatives?|gifs?|decorations?|emojis?|smileys?|stickers?)\\//i.test(b))return 1; if(/(default|anon|guest|blank)[-_]?(pp|avatar|user|profile|image)/i.test(b))return 1; if(/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\\.net)/i.test(b))return 1; return 0} function keyOf(u){ var s=String(u); var b=s.split(/[?#]/)[0]; if(!/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))return s.split('#')[0]; return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')} function bkey(u){return String(u).split('#')[0]} function hold(k,b){ try{ if(!b||W.__MT_BLOBS[k])return; var n=0;for(var p in W.__MT_BLOBS)n++; if(n<120)W.__MT_BLOBS[k]=b }catch(e){}} function capb(u){ try{ if(!u)return; u=String(u).trim(); if(u.indexOf('blob:')!==0)return; var k=bkey(u); if(Object.prototype.hasOwnProperty.call(W.__MT_FOUND,k))return; W.__MT_FOUND[k]=u; W.__MT_ORDER.push(u); try{fetch(u).then(function(r){return r.ok?r.blob():null}).then(function(b){if(b)hold(k,b)}).catch(function(){})}catch(e2){} }catch(e){}} function cap(u){ try{ if(!u)return; u=String(u).trim(); if(u.indexOf('data:')===0)return; if(u.indexOf('blob:')===0){capb(u);return} if(!/^https?:/i.test(u))return; u=abs(u); if(!u||junk(u))return; try{if(u===location.href)return}catch(e){} var k=keyOf(u); if(Object.prototype.hasOwnProperty.call(W.__MT_FOUND,k))return; W.__MT_FOUND[k]=u; W.__MT_ORDER.push(u) }catch(e){}} function bestSrcset(ss){ try{ var parts=String(ss).split(','),best='',bw=-1; for(var k=0;k<parts.length;k++){ var tk=parts[k].trim().split(/\\s+/); var u0=tk[0]||''; var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0; if(u0&&w0>=bw){bw=w0;best=u0}} return best }catch(e){return ''}} var DATA_ATTS=['data-src','data-lazy-src','data-original','data-original-src','data-orig-src','data-lazy','data-url','data-image','data-echo','data-asurl','data-cfsrc','data-hi-res-src','data-full-src','data-full_image','data-large-src','data-file','data-path','data-actualsrc']; function nowT(){try{return performance.now()}catch(e){return 0}} function grabEl(el){ try{ if(!el||el.nodeType!==1)return; var tg=el.tagName; if(tg!=='IMG'&&tg!=='SOURCE')return; el.__MT_SEEN=nowT(); var u=''; try{u=el.currentSrc||el.getAttribute('src')||''}catch(e){} u=String(u||''); if(u.indexOf('blob:')===0){capb(u)} else if(tg==='SOURCE'&&u&&u.indexOf('data:')!==0){cap(u)} else if(u&&u.indexOf('data:')!==0){ var done=function(){try{var c=el.currentSrc||el.src||'';if(c&&c.indexOf('http')===0)cap(c)}catch(e){}}; try{ if(el.complete&&el.naturalWidth>0){ if(Math.max(el.naturalWidth||0,el.naturalHeight||0)>=300)done(); }else{ el.addEventListener('load',function(){ try{if(Math.max(el.naturalWidth||0,el.naturalHeight||0)>=300)done()}catch(e){} },{once:true}); } }catch(e){} } try{ var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset'); if(ss){var bs=bestSrcset(ss);if(bs)cap(bs)} }catch(e){} for(var j=0;j<DATA_ATTS.length;j++){ try{var v=el.getAttribute(DATA_ATTS[j]);if(v&&v.length>4)cap(v)}catch(e){} } }catch(e){}} function grabTree(n){ try{ if(!n||n.nodeType!==1)return; if(n.tagName==='IMG'||n.tagName==='SOURCE'){grabEl(n);return} if(n.querySelectorAll){ var q=n.querySelectorAll('img,source'); for(var i=0;i<q.length;i++)grabEl(q[i]) } }catch(e){}} if(!W.__MT_WATCH){ W.__MT_WATCH=1; try{ var ex=document.querySelectorAll('img,source'); for(var i2=0;i2<ex.length;i2++){try{ex[i2].__MT_SEEN=nowT()}catch(e){}} }catch(e){} try{ var obs=new MutationObserver(function(ms){ for(var i3=0;i3<ms.length;i3++){ var m=ms[i3]; try{ if(m.type==='attributes'){grabEl(m.target);continue} var ns=m.addedNodes; for(var j2=0;j2<ns.length;j2++)grabTree(ns[j2]) }catch(e){}} }); obs.observe(document.documentElement||document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['src','srcset']}) }catch(e){} try{ if(!W.__mtPO){W.__mtPO=1; var po=new PerformanceObserver(function(list){ try{ var es=list.getEntries(); for(var i=0;i<es.length;i++){ var en=es[i]||{};var n=String(en.name||''); if(!n)continue; var b=n.split(/[?#]/)[0]; var t=String(en.initiatorType||''); if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)||t==='img'||/\\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)){cap(n)} } }catch(e){}}); po.observe({entryTypes:['resource'],buffered:true}) }}catch(e){} try{ var _f=W.fetch; if(typeof _f==='function'&&!W.__mtFH){W.__mtFH=1; W.fetch=function(){var p;try{p=_f.apply(this,arguments)}catch(e){throw e} try{var a0=arguments[0];var u0=''; if(a0){if(typeof a0==='string')u0=a0;else if(a0.url)u0=String(a0.url)} p.then(function(r){try{var ct=(r.headers&&r.headers.get('content-type'))||''; if(/^image\\//i.test(String(ct).trim()))cap(u0)}catch(e){}}).catch(function(){}) }catch(e){}return p}} var _o=XMLHttpRequest.prototype.open,_s=XMLHttpRequest.prototype.send; XMLHttpRequest.prototype.open=function(m,u){try{this.__mtU=String(u||'')}catch(e){}return _o.apply(this,arguments)}; XMLHttpRequest.prototype.send=function(){try{var x=this; x.addEventListener('loadend',function(){try{var ct=''; try{ct=x.getResponseHeader('content-type')||''}catch(e){} var ru='';try{ru=x.responseURL||x.__mtU||''}catch(e){} if(/^image\\//i.test(String(ct).trim()))cap(ru)}catch(e){}})}catch(e){} return _s.apply(this,arguments)} }catch(e){} } function scanDoc(doc){ try{ var els=doc.querySelectorAll('img'); for(var i=0;i<els.length;i++){ var el=els[i]; try{ var t0=W.__MT_T0||0; if(el.__MT_SEEN&&el.__MT_SEEN<t0)continue; el.__MT_SEEN=nowT(); }catch(e){} var nw=0,nh=0,loaded=false; try{loaded=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){} var u=''; try{u=el.currentSrc||el.src||''}catch(e){} if(u&&u.indexOf('data:')===0)u=''; if(u&&u.indexOf('blob:')===0){ if(loaded&&nw&&nh&&Math.max(nw,nh)>=300)capb(u); u=''; } if(u&&loaded&&nw&&nh&&Math.max(nw,nh)<300)u=''; if(u)cap(u); try{ var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset'); if(ss){var bs=bestSrcset(ss);if(bs)cap(bs)} }catch(e){} for(var j=0;j<DATA_ATTS.length;j++){ try{ var v=el.getAttribute(DATA_ATTS[j]); if(v&&v.length>4)cap(v) }catch(e){}} } }catch(e){} try{ var sos=doc.querySelectorAll('source'); for(var i4=0;i4<sos.length;i4++){ var so=sos[i4]; try{ var t02=W.__MT_T0||0; if(so.__MT_SEEN&&so.__MT_SEEN<t02)continue; so.__MT_SEEN=nowT(); var s2=so.getAttribute('srcset')||so.getAttribute('data-srcset')||so.getAttribute('src'); if(s2){var b2=bestSrcset(s2);if(!b2)b2=s2;if(b2)cap(b2)} }catch(e){}} }catch(e){} try{ var as=doc.querySelectorAll('a[href]'); for(var i5=0;i5<as.length;i5++){ var h=as[i5].getAttribute('href')||''; if(/^https?:/i.test(h)&&/\\.(jpe?g|png|webp|avif|bmp)([?#]|$)/i.test(h))cap(h)} }catch(e){} try{ var st=doc.querySelectorAll('[style*=\"url(\"]'); for(var i6=0;i6<st.length;i6++){ var mm=String(st[i6].getAttribute('style')||'').match(/url\\((['\"]?)([^'\")]+)\\1\\)/i); if(mm&&mm[2])cap(mm[2])} }catch(e){}} function scanAll(){ try{scanDoc(document)}catch(e){} try{ var fs=document.querySelectorAll('iframe'); for(var i=0;i<fs.length;i++){ try{var d=fs[i].contentDocument;if(d)scanDoc(d)}catch(e){}} }catch(e){} try{ var of=window.frames; for(var j=0;j<of.length;j++){ try{var d2=of[j].document;if(d2)scanDoc(d2)}catch(e){}} }catch(e){}} function perfPass(){ try{ var rs=performance.getEntriesByType('resource'); var tp=W.__MT_T0||0; for(var i=0;i<rs.length;i++){ var en=rs[i]||{}; var n=String(en.name||''); if(!n)continue; try{if(en.startTime<tp)continue}catch(e){} var b=n.split(/[?#]/)[0]; var t=String(en.initiatorType||''); if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)){cap(n);continue} if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)){cap(n);continue} if(t==='img'){if(n.indexOf('blob:')===0){capb(n)}else{cap(n)}} } }catch(e){}} function scriptPass(){ try{ if(W.__MT_ORDER.length)return; var sc=document.querySelectorAll('script'); var re=/https?:\\\\?\\/\\\\?\\/[^\"'\\s\\\\<>()[\\]]+?\\.(?:jpe?g|png|webp|avif|bmp)(?:\\?[^\"'\\\\\\s<>()[\\]]*)?/gi; var m,guard=0; for(var i=0;i<sc.length&&guard<800;i++){ var txt=''; try{txt=sc[i].textContent||''}catch(e){continue} if(!txt||txt.length<10)continue; re.lastIndex=0; while((m=re.exec(txt))&&guard<800){ guard++; try{cap(m[0].replace(/\\\\\\//g,'/'))}catch(e){}}} }catch(e){}} scanAll(); perfPass(); scriptPass(); try{return W.__MT_ORDER.slice(0,400)}catch(e){return []} })()";
+        "(function(){ var W=window; if(!W.__MT_FOUND){W.__MT_FOUND={};W.__MT_ORDER=[];} if(!W.__MT_BLOBS){W.__MT_BLOBS={};} if(typeof W.__MT_T0!=='number'){W.__MT_T0=0;} function abs(u){try{var a=document.createElement('a');a.href=u;return a.href}catch(e){return null}} function qsz(u){ try{ var m=String(u).match(/[?&](?:type|size|w|h|width|height)=(f?)(\\d{1,4})(?:[_x](\\d{1,4}))?/i); if(!m)return 0; var a=parseInt(m[2],10)||0; var b=parseInt(m[3]||'0',10)||0; if(a>0&&b>0)return Math.max(a,b); if(m[1]&&a>0)return a; return 0 }catch(e){return 0}} function junk(u){ if(!u)return 1; u=String(u); if(u.indexOf('data:')===0)return 1; if(u.indexOf('blob:')===0)return 1; if(!/^https?:/i.test(u))return 1; var b=u.split(/[?#]/)[0]; if(/\\.(svg|ico|gif|css|js|mjs|json|html?|xml|txt|pdf|zip|rar|7z|gz|mp4|webm|mp3|m4a|ogg|wav|woff2?|ttf|otf|eot|map)$/i.test(b))return 1; if(/[-_]\\d{2,4}x\\d{2,4}\\.(jpe?g|png|webp|avif)$/i.test(b))return 1; if(/\\/\\d{2,4}x\\d{2,4}\\//i.test(b))return 1; if(/(login|signin|signup|register|servicelogin|oauth)/i.test(b))return 1; var q=qsz(u); if(q>0&&q<=400)return 1; if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b))return 1; if(/(?:^|[^a-z0-9])ads?[._\\/-]/i.test(b))return 1; if(/\\/(covers?|thumbs?|thumbnails?|avatars?|banners?|creatives?|gifs?|decorations?|emojis?|smileys?|stickers?)\\//i.test(b))return 1; if(/(default|anon|guest|blank)[-_]?(pp|avatar|user|profile|image)/i.test(b))return 1; if(/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\\.net|jumpg-assets)/i.test(b))return 1; return 0} function keyOf(u){ var s=String(u); var b=s.split(/[?#]/)[0]; if(!/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b))return s.split('#')[0]; return b.replace(/[-_]\\d{2,4}x\\d{2,4}\\./i,'.')} function bkey(u){return String(u).split('#')[0]} function hold(k,b){ try{ if(!b||W.__MT_BLOBS[k])return; var n=0;for(var p in W.__MT_BLOBS)n++; if(n<120)W.__MT_BLOBS[k]=b }catch(e){}} function capb(u){ try{ if(!u)return; u=String(u).trim(); if(u.indexOf('blob:')!==0)return; var k=bkey(u); if(Object.prototype.hasOwnProperty.call(W.__MT_FOUND,k))return; W.__MT_FOUND[k]=u; W.__MT_ORDER.push(u); try{fetch(u).then(function(r){return r.ok?r.blob():null}).then(function(b){if(b)hold(k,b)}).catch(function(){})}catch(e2){} }catch(e){}} function cap(u){ try{ if(!u)return; u=String(u).trim(); if(u.indexOf('data:')===0)return; if(u.indexOf('blob:')===0){capb(u);return} if(!/^https?:/i.test(u))return; u=abs(u); if(!u||junk(u))return; try{if(u===location.href)return}catch(e){} var k=keyOf(u); if(Object.prototype.hasOwnProperty.call(W.__MT_FOUND,k))return; W.__MT_FOUND[k]=u; W.__MT_ORDER.push(u) }catch(e){}} function bestSrcset(ss){ try{ var parts=String(ss).split(','),best='',bw=-1; for(var k=0;k<parts.length;k++){ var tk=parts[k].trim().split(/\\s+/); var u0=tk[0]||''; var w0=parseInt(String(tk[1]||'').replace(/[^0-9]/g,''),10)||0; if(u0&&w0>=bw){bw=w0;best=u0}} return best }catch(e){return ''}} var DATA_ATTS=['data-src','data-lazy-src','data-original','data-original-src','data-orig-src','data-lazy','data-url','data-image','data-echo','data-asurl','data-cfsrc','data-hi-res-src','data-full-src','data-full_image','data-large-src','data-file','data-path','data-actualsrc']; function nowT(){try{return performance.now()}catch(e){return 0}} function grabEl(el){ try{ if(!el||el.nodeType!==1)return; var tg=el.tagName; if(tg!=='IMG'&&tg!=='SOURCE')return; el.__MT_SEEN=nowT(); var u=''; try{u=el.currentSrc||el.getAttribute('src')||''}catch(e){} u=String(u||''); if(u.indexOf('blob:')===0){capb(u)} else if(tg==='SOURCE'&&u&&u.indexOf('data:')!==0){cap(u)} else if(u&&u.indexOf('data:')!==0){ var done=function(){try{var c=el.currentSrc||el.src||'';if(c&&c.indexOf('http')===0)cap(c)}catch(e){}}; try{ if(el.complete&&el.naturalWidth>0){ if(Math.max(el.naturalWidth||0,el.naturalHeight||0)>=300)done(); }else{ el.addEventListener('load',function(){ try{if(Math.max(el.naturalWidth||0,el.naturalHeight||0)>=300)done()}catch(e){} },{once:true}); } }catch(e){} } try{ var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset'); if(ss){var bs=bestSrcset(ss);if(bs)cap(bs)} }catch(e){} for(var j=0;j<DATA_ATTS.length;j++){ try{var v=el.getAttribute(DATA_ATTS[j]);if(v&&v.length>4)cap(v)}catch(e){} } }catch(e){}} function grabTree(n){ try{ if(!n||n.nodeType!==1)return; if(n.tagName==='IMG'||n.tagName==='SOURCE'){grabEl(n);return} if(n.querySelectorAll){ var q=n.querySelectorAll('img,source'); for(var i=0;i<q.length;i++)grabEl(q[i]) } }catch(e){}} if(!W.__MT_WATCH){ W.__MT_WATCH=1; try{ if(!W.__mtCO){W.__mtCO=1; var _co=URL.createObjectURL; URL.createObjectURL=function(){ var u=''; try{u=_co.apply(this,arguments)}catch(e){return _co.apply(this,arguments)} try{ var b=arguments[0]; if(b&&(typeof Blob!=='undefined')&&b instanceof Blob&&String(b.type||'').indexOf('image/')===0&&(b.size||0)>12000){hold(String(u).split('#')[0],b)} }catch(e2){} return u }; } var ex=document.querySelectorAll('img,source'); for(var i2=0;i2<ex.length;i2++){try{ex[i2].__MT_SEEN=nowT()}catch(e){}} }catch(e){} try{ var obs=new MutationObserver(function(ms){ for(var i3=0;i3<ms.length;i3++){ var m=ms[i3]; try{ if(m.type==='attributes'){grabEl(m.target);continue} var ns=m.addedNodes; for(var j2=0;j2<ns.length;j2++)grabTree(ns[j2]) }catch(e){}} }); obs.observe(document.documentElement||document.body,{subtree:true,childList:true,attributes:true,attributeFilter:['src','srcset']}) }catch(e){} try{ if(!W.__mtPO){W.__mtPO=1; var po=new PerformanceObserver(function(list){ try{ var es=list.getEntries(); for(var i=0;i<es.length;i++){ var en=es[i]||{};var n=String(en.name||''); if(!n)continue; var b=n.split(/[?#]/)[0]; var t=String(en.initiatorType||''); if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)||t==='img'||/\\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)){cap(n)} } }catch(e){}}); po.observe({entryTypes:['resource'],buffered:true}) }}catch(e){} try{ var _f=W.fetch; if(typeof _f==='function'&&!W.__mtFH){W.__mtFH=1; W.fetch=function(){var p;try{p=_f.apply(this,arguments)}catch(e){throw e} try{var a0=arguments[0];var u0=''; if(a0){if(typeof a0==='string')u0=a0;else if(a0.url)u0=String(a0.url)} p.then(function(r){try{var ct=(r.headers&&r.headers.get('content-type'))||''; if(/^image\\//i.test(String(ct).trim()))cap(u0)}catch(e){}}).catch(function(){}) }catch(e){}return p}} var _o=XMLHttpRequest.prototype.open,_s=XMLHttpRequest.prototype.send; XMLHttpRequest.prototype.open=function(m,u){try{this.__mtU=String(u||'')}catch(e){}return _o.apply(this,arguments)}; XMLHttpRequest.prototype.send=function(){try{var x=this; x.addEventListener('loadend',function(){try{var ct=''; try{ct=x.getResponseHeader('content-type')||''}catch(e){} var ru='';try{ru=x.responseURL||x.__mtU||''}catch(e){} if(/^image\\//i.test(String(ct).trim()))cap(ru)}catch(e){}})}catch(e){} return _s.apply(this,arguments)} }catch(e){} } function scanDoc(doc){ try{ var els=doc.querySelectorAll('img'); for(var i=0;i<els.length;i++){ var el=els[i]; try{ var t0=W.__MT_T0||0; if(el.__MT_SEEN&&el.__MT_SEEN<t0)continue; el.__MT_SEEN=nowT(); }catch(e){} var nw=0,nh=0,loaded=false; try{loaded=!!el.complete&&el.naturalWidth>0;nw=el.naturalWidth||0;nh=el.naturalHeight||0}catch(e){} var u=''; try{u=el.currentSrc||el.src||''}catch(e){} if(u&&u.indexOf('data:')===0)u=''; if(u&&u.indexOf('blob:')===0){ if(loaded&&nw&&nh&&Math.max(nw,nh)>=300)capb(u); u=''; } if(u&&loaded&&nw&&nh&&Math.max(nw,nh)<300)u=''; if(u)cap(u); try{ var ss=el.getAttribute('srcset')||el.getAttribute('data-srcset'); if(ss){var bs=bestSrcset(ss);if(bs)cap(bs)} }catch(e){} for(var j=0;j<DATA_ATTS.length;j++){ try{ var v=el.getAttribute(DATA_ATTS[j]); if(v&&v.length>4)cap(v) }catch(e){}} } }catch(e){} try{ var sos=doc.querySelectorAll('source'); for(var i4=0;i4<sos.length;i4++){ var so=sos[i4]; try{ var t02=W.__MT_T0||0; if(so.__MT_SEEN&&so.__MT_SEEN<t02)continue; so.__MT_SEEN=nowT(); var s2=so.getAttribute('srcset')||so.getAttribute('data-srcset')||so.getAttribute('src'); if(s2){var b2=bestSrcset(s2);if(!b2)b2=s2;if(b2)cap(b2)} }catch(e){}} }catch(e){} try{ var as=doc.querySelectorAll('a[href]'); for(var i5=0;i5<as.length;i5++){ var h=as[i5].getAttribute('href')||''; if(/^https?:/i.test(h)&&/\\.(jpe?g|png|webp|avif|bmp)([?#]|$)/i.test(h))cap(h)} }catch(e){} try{ var st=doc.querySelectorAll('[style*=\"url(\"]'); for(var i6=0;i6<st.length;i6++){ var mm=String(st[i6].getAttribute('style')||'').match(/url\\((['\"]?)([^'\")]+)\\1\\)/i); if(mm&&mm[2])cap(mm[2])} }catch(e){}} function scanAll(){ try{scanDoc(document)}catch(e){} try{ var fs=document.querySelectorAll('iframe'); for(var i=0;i<fs.length;i++){ try{var d=fs[i].contentDocument;if(d)scanDoc(d)}catch(e){}} }catch(e){} try{ var of=window.frames; for(var j=0;j<of.length;j++){ try{var d2=of[j].document;if(d2)scanDoc(d2)}catch(e){}} }catch(e){}} function perfPass(){ try{ var rs=performance.getEntriesByType('resource'); var tp=W.__MT_T0||0; for(var i=0;i<rs.length;i++){ var en=rs[i]||{}; var n=String(en.name||''); if(!n)continue; try{if(en.startTime<tp)continue}catch(e){} var b=n.split(/[?#]/)[0]; var t=String(en.initiatorType||''); if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)$/i.test(b)){cap(n);continue} if(/\\.(jpe?g|png|webp|avif|bmp|tiff?)([?#]|$)/i.test(n)){cap(n);continue} if(t==='img'){if(n.indexOf('blob:')===0){capb(n)}else{cap(n)}} } }catch(e){}} function scriptPass(){ try{ if(W.__MT_ORDER.length)return; var sc=document.querySelectorAll('script'); var re=/https?:\\\\?\\/\\\\?\\/[^\"'\\s\\\\<>()[\\]]+?\\.(?:jpe?g|png|webp|avif|bmp)(?:\\?[^\"'\\\\\\s<>()[\\]]*)?/gi; var m,guard=0; for(var i=0;i<sc.length&&guard<800;i++){ var txt=''; try{txt=sc[i].textContent||''}catch(e){continue} if(!txt||txt.length<10)continue; re.lastIndex=0; while((m=re.exec(txt))&&guard<800){ guard++; try{cap(m[0].replace(/\\\\\\//g,'/'))}catch(e){}}} }catch(e){}} scanAll(); perfPass(); scriptPass(); try{return W.__MT_ORDER.slice(0,400)}catch(e){return []} })()";
 
     private static final String SCROLL_JS =
         "(function(){try{if(window.__MT_SCROLLING)return;window.__MT_SCROLLING=1;window.__MT_SCROLL_DONE=0;var step=Math.max(500,Math.floor(window.innerHeight*0.85));var y=0,n=0,stable=0,lastH=0;function H(){try{return Math.max(document.body?document.body.scrollHeight:0,document.documentElement?document.documentElement.scrollHeight:0)}catch(e){return 0}}lastH=H();function tick(){try{y+=step;window.scrollTo(0,y);n++;var h=H();if(h===lastH)stable++;else{stable=0;lastH=h}var atBottom=(y+window.innerHeight>=h-8);if((atBottom&&stable>=3)||n>200){try{window.scrollTo(0,0)}catch(e){}window.__MT_SCROLL_DONE=1;return}setTimeout(tick,280)}catch(e){window.__MT_SCROLL_DONE=1}}tick()}catch(e){try{window.__MT_SCROLL_DONE=1}catch(e2){}}})()";
@@ -1041,7 +1041,7 @@ public class BrowserActivity extends Activity {
         js.append("(function(){try{var urls=").append(arr.toString()).append(";");
         js.append("function toData(u){")
            .append("try{var k=String(u).split('#')[0];")
-           .append("if(window.__MT_BLOBS&&window.__MT_BLOBS[k]){")
+           .append("if(window.__MT_BLOBS&&window.__MT_BLOBS[k]&&window.__MT_BLOBS[k].size){")
            .append("var bb=window.__MT_BLOBS[k];")
            .append("return new Promise(function(res){")
            .append("try{var f=new FileReader();")
@@ -1049,13 +1049,36 @@ public class BrowserActivity extends Activity {
            .append("f.onerror=function(){res('')};")
            .append("f.readAsDataURL(bb)}")
            .append("catch(e){res('')}})}}catch(e){}")
-           .append("return fetch(u,{credentials:'include'})")
-           .append(".then(function(r){if(!r.ok)return '';return r.blob()})")
+           .append("function fgo(o){return fetch(u,o)")
+           .append(".then(function(r){if(!r.ok)return '';return r.blob()})}")
+           .append("return fgo()")
+           .append(".then(function(b){if(b)return b;return fgo({credentials:'include'})})")
            .append(".then(function(b){if(!b)return '';return new Promise(function(res){")
            .append("try{var f=new FileReader();")
            .append("f.onload=function(){res(String(f.result||''))};")
            .append("f.onerror=function(){res('')};f.readAsDataURL(b)}")
-           .append("catch(e){res('')}})})}");
+           .append("catch(e){res('')}})})")
+           .append(".then(function(d){if(d&&d.indexOf('data:image')===0)return d;")
+           .append("if(String(u).indexOf('blob:')!==0)return '';")
+           .append("return new Promise(function(res2){")
+           .append("try{var im=null;")
+           .append("try{var cs=document.querySelectorAll('img');var kk=String(u).split('#')[0];")
+           .append("for(var q=0;q<cs.length;q++){var ss='';")
+           .append("try{ss=cs[q].currentSrc||cs[q].src||''}catch(e5){}")
+           .append("if(ss&&ss.split('#')[0]===kk){im=cs[q];break}}}catch(e7){}")
+           .append("if(im&&im.complete&&im.naturalWidth>0){")
+           .append("try{var cv2=document.createElement('canvas');")
+           .append("cv2.width=im.naturalWidth;cv2.height=im.naturalHeight;")
+           .append("cv2.getContext('2d').drawImage(im,0,0);")
+           .append("res2(cv2.toDataURL('image/jpeg',0.92)||'');return}")
+           .append("catch(e6){}}")
+           .append("im=new Image();")
+           .append("im.onload=function(){try{var cv=document.createElement('canvas');")
+           .append("cv.width=im.naturalWidth||1;cv.height=im.naturalHeight||1;")
+           .append("var ctx=cv.getContext('2d');ctx.drawImage(im,0,0);")
+           .append("res2(cv.toDataURL('image/jpeg',0.92)||'')}catch(e3){res2('')}};")
+           .append("im.onerror=function(){res2('')};im.src=u}")
+           .append("catch(e4){res2('')}})})}");
         js.append("var CH=262144;");
         js.append("function send(idx,total,u,d){")
            .append("try{d=String(d||'');")
@@ -1086,10 +1109,6 @@ public class BrowserActivity extends Activity {
         String cur;
         try { cur = web.getUrl() != null ? web.getUrl() : ""; }
         catch (Exception e) { cur = ""; }
-        if (!cur.isEmpty() && isMangaPlusViewer(cur)) {
-            showLinkDownloadChoice(java.util.Collections.singletonList(cur), true);
-            return;
-        }
         extractBtn.setText("… در حال آماده‌سازی");
         extractWithScroll(arr -> {
             extractBtn.setText("🖼 استخراج");
@@ -1102,6 +1121,11 @@ public class BrowserActivity extends Activity {
                     }
                 }
                 if (all.isEmpty()) {
+                    if (!cur.isEmpty() && isMangaPlusViewer(cur)) {
+                        showLinkDownloadChoice(
+                                java.util.Collections.singletonList(cur), true);
+                        return;
+                    }
                     countLbl.setText("هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن");
                     Toast.makeText(BrowserActivity.this,
                             "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
@@ -1640,7 +1664,25 @@ public class BrowserActivity extends Activity {
         }
     }
 
-    private void showFolderDialogFallback(final java.util.List<String> all) {
+    private static String hostOfKey(String u) {
+        if (u.startsWith("blob:")) return "blob:";
+        try {
+            java.net.URI p = new java.net.URI(u);
+            String scheme = p.getScheme() == null ? "https" : p.getScheme();
+            String host = p.getHost() == null ? "" : p.getHost();
+            return scheme + "://" + host;
+        } catch (Exception e) {
+            String s = u;
+            int h = s.indexOf('#');
+            if (h >= 0) s = s.substring(0, h);
+            int q = s.indexOf('?');
+            if (q >= 0) s = s.substring(0, q);
+            return s;
+        }
+    }
+
+    private java.util.LinkedHashMap<String, java.util.List<String>> buildFolders(
+            final java.util.List<String> all) {
         java.util.LinkedHashMap<String, java.util.List<String>> folders =
                 new java.util.LinkedHashMap<>();
         for (String u : all) {
@@ -1649,6 +1691,23 @@ public class BrowserActivity extends Activity {
                 folders.put(f, new java.util.ArrayList<>());
             folders.get(f).add(u);
         }
+        if (folders.size() > Math.max(8, all.size() * 6 / 10)) {
+            java.util.LinkedHashMap<String, java.util.List<String>> byHost =
+                    new java.util.LinkedHashMap<>();
+            for (String u : all) {
+                String h = hostOfKey(u);
+                if (!byHost.containsKey(h))
+                    byHost.put(h, new java.util.ArrayList<>());
+                byHost.get(h).add(u);
+            }
+            folders = byHost;
+        }
+        return folders;
+    }
+
+    private void showFolderDialogFallback(final java.util.List<String> all) {
+        java.util.LinkedHashMap<String, java.util.List<String>> folders =
+                buildFolders(all);
         java.util.List<java.util.Map.Entry<String, java.util.List<String>>> entries =
                 new java.util.ArrayList<>(folders.entrySet());
         entries.sort((a, b) -> Integer.compare(b.getValue().size(), a.getValue().size()));
@@ -1674,7 +1733,8 @@ public class BrowserActivity extends Activity {
             for (int i = 0; i < nf; i++)
                 if (checkedF[i]) checkedKeys.add(entries.get(i).getKey());
             for (String u : all)
-                if (checkedKeys.contains(folderOf(u))) sel.add(u);
+                if (checkedKeys.contains(folderOf(u)) ||
+                        checkedKeys.contains(hostOfKey(u))) sel.add(u);
             if (sel.isEmpty()) {
                 Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
                         Toast.LENGTH_SHORT).show();
@@ -1688,13 +1748,7 @@ public class BrowserActivity extends Activity {
 
     private void showFolderDialogImpl(final java.util.List<String> all) {
         java.util.LinkedHashMap<String, java.util.List<String>> folders =
-                new java.util.LinkedHashMap<>();
-        for (String u : all) {
-            String f = folderOf(u);
-            if (!folders.containsKey(f))
-                folders.put(f, new java.util.ArrayList<>());
-            folders.get(f).add(u);
-        }
+                buildFolders(all);
         java.util.HashMap<String, Integer> rankOf = new java.util.HashMap<>();
         for (int i = 0; i < all.size(); i++) rankOf.put(all.get(i), i + 1);
         java.util.List<java.util.Map.Entry<String, java.util.List<String>>> entries =

@@ -39,7 +39,6 @@ class BrowserActivity : Activity() {
         private const val EXTRACT_JS = """
 (function(){
 var W=window;
-try{if(/(^|\.)mangaplus\.shueisha\.co\.jp${'$'}/i.test(location.host)&&location.pathname.indexOf('/viewer/')===0)return [location.href];}catch(e){}
 if(!W.__MT_FOUND){W.__MT_FOUND={};W.__MT_ORDER=[];}
 if(!W.__MT_BLOBS){W.__MT_BLOBS={};}
 if(typeof W.__MT_T0!=='number'){W.__MT_T0=0;}
@@ -71,7 +70,7 @@ if(/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?
 if(/(?:^|[^a-z0-9])ads?[._\/-]/i.test(b))return 1;
 if(/\/(covers?|thumbs?|thumbnails?|avatars?|banners?|creatives?|gifs?|decorations?|emojis?|smileys?|stickers?)\//i.test(b))return 1;
 if(/(default|anon|guest|blank)[-_]?(pp|avatar|user|profile|image)/i.test(b))return 1;
-if(/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\.net)/i.test(b))return 1;
+if(/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\.net|jumpg-assets)/i.test(b))return 1;
 return 0}
 function keyOf(u){
 var s=String(u);
@@ -165,6 +164,20 @@ for(var i=0;i<q.length;i++)grabEl(q[i])
 }catch(e){}}
 if(!W.__MT_WATCH){
 W.__MT_WATCH=1;
+try{
+if(!W.__mtCO){W.__mtCO=1;
+var _co=URL.createObjectURL;
+URL.createObjectURL=function(){
+var u='';
+try{u=_co.apply(this,arguments)}catch(e){return _co.apply(this,arguments)}
+try{
+var b=arguments[0];
+if(b&&(typeof Blob!=='undefined')&&b instanceof Blob&&String(b.type||'').indexOf('image/')===0&&(b.size||0)>12000){hold(String(u).split('#')[0],b)}
+}catch(e2){}
+return u
+};
+}
+}catch(e){}
 try{
 var ex=document.querySelectorAll('img,source');
 for(var i2=0;i2<ex.length;i2++){try{ex[i2].__MT_SEEN=nowT()}catch(e){}}
@@ -873,10 +886,6 @@ tick()
 
     private fun showExtractChoice() {
         val cur = try { web.url ?: "" } catch (_: Exception) { "" }
-        if (cur.isNotEmpty() && isMangaPlusViewerUrl(cur)) {
-            showLinkDownloadChoice(listOf(cur), mpMode = true)
-            return
-        }
         extractBtn.text = "… در حال آماده‌سازی"
         extractWithScroll { arr ->
             extractBtn.text = "🖼 استخراج"
@@ -889,6 +898,10 @@ tick()
                     }
                 }
                 if (all.isEmpty()) {
+                    if (cur.isNotEmpty() && isMangaPlusViewerUrl(cur)) {
+                        showLinkDownloadChoice(listOf(cur), mpMode = true)
+                        return@extractWithScroll
+                    }
                     countLbl.text = "هیچ عکسی ضبط نشد — فصل را باز کن و ورق بزن"
                     Toast.makeText(this,
                         "هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن",
@@ -1056,10 +1069,7 @@ tick()
     }
 
     private fun showFolderDialogFallback(all: List<String>) {
-        val folders = LinkedHashMap<String, MutableList<String>>()
-        for (u in all) {
-            folders.getOrPut(folderOf(u)) { mutableListOf() }.add(u)
-        }
+        val (folders, keyBy) = buildFolders(all)
         val entries = folders.entries.sortedByDescending { it.value.size }
         val labels = Array(entries.size) { i ->
             "\u200E" + shortFolder(entries[i].key) +
@@ -1078,7 +1088,7 @@ tick()
             val sel = ArrayList<String>()
             val checkedKeys = HashSet<String>()
             for (i in entries.indices) if (checked[i]) checkedKeys.add(entries[i].key)
-            for (u in all) if (checkedKeys.contains(folderOf(u))) sel.add(u)
+            for (u in all) if (checkedKeys.contains(keyBy[u])) sel.add(u)
             if (sel.isEmpty()) {
                 Toast.makeText(this, "هیچ پوشه‌ای انتخاب نشد",
                     Toast.LENGTH_SHORT).show()
@@ -1090,11 +1100,37 @@ tick()
         b.show()
     }
 
-    private fun showFolderDialogImpl(all: List<String>) {
+    private fun hostOf(u: String): String {
+        if (u.startsWith("blob:")) return "blob:"
+        return try {
+            val p = java.net.URI(u)
+            (p.scheme ?: "https") + "://" + (p.host ?: "")
+        } catch (_: Exception) {
+            u.split("#").firstOrNull()?.split("?")?.firstOrNull() ?: u
+        }
+    }
+
+    private fun buildFolders(all: List<String>):
+            Pair<LinkedHashMap<String, MutableList<String>>, Map<String, String>> {
         val folders = LinkedHashMap<String, MutableList<String>>()
         for (u in all) {
             folders.getOrPut(folderOf(u)) { mutableListOf() }.add(u)
         }
+        if (folders.size > maxOf(8, all.size * 6 / 10)) {
+            val byHost = LinkedHashMap<String, MutableList<String>>()
+            for (u in all) {
+                byHost.getOrPut(hostOf(u)) { mutableListOf() }.add(u)
+            }
+            folders.clear()
+            folders.putAll(byHost)
+        }
+        val keyBy = HashMap<String, String>()
+        for ((k, list) in folders) for (u in list) keyBy[u] = k
+        return Pair(folders, keyBy)
+    }
+
+    private fun showFolderDialogImpl(all: List<String>) {
+        val (folders, _) = buildFolders(all)
         val order = folders.entries.sortedByDescending { it.value.size }
             .map { it.key }
         val rankOf = HashMap<String, Int>()
@@ -2176,7 +2212,7 @@ tick()
             append("(function(){try{var urls=").append(arr.toString()).append(";")
             append("function toData(u){")
             append("try{var k=String(u).split('#')[0];")
-            append("if(window.__MT_BLOBS&&window.__MT_BLOBS[k]){")
+            append("if(window.__MT_BLOBS&&window.__MT_BLOBS[k]&&window.__MT_BLOBS[k].size){")
             append("var bb=window.__MT_BLOBS[k];")
             append("return new Promise(function(res){")
             append("try{var f=new FileReader();")
@@ -2184,13 +2220,36 @@ tick()
             append("f.onerror=function(){res('')};")
             append("f.readAsDataURL(bb)}")
             append("catch(e){res('')}})}}catch(e){}")
-            append("return fetch(u,{credentials:'include'})")
-            append(".then(function(r){if(!r.ok)return '';return r.blob()})")
+            append("function fgo(o){return fetch(u,o)")
+            append(".then(function(r){if(!r.ok)return '';return r.blob()})}")
+            append("return fgo()")
+            append(".then(function(b){if(b)return b;return fgo({credentials:'include'})})")
             append(".then(function(b){if(!b)return '';return new Promise(function(res){")
             append("try{var f=new FileReader();")
             append("f.onload=function(){res(String(f.result||''))};")
             append("f.onerror=function(){res('')};f.readAsDataURL(b)}")
-            append("catch(e){res('')}})})}")
+            append("catch(e){res('')}})})")
+            append(".then(function(d){if(d&&d.indexOf('data:image')===0)return d;")
+            append("if(String(u).indexOf('blob:')!==0)return '';")
+            append("return new Promise(function(res2){")
+            append("try{var im=null;")
+            append("try{var cs=document.querySelectorAll('img');var kk=String(u).split('#')[0];")
+            append("for(var q=0;q<cs.length;q++){var ss='';")
+            append("try{ss=cs[q].currentSrc||cs[q].src||''}catch(e5){}")
+            append("if(ss&&ss.split('#')[0]===kk){im=cs[q];break}}}catch(e7){}")
+            append("if(im&&im.complete&&im.naturalWidth>0){")
+            append("try{var cv2=document.createElement('canvas');")
+            append("cv2.width=im.naturalWidth;cv2.height=im.naturalHeight;")
+            append("cv2.getContext('2d').drawImage(im,0,0);")
+            append("res2(cv2.toDataURL('image/jpeg',0.92)||'');return}")
+            append("catch(e6){}}")
+            append("im=new Image();")
+            append("im.onload=function(){try{var cv=document.createElement('canvas');")
+            append("cv.width=im.naturalWidth||1;cv.height=im.naturalHeight||1;")
+            append("var ctx=cv.getContext('2d');ctx.drawImage(im,0,0);")
+            append("res2(cv.toDataURL('image/jpeg',0.92)||'')}catch(e3){res2('')}};")
+            append("im.onerror=function(){res2('')};im.src=u}")
+            append("catch(e4){res2('')}})})}")
             append("var CH=262144;")
             append("function send(idx,total,u,d){")
             append("try{d=String(d||'');")

@@ -623,6 +623,23 @@
       if (!gmap[it.folder]) { gmap[it.folder] = []; groups.push(it.folder) }
       gmap[it.folder].push({ it: it, idx: i })
     }
+    if (groups.length > Math.max(8, Math.floor(items.length * 0.6))) {
+      const hmap = {}
+      const hgroups = []
+      for (let i = 0; i < items.length; i++) {
+        const it = items[i]
+        let h = it.folder
+        if (it.folder !== 'blob' && it.folder !== 'misc') {
+          h = it.folder.split('/')[0]
+        }
+        if (!hmap[h]) { hmap[h] = []; hgroups.push(h) }
+        hmap[h].push({ it: it, idx: i })
+      }
+      groups.length = 0
+      for (let g = 0; g < hgroups.length; g++) groups.push(hgroups[g])
+      for (const k of Object.keys(gmap)) delete gmap[k]
+      for (const k of Object.keys(hmap)) gmap[k] = hmap[k]
+    }
     const groupRows = []
     const update = function () {
       let total = 0
@@ -816,6 +833,18 @@
     viewSpin.style.display = 'block'
     view.classList.add('mtopen')
     let stage = 0
+    function giveUp() {
+      viewSpin.style.display = 'none'
+      toast('این سایت اجازهٔ نمایش مستقیم نمی‌دهد')
+    }
+    function toDataUrl(u8, ct) {
+      let bin = ''
+      const CH = 32768
+      for (let i = 0; i < u8.length; i += CH) {
+        bin += String.fromCharCode.apply(null, u8.subarray(i, i + CH))
+      }
+      return 'data:' + (ct || 'image/jpeg') + ';base64,' + btoa(bin)
+    }
     viewImg.onload = function () {
       viewSpin.style.display = 'none'
       viewImg.style.display = 'block'
@@ -834,16 +863,17 @@
             viewImg.src = 'data:' + (r.ct || 'image/jpeg') + ';base64,' + r.b64
             return
           }
-          viewSpin.style.display = 'none'
-          toast('این سایت اجازهٔ نمایش مستقیم نمی‌دهد')
-        }).catch(function () {
-          viewSpin.style.display = 'none'
-          toast('این سایت اجازهٔ نمایش مستقیم نمی‌دهد')
-        })
+          return pageFetch(item.fetch).then(function (pf) {
+            if (pf && pf.u8 && pf.u8.length) {
+              viewImg.src = toDataUrl(pf.u8, pf.ct)
+              return
+            }
+            giveUp()
+          })
+        }).catch(giveUp)
         return
       }
-      viewSpin.style.display = 'none'
-      toast('این سایت اجازهٔ نمایش مستقیم نمی‌دهد')
+      giveUp()
     }
     viewImg.referrerPolicy = 'strict-origin-when-cross-origin'
     viewImg.src = item.show

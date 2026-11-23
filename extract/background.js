@@ -125,7 +125,7 @@ function junk(u) {
   if (/(?:^|[^a-z0-9])ads?[._\/-]/i.test(b)) return true
   if (/\/(covers?|thumbs?|thumbnails?|avatars?|banners?|creatives?|gifs?|decorations?|emojis?|smileys?|stickers?)\//i.test(b)) return true
   if (/(default|anon|guest|blank)[-_]?(pp|avatar|user|profile|image)/i.test(b)) return true
-  if (/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\.net)/i.test(b)) return true
+  if (/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\.net|jumpg-assets)/i.test(b)) return true
   return false
 }
 

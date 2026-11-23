@@ -500,8 +500,19 @@ class _MangaTranslatorBody_95:
                     def _probe(u: str) -> tuple:
                         try:
                             import requests as _rq
-                            h = dict(headers) if headers else {
-                                "User-Agent": "Mozilla/5.0"}
+                            from urllib.parse import urlparse as _up
+                            h = {
+                                "User-Agent": (
+                                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                    "Chrome/120.0.0.0 Safari/537.36")}
+                            try:
+                                _ou = _up(u)
+                                h["Referer"] = (
+                                    f"{_ou.scheme or 'https'}:"
+                                    f"//{_ou.netloc}/")
+                            except Exception:
+                                pass
                             r = _rq.head(u, headers=h, timeout=8,
                                          allow_redirects=True)
                             ct = (r.headers.get("Content-Type") or "").lower()
@@ -527,7 +538,19 @@ class _MangaTranslatorBody_95:
                 self._is_direct_image_url(u) or u in _probe_image for u in urls)
             if len(urls) == 1:
                 print(f"[*] دانلود تصاویر از لینک: {urls[0]}")
-                image_files = self._download_images_from_url(urls[0], src_dir)
+                try:
+                    image_files = self._download_images_from_url(
+                        urls[0], src_dir)
+                except Exception as e:
+                    print(f"[!] دانلود لینک ناموفق: {str(e)[:160]}",
+                          file=sys.stderr)
+                    image_files = []
+                if not image_files:
+                    print("[!] هیچ تصویری از این لینک گرفته نشد — اگر سایت "
+                          "لینک‌هایش را قفل می‌کند، فصل را در «مرورگر "
+                          "داخلی» باز کن و «استخراج با دانلود» را بزن.",
+                          file=sys.stderr)
+                    return
                 self._independent_pages = True
             elif all_direct:
                 print(f"[*] {len(urls)} تصویر مستقیم — دانلود یک‌جا به عنوان یک فصل...")
@@ -577,6 +600,20 @@ class _MangaTranslatorBody_95:
                                   file=sys.stderr)
                             continue
                         u = self._normalize_image_url(u)
+                        _hu = {
+                            "User-Agent": (
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/120.0.0.0 Safari/537.36"
+                            )}
+                        try:
+                            from urllib.parse import urlparse as _up2
+                            _ou2 = _up2(u)
+                            _hu["Referer"] = (
+                                f"{_ou2.scheme or 'https'}:"
+                                f"//{_ou2.netloc}/")
+                        except Exception:
+                            pass
                         _ub0 = os.path.splitext(os.path.basename(u.split("?")[0]))[0]
                         _ub0 = re.sub(r'[\\/:*?"<>|]+', "_", _ub0).strip("._ ")[:80]
                         if not re.search(r"\d", _ub0):
@@ -591,8 +628,25 @@ class _MangaTranslatorBody_95:
                             image_files.append(_hit0)
                             print(f"    [+] {i}/{len(urls)} از کشِ دانلود")
                             continue
-                        r = _req.get(u, headers=headers, timeout=60)
-                        r.raise_for_status()
+                        r = None
+                        try:
+                            r = _req.get(u, headers=_hu, timeout=60)
+                            r.raise_for_status()
+                        except Exception:
+                            r = None
+                        if r is None and "Referer" in _hu:
+                            try:
+                                _hn = dict(_hu)
+                                _hn.pop("Referer", None)
+                                _hn["Accept"] = (
+                                    "image/jpeg,image/png,image/webp,*/*;q=0.8")
+                                r = _req.get(u, headers=_hn, timeout=60)
+                                r.raise_for_status()
+                            except Exception:
+                                r = None
+                        if r is None:
+                            print(f"    [!] دانلود ناموفق ({u[:90]}…)")
+                            continue
                         content = r.content
                         ext = os.path.splitext(u.split("?")[0])[1].lower() or ".jpg"
                         if ext not in IMAGE_EXTS:

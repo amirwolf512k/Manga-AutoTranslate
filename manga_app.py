@@ -1386,6 +1386,105 @@ _MT_BROWSER_WIN_JS = r"""(function(){
   var rec = false;
   try { rec = sessionStorage.getItem(REC_KEY) === '1'; } catch (e) {}
 
+  if (!window.__MT_BLOBS) window.__MT_BLOBS = {};
+  function hold(k, b){
+    try{
+      if(!b) return;
+      var ex = window.__MT_BLOBS[k];
+      if(ex && ex !== 1) return;
+      var n = 0;
+      for (var p in window.__MT_BLOBS) n++;
+      if(n >= 240 && !ex) return;
+      window.__MT_BLOBS[k] = b;
+    }catch(e){}
+  }
+  function findImgEl(u){
+    try{
+      var cand = document.querySelectorAll('img');
+      var k = String(u).split('#')[0];
+      for(var i=0;i<cand.length;i++){
+        var s = '';
+        try{ s = cand[i].currentSrc || cand[i].src || ''; }catch(e){}
+        if(s && s.split('#')[0] === k) return cand[i];
+      }
+    }catch(e){}
+    return null;
+  }
+  function imgHold(u, k){
+    try{
+      var el = findImgEl(u);
+      if(el && el.complete && el.naturalWidth > 0){
+        try{
+          var cv0 = document.createElement('canvas');
+          cv0.width = el.naturalWidth; cv0.height = el.naturalHeight;
+          cv0.getContext('2d').drawImage(el, 0, 0);
+          if(cv0.toBlob){
+            cv0.toBlob(function(b){ if(b) hold(k, b); }, 'image/jpeg', 0.92);
+          }
+          return;
+        }catch(e){}
+      }
+      var im = new Image();
+      im.onload = function(){
+        try{
+          var cv = document.createElement('canvas');
+          cv.width = im.naturalWidth || 1;
+          cv.height = im.naturalHeight || 1;
+          var ctx = cv.getContext('2d');
+          ctx.drawImage(im, 0, 0);
+          if(cv.toBlob){
+            cv.toBlob(function(b){ if(b) hold(k, b); }, 'image/jpeg', 0.92);
+          }
+        }catch(e){}
+      };
+      im.src = u;
+    }catch(e){}
+  }
+  function capb(u){
+    try{
+      if(!u) return;
+      u = String(u).trim();
+      if(u.indexOf('blob:') !== 0) return;
+      var k = u.split('#')[0];
+      if(window.__MT_BLOBS[k]) return;
+      window.__MT_BLOBS[k] = 1;
+      try{
+        fetch(u).then(function(r){ return r.ok ? r.blob() : null; })
+          .then(function(b){
+            if(b) hold(k, b);
+            else{
+              try{ delete window.__MT_BLOBS[k]; }catch(e){}
+              imgHold(u, k);
+            }
+          }).catch(function(){
+            try{ delete window.__MT_BLOBS[k]; }catch(e){}
+            imgHold(u, k);
+          });
+      }catch(e){
+        try{ delete window.__MT_BLOBS[k]; }catch(e2){}
+        imgHold(u, k);
+      }
+    }catch(e){}
+  }
+  try{
+    if(!window.__mtCOHook){
+      window.__mtCOHook = 1;
+      var _co = URL.createObjectURL;
+      URL.createObjectURL = function(b){
+        var u = '';
+        try{ u = _co.apply(this, arguments); }
+        catch(e){ return _co.apply(this, arguments); }
+        try{
+          if(b && typeof Blob !== 'undefined' && b instanceof Blob &&
+             String(b.type || '').indexOf('image/') === 0 &&
+             (b.size || 0) > 12000)
+            hold(String(u).split('#')[0], b);
+        }catch(e){}
+        return u;
+      };
+    }
+  }catch(e){}
+
   var st = null;
   var box = null, menu = null, fold = null;
 
@@ -1515,7 +1614,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     if(/(?:^|[^a-z0-9])ads?[._\/-]/i.test(b)) return 1;
     if(/\/(covers?|thumbs?|thumbnails?|avatars?|banners?|creatives?|gifs?|decorations?|emojis?|smileys?|stickers?)\//i.test(b)) return 1;
     if(/(default|anon|guest|blank)[-_]?(pp|avatar|user|profile|image)/i.test(b)) return 1;
-    if(/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\.net)/i.test(b)) return 1;
+    if(/(pubadx|adservice|adserver|doubleclick|adnxs|propellerads?|onclck|adcash|adsterra|hilltopads?|clickadu|sovrn|taboola|outbrain|zedo|buysellads?|sharethrough|smartadserver|openx|rubicon|criteo|pubmatic|media\.net|jumpg-assets)/i.test(b)) return 1;
     return 0;
   }
   function keyOf(u){
@@ -1552,6 +1651,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
           var kb = u.split('#')[0];
           if(seen[kb]) return;
           seen[kb] = 1; picked.push(u);
+          capb(u);
           return;
         }
         u = abs(u);
@@ -1669,6 +1769,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       if(!u) return;
       u = String(u).trim();
       if(u.indexOf('data:') === 0) return;
+      if(u.indexOf('blob:') === 0){ capb(u); return; }
       if(!/^https?:/i.test(u)) return;
       var au = abs(u);
       if(!au) return;
@@ -1753,8 +1854,6 @@ _MT_BROWSER_WIN_JS = r"""(function(){
   netHook();
 
   function collectAll(){
-    var mp = mpViewer();
-    if(mp){ accClear(); return [mp]; }
     var acc = accLoad();
     var page = collectPage();
     var seen = {}, out = [], i, u, k;
@@ -1767,7 +1866,9 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       if(!seen[k]){ seen[k] = 1; out.push(u); }
     }
     var keep = [];
-    for(i=0;i<out.length;i++) if(/^https?:/i.test(out[i])) keep.push(out[i]);
+    for(i=0;i<out.length;i++){
+      if(/^https?:/i.test(out[i])) keep.push(out[i]);
+    }
     accSave(keep);
     return out;
   }
@@ -1780,6 +1881,15 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       var c = p.lastIndexOf('/');
       p = c >= 0 ? p.slice(0, c+1) : '/';
       return a.protocol + '//' + a.hostname + p;
+    }catch(e){
+      return String(u).split('#')[0].split('?')[0];
+    }
+  }
+  function hostOf(u){
+    if(String(u).indexOf('blob:') === 0) return 'blob:';
+    try{
+      var a2 = document.createElement('a'); a2.href = u;
+      return a2.protocol + '//' + a2.hostname;
     }catch(e){
       return String(u).split('#')[0].split('?')[0];
     }
@@ -1868,17 +1978,69 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     accClear();
   }
 
+  function hasBlobRec(list){
+    for(var i=0;i<list.length;i++){
+      if(String(list[i]).indexOf('blob:') === 0) return true;
+    }
+    return false;
+  }
+  function autoScroll(cb){
+    try{
+      if(window.__MT_SCROLLING){ cb(); return; }
+      window.__MT_SCROLLING = 1;
+      window.__MT_SCROLL_DONE = 0;
+      var step = Math.max(500, Math.floor(window.innerHeight * 0.85));
+      var y = 0, n = 0, stable = 0, lastH = 0;
+      function H(){
+        try{
+          return Math.max(
+            document.body ? document.body.scrollHeight : 0,
+            document.documentElement ?
+              document.documentElement.scrollHeight : 0);
+        }catch(e){ return 0; }
+      }
+      lastH = H();
+      function tick(){
+        try{
+          y += step; window.scrollTo(0, y); n++;
+          var h = H();
+          if(h === lastH) stable++; else { stable = 0; lastH = h; }
+          var atBottom = (y + window.innerHeight >= h - 8);
+          if((atBottom && stable >= 3) || n > 200){
+            try{ window.scrollTo(0, 0); }catch(e){}
+            window.__MT_SCROLL_DONE = 1;
+            cb(); return;
+          }
+          setTimeout(tick, 280);
+        }catch(e){
+          try{ window.__MT_SCROLL_DONE = 1; }catch(e2){}
+          cb();
+        }
+      }
+      tick();
+    }catch(e){ cb(); }
+  }
+
   function doExtract(){
     closeAll();
     var list = collectAll();
-    if(!list.length){
-      alert('هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن');
+    if(rec && (!list.length || hasBlobRec(list))){
+      cnt.textContent = '… اسکرول خودکار برای گرفتن همهٔ صفحه‌ها';
+      autoScroll(function(){ afterCollect(collectAll()); });
       return;
     }
-    if(list.length === 1 && mpViewer()){
-      showModeMenu(list,
-        'فصلِ مانگاپلاس: موتور خودش عکس‌ها را از API رسمی می‌گیرد و رمزگشایی می‌کند',
-        true);
+    afterCollect(list);
+  }
+  function afterCollect(list){
+    if(!list.length){
+      var mp = mpViewer();
+      if(mp){
+        showModeMenu([mp],
+          'عکس‌های این فصل در حافظهٔ مرورگر پیدا نشد — موتور خودش از API رسمی می‌گیرد',
+          true);
+        return;
+      }
+      alert('هیچ عکسی ضبط نشد — صفحه فصل را باز کن و ورق بزن');
       return;
     }
     var rank = {};
@@ -1889,6 +2051,15 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       if(!folders[f]){ folders[f] = []; order.push(f); }
       folders[f].push(list[i]);
     }
+    if(order.length > Math.max(8, Math.floor(list.length * 0.6))){
+      var byHost = {}, hOrder = [];
+      for(var h0=0;h0<list.length;h0++){
+        var hh = hostOf(list[h0]);
+        if(!byHost[hh]){ byHost[hh] = []; hOrder.push(hh); }
+        byHost[hh].push(list[h0]);
+      }
+      folders = byHost; order = hOrder;
+    }
     order.sort(function(a,b){ return folders[b].length - folders[a].length; });
     showFolders(order, folders, rank);
   }
@@ -1897,9 +2068,14 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     closeAll();
     rank = rank || {};
     var flat = [];
-    for(var f0=0;f0<order.length;f0++)
-      for(var f1=0;f1<folders[order[f0]].length;f1++)
-        flat.push(folders[order[f0]][f1]);
+    var keyBy = {};
+    for(var f0=0;f0<order.length;f0++){
+      for(var f1=0;f1<folders[order[f0]].length;f1++){
+        var u00 = folders[order[f0]][f1];
+        keyBy[u00] = order[f0];
+        flat.push(u00);
+      }
+    }
     if(!flat.length){ return; }
     var picks = {};
     for(var i=0;i<order.length;i++) picks[order[i]] = {};
@@ -2043,7 +2219,21 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       wrap.appendChild(im); wrap.appendChild(ld); wrap.appendChild(errm);
       fv.appendChild(wrap); fv.appendChild(x); fv.appendChild(tip);
       (document.body || document.documentElement).appendChild(fv);
-      im.src = String(u);
+      var memB = null;
+      try{
+        if(String(u).indexOf('blob:') === 0){
+          var mb = window.__MT_BLOBS[String(u).split('#')[0]];
+          if(mb && mb !== 1) memB = mb;
+        }
+      }catch(e){}
+      if(memB){
+        blobToData(memB).then(function(d){
+          if(d && d.indexOf('data:image') === 0) setSrc(d);
+          else{ try{ im.src = String(u); }catch(e){ hostFetch(); } }
+        });
+      }else{
+        im.src = String(u);
+      }
     }
     function armHold(el, u){
       var ht = null;
@@ -2207,7 +2397,7 @@ _MT_BROWSER_WIN_JS = r"""(function(){
       var sel = [];
       for(var q3=0;q3<flat.length;q3++){
         var u3 = flat[q3];
-        var f3 = folderOf(u3);
+        var f3 = keyBy[u3];
         if(picks[f3] && picks[f3][u3]) sel.push(u3);
       }
       closeAll();
@@ -2294,40 +2484,118 @@ _MT_BROWSER_WIN_JS = r"""(function(){
     }
   }
 
+  function blobToData(b){
+    return new Promise(function(res){
+      try{
+        var f = new FileReader();
+        f.onload = function(){ res(String(f.result || '')); };
+        f.onerror = function(){ res(''); };
+        f.readAsDataURL(b);
+      }catch(e){ res(''); }
+    });
+  }
+  function hostData(u){
+    try{
+      if(window.pywebview && window.pywebview.api &&
+         window.pywebview.api.fetchImg){
+        var ref = '';
+        try{ ref = String(location.href || ''); }catch(e){}
+        return window.pywebview.api.fetchImg(String(u), ref).then(function(d){
+          return (d && String(d).indexOf('data:image') === 0)
+            ? String(d) : '';
+        }).catch(function(){ return ''; });
+      }
+    }catch(e){}
+    return Promise.resolve('');
+  }
+  function imgToData(u){
+    return new Promise(function(res){
+      try{
+        function draw(im){
+          try{
+            var cv = document.createElement('canvas');
+            cv.width = im.naturalWidth || 1;
+            cv.height = im.naturalHeight || 1;
+            var ctx = cv.getContext('2d');
+            ctx.drawImage(im, 0, 0);
+            var d = cv.toDataURL('image/jpeg', 0.92);
+            res(d && d.indexOf('data:image') === 0 ? d : '');
+          }catch(e){ res(''); }
+        }
+        var el = findImgEl(u);
+        if(el && el.complete && el.naturalWidth > 0){ draw(el); return; }
+        var im = new Image();
+        im.onload = function(){ draw(im); };
+        im.onerror = function(){ res(''); };
+        im.src = u;
+      }catch(e){ res(''); }
+    });
+  }
+  function grabFetch(u){
+    function viaFetch(opts){
+      return fetch(u, opts).then(function(r){
+        if(!r.ok) return '';
+        return r.blob();
+      }).then(function(b){
+        if(!b) return '';
+        return blobToData(b);
+      });
+    }
+    return viaFetch().then(function(d){
+      if(d && d.indexOf('data:image') === 0) return d;
+      return viaFetch({credentials:'include'});
+    }).then(function(d){
+      if(d && d.indexOf('data:image') === 0) return d;
+      if(String(u).indexOf('blob:') === 0) return imgToData(u);
+      return '';
+    }).then(function(d){
+      if(d && d.indexOf('data:image') === 0) return d;
+      return hostData(u);
+    }).catch(function(){ return hostData(u); });
+  }
+  function grabData(u){
+    var k = String(u).split('#')[0];
+    var b = null;
+    try{
+      if(String(u).indexOf('blob:') === 0){
+        var bb = window.__MT_BLOBS[k];
+        if(bb && bb !== 1) b = bb;
+      }
+    }catch(e){}
+    if(b){
+      return blobToData(b).then(function(d){
+        if(d && d.indexOf('data:image') === 0) return d;
+        return grabFetch(u);
+      });
+    }
+    return grabFetch(u);
+  }
+
   function doDl(sel){
     cnt.textContent = '⬇ 0/' + sel.length;
-    var i = 0;
+    var i = 0, ok = 0;
     function step(){
       if(i >= sel.length){
         clearRec();
         mainBtn.textContent = '▶ شروع ضبط';
+        if(ok === 0){
+          alert('هیچ عکسی دانلود نشد — سایت اجازهٔ دانلود مستقیم نمی‌دهد');
+        }else if(ok < sel.length){
+          alert((sel.length - ok) + ' عکس دانلود نشد — فقط ' + ok + ' تا گرفته شد');
+        }
         return;
       }
       var u = sel[i]; var idx = i; i++;
-      try{
-        fetch(u, {credentials:'include'}).then(function(r){
-          if(!r.ok) return '';
-          return r.blob();
-        }).then(function(b){
-          if(!b) return '';
-          return new Promise(function(res){
-            try{
-              var f = new FileReader();
-              f.onload = function(){ res(String(f.result || '')); };
-              f.onerror = function(){ res(''); };
-              f.readAsDataURL(b);
-            }catch(e){ res(''); }
-          });
-        }).then(function(d){
-          try{ window.pywebview.api.onDlOne(idx, sel.length, d || ''); }catch(e){}
-          cnt.textContent = '⬇ ' + (idx+1) + '/' + sel.length;
-          setTimeout(step, 30);
-        }).catch(function(){
-          try{ window.pywebview.api.onDlOne(idx, sel.length, ''); }catch(e){}
-          cnt.textContent = '⬇ ' + (idx+1) + '/' + sel.length;
-          setTimeout(step, 30);
-        });
-      }catch(e){ setTimeout(step, 30); }
+      grabData(u).then(function(d){
+        if(d && d.indexOf('data:image') === 0) ok++;
+        try{ window.pywebview.api.onDlOne(idx, sel.length, d || ''); }catch(e){}
+        cnt.textContent = '⬇ ' + (idx+1) + '/' + sel.length + ' — ' + ok + ' ✓';
+        setTimeout(step, 30);
+      }).catch(function(){
+        try{ window.pywebview.api.onDlOne(idx, sel.length, ''); }catch(e){}
+        cnt.textContent = '⬇ ' + (idx+1) + '/' + sel.length + ' — ' + ok + ' ✓';
+        setTimeout(step, 30);
+      });
     }
     step();
   }
@@ -3843,6 +4111,16 @@ def _browser_extract_js() -> str:
                 return String(u).split("#")[0].split("?")[0];
               }
             };
+            const hostOf = (u) => {
+              if (String(u).indexOf("blob:") === 0) return "blob:";
+              try {
+                const a = document.createElement("a");
+                a.href = u;
+                return a.protocol + "//" + a.hostname;
+              } catch (e) {
+                return String(u).split("#")[0].split("?")[0];
+              }
+            };
             const shortFolder = (f) => {
               if (f === "blob:") return "درون صفحه (رمزگشایی‌شده)";
               f = String(f).replace(/^https?:\\/\\//, "");
@@ -3938,6 +4216,7 @@ def _browser_extract_js() -> str:
                 if (q > 0 && q <= 400) return 1;
                 if (/(logo|icon|avatar|banner|sprite|favicon|badge|flag|button|emoji|thumb(nail)?s?|placeholder|blank|spacer|transparen|loading|spinner|pixel|profile|rating|share|follow|comment|credits)/i.test(b)) return 1;
                 if (/(?:^|[^a-z0-9])ads?[._/-]/i.test(b)) return 1;
+                if (/jumpg-assets/i.test(b)) return 1;
                 return 0;
               };
               const keyOf = (u) => String(u).split(/[?#]/)[0]
@@ -4181,11 +4460,21 @@ def _browser_extract_js() -> str:
 
             const showFolders = () => {
               closeFold();
-              const folders = {}, order = [];
+              let folders = {}, order = [];
               for (const u of acc) {
                 const f = folderOf(u);
                 if (!folders[f]) { folders[f] = []; order.push(f); }
                 folders[f].push(u);
+              }
+              if (order.length > Math.max(8, Math.floor(acc.length * 0.6))) {
+                const byHost = {};
+                order = [];
+                for (const u of acc) {
+                  const h = hostOf(u);
+                  if (!byHost[h]) { byHost[h] = []; order.push(h); }
+                  byHost[h].push(u);
+                }
+                folders = byHost;
               }
               order.sort((a, b) => folders[b].length - folders[a].length);
               const picks = {};
@@ -4434,8 +4723,10 @@ def _browser_extract_js() -> str:
               await pool(3, sel.length, async (k) => {
                 const u = sel[k];
                 try {
-                  const r = await fetch(u, { credentials: "include" });
-                  if (!r.ok) throw 0;
+                  let r = await fetch(u);
+                  if (!r || !r.ok)
+                    r = await fetch(u, { credentials: "include" });
+                  if (!r || !r.ok) throw 0;
                   const b = await r.blob();
                   items[k] = b;
                 } catch (e) { items[k] = null; }
