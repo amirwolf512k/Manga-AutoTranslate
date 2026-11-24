@@ -7158,7 +7158,7 @@ class _MangaTranslatorBody_85:
                         rmed = rstd = None
                 except Exception:
                     rmed = rstd = None
-                if rstd is not None and rstd > 12.0:
+                if rstd is not None:
                     try:
                         _vT = rg[subm].astype(np.float32)
                         if _vT.size >= 200:
@@ -7183,8 +7183,8 @@ class _MangaTranslatorBody_85:
                                         print(f"  [dbg-polish] SKIP-textured "
                                               f"comp x={x} y={y} {w}x{h} "
                                               f"std={float(np.std(_vT)):.1f} "
-                                              f"lap={float(np.mean(_lapT[subm])):.2f}",
-                                              flush=True)
+                                              f"lap={float(np.mean(_lapT[subm])):.2f} "
+                                              f"rstd={rstd:.1f}", flush=True)
                                     continue
                                 if _pdbg:
                                     print(f"  [dbg-polish] force-block "
@@ -7359,6 +7359,17 @@ class _MangaTranslatorBody_85:
                                             _carr[-_q:], axis=0)
                                         _dr = float(np.abs(
                                             _mt - _mb).max())
+                                        try:
+                                            _med_all = np.median(
+                                                _carr, axis=0)
+                                            _dr = max(
+                                                _dr,
+                                                float(np.abs(
+                                                    _carr
+                                                    - _med_all[None, :]
+                                                ).max()))
+                                        except Exception:
+                                            pass
                                         if _pdbg:
                                             try:
                                                 print(
@@ -7455,6 +7466,17 @@ class _MangaTranslatorBody_85:
                                     _carrc[-_quat:], axis=0)
                                 _drc = float(np.abs(
                                     _mtc - _mbc).max())
+                                try:
+                                    _med_allc = np.median(
+                                        _carrc, axis=0)
+                                    _drc = max(
+                                        _drc,
+                                        float(np.abs(
+                                            _carrc
+                                            - _med_allc[None, :]
+                                        ).max()))
+                                except Exception:
+                                    pass
                                 _gmean = float(np.mean(_carrc))
                                 if _drc > 6.0:
                                     try:
@@ -11993,7 +12015,196 @@ class _MangaTranslatorBody_85:
                           f"روشن شد", flush=True)
         except Exception:
             pass
+        try:
+            if _cmp2 is not None \
+                    and os.environ.get("MANGA_STAIN_SWEEP", "1") != "0":
+                _nst = self._dark_stain_sweep(image, cleaned, _cmp2)
+                if _nst and self.debug:
+                    print(f"  [✓] تورِ ایمنیِ لگه: {_nst}px با گرادیانِ "
+                          f"ردیفی تعمیر شد", flush=True)
+        except Exception:
+            pass
+        try:
+            _sdT = os.environ.get("MANGA_STAGE_DUMP", "")
+            if _sdT:
+                cv2.imwrite(os.path.join(_sdT, "post_stain.jpg"), cleaned)
+        except Exception:
+            pass
         return cleaned
+
+    def _dark_stain_sweep(self, image: np.ndarray, cleaned: np.ndarray,
+                          mask: np.ndarray) -> int:
+        try:
+            if image is None or cleaned is None or mask is None:
+                return 0
+            h, w = cleaned.shape[:2]
+            if mask.shape != (h, w):
+                return 0
+            if float(h) * float(w) > 12_000_000.0:
+                return 0
+            m = (mask > 0).astype(np.uint8)
+            if not cv2.countNonZero(m):
+                return 0
+            _msd = os.environ.get("MANGA_STAIN_MASK_DUMP", "")
+            if _msd:
+                cv2.imwrite(_msd, m * 255)
+            n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
+            if n <= 1:
+                return 0
+            out = cleaned
+            fixed_px = 0
+            _trc = os.environ.get("MANGA_STAIN_TRACE", "")
+            _tr_y = -1
+            if _trc:
+                try:
+                    _tr_y = int(_trc)
+                except Exception:
+                    _tr_y = -1
+            for i in range(1, n):
+                x = int(st[i, cv2.CC_STAT_LEFT])
+                y = int(st[i, cv2.CC_STAT_TOP])
+                cw = int(st[i, cv2.CC_STAT_WIDTH])
+                ch = int(st[i, cv2.CC_STAT_HEIGHT])
+                a = int(st[i, cv2.CC_STAT_AREA])
+                if a < 400 or cw < 20 or ch < 14:
+                    continue
+                if cw > 0.92 * w or ch > 0.92 * h:
+                    continue
+                x0 = max(0, x - 10)
+                y0 = max(0, y - 10)
+                x1 = min(w, x + cw + 10)
+                y1 = min(h, y + ch + 10)
+                comp = (lab[y0:y1, x0:x1] == i)
+                if not comp.any():
+                    continue
+                _rows = [rr for rr in range(comp.shape[0])
+                         if comp[rr].any()]
+                if not _rows:
+                    continue
+                _groups = []
+                _curg = [_rows[0]]
+                for rr in _rows[1:]:
+                    if rr - _curg[-1] > 12:
+                        _groups.append(_curg)
+                        _curg = [rr]
+                    else:
+                        _curg.append(rr)
+                _groups.append(_curg)
+                _wins = []
+                for _g in _groups:
+                    if len(_g) <= 170:
+                        if len(_g) >= 14:
+                            _wins.append(_g)
+                        continue
+                    _st = 0
+                    while _st < len(_g):
+                        _en = min(len(_g), _st + 150)
+                        if _en - _st >= 14:
+                            _wins.append(_g[_st:_en])
+                        if _en >= len(_g):
+                            break
+                        _st += 110
+                for _win in _wins:
+                    _ry0 = int(_win[0])
+                    _ry1 = int(_win[-1]) + 1
+                    compW = comp[_ry0:_ry1]
+                    n_comp = int(np.count_nonzero(compW))
+                    if _trc:
+                        print("  [STAINw] win=(%d,%d %dx%d) npx=%d"
+                              % (x, y0 + _ry0, x1 - x0, _ry1 - _ry0,
+                                 n_comp), flush=True)
+                    if n_comp < 400:
+                        continue
+                    origC = image[y0 + _ry0:y0 + _ry1, x0:x1]
+                    curC = out[y0 + _ry0:y0 + _ry1, x0:x1]
+                    try:
+                        _kb = 81
+                        while _kb > 5 and (_kb >= compW.shape[0]
+                                           or _kb >= compW.shape[1]):
+                            _kb -= 8
+                        if _kb < 5:
+                            continue
+                        if _kb % 2 == 0:
+                            _kb += 1
+                        bgblur = cv2.medianBlur(origC, _kb)
+                        _kb2 = min(15, _kb)
+                        if _kb2 % 2 == 0:
+                            _kb2 -= 2
+                        if _kb2 < 3:
+                            continue
+                        bgblur2 = cv2.medianBlur(origC, _kb2)
+                    except Exception:
+                        continue
+                    devO = np.abs(
+                        origC.astype(np.int16)
+                        - bgblur.astype(np.int16)).max(axis=2)
+                    devO2 = np.abs(
+                        origC.astype(np.int16)
+                        - bgblur2.astype(np.int16)).max(axis=2)
+                    ink = (devO > 42) & (devO2 > 42)
+                    n_ink = int(np.count_nonzero(ink))
+                    _n_rect = float(compW.size)
+                    if float(n_ink) > 0.52 * _n_rect:
+                        if _trc:
+                            print("  [STAINsk] ink=%.2f win=(%d,%d)"
+                                  % (n_ink / _n_rect,
+                                     x, y0 + _ry0), flush=True)
+                        continue
+                    nonink = ~ink
+                    n_nonink = int(np.count_nonzero(nonink))
+                    if n_nonink < 0.45 * _n_rect:
+                        if _trc:
+                            print("  [STAINsk] nonink=%.2f win=(%d,%d)"
+                                  % (n_nonink / _n_rect,
+                                     x, y0 + _ry0), flush=True)
+                        continue
+                    _nloc = float(np.mean(devO2[nonink]))
+                    if _nloc > 30.0:
+                        if _trc:
+                            print("  [STAINsk] loc=%.1f win=(%d,%d)"
+                                  % (_nloc, x, y0 + _ry0), flush=True)
+                        continue
+                    devC = np.abs(
+                        curC.astype(np.int16)
+                        - bgblur.astype(np.int16)).max(axis=2)
+                    stain = compW & (devC > 26)
+                    n_stain = int(np.count_nonzero(stain))
+                    if n_stain < 0.15 * n_comp:
+                        if _trc:
+                            print("  [STAINsk] stain=%.2f ink=%.2f "
+                                  "win=(%d,%d)"
+                                  % (n_stain / float(n_comp),
+                                     n_ink / float(n_comp),
+                                     x, y0 + _ry0), flush=True)
+                        continue
+                    if _tr_y >= 0 and y0 + _ry0 <= _tr_y < y0 + _ry1:
+                        print("  [STAINtr] win=(%d,%d %dx%d) "
+                              "ink=%.2f stain=%.2f bgmed=%s"
+                              % (x, y0 + _ry0, cw, _ry1 - _ry0,
+                                 n_ink / _n_rect,
+                                 n_stain / float(n_comp),
+                                 np.rint(np.median(
+                                     origC[nonink], axis=0))),
+                              flush=True)
+                    _rwpx = origC[nonink]
+                    if _rwpx.shape[0] < 60:
+                        continue
+                    _rwmed = np.median(
+                        _rwpx.astype(np.float32), axis=0)
+                    _rwc = np.repeat(
+                        _rwmed[None, :], compW.shape[0], axis=0)
+                    _fillc = np.clip(
+                        np.rint(_rwmed), 0, 255).astype(np.uint8)
+                    sub = out[y0 + _ry0:y0 + _ry1, x0:x1]
+                    _sel = compW
+                    sub[_sel] = _fillc
+                    fixed_px += n_comp
+            return fixed_px
+        except Exception:
+            import traceback as _tb
+            if os.environ.get("MANGA_STAIN_DBG", "0") == "1":
+                _tb.print_exc()
+            return 0
 
     def _faint_ghost_polish(self, cleaned: np.ndarray,
                             original: np.ndarray) -> int:
