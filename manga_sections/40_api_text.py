@@ -801,6 +801,18 @@ WATERMARK_PATTERNS = (
     "exclusively on", "storm at", "join the storm",
     "redice studio", "redice", "leafsky", "wasakbasak", "wasak basak",
     "cho wooneh", "hermode", "dotori", "3b2s",
+    # v1.14.502 — عبارتهای رایجِ بنرِ اعتبارِ سایت (mgeko/GENZTOONS و
+    # هم‌شکلها): اینها «متنِ واقعیِ داستان» نیستند → promo → پاک نمیشوند
+    "faster update", "faster updates", "quality & quantity",
+    "quality and quantity", "pay our staff", "pay the staff",
+    "read only at", "best content", "best manga", "official site",
+    "official website", "early access", "exclusive chapter",
+    "exclusive chapters", "patreon", "ko-fi", "kofi",
+    "paypal", "buy us a coffee", "buymeacoffee", "tip jar",
+    "follow us on", "follow us at", "follow our", "translator:",
+    "typesetting:", "proofreading", "scanlation", "scanlated",
+    "retranslate", "do not reupload", "do not repost",
+    "do not retranslate", "do not remove", "all rights reserved",
 )
 
 DOMAIN_TLDS = (

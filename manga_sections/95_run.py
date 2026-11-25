@@ -1898,24 +1898,19 @@ class _MangaTranslatorBody_95:
             _txt_ok = lambda r: bool(
                 str(getattr(r, "source_text", "") or "").strip()
                 or str(getattr(r, "translated_text", "") or "").strip())
+            # v1.14.502 — فقط «متنِ واقعی» پاک میشود (درخواستِ سازنده):
+            # تبلیغِ سایت (promo) و SFX و junk دیگر هرگز واردِ پاکسازی
+            # نمیشوند — نه در حالتِ ترجمه، نه در حالتِ فقط-پاکسازی.
             regs = [r for r in regions
                     if r.kind == "dialogue"
                     and (((r.source_text or "").strip()
                           or (r.translated_text or "").strip()))]
             if _android_gate("MANGA_CLEAN_TEXTFREE"):
                 regs = regs + [r for r in regions if r.kind == "text_free"]
-            if getattr(self, "clean_only", False):
-                regs = regs + [r for r in regions
-                               if r.kind == "promo" and _txt_ok(r)]
             if getattr(self, "clean_sfx", False):
                 regs = regs + [r for r in regions
                                if r.kind == "sfx"
                                and (r.translated_text or "").strip()]
-            if getattr(self, "clean_only", False):
-                _have = {id(x) for x in regs}
-                regs = regs + [r for r in regions
-                               if r.kind == "junk" and id(r) not in _have
-                               and _txt_ok(r)]
             return regs or None
 
         def _clean_one_page(_p: int) -> bool:

@@ -962,6 +962,16 @@ class MangaTranslator:
 
         def _warm():
             try:
+                # v1.14.502 — سرعتِ استخراج: ساختِ سشنِ LaMa (لودِ ۲۰۰MB +
+                # بهینه‌سازیِ ORT) همان لحظهٔ OCR نچسبد — تا پایانِ فازِ
+                # استخراج صبر میکند (سقفِ ۳ دقیقه)؛ در این فاصله OCR همهٔ
+                # هسته‌ها را دارد. برای فصلهایِ چندصفحه‌ای اثرِ بزرگ، برای
+                # تک‌صفحه فقط ~۱ثانیهٔ پنهان.
+                _t_wait = time.time()
+                while time.time() - _t_wait < 180.0:
+                    if getattr(self, "_extraction_done", True):
+                        break
+                    time.sleep(0.3)
                 _l = self._get_lama()
                 if _l is not None:
                     try:

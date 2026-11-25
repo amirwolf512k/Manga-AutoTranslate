@@ -2518,6 +2518,7 @@ class _MangaTranslatorBody_70:
         h, w = image.shape[:2]
         page_area = float(max(1, min(h, RTDetrV2ONNXDetector.TILE_HEIGHT) * w))
         cand: List[Tuple[int, dict, int, int, int, int, int, int]] = []
+        _banner_skip_n = 0
         for i, b in enumerate(boxes):
             x1, y1, x2, y2 = b["rect"]
             x1, y1 = max(0, int(x1)), max(0, int(y1))
@@ -2532,7 +2533,33 @@ class _MangaTranslatorBody_70:
                 if self.debug:
                     print(f"    [*] باکسِ خیلی کوچک حذف شد: ({x1},{y1},{bw}x{bh})")
                 continue
+            # v1.14.502 — سرعت + «فقط متنِ واقعی»: نوارِ اعتبارِ سایت
+            # (text_freeِ نازکِ چسبیده به لبهٔ بالا — و در وب‌تونِ بلند،
+            # لبهٔ پایین) اصلاً OCR نمیشود — تبلیغ نه ترجمه میشود نه
+            # پاکسازی. محافظه‌کارانه: فقط هندسهٔ بنرِ کلاسیکِ اعتبار.
+            _bc = str(b.get("class_name") or "")
+            if _bc == "text_free":
+                _tall_strip = (float(h) / max(1.0, float(w))) > 2.0
+                _at_top = (y1 <= max(24, int(0.02 * h)))
+                _at_bot = _tall_strip and (
+                    y2 >= h - max(120, int(0.03 * h)))
+                _thin = (bh <= 140)
+                # بنرِ اعتبار همیشه «وسط‌چین» است؛ کپشنِ راوی معمولاً
+                # گوشهٔ صفحه است → فقط وسط‌چینِ لبه‌ای رد میشود
+                _centered = abs((x1 + x2) / 2.0 - w / 2.0) <= 0.18 * w
+                if (_at_top or _at_bot) and _thin and _centered:
+                    _banner_skip_n += 1
+                    if self.debug:
+                        print(f"    [*] بنرِ تبلیغاتی بدونِ OCR رد شد: "
+                              f"({x1},{y1},{bw}x{bh})")
+                    continue
             cand.append((i, b, x1, y1, x2, y2, bw, bh))
+        if _banner_skip_n:
+            try:
+                print(f"[*] {_banner_skip_n} بنرِ تبلیغاتیِ سایت → بدونِ OCR، "
+                      f"دست‌نخورده (نه ترجمه، نه پاکسازی)")
+            except Exception:
+                pass
         ocr_results: List[Tuple[str, List[np.ndarray], List[float]]] = [
             ("", [], [], [], [])] * len(cand)
         if cand:
@@ -4263,6 +4290,69 @@ class _MangaTranslatorBody_70:
                 _crop = image[_cy1:_cy2, _cx1:_cx2]
                 if _crop is None or _crop.size == 0:
                     continue
+                # v1.14.502 — پیش‌چکِ ارزان (سرعت): اگر جوهرِ متنِ داخلِ
+                # برش از قبل با پالی‌های OCR پوشیده شده، پاسِ نجاتِ det
+                # لازم نیست — نیمی از هزینهٔ استخراج همین‌جا حذف میشود.
+                try:
+                    _skip_det = False
+                    _g = cv2.cvtColor(_crop, cv2.COLOR_BGR2GRAY)
+                    _inset = 4
+                    _off_x, _off_y = _cx1, _cy1
+                    if (_g.shape[0] > 2 * _inset + 8
+                            and _g.shape[1] > 2 * _inset + 8):
+                        _gc = _g[_inset:_g.shape[0] - _inset,
+                                 _inset:_g.shape[1] - _inset]
+                        _off_x, _off_y = _cx1 + _inset, _cy1 + _inset
+                    else:
+                        _gc = _g
+                    _hist = np.bincount(_gc.ravel() // 16, minlength=16)
+                    _b = int(np.argmax(_hist))
+                    _bg = float(_b * 16 + 8)
+                    _ink = ((np.abs(_gc.astype(np.int32)
+                                    - int(round(_bg))) > 34)
+                            .astype(np.uint8))
+                    if int(_ink.sum()) >= 40:
+                        _n2, _lab2, _st2, _ = cv2.connectedComponentsWithStats(
+                            _ink, connectivity=8)
+                        _border_bad = np.zeros(_n2, bool)
+                        _border_bad[0] = True
+                        _chh, _cww = _ink.shape
+                        for _ci in range(1, _n2):
+                            _cx0 = _st2[_ci, cv2.CC_STAT_LEFT]
+                            _cy0 = _st2[_ci, cv2.CC_STAT_TOP]
+                            _cw2 = _st2[_ci, cv2.CC_STAT_WIDTH]
+                            _ch2 = _st2[_ci, cv2.CC_STAT_HEIGHT]
+                            if (_cx0 <= 0 or _cy0 <= 0
+                                    or _cx0 + _cw2 >= _cww
+                                    or _cy0 + _ch2 >= _chh
+                                    or _st2[_ci, cv2.CC_STAT_AREA] > 0.3 * _chh * _cww):
+                                _border_bad[_ci] = True
+                        _ink = _ink.copy()
+                        _ink[_border_bad[_lab2]] = 0
+                    if int(_ink.sum()) >= 40:
+                        _pm = np.zeros(_gc.shape, np.uint8)
+                        for _p2 in _polys:
+                            _pp2 = np.asarray(_p2, dtype=np.float32) \
+                                .reshape(-1, 2).copy()
+                            _pp2[:, 0] -= _off_x
+                            _pp2[:, 1] -= _off_y
+                            cv2.fillPoly(_pm, [np.round(_pp2)
+                                               .astype(np.int32)], 255)
+                        _cov = float((_ink & (_pm > 0)).sum()) \
+                            / float(_ink.sum())
+                        if _cov >= 0.88:
+                            _ys_i = np.flatnonzero(_ink.any(axis=1))
+                            _ys_p = np.flatnonzero((_pm > 0).any(axis=1))
+                            if len(_ys_i) and len(_ys_p):
+                                if (_ys_p[0] <= _ys_i[0] + 10
+                                        and _ys_p[-1] >= _ys_i[-1] - 10):
+                                    _skip_det = True
+                    else:
+                        _skip_det = False
+                    if _skip_det:
+                        continue
+                except Exception:
+                    pass
                 _quads = []
                 for _cimg, _cs in ((_crop, 1.0),):
                     for _q in (_det_fn(_cimg) or []):

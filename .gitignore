@@ -33,3 +33,4 @@ android/app/src/main/python/.manga_sections_refresh
 android/.gradle/
 android/app/build/
 dist/
+test_out/
