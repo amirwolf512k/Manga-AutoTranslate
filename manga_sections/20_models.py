@@ -2348,12 +2348,10 @@ def _rapidocr_model_pair(lang: str, small: bool = False,
     return _det, "PP-OCRv6_medium_rec_onnx.onnx"
 
 def _pc_ocr_small() -> bool:
+    # v1.14.504 — یکسان‌سازی: همه‌جا مثلِ PC (مدلِ متوسط)؛ فقط با
+    # پرچمِ محیطی میتوان کوچک کرد
     _v = str(os.environ.get("MANGA_OCR_SMALL", "") or "").strip().lower()
-    if _v in ("1", "true", "yes", "on"):
-        return True
-    if _v in ("0", "false", "no", "off"):
-        return False
-    return bool(_android_x86_emulator())
+    return _v in ("1", "true", "yes", "on")
 
 def _ocr_det_resize_policy(lang: str):
     try:

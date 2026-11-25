@@ -451,6 +451,10 @@ class _MangaTranslatorBody_85:
 # ─────────── حفظ‌شدهٔ عرفی (قراردادِ بیرونی) ───────────
 
     def _lama_workers_auto(self) -> int:
+        # v1.14.504 — حینِ فازِ استخراج تک‌کارگره (کم‌فشار)؛
+        # پس از پایانِ استخراج با تمامِ توان
+        if _extract_phase_active():
+            return 1
         try:
             _wa = int(os.environ.get("MANGA_LAMA_WORKERS", "0") or 0)
             if _wa > 0:
@@ -512,7 +516,9 @@ class _MangaTranslatorBody_85:
         except Exception:
             pass
         try:
-            if _on_android():
+            # v1.14.504 — یکسان‌سازی: حینِ فازِ استخراج تک‌کارگره؛
+            # فرمولِ نخ‌ها مثلِ PC برای همهٔ پلتفرم‌ها
+            if _extract_phase_active():
                 return 1
             _c = os.cpu_count() or 2
             # v1.14.502 — سرعت: ماشینِ پرهسته → کارگرِ بیشتر (هر برش

@@ -307,7 +307,19 @@ class _MangaTranslatorBody_95:
 
     def run(self, input_path: str, output_path: str, resume: bool = True,
             clean_old: bool = True) -> None:
+        # v1.14.504 — پوستهٔ ایمن: پرچمِ «فازِ استخراج» در هر حالتی
+        # (خطا/لغو/پایان) خاموش میشود تا پاکسازیِ کارِ بعدی کم‌فشار نماند.
+        try:
+            self._run_impl(input_path, output_path, resume, clean_old)
+        finally:
+            _set_extract_phase(False)
+
+    def _run_impl(self, input_path: str, output_path: str,
+                  resume: bool = True, clean_old: bool = True) -> None:
         self._extraction_done = False
+        # v1.14.504 — فازِ استخراج شروع شد: پاکسازی کم‌فشار میشود تا OCR
+        # تمامِ CPU را داشته باشد؛ با پایانِ استخراج تمام‌قد میرود.
+        _set_extract_phase(True)
         self._independent_pages = False
         _t_run = time.time()
         try:
@@ -410,7 +422,7 @@ class _MangaTranslatorBody_95:
                     int(getattr(self, "inpaint_radius", 3) or 0),
                     round(float(getattr(self, "mag_ratio", 1.35) or 0), 4),
                     1 if getattr(self, "clean_only", False) else 0,
-                    1 if _android_gate("MANGA_CLEAN_TEXTFREE") else 0,
+                    1 if _gate_default_off("MANGA_CLEAN_TEXTFREE") else 0,
                 ]
                 return _hl.sha256(
                     "|".join(str(p) for p in parts).encode()).hexdigest()[:8]
@@ -1855,11 +1867,7 @@ class _MangaTranslatorBody_95:
                 _e = 0
             if _e > 0:
                 return max(1, _e)
-            try:
-                if _IS_ANDROID:
-                    return 1
-            except Exception:
-                pass
+            # v1.14.504 — یکسان‌سازی: فرمولِ واحد برای همهٔ پلتفرم‌ها
             _gpu = False
             try:
                 import onnxruntime as _ort
@@ -1886,6 +1894,25 @@ class _MangaTranslatorBody_95:
         pending_clean: set = set()
         extraction_done = {"v": False}
         _clean_cond = threading.Condition()
+        # v1.14.504 — حینِ فازِ استخراج فقط یک کارگرِ پاکسازی فعال است؛
+        # پس از پایانِ استخراج همهٔ کارگران با تمامِ توان کار میکنند.
+        _clean_active = {"n": 0}
+
+        def _wait_clean_slot() -> None:
+            while True:
+                with _clean_cond:
+                    _lim = 1 if _extract_phase_active() \
+                        else max(1, _CLEAN_PAGES)
+                    if _clean_active["n"] < _lim:
+                        _clean_active["n"] += 1
+                        return
+                    _clean_cond.wait(timeout=0.5)
+
+        def _leave_clean_slot() -> None:
+            with _clean_cond:
+                if _clean_active["n"] > 0:
+                    _clean_active["n"] -= 1
+                _clean_cond.notify_all()
 
 
         def _clean_regions_for_page(page_i: int) -> Optional[List[TextRegion]]:
@@ -1905,7 +1932,7 @@ class _MangaTranslatorBody_95:
                     if r.kind == "dialogue"
                     and (((r.source_text or "").strip()
                           or (r.translated_text or "").strip()))]
-            if _android_gate("MANGA_CLEAN_TEXTFREE"):
+            if _gate_default_off("MANGA_CLEAN_TEXTFREE"):
                 regs = regs + [r for r in regions if r.kind == "text_free"]
             if getattr(self, "clean_sfx", False):
                 regs = regs + [r for r in regions
@@ -2058,8 +2085,12 @@ class _MangaTranslatorBody_95:
                         _clean_cond.wait(timeout=0.5)
                     pi = min(cand)
                     pending_clean.discard(pi)
-                if _clean_one_page(pi):
-                    _clean_done_mark(pi)
+                _wait_clean_slot()
+                try:
+                    if _clean_one_page(pi):
+                        _clean_done_mark(pi)
+                finally:
+                    _leave_clean_slot()
 
         for _ in range(max(1, _CLEAN_PAGES)):
             clean_all_futs.append(clean_pool.submit(_clean_sched_job))
@@ -2260,6 +2291,8 @@ class _MangaTranslatorBody_95:
             _t.join()
 
         extraction_done["v"] = True
+        # v1.14.504 — استخراج تمام شد → پاکسازیِ باقی‌مانده تمام‌قد
+        _set_extract_phase(False)
         with _clean_cond:
             _clean_cond.notify_all()
 
@@ -2283,6 +2316,7 @@ class _MangaTranslatorBody_95:
             raise JobCancelled("لغو توسط کاربر")
 
         self._extraction_done = True
+        _set_extract_phase(False)
         _n_dlg_total = int(len(dialogue_buffer))
         if not getattr(self, "clean_only", False):
             print(

@@ -1,0 +1,79 @@
+# v1.14.504 — گیتِ نمایشگرِ اندروید: دکمهٔ «نمایش» را میزند،
+# اسکرین‌شات میگیرد و بررسی میکند که صفحهٔ ترجمه واقعاً رندر شده
+# باشد (نه جعبهٔ سیاهِ خالی).
+import re
+import subprocess
+import sys
+import time
+
+
+def sh(*a, timeout=90):
+    return subprocess.run(list(a), capture_output=True, text=True,
+                          errors="replace", timeout=timeout)
+
+
+def dump():
+    sh("adb", "shell", "rm", "-f", "/sdcard/ui.xml")
+    for _ in range(4):
+        r = sh("adb", "shell", "uiautomator", "dump", "/sdcard/ui.xml")
+        out = (r.stdout or "") + (r.stderr or "")
+        if "dumped" in out or "hover" in out:
+            c = sh("adb", "shell", "cat", "/sdcard/ui.xml")
+            if "<node" in (c.stdout or ""):
+                return c.stdout
+        time.sleep(3)
+    return ""
+
+
+def nodes(xml):
+    for nm in re.finditer(r"<node[^>]*>", xml):
+        tag = nm.group(0)
+        mtext = re.search(r'text="([^"]*)"', tag)
+        mdesc = re.search(r'content-desc="([^"]*)"', tag)
+        mb = re.search(r'bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', tag)
+        txt = ((mtext.group(1) if mtext else "") + " " +
+               (mdesc.group(1) if mdesc else "")).strip()
+        if mb:
+            yield txt, tuple(int(v) for v in mb.groups())
+
+
+def find_view_btn(xml):
+    # «📖  نمایش (N صفحه)» — نه «نمایش خروجی (PDF)»
+    best = None
+    for txt, b in nodes(xml):
+        if "نمایش" in txt and "PDF" not in txt and (b[2] - b[0]) > 60 \
+                and (b[3] - b[1]) > 30:
+            best = b
+            break
+    return best
+
+
+def main():
+    xml = dump()
+    if not xml:
+        print("[view] UI dump خالی ✘")
+        return 1
+    btn = find_view_btn(xml)
+    if not btn:
+        print("[view] دکمهٔ نمایش پیدا نشد ✘")
+        for txt, b in list(nodes(xml))[:40]:
+            if txt.strip():
+                print("   node:", txt[:80])
+        return 1
+    cx = (btn[0] + btn[2]) // 2
+    cy = (btn[1] + btn[3]) // 2
+    print(f"[view] دکمهٔ نمایش: {btn} → tap ({cx},{cy})")
+    sh("adb", "shell", "input", "tap", str(cx), str(cy))
+    time.sleep(6)
+    sh("adb", "shell", "screencap", "-p", "/sdcard/viewer.png")
+    r = sh("adb", "pull", "/sdcard/viewer.png", "/tmp/emulout/viewer.png",
+           timeout=120)
+    if not r.stdout or "1 file" not in (r.stdout or ""):
+        print("[view] اسکرین‌شات گرفته نشد ✘", r.stdout, r.stderr)
+        return 1
+    print("[view] اسکرین‌شات: /tmp/emulout/viewer.png ✔")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

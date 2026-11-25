@@ -189,6 +189,14 @@ jobs:
           adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
           adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
           adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models && cp /data/local/tmp/det.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/detector-v4-s_int8.onnx && cp /data/local/tmp/lama.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/lama-manga-dyn.onnx'"
+          # v1.14.504 — یکسان‌سازی: OCRِ گوشی = همان RapidOCRِ PC → مدلهای
+          # rapidocr را از پیش در filesDir میگذاریم (بدونِ دانلودِ داخل اپ)
+          A=android/app/src/main/assets/models
+          adb push $A/det/inference.onnx /data/local/tmp/ocr_det.onnx
+          adb push $A/rec/inference.onnx /data/local/tmp/ocr_rec.onnx
+          adb push $A/rec/dict.txt /data/local/tmp/ocr_chars.txt
+          adb push $A/cls/inference.onnx /data/local/tmp/ocr_cls.onnx
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p files/rapidocr_models && cp /data/local/tmp/ocr_det.onnx files/rapidocr_models/PP-OCRv6_det_small.onnx && cp /data/local/tmp/ocr_rec.onnx files/rapidocr_models/PP-OCRv6_medium_rec_onnx.onnx && cp /data/local/tmp/ocr_chars.txt files/rapidocr_models/ppocrv6_chars.txt && cp /data/local/tmp/ocr_cls.onnx files/rapidocr_models/ch_ppocr_mobile_v2.0_cls_mobile.onnx'"
           adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/shared_prefs && echo PD94bWwgdmVyc2lvbj0nMS4wJyBlbmNvZGluZz0ndXRmLTgnIHN0YW5kYWxvbmU9J3llcycgPz4KPG1hcD4KICAgIDxzdHJpbmcgbmFtZT0iaW5wX3VwbG9hZF9wYXRoIj4vZGF0YS91c2VyLzAvY29tLmFtaXJ3b2xmLm1hbmdhdHJhbnNsYXRvci9maWxlcy90ZXN0LndlYnA8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0iZmFrZV90ZXN0Ij50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX29ubHkiPnRydWU8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0id2ViX2RlYnVnIj50cnVlPC9zdHJpbmc+CiAgICA8c3RyaW5nIG5hbWU9ImNsZWFuX21ldGhvZCI+bGFtYS1tYW5nYTwvc3RyaW5nPgogICAgPHN0cmluZyBuYW1lPSJvdXRfZm10Ij5QREY8L3N0cmluZz4KICAgIDxzdHJpbmcgbmFtZT0icmVhZG9yZCI+cnRsPC9zdHJpbmc+CiAgICA8Ym9vbGVhbiBuYW1lPSJiYXR0ZXJ5X2Fza2VkIiB2YWx1ZT0idHJ1ZSIgLz4KICAgIDxib29sZWFuIG5hbWU9InZpZXdlcl9oaW50X3YzIiB2YWx1ZT0idHJ1ZSIgLz4KPC9tYXA+Cg== | base64 -d > /data/user/0/com.amirwolf.mangatranslator/shared_prefs/manga_settings.xml'"
           adb logcat -c || true
           adb shell am start -W -n com.amirwolf.mangatranslator/.MainActivity || true
@@ -208,6 +216,13 @@ jobs:
           adb shell rm -f /data/local/tmp/test.webp /data/local/tmp/det.onnx /data/local/tmp/lama.onnx || true
           test -s /tmp/emulout/test_out.pdf
           python3 .ci_scripts/check_red.py /tmp/emulout/test_out.pdf /tmp/mt/imgs/img5.webp
+          # v1.14.504 — گیتِ نمایشگر: دکمهٔ «نمایش» باید صفحهٔ ترجمه را
+          # واقعاً رندر کند (نه جعبهٔ سیاه). لاگِ JSِ نمایشگر هم جمع میشود.
+          python3 .ci_scripts/tap_view.py || { adb shell screencap -p /sdcard/viewer_fail.png || true; adb pull /sdcard/viewer_fail.png /tmp/emulout/viewer_fail.png || true; adb logcat -d -t 2000 > /tmp/emulout/logcat_view_fail.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          python3 .ci_scripts/check_viewer.py /tmp/emulout/viewer.png || { adb shell screencap -p /sdcard/viewer_fail2.png || true; adb pull /sdcard/viewer_fail2.png /tmp/emulout/viewer_fail2.png || true; adb logcat -d -t 2000 > /tmp/emulout/logcat_view_fail2.txt || true; adb logcat -d -s MangaViewJS:V MangaView:V chromium:V > /tmp/emulout/logcat_view_js.txt || true; cp /tmp/emulout/* emul-artifacts/ || true; exit 1; }
+          adb shell input keyevent 4 || true
+          sleep 2
+          adb logcat -d -s MangaViewJS:V MangaView:V chromium:V > /tmp/emulout/logcat_viewer_js.txt || true
           sleep 8
           adb shell ls -la /sdcard/Download/manga/ | tee /tmp/emulout/dl_ls_run1.txt || true
           adb exec-out run-as com.amirwolf.mangatranslator sh -c ': > files/manga.log' || true

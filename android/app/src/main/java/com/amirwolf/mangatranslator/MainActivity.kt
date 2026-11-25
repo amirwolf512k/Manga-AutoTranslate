@@ -3715,14 +3715,38 @@ class MainActivity : AppCompatActivity() {
                     "<script>window.UI_T=" + uj + ";</script></head>")
         } catch (_: Exception) { }
 
-        wv.loadDataWithBaseURL("https://localhost/$runTok/", html, "text/html", "utf-8", null)
+        // v1.14.504 — ریشهٔ «نمایشگرِ سیاه»: loadDataWithBaseURL صفحه را در
+        // originِ تاریک (null) اجرا میکرد → fetch/ذخیره‌سازیِ مرورگر میمرد و
+        // روی بعضی گوشیها کلِ رندر سیاه میشد. حالا مثلِ نسخهٔ وب، صفحه با
+        // URLِ واقعی بارگذاری میشود و خودمان در shouldInterceptRequest
+        // پاسخ میدهیم → originِ واقعی، fetch سالم، localStorage سالم.
+        // اگر باز هم شکست خورد → یک‌بار مسیرِ قدیمی (سازگار) امتحان میشود.
+        val htmlFinal = html
+        val entryUrl = "https://localhost/$runTok/reader.html"
+        val corsHdr = mapOf(
+            "Access-Control-Allow-Origin" to "*",
+            "Access-Control-Allow-Headers" to "*",
+            "Cache-Control" to "no-store")
+        val mainServed = java.util.concurrent.atomic.AtomicBoolean(false)
+        val fellBack = java.util.concurrent.atomic.AtomicBoolean(false)
 
         wv.webViewClient = object : android.webkit.WebViewClient() {
             override fun shouldInterceptRequest(
                 view: android.webkit.WebView,
                 request: android.webkit.WebResourceRequest,
             ): android.webkit.WebResourceResponse? {
-                val dm = dbgRx.find(request.url.toString())
+                val urlStr = request.url.toString()
+                try {
+                    if (request.isForMainFrame && !fellBack.get() &&
+                        urlStr.contains("/$runTok/")) {
+                        mainServed.set(true)
+                        return android.webkit.WebResourceResponse(
+                            "text/html", "utf-8", 200, "OK", corsHdr,
+                            java.io.ByteArrayInputStream(
+                                htmlFinal.toByteArray(Charsets.UTF_8)))
+                    }
+                } catch (_: Exception) { }
+                val dm = dbgRx.find(urlStr)
                 if (dm != null) {
                     val di = dm.groupValues[1].toIntOrNull() ?: return null
                     if (di < 0 || di >= dpaths.size) return null
@@ -3734,7 +3758,7 @@ class MainActivity : AppCompatActivity() {
                             df.inputStream())
                     } catch (_: Exception) { null }
                 }
-                val bm = dbgBaseRx.find(request.url.toString())
+                val bm = dbgBaseRx.find(urlStr)
                 if (bm != null) {
                     val bi = bm.groupValues[1].toIntOrNull() ?: return null
                     if (bi < 0 || bi >= dpaths.size) return null
@@ -3749,7 +3773,7 @@ class MainActivity : AppCompatActivity() {
                             bf.inputStream())
                     } catch (_: Exception) { null }
                 }
-                val jm = dbgJsonRx.find(request.url.toString())
+                val jm = dbgJsonRx.find(urlStr)
                 if (jm != null) {
                     val ji = jm.groupValues[1].toIntOrNull() ?: return null
                     if (ji < 0 || ji >= dpaths.size) return null
@@ -3762,7 +3786,7 @@ class MainActivity : AppCompatActivity() {
                             "application/json", "utf-8", jf.inputStream())
                     } catch (_: Exception) { null }
                 }
-                if (request.url.toString().contains("/mtimes")) {
+                if (urlStr.contains("/mtimes")) {
                     var mtf: java.io.File? = null
                     try {
                         synchronized(paths) {
@@ -3781,7 +3805,7 @@ class MainActivity : AppCompatActivity() {
                     }
                     return null
                 }
-                val m = imgRx.find(request.url.toString()) ?: return null
+                val m = imgRx.find(urlStr) ?: return null
                 val idx = m.groupValues[1].toIntOrNull() ?: return null
                 if (idx < 0 || idx >= paths.size) return null
                 val f = File(paths[idx])
@@ -3792,7 +3816,45 @@ class MainActivity : AppCompatActivity() {
                         f.inputStream())
                 } catch (_: Exception) { null }
             }
+
+            // v1.14.504 — اگر فریمِ اصلی به هر دلیلی سرو نشد (شبکه/خطا)،
+            // یک‌بار مسیرِ سازگارِ قدیمی (loadDataWithBaseURL) امتحان میشود
+            // تا دیالوگ هرگز جعبهٔ سیاهِ مرده نماند.
+            override fun onReceivedError(
+                view: android.webkit.WebView,
+                request: android.webkit.WebResourceRequest,
+                error: android.webkit.WebResourceError,
+            ) {
+                try {
+                    if (request.isForMainFrame && !fellBack.get() &&
+                        !mainServed.get()) {
+                        fellBack.set(true)
+                        ui.post {
+                            try {
+                                Toast.makeText(this@MainActivity,
+                                    "حالتِ سازگارِ نمایشگر",
+                                    Toast.LENGTH_SHORT).show()
+                                wv.loadDataWithBaseURL(
+                                    "https://localhost/$runTok/", htmlFinal,
+                                    "text/html", "utf-8", null)
+                                if (live) livePush?.invoke(0)
+                            } catch (_: Exception) { }
+                        }
+                    }
+                } catch (_: Exception) { }
+            }
+
+            // v1.14.504 — پس از آماده‌شدنِ صفحه، وضعیتِ زنده دوباره رانده
+            // میشود (پوشِ اولیه پیش از لود میتوانست گم شود).
+            override fun onPageFinished(
+                view: android.webkit.WebView?, url: String?,
+            ) {
+                if (live) {
+                    try { livePush?.invoke(0) } catch (_: Exception) { }
+                }
+            }
         }
+        wv.loadUrl(entryUrl)
 
         val close = TextView(this).apply {
             text = "✕"; setTextColor(Color.WHITE); textSize = 15f
@@ -3815,6 +3877,21 @@ class MainActivity : AppCompatActivity() {
         wv.webChromeClient = object : android.webkit.WebChromeClient() {
             override fun onCloseWindow(window: android.webkit.WebView?) {
                 dlg.dismiss()
+            }
+
+            // v1.14.504 — خطاهایِ JSِ نمایشگر به logcat میروند (تagged:
+            // MangaViewJS) تا در CI/گوشی قابلِ تشخیص باشند.
+            override fun onConsoleMessage(
+                msg: android.webkit.ConsoleMessage?,
+            ): Boolean {
+                try {
+                    val m = msg?.message()
+                    if (m != null)
+                        android.util.Log.i("MangaViewJS",
+                            "(" + (msg.lineNumber()) + ") " +
+                                m.take(400))
+                } catch (_: Exception) { }
+                return false
             }
         }
         dlg.setOnDismissListener {

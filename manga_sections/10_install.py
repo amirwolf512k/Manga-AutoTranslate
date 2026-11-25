@@ -202,7 +202,42 @@ def _ort_has_dml() -> bool:
     except Exception:
         return False
 
+
+# v1.14.504 — پرچمِ «فازِ استخراج در جریان است»: پاکسازی حینِ استخراجِ
+# متن کم‌فشار است (تا OCR تمامِ CPU را داشته باشد) و پس از پایانِ
+# استخراج با تمامِ توان میرود. 95_run این پرچم را روشن/خاموش میکند و
+# _parallel_budget/_lama_workers_auto/_cc_workers/کارگرانِ صفحه به آن
+# نگاه میکنند.
+import threading as _threading_mod
+_EXTRACT_PHASE_EV = _threading_mod.Event()
+
+
+def _set_extract_phase(active: bool) -> None:
+    try:
+        if active:
+            _EXTRACT_PHASE_EV.set()
+        else:
+            _EXTRACT_PHASE_EV.clear()
+    except Exception:
+        pass
+
+
+def _extract_phase_active() -> bool:
+    try:
+        return _EXTRACT_PHASE_EV.is_set()
+    except Exception:
+        return False
+
+
 def _parallel_budget(kind: str = "ocr") -> int:
+    # v1.14.504 — حینِ استخراج، پاکسازی تک‌کارگره (کم‌فشار)
+    if kind == "clean" and _extract_phase_active():
+        try:
+            _ev = int(os.environ.get("MANGA_REGION_WORKERS", "0") or 0)
+        except Exception:
+            _ev = 0
+        if _ev <= 0:
+            return 1
     try:
         cpu = os.cpu_count() or 4
     except Exception:
@@ -255,12 +290,10 @@ def _parallel_budget(kind: str = "ocr") -> int:
         if _gpu:
             base += 1
     else:
-        if _IS_ANDROID:
-            base = max(2, min(4, cpu // 2))
-        else:
-            base = max(2, min(8, cpu - 1))
-            if _gpu:
-                base += 1
+        # v1.14.504 — یکسان‌سازی: فرمولِ واحد برای همهٔ پلتفرم‌ها
+        base = max(2, min(8, cpu - 1))
+        if _gpu:
+            base += 1
     if ram_gb > 0.0:
         if ram_gb < 1.2:
             base = min(base, 2)

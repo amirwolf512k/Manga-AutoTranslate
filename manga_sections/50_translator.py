@@ -39,7 +39,8 @@ class MangaTranslator:
                 return _e
             if self.__dict__.get("_ocr_cpu_failed"):
                 return None
-            if _on_android() or not self._ocr_gpu_active():
+            # v1.14.504 — یکسان‌سازی: بدونِ شرطِ اندروید
+            if not self._ocr_gpu_active():
                 return None
             _main = self.__dict__.get("_ocr_main")
             if not isinstance(_main, RapidOCRBackend):
@@ -63,8 +64,7 @@ class MangaTranslator:
 
     def _ocr_dual_setup(self):
         try:
-            if _on_android():
-                return None
+            # v1.14.504 — یکسان‌سازی: فقط گیرهٔ محیطی (مثلِ PC)
             if str(getattr(self, "device_pref", "auto") or "auto") == "cpu":
                 return None
             _main = self.__dict__.get("_ocr_main")
@@ -228,7 +228,8 @@ class MangaTranslator:
                 return None
             if str(getattr(self, "device_pref", "auto") or "auto") != "auto":
                 return None
-            if _on_android() or not self.use_lama:
+            # v1.14.504 — یکسان‌سازی: بدونِ شرطِ اندروید
+            if not self.use_lama:
                 return None
             _main = getattr(self, "_lama", None)
             if _main is None:
@@ -325,6 +326,10 @@ class MangaTranslator:
             print("[*] روش پاکسازی: lama.onnx (پیش‌فرض).")
             return True
         if cm == "lama-big":
+            # v1.14.504 — big-lama هرگز روی گوشی نمی‌آید (دستورِ سازنده)
+            if _on_android():
+                print("[*] big-lama روی گوشی نیست → lama.onnx.")
+                return True
             if not has_torch:
                 has_torch = _ensure_torch_cpu()
             if not has_torch:
@@ -341,21 +346,19 @@ class MangaTranslator:
             print("[*] نه onnxruntime هست و نه torch → OpenCV inpaint.")
             return False
 
-        if _on_android() and not force_lama:
-            if os.environ.get("MANGA_ANDROID_LAMA", "1") == "0":
-                if self.debug:
-                    print("[*] اندروید: پاک‌سازی سریع OpenCV (MANGA_ANDROID_LAMA=0)")
-                return False
-            if self.debug:
-                print("[*] اندروید: پاک‌سازی LaMa پچ‌به‌پچ — سریع‌ترین EP "
-                      "روی همین گوشی خودکار انتخاب می‌شود.")
-            return True
-
         if force_gpu is True:
+            # v1.14.504 --gpu روی گوشی → lama.onnx (big-lama ممنوع)
+            if _on_android():
+                print("[*] --gpu روی گوشی → lama.onnx.")
+                return True
             print(f"[*] --gpu → big-LaMa فعال ({name or 'CUDA'}, {vram:.1f} GB).")
             return True
 
         if force_lama:
+            # v1.14.504 --lama روی گوشی → lama.onnx (big-lama ممنوع)
+            if _on_android():
+                print("[*] --lama روی گوشی → lama.onnx.")
+                return True
             print("[*] --lama → پاک‌سازی big-LaMa فعال (روی CPU کندتر ولی تمیزتر).")
             return True
 
@@ -378,8 +381,9 @@ class MangaTranslator:
                   "(روی CPU کندتر ولی تمیزتر). برای غیرفعال‌سازی: --cpu")
             return True
 
-        if has_ort and not _on_android():
-            print("[*] دسکتاپ → پاک‌سازی پیش‌فرض با lama.onnx + flat (سبک و سریع). "
+        # v1.14.504 — یکسان‌سازی: lama.onnx پیش‌فرضِ CPU روی همهٔ پلتفرم‌ها
+        if has_ort:
+            print("[*] CPU → پاک‌سازی پیش‌فرض با lama.onnx + flat (سبک و سریع). "
                   "برای big-lama: --clean-method lama-big | برای OpenCV: --clean-method opencv")
             return True
 
@@ -608,9 +612,10 @@ class MangaTranslator:
         except Exception:
             self.translation_top_p = 0.9
         self.two_pass_ocr = bool(two_pass_ocr)
-        if _on_android() and os.environ.get(
-                "MANGA_ANDROID_TWO_PASS", "").strip().lower() in (
-                "0", "false", "no"):
+        # v1.14.504 — یکسان‌سازی: گیرهٔ محیطی برای همهٔ پلتفرم‌ها
+        if os.environ.get(
+                "MANGA_TWO_PASS_OFF", "").strip().lower() in (
+                "1", "true", "yes"):
             self.two_pass_ocr = False
         self.max_output_width = max_output_width
         self.stitch_max_height = int(stitch_max_height) if stitch_max_height else 0
@@ -745,7 +750,8 @@ class MangaTranslator:
         main_lang = "en"
         for lang in _prio:
             if lang == "multi":
-                main_lang = "multi" if _on_android() else "korean"
+                # v1.14.504 — یکسان‌سازی: مثلِ PC
+                main_lang = "korean"
                 break
             if lang in lang_map:
                 main_lang = lang_map[lang]
@@ -825,17 +831,6 @@ class MangaTranslator:
             except Exception as e:
                 print(f"[!] PaddleOCR لود نشد ({e}) → RapidOCR ONNX")
 
-        if self.ocr is None and _on_android():
-            try:
-                self.ocr = RapidOCRBackend(
-                    lang=main_lang, prefer_gpu=self.use_gpu)
-                self._ocr_backend_name = "rapidocr"
-                print("[*] اندروید: استخراجِ متن = فقط رویِ کراپهایِ "
-                      "detector-v4-s (سبکِ PC)")
-            except Exception as e:
-                print(f"[!] موتورِ OCR گوشی لود نشد ({e})")
-                raise
-
         try:
             _nw_env = int(os.environ.get("MANGA_OCR_WORKERS", "0") or 0)
             if _nw_env > 0:
@@ -855,7 +850,8 @@ class MangaTranslator:
                     "  یا: pip install rapidocr  (یا rapidocr-onnxruntime)"
                 ) from e
 
-        if self.ocr is not None and not _on_android():
+        # v1.14.504 — یکسان‌سازی: تنظیمِ نخ‌ها روی همهٔ پلتفرم‌ها
+        if self.ocr is not None:
             _thr = int(getattr(self.ocr, "ocr_threads", 0) or 0)
             if _thr > 0:
                 try:
@@ -880,9 +876,9 @@ class MangaTranslator:
                 prefer_gpu=self.use_gpu,
                 conf_thresh=self.det_confidence,
                 iou_thresh=0.45,
-                threads=4 if _on_android() else max(1, int(self.max_workers or 2)),
-                multi_scale=(not _IS_ANDROID)
-                            or (self._ocr_backend_name == "rapidocr"),
+                # v1.14.504 — یکسان‌سازی: فرمولِ واحد برای همهٔ پلتفرم‌ها
+                threads=max(1, int(self.max_workers or 2)),
+                multi_scale=(self._ocr_backend_name == "rapidocr"),
             )
         except Exception as e:
             print(f"[!] RT-DETR (detector-v4-s) لود نشد ({e}) → استخراجِ متن و "
@@ -962,16 +958,11 @@ class MangaTranslator:
 
         def _warm():
             try:
-                # v1.14.502 — سرعتِ استخراج: ساختِ سشنِ LaMa (لودِ ۲۰۰MB +
-                # بهینه‌سازیِ ORT) همان لحظهٔ OCR نچسبد — تا پایانِ فازِ
-                # استخراج صبر میکند (سقفِ ۳ دقیقه)؛ در این فاصله OCR همهٔ
-                # هسته‌ها را دارد. برای فصلهایِ چندصفحه‌ای اثرِ بزرگ، برای
-                # تک‌صفحه فقط ~۱ثانیهٔ پنهان.
-                # v1.14.503 — درخواستِ سازنده: سقفِ انتظار ۳دقیقه→۶۰ثانیه
+                # v1.14.504 — حینِ فازِ استخراج، لودِ LaMa عقب می‌افتد تا با
+                # OCR بر سرِ CPU نزاع نکند؛ پرچمِ فاز دقیقاً با پایانِ
+                # استخراج خاموش میشود (بدونِ سقفِ زمانی).
                 _t_wait = time.time()
-                while time.time() - _t_wait < 60.0:
-                    if getattr(self, "_extraction_done", True):
-                        break
+                while _extract_phase_active() and time.time() - _t_wait < 3600.0:
                     time.sleep(0.3)
                 _l = self._get_lama()
                 if _l is not None:
@@ -1173,49 +1164,15 @@ class MangaTranslator:
     def _get_lama_locked(self):
 
         if self._lama is None and self.use_lama:
-            if _on_android():
-                total = self._total_ram_gb()
-                avail = self._available_ram_gb()
-                cores = self._cpu_core_count()
-                strong_cpu = cores >= self._ANDROID_LAMA_STRONG_CPU_CORES
-                try:
-                    import gc as _gc
-                    _gc.collect()
-                except Exception:
-                    pass
-                if total and total < self._ANDROID_LAMA_MIN_TOTAL_GB:
-                    print(f"[!] LaMa فعال نشد: رم کل گوشی {total:.1f}GB است "
-                          f"(حداقل {self._ANDROID_LAMA_MIN_TOTAL_GB:.0f}GB لازم است) "
-                          f"→ پاک‌سازی OpenCV (سبک و سریع).")
-                    self.use_lama = False
-                    self._inpainter_name = "OpenCV"
-                    return None
-                if avail and avail < self._ANDROID_LAMA_MIN_AVAIL_GB:
-                    if strong_cpu:
-                        print(f"[!] رم آزاد لحظه‌ای خیلی کم است ({avail:.1f}GB) ولی CPU "
-                              f"گوشی قوی است ({cores} هسته) → با این حال تلاش می‌کنیم؛ "
-                              f"اندروید با کش/zram جا باز می‌کند. اگر باز کرش شد، "
-                              f"اپ‌های بیکار را ببند و دوباره امتحان کن.")
-                    else:
-                        print(f"[!] الان رم آزاد گوشی خیلی کم است ({avail:.1f}GB) — LaMa این بار "
-                              f"اجرا نشد → OpenCV. اپ‌های بیکار را ببند و دوباره امتحان کن.")
-                        self.use_lama = False
-                        self._inpainter_name = "OpenCV"
-                        return None
-                elif avail and avail < self._ANDROID_LAMA_WARN_AVAIL_GB:
-                    print(f"    [!] رم آزاد کمی پایین است ({avail:.1f}GB)؛ اگر وسط کار "
-                          f"کرش شد، اپ‌های بیکار را ببند یا چند لحظه بعد امتحان کن.")
-                print(f"[*] رم گوشی: کل {total:.1f}GB / آزاد {avail:.1f}GB / "
-                      f"{cores} هستهٔ CPU → LaMa-Manga روی CPU اجرا می‌شود "
-                      f"(کندتر ولی تمیزتر از OpenCV).")
-            else:
-                _av = self._available_ram_gb()
-                if _av and _av < 1.0:
-                    print(f"[!] رم آزاد خیلی کم است ({_av:.1f}GB) → پاک‌سازی "
-                          "OpenCV (بارگذاری LaMa حذف شد تا کرش نکند).")
-                    self.use_lama = False
-                    self._inpainter_name = "OpenCV"
-                    return None
+            # v1.14.504 — یکسان‌سازی: همان گیتِ رمِ PC برای همه (شاخهٔ
+            # اندروید حذف شد — خروجی یکسان، فقط گاردِ کرش)
+            _av = self._available_ram_gb()
+            if _av and _av < 1.0:
+                print(f"[!] رم آزاد خیلی کم است ({_av:.1f}GB) → پاک‌سازی "
+                      "OpenCV (بارگذاری LaMa حذف شد تا کرش نکند).")
+                self.use_lama = False
+                self._inpainter_name = "OpenCV"
+                return None
             _backend = (os.environ.get("MANGA_LAMA_BACKEND", "auto")
                         or "auto").strip().lower()
             if _backend == "auto":

@@ -334,7 +334,7 @@ _PURGE_MARKER = ".onnx_loser_models_purged"
 
 def _purge_loser_onnx_models() -> str:
     try:
-        if not _android_gate("MANGA_PURGE_ONNX_MODELS"):
+        if not _gate_default_off("MANGA_PURGE_ONNX_MODELS"):
             return ""
         _mdir = os.path.join(
             os.environ.get("MANGA_FILES_DIR") or os.getcwd(),
@@ -548,7 +548,8 @@ def speed_test_run(src, langs=("en",), per_mode=60.0, log=print,
         log("[!] تصویر ورودی باز نشد (%s)" % os.path.basename(str(src or "")))
         return None
     try:
-        be = backend if backend is not None else RapidOCRBackend(lang=lang)
+        be = backend if backend is not None else RapidOCRBackend(
+            lang=lang, mobile_engine=True)
     except Exception as _e:
         log("[!] موتورِ OCR ساخته نشد: %s" % str(_e)[:140])
         return None
@@ -691,19 +692,26 @@ _RAPIDOCR_RECOVER_LOCK = threading.Lock()
 
 class RapidOCRBackend:
 
-    def __init__(self, lang: str = "en", prefer_gpu: Optional[bool] = None):
+    def __init__(self, lang: str = "en", prefer_gpu: Optional[bool] = None,
+                 mobile_engine: bool = False):
         self.lang = lang
         self._new_api = False
         self._mobile = None
         try:
-            self._cjk_guard = _android_gate("MANGA_CJK_GUARD") and \
+            # v1.14.504 — یکسان‌سازی: گاردِ CJK فقط با پرچمِ صریح (مثلِ PC)
+            self._cjk_guard = _gate_default_off("MANGA_CJK_GUARD") and \
                 str(lang).lower() in ("en", "latin", "english")
         except Exception:
             self._cjk_guard = False
-        if _IS_ANDROID:
-            self._init_mobile_engine(lang)
-            return
+        # v1.14.504 — یکسان‌سازیِ کامل با PC/وب/لینوکس: موتورِ اندروید از
+        # استخراج حذف شد؛ همه از همان RapidOCR (onnx) استفاده میکنند.
+        # mobile_engine فقط برای «تستِ سرعتِ» نردبان روشن میشود.
         self._prefer_gpu = prefer_gpu
+        if mobile_engine:
+            try:
+                self._init_mobile_engine(lang)
+            except Exception:
+                self._mobile = None
         try:
             if not _ensure_rapidocr_pkg():
                 raise ImportError("rapidocr نصب نیست و نصب خودکار ناموفق بود")
@@ -959,8 +967,8 @@ class RapidOCRBackend:
         if _pb is not None:
             self._mobile = _pb
             return
-        print("[!] RapidOCRِ اندروید آماده نشد — استخراجِ گوشی "
-              "خالی میماند (فالبکی نیست)")
+        print("[!] موتورِ نردبانِ تستِ سرعت آماده نشد (فقط تستِ "
+              "سرعت، نه استخراج)")
         self._mobile = None
 
     def _build_paddle_android(self, lang: str):
@@ -1007,8 +1015,6 @@ class RapidOCRBackend:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return []
         if not getattr(self, "_new_api", False):
-            return []
-        if getattr(self, "_mobile", None) is not None:
             return []
         eng = self._det_dbg_engine()
         if eng is None:
@@ -1061,8 +1067,6 @@ class RapidOCRBackend:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
         if not getattr(self, "_new_api", False):
-            return None
-        if getattr(self, "_mobile", None) is not None:
             return None
         eng = self._rec_rescue_engine()
         if eng is None:
@@ -1175,32 +1179,8 @@ class RapidOCRBackend:
 
         if image_bgr is None or image_bgr.size == 0:
             return None
-        if self._mobile is not None:
-            try:
-                _out = self._mobile.ocr(image_bgr, crop_mode=crop_mode)
-            except Exception as _e:
-                print(f"[!] خطایِ OCRِ موبایل: {str(_e)[:150]}")
-                return None
-            if not _out or not _out[0]:
-                return None
-            _lines = []
-            _ncjk = 0
-            for _box, _pair in _out[0]:
-                try:
-                    _t = self._deaccent(str(_pair[0])).strip()
-                    if not _t:
-                        continue
-                    if self._cjk_guard and _cjk_dominant(_t):
-                        _ncjk += 1
-                        continue
-                    _s = float(_pair[1])
-                    _lines.append([_box, (_t, _s)])
-                except Exception:
-                    continue
-            if _ncjk:
-                print(f"    [OCR] {_ncjk} خطِ پر از نویسهٔ چینی حذف شد "
-                      "(گاردِ لاتین)")
-            return [_lines] if _lines else None
+        # v1.14.504 — یکسان‌سازی: مسیرِ موبایل حذف شد؛ همه (اندروید/PC/
+        # وب/لینوکس) از همان موتورِ RapidOCR میگذرند.
         if self._new_api:
             for _att in range(2):
                 try:
@@ -1315,6 +1295,13 @@ def _android_gate(env_name: str) -> bool:
 def _gate_default_on(env_name: str) -> bool:
     return str(os.environ.get(env_name, "") or "").strip().lower() \
         not in ("0", "false", "no", "off")
+
+
+def _gate_default_off(env_name: str) -> bool:
+    # v1.14.504 — یکسان‌سازی: گیرهٔ «پیش‌فرض خاموش» — رفتارِ PC روی همهٔ
+    # پلتفرم‌ها مگر با پرچمِ صریح روشن شود
+    return str(os.environ.get(env_name, "") or "").strip().lower() \
+        in ("1", "true", "yes", "on")
 
 class PaddleOCRWrapper:
 

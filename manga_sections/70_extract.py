@@ -474,11 +474,8 @@ class _MangaTranslatorBody_70:
                 )
             try:
                 _oc = self.ocr
-                if _on_android() and getattr(_oc, "_mobile", None) \
-                        is not None:
-                    results = _oc.ocr(crop_bgr, crop_mode=True)
-                else:
-                    results = _oc.ocr(crop_bgr)
+                # v1.14.504 — یکسان‌سازی: مسیرِ crop_mode مخصوصِ موبایل حذف شد
+                results = _oc.ocr(crop_bgr)
             except Exception as _e:
                 if getattr(self, "debug", False):
                     print(f"    [!] OCRِ برش خطا داد: {str(_e)[:140]}")
@@ -542,7 +539,8 @@ class _MangaTranslatorBody_70:
             avg_conf = float(np.mean(confs)) if confs else 0.0
             return joined, polys, avg_conf, entries
 
-        _sc_cjk = _on_android() or not _latin_lang(self)
+        # v1.14.504 — یکسان‌سازی: امتیازدهی مثلِ PC (فقط زبان تصمیم میگیرد)
+        _sc_cjk = not _latin_lang(self)
 
         def _score(txt: str, conf: float) -> float:
             if not txt:
@@ -1025,83 +1023,17 @@ class _MangaTranslatorBody_70:
                     ]
                     if _kept:
                         merged = _kept
-            if _on_android() and len(merged) >= 3:
-                try:
-                    _bbsF = [_bb_of(m[2]) for m in merged]
-                    _vF = [b for b in _bbsF if b is not None]
-                    if len(_vF) >= 3:
-                        _medhF = float(np.median(
-                            [b[3] - b[1] for b in _vF]))
-                        _medwF = float(np.median(
-                            [b[2] - b[0] for b in _vF]))
-                        _tallF = sum(
-                            1 for b in _vF
-                            if (b[3] - b[1]) > 1.4 * (b[2] - b[0]))
-                        _wideF = len(_vF) - _tallF
-                        _keepF = None
-                        if _tallF * 20 >= len(_vF) * 11:
-                            _keepF = [
-                                m for m, b in zip(merged, _bbsF)
-                                if b is None or not (
-                                    (b[2] - b[0]) > max(
-                                        1.7 * _medwF, _medwF + 28.0)
-                                    and (b[2] - b[0]) > 1.6 * (b[3] - b[1]))
-                            ]
-                        elif _wideF * 20 >= len(_vF) * 11:
-                            _keepF = [
-                                m for m, b in zip(merged, _bbsF)
-                                if b is None or not (
-                                    (b[3] - b[1]) > max(
-                                        1.7 * _medhF, _medhF + 28.0)
-                                    and (b[3] - b[1]) > 1.6 * (b[2] - b[0]))
-                            ]
-                        if (_keepF is not None and len(_keepF) >= 2
-                                and len(_keepF) < len(merged)):
-                            merged = _keepF
-                except Exception:
-                    pass
             hts = []
             for m_item in merged:
                 mb = _bb_of(m_item[2])
                 if mb is not None:
                     hts.append(mb[3] - mb[1])
-            if _on_android():
-                _bbsS = [_bb_of(m[2]) for m in merged]
-                _vS = [b for b in _bbsS if b is not None]
-                if _vS:
-                    _medhS = float(np.median(
-                        [b[3] - b[1] for b in _vS]))
-                    _tallS = sum(
-                        1 for b in _vS
-                        if (b[3] - b[1]) > 1.4 * (b[2] - b[0]))
-                    _rtlS = (
-                        getattr(self, "reading_order", "rtl") == "rtl")
-                    if len(_vS) >= 2 and _tallS * 2 >= len(_vS):
-                        if _rtlS:
-                            merged.sort(key=lambda m_item: (
-                                (-(_bb_of(m_item[2])[0])
-                                 if m_item[2] is not None else 0.0),
-                                (_bb_of(m_item[2])[1]
-                                 if m_item[2] is not None else 0.0)))
-                        else:
-                            merged.sort(key=lambda m_item: (
-                                (_bb_of(m_item[2])[0]
-                                 if m_item[2] is not None else 0.0),
-                                (_bb_of(m_item[2])[1]
-                                 if m_item[2] is not None else 0.0)))
-                    else:
-                        _rh = max(8.0, _medhS * 0.75)
-                        merged.sort(key=lambda m_item: (
-                            ((_bb_of(m_item[2])[1]
-                              if m_item[2] is not None else 0.0) // _rh),
-                            (_bb_of(m_item[2])[0]
-                             if m_item[2] is not None else 0.0)))
-            else:
-                row_h = max(8.0, (float(np.median(hts)) if hts else 8.0) * 0.75)
-                merged.sort(key=lambda m_item: (
-                    ((_bb_of(m_item[2])[1] if m_item[2] is not None else 0.0) // row_h),
-                    (_bb_of(m_item[2])[0] if m_item[2] is not None else 0.0),
-                ))
+            # v1.14.504 — یکسان‌سازی: مرتب‌سازی مثلِ PC (شاخهٔ اندروید حذف شد)
+            row_h = max(8.0, (float(np.median(hts)) if hts else 8.0) * 0.75)
+            merged.sort(key=lambda m_item: (
+                ((_bb_of(m_item[2])[1] if m_item[2] is not None else 0.0) // row_h),
+                (_bb_of(m_item[2])[0] if m_item[2] is not None else 0.0),
+            ))
             try:
                 _cg = MangaTranslator._column_line_groups(
                     list(range(len(merged))),
@@ -2581,8 +2513,9 @@ class _MangaTranslatorBody_70:
                         and str(getattr(self, "device_pref", "auto") or "auto")
                         != "cpu")
             _split_engs: list = []
+            # v1.14.504 — یکسان‌سازی: چندموتوری روی همهٔ پلتفرم‌ها
             if (not _img_par and _ocr_ts and len(cand) >= 2
-                    and n_workers >= 2 and not _on_android()):
+                    and n_workers >= 2):
                 _pool: list = []
                 _main = self.__dict__.get("_ocr_main")
                 if isinstance(_main, RapidOCRBackend):
@@ -4791,7 +4724,7 @@ class _MangaTranslatorBody_70:
             clean_targets = [r for r in regions
                              if r.kind in ("dialogue", "junk", "promo")
                              and _txt_ok(r)]
-            if _android_gate("MANGA_CLEAN_TEXTFREE"):
+            if _gate_default_off("MANGA_CLEAN_TEXTFREE"):
                 _tf = [r for r in regions if r.kind == "text_free"]
                 if _tf:
                     clean_targets = clean_targets + _tf
@@ -4883,7 +4816,7 @@ class _MangaTranslatorBody_70:
             _clean_regions = _clean_regions + [
                 r for r in sfx_regions
                 if (r.translated_text or "").strip()]
-        if _android_gate("MANGA_CLEAN_TEXTFREE"):
+        if _gate_default_off("MANGA_CLEAN_TEXTFREE"):
             _tf_free = [r for r in regions if r.kind == "text_free"]
             if _tf_free:
                 _clean_regions = _clean_regions + _tf_free
@@ -5465,7 +5398,8 @@ class _MangaTranslatorBody_70:
                 _pre_t0 = time.time()
                 _pre_done_flag = {"d": False}
                 try:
-                    _n_pre = 2 if _on_android() else max(2, min(4, (os.cpu_count() or 2)))
+                    # v1.14.504 — یکسان‌سازی: مثلِ PC
+                    _n_pre = max(2, min(4, (os.cpu_count() or 2)))
                 except Exception:
                     _n_pre = 2
                 _n_pre = max(1, min(_n_pre, len(_pre_pages)))
@@ -5643,8 +5577,8 @@ class _MangaTranslatorBody_70:
                 _scan_tw = 1
                 try:
                     if len(_win_starts) > 1:
-                        _scan_tw = (2 if _on_android()
-                                    else max(2, min(3, (os.cpu_count() or 2) // 2)))
+                        # v1.14.504 — یکسان‌سازی: مثلِ PC
+                        _scan_tw = max(2, min(3, (os.cpu_count() or 2) // 2))
                 except Exception:
                     _scan_tw = 1
                 _scan_tw = max(1, min(_scan_tw, len(_win_starts)))
