@@ -545,6 +545,22 @@ class _MangaTranslatorBody_85:
             y2 = min(h, ry + rh + pad + 1)
             if x2 - x1 < 12 or y2 - y1 < 12:
                 continue
+            # v1.14.501: بنرِ اعتبارِ سایت (نوارِ پایین/بالای صفحه): ناحیهٔ
+            # متنِ لبهٔ صفحه → ناحیهٔ پاکسازی تا تمامِ عرضِ صفحه و تا نوارِ
+            # همجوارِ یکدست گسترش می‌یابد (دیتکتور فقط متنِ داخلِ بنر را
+            # می‌بیند؛ خودِ بنرِ تمام‌عرض بی‌جوهر است و برای پاک شدن باید
+            # داخلِ زون بیفتد)
+            _cls = str(getattr(r, "det_class", "") or "")
+            _at_bottom = (y2 >= h - max(20, int(0.03 * h)))
+            _at_top = (y1 <= max(20, int(0.02 * h)))
+            _banner = False
+            if (_at_bottom or _at_top) and _cls == "text_free":
+                x1, x2 = 0, w
+                if _at_bottom:
+                    y1 = max(0, y1 - int(0.045 * h))
+                else:
+                    y2 = min(h, y2 + int(0.03 * h))
+                _banner = True
             polys = []
             for p in list(getattr(r, "ocr_polys", None) or []):
                 try:
@@ -565,6 +581,10 @@ class _MangaTranslatorBody_85:
                 _pa = float(np.abs(getattr(r, "angle", 0.0) or 0.0))
                 if _pa < 3.0:
                     polys = boxes
+            if _banner:
+                # زونِ بنر = کلِ نوارِ گسترش‌یافته (نه فقط جعبهٔ کوچکِ متن)
+                polys = [np.array([[x1, y1], [x2, y1],
+                                   [x2, y2], [x1, y2]], np.float32)]
             jobs.append({"x1": int(x1), "y1": int(y1),
                          "x2": int(x2), "y2": int(y2),
                          "polys": polys, "rid": int(getattr(r, "id", -1))})
@@ -725,10 +745,16 @@ class _MangaTranslatorBody_85:
 
     def _cc_zone_ink_mask(self, crop_bgr: np.ndarray, zone: np.ndarray,
                           dilate_px: int = 3) -> Optional[np.ndarray]:
-        """سبکِ HF: ماسک = «جوهرِ متنِ داخلِ زون» (نه کلِ زون).
-        جهتِ جوهر (تیره/روشن) با مقایسهٔ تراکمِ داخلِ زون با بیرونش انتخاب
-        میشود؛ دورِ حباب/خطوطِ هنری با barrier محفوظ میماند. خروجی None
-        یعنی جوهرِ قابلِ اتکا پیدا نشد (بیا کلِ زون را پاک کن)."""
+        """v1.14.501 — ماسکِ جوهرِ متن، «نسبت به زمینهٔ خودِ زون» (نه Otsu):
+        زمینه = میانهٔ خاکستریِ زون؛ جوهر = |Δ|>۲۲ از زمینه (تیره یا روشن).
+        ریشهٔ شبح: Otsu روی متنِ کم‌کنتراست (۱۹۶ روی ۲۴۱) آستانه را داخلِ
+        خوشهٔ متن میگذاشت و نیمی از جوهر نیم‌پاک میماند؛ هالهٔ سفید دورِ
+        حروف (۲۵۵ روی ۲۴۱؛ Δ=۱۴) هم هیچ‌وقت گرفته نمیشد. قاعدهٔ جدید:
+        ۱) core = تیره‌تر از bg-۲۲ «یا» روشن‌تر از bg+۲۲ (هاله + متنِ
+        روشن روی زمینهٔ تیره)؛
+        ۲) soft-halo = Δ>۸ در فاصلهٔ ≤۷px از core (هالهٔ نازکِ چسبیده)؛
+        ۳) close(5) → لکه‌های <۶px حذف؛ barrier دورِ خطوطِ هنری محفوظ.
+        خروجی None یعنی جوهر پیدا نشد (→ کلِ زون)."""
         ch, cw = crop_bgr.shape[:2]
         if ch < 6 or cw < 6 or not np.any(zone):
             return None
@@ -736,32 +762,57 @@ class _MangaTranslatorBody_85:
         zone_d = cv2.dilate(zone, cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (9, 9))) > 0
         zn = float(zone_d.sum()) or 1.0
-        # آستانهٔ تطبیقی (Otsu روی پیکسل‌های خودِ زون): متن/زمینه‌ی هر رنگی
-        try:
-            gz = g[zone_d]
-            thr, _ = cv2.threshold(gz, 0, 255,
-                                    cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-            thr = float(thr)
-        except Exception:
-            thr = float(np.median(gz)) + 45.0
-        dark = (g < thr - 6.0)
-        # متنِ روشن روی زمینهٔ تیره (واترمارک): آنتی‌آلیاسِ حروف تا
-        # ۱۲ درجه زیرِ آستانه میرود — حاشیهٔ بازتر لازم است
-        bright = (g > thr - 12.0)
+        # v1.14.501: زمینهٔ زون = «مدِ هیستوگرام» (نه میانه) — میانه روی
+        # زونِ نیمه‌تیره (متن روی آرت‌ورک تیره) آلوده میشود؛ مد + سهمِ ۳-بنِ
+        # همسایه میگوید زمینه واقعاً یکدست هست یا نه:
+        #   share3 ≥ 0.5 → کاغذ/حبابِ یکدست → شاخهٔ جوهر معتبر؛
+        #   share3 < 0.5 → آرت‌ورکِ پربافت → جوهر جداکردنی نیست → None
+        #   (کلِ زون به LaMa می‌افتد که آرت را بازسازی میکند — ریشهٔ
+        #   «جعبهٔ سفید روی آرت» همین بود که flat روی آرت می‌ریخت)
+        vals = g[zone_d].astype(np.int32) // 16
+        h16 = np.bincount(vals.ravel(), minlength=16)
+        b = int(np.argmax(h16))
+        share3 = float(h16[max(0, b - 1):min(16, b + 2)].sum()) / zn
+        bg = float(b * 16 + 8)
+        gi = g.astype(np.int32)
+        dark = (g < bg - 22.0)
+        bright = (g > bg + 22.0)
         dark_in = float((dark & zone_d).sum()) / zn
         bright_in = float((bright & zone_d).sum()) / zn
-        # متن همیشه «اقلیتِ» زون است (جوهرِ متن ~۲٪..۴۲٪):
-        #  • حباب/سند: متنِ تیره روی کاغذِ روشن → dark
-        #  • بنرِ واترمارک: متنِ روشن روی زمینهٔ تیره → bright
-        #  • متنِ متراکم: dark بیش از ۵۰٪ → باز هم متن است
-        if dark_in >= 0.02 and dark_in <= bright_in:
-            raw = dark.astype(np.uint8) * 255
-        elif 0.02 <= bright_in <= 0.42 and bright_in < dark_in:
-            raw = bright.astype(np.uint8) * 255
-        elif dark_in > 0.50:
-            raw = dark.astype(np.uint8) * 255
+        if share3 >= 0.50:
+            # زمینهٔ یکدست (کاغذ/حباب/بنرِ ساده) → جوهر = اقلیتِ نسبی
+            # متن همیشه «اقلیت» است (~۲٪..۴۵٪)؛ متنِ متراکم تا ۴۵٪ هم واقعی است
+            if 0.02 <= dark_in <= 0.45:
+                raw = dark.astype(np.uint8) * 255
+                if bright_in >= 0.02 and bright_in <= 0.42:
+                    # هالهٔ روشن/متنِ روشن دورِ هم → هر دو جوهرند
+                    raw = cv2.bitwise_or(raw, bright.astype(np.uint8) * 255)
+            elif 0.02 <= bright_in <= 0.42:
+                # متنِ روشن روی زمینهٔ تیره (واترمارک/بنر)
+                raw = bright.astype(np.uint8) * 255
+            else:
+                return None
         else:
-            return None
+            # v1.14.501: بنرِ تیرهٔ تمام‌عرض (QIMANGA و هم‌سایه‌ها): زمینهٔ
+            # کل ناهمگن است ولی نیمهٔ تیرهٔ هیستوگرام غالب است → متنِ روشنِ
+            # روی زمینهٔ تیره از نیمهٔ تیره جدا میشود
+            dark_share = float(h16[:8].sum()) / zn
+            if dark_share >= 0.40:
+                db = int(np.argmax(h16[:8]))
+                dbg = float(db * 16 + 8)
+                br = (g > dbg + 22.0)
+                br_in = float((br & zone_d).sum()) / zn
+                if 0.005 <= br_in <= 0.42:
+                    bg = dbg
+                    bright = br
+                    bright_in = br_in
+                    dark = (g < dbg - 22.0)
+                    dark_in = float((dark & zone_d).sum()) / zn
+                    raw = br.astype(np.uint8) * 255
+                else:
+                    return None
+            else:
+                return None
         text_core = cv2.bitwise_and(raw, zone_d.astype(np.uint8) * 255)
         # حذفِ خرده‌نویز
         try:
@@ -778,14 +829,38 @@ class _MangaTranslatorBody_85:
         # پرکردنِ داخلِ حروف توپر
         text_core = cv2.morphologyEx(text_core, cv2.MORPH_CLOSE,
                                       np.ones((5, 5), np.uint8))
+        # soft-halo: Δ>۸ از زمینه در فاصلهٔ ≤۷px از جوهر (هالهٔ سفیدِ نازک)
+        try:
+            near = cv2.dilate(text_core, cv2.getStructuringElement(
+                cv2.MORPH_ELLIPSE, (15, 15))) > 0
+            soft = ((np.abs(gi - int(round(bg))) > 8) & zone_d
+                    & near & (text_core == 0)).astype(np.uint8) * 255
+            text_core = cv2.bitwise_or(text_core, soft)
+        except Exception:
+            pass
         core_d = cv2.dilate(text_core, cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (7, 7)))
-        barrier = self._cc_barrier(g, core_d)
+        barrier = self._cc_barrier(g, core_d, grow=4)
         r = max(2, int(dilate_px))
         halo = cv2.dilate(text_core, cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
         m = cv2.bitwise_and(halo, cv2.bitwise_not(barrier))
         m = cv2.bitwise_or(m, text_core)  # خودِ استروک‌ها همیشه پاک
+        # v1.14.501: خطِ لبهٔ حباب/کادر حتی اگر با متن چسبیده باشد محفوظ
+        # بماند — نوارِ ۲px دورِ بلوکِ جوهرِ متراکم از ماسک خارج شود وقتی
+        # آن نوار تیره و خط‌مانند است (rim) نه متن.
+        try:
+            _dense = float(cv2.countNonZero(m)) / float(max(1, zone_d.sum()))
+            if _dense > 0.45:
+                # بلوکِ متراکم: ردیف‌های اول/آخرِ ماسک را ۲px عقب بکش
+                ys, xs = np.nonzero(m)
+                if len(ys):
+                    y0, y1 = int(ys.min()), int(ys.max())
+                    for _yy in (y0, y0 + 1, y1, y1 - 1):
+                        if 0 <= _yy < m.shape[0]:
+                            m[_yy, :] &= 0
+        except Exception:
+            pass
         # محدود به پیرامونِ زون
         lim = cv2.dilate(zone.astype(np.uint8) * 255,
                           cv2.getStructuringElement(
@@ -796,20 +871,26 @@ class _MangaTranslatorBody_85:
     def _cc_crop_mask(self, crop_bgr: np.ndarray, job: dict,
                       dilate_px: int = 3) -> np.ndarray:
         ch, cw = crop_bgr.shape[:2]
+        # v1.14.501: dilation پیش‌فرض = ۵ (درخواستِ سازنده) — هالهٔ
+        # آنتی‌آلیاسِ متنِ چاق/واترمارکِ کمی‌راه‌راه کامل پاک شود
+        dilate_px = max(5, int(dilate_px))
         zone = self._cc_polys_mask(ch, cw, job.get("polys") or [],
                                    int(job["x1"]), int(job["y1"]),
                                    grow=2)
         if int(cv2.countNonZero(zone)) >= 30:
             # ۱) سبکِ HF: فقط جوهرِ متنِ داخلِ زون
-            m = self._cc_zone_ink_mask(crop_bgr, zone,
-                                       dilate_px=max(3, int(dilate_px)))
+            m = self._cc_zone_ink_mask(crop_bgr, zone, dilate_px=dilate_px)
             if m is not None and int(cv2.countNonZero(m)) >= 30:
                 return m
-            # ۲) وگرنه کلِ زون (متنی که جوهرش قابلِ تشخیص نیست)
+            # ۲) وگرنه کلِ زون (متنی که جوهرش قابلِ تشخیص نیست) — اما
+            # فقط تا ۷۰٪ برش؛ بیش از آن خطرِ «جعبهٔ کاملاً سفید» دارد
             zone = cv2.morphologyEx(zone, cv2.MORPH_CLOSE,
-                                     np.ones((5, 5), np.uint8))
+                                    np.ones((5, 5), np.uint8))
+            if float(cv2.countNonZero(zone)) < 0.70 * ch * cw:
+                return zone
+            # ناحیهٔ کلانِ بی‌جوهر → به LaMa/TELEA با همین زون بسپار
             return zone
-        return self._cc_ink_mask(crop_bgr, grow=max(3, int(dilate_px)))
+        return self._cc_ink_mask(crop_bgr, grow=dilate_px)
 
     @staticmethod
     def _cc_flat_fill(crop_bgr: np.ndarray, msk: np.ndarray):
@@ -827,6 +908,15 @@ class _MangaTranslatorBody_85:
                 px.astype(np.float32) - med[None, :]).max(axis=1)))
             if mad > 9.0:
                 return None
+            # v1.14.501: گاردِ «جعبهٔ سفید» — وقتی ماسک تقریباً کلِ برش را
+            # گرفته و رینگِ حاشیه‌ای (نوارِ لبهٔ برش) آثارِ هنریِ تیره است،
+            # median سفیدِ کاذب برمی‌گردد و کلِ برش سفید میشود؛ چنین برشی
+            # باید به اینپینتِ واقعی برود نه flat.
+            ch, cw = crop_bgr.shape[:2]
+            if float(mm.sum()) > 0.60 * ch * cw:
+                g_r = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)[ring]
+                if float(np.median(g_r)) < 150.0:
+                    return None
             out = crop_bgr.copy()
             out[mm] = np.clip(med, 0, 255).astype(np.uint8)
             return out
@@ -865,6 +955,11 @@ class _MangaTranslatorBody_85:
             return False
 
     def _cc_lama_call(self, crop_bgr: np.ndarray, msk: np.ndarray):
+        # v1.14.501: opencv-method → مستقیم None (سقوط به TELEA در تمیزکننده)
+        # بدونِ تلاش برای بارگذاریِ LaMa — سریعترین مسیرِ opencv.
+        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
+        if _cm == "opencv":
+            return None
         lama = None
         try:
             lama = self._get_lama()
@@ -1072,48 +1167,101 @@ class _MangaTranslatorBody_85:
             pass
         return out, left
 
+    @staticmethod
+    def _cc_zone_share3(crop_bgr: np.ndarray, msk: np.ndarray) -> float:
+        """سهمِ ۳-بنِ مدِ هیستوگرامِ پیکسل‌های ماسک — «یکسانیِ زمینه» را
+        می‌سنجد (بنرِ گرادیانی/سندِ سفید = بالا؛ آرت‌ورکِ پربافت = پایین)."""
+        try:
+            g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+            sel = (msk > 0)
+            if not sel.any():
+                return 0.0
+            vals = g[sel].astype(np.int32) // 16
+            h16 = np.bincount(vals.ravel(), minlength=16)
+            b = int(np.argmax(h16))
+            return float(h16[max(0, b - 1):min(16, b + 2)].sum()) \
+                / float(max(1, int(sel.sum())))
+        except Exception:
+            return 0.0
+
     def _cc_clean_crop(self, crop_bgr: np.ndarray, msk0: np.ndarray):
         """یک برش را پاک میکند؛ خروجی: (cleaned_bgr, tag).
         ترتیب: flat کل (فوری) → flat محلیِ هر کامپوننت (گرادیان/بنر/سند)
         → LaMa روی باقی‌مانده → و فقط برای ماسکهای ریزِ TELEA.
-        گاردها: شبح (residue) و نوارِ سیاهِ LaMa → با TELEA جایگزین."""
+        گاردها: شبح (residue) و نوارِ سیاهِ LaMa → با TELEA جایگزین.
+        v1.14.501: فیکسِ «جعبهٔ کاملاً سفید» — flat-fill وقتی رینگِ دورِ ماسک
+        آثارِ هنری/پس‌زمینهٔ تیره است هرگز نباید سفیدِ سرِ خود را بریزد؛
+        ماسکِ ریزِ داخلِ زمینهٔ غیریکنواخت مستقیم به LaMa میرود."""
         _dbg = bool(os.environ.get("MANGA_CC_DEBUG"))
         try:
             _ir = int(getattr(self, "inpaint_radius", 3) or 3)
         except Exception:
             _ir = 3
-        # ۱) یکدستِ کلِ برش (سریع‌ترین مسیر)
-        flat = self._cc_flat_fill(crop_bgr, msk0)
+        # v1.14.501: روشِ opencv — مسیرِ کوتاه: بدونِ AI؛ flat فقط برای حبابِ
+        # سفیدِ ساده؛ بقیه مستقیم TELEA (سریع و بدونِ لودِ مدل)
+        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
+        if _cm == "opencv":
+            flat = self._cc_flat_fill(crop_bgr, msk0)
+            if flat is not None \
+                    and not self._cc_residue_bad(crop_bgr, flat, msk0):
+                if _dbg:
+                    print("    [cc] opencv flat ok", flush=True)
+                return flat, "flat"
+            telea = cv2.inpaint(crop_bgr, msk0, max(2, _ir),
+                                 cv2.INPAINT_TELEA)
+            telea = self._cc_repair_stray_lines(crop_bgr, telea, msk0)
+            return telea, "telea"
+        # ۱) یکدستِ کلِ برش (سریع‌ترین مسیر) — فقط وقتی ماسک «اقلیت» است
+        # v1.14.501: ماسکِ کلان (≥۴۵٪ برش) روی زمینهٔ غیریکنواخت = جعبهٔ سفید؛
+        # مستقیم به LaMa (بازسازیِ واقعیِ بافت) برو
+        ch_, cw_ = crop_bgr.shape[:2]
+        _mfrac = float(cv2.countNonZero(msk0)) / float(max(1, ch_ * cw_))
+        flat = None
+        if _mfrac <= 0.45:
+            flat = self._cc_flat_fill(crop_bgr, msk0)
         if flat is not None:
             if not self._cc_residue_bad(crop_bgr, flat, msk0):
                 if _dbg:
                     print("    [cc] flat#0 ok", flush=True)
                 return flat, "flat"
-        # ۲) پرکردنِ محلیِ کامپوننت‌ها (بدونِ AI)
-        base, left = self._cc_local_flat_fill(crop_bgr, msk0)
-        msk1 = left
-        _left_px = int(cv2.countNonZero(msk1)) if msk1 is not None else 0
-        if _left_px < 12:
-            if not self._cc_residue_bad(crop_bgr, base, msk0):
-                if _dbg:
-                    print(f"    [cc] local-flat ok ({_left_px} leftover)",
-                          flush=True)
-                return base, "flat"
-            msk1 = msk0  # شبح مانده → کلِ ماسک با اینپینت
+        # ۲) پرکردنِ محلیِ کامپوننت‌ها (بدونِ AI) — فقط برای ماسکِ اقلیت
+        if _mfrac <= 0.45:
+            base, left = self._cc_local_flat_fill(crop_bgr, msk0)
+            msk1 = left
+            _left_px = int(cv2.countNonZero(msk1)) if msk1 is not None else 0
+            if _left_px < 12:
+                if not self._cc_residue_bad(crop_bgr, base, msk0):
+                    if _dbg:
+                        print(f"    [cc] local-flat ok ({_left_px} leftover)",
+                              flush=True)
+                    return base, "flat"
+                msk1 = msk0  # شبح مانده → کلِ ماسک با اینپینت
+        else:
+            base = crop_bgr.copy()
+            msk1 = msk0
         # ۲٫۵) ماسکِ کلان → رنگِ غالبِ خودِ ناحیه (بنر/بلوکِ متراکم)
         selff = self._cc_self_fill(crop_bgr, msk1)
         if selff is not None:
             if _dbg:
                 print("    [cc] self-fill ok", flush=True)
             return selff, "flat"
-        # ۲٫۶) ماسکِ ~کلان → نسخهٔ نرمِ خودِ ناحیه (گرادیانِ بنر)
-        smoo = self._cc_smooth_fill(crop_bgr, msk1)
+        # ۲٫۶) ماسکِ ~کلان → نسخهٔ نرمِ خودِ ناحیه (گرادیانِ بنر) —
+        # v1.14.501: فقط وقتی زمینهٔ زون «یکدستِ غالب» بود (share3 ≥ 0.5
+        # در گامِ ماسک); برای آرت‌ورکِ پربافت این محوشدگیِ بی‌معنی است و
+        # متن را مه‌آلود (نه پاک) میگذارد → مستقیم LaMa
+        _skip_smooth = _mfrac > 0.85 and self._cc_zone_share3(crop_bgr, msk1) < 0.50
+        smoo = None
+        if not _skip_smooth:
+            smoo = self._cc_smooth_fill(crop_bgr, msk1)
         if smoo is not None \
                 and not self._cc_lama_black_artifact(crop_bgr, smoo, msk1):
             if _dbg:
                 print("    [cc] smooth-fill ok", flush=True)
             return smoo, "flat"
         # ۳) LaMa روی باقی‌مانده (با ماسکهای بزرگ‌شونده برای شبح)
+        # v1.14.501: روشِ big-lama → بدونِ توقفِ زودهنگام؛ همهٔ ماسکها را
+        # امتحان کن و بهترینِ تمیز را نگه دار (کاربر: «وضعیتش یک کم بدتره»)
+        _big = _cm == "lama-big"
         masks = [msk1]
         for _g in (3, 6):
             try:
@@ -1147,7 +1295,8 @@ class _MangaTranslatorBody_85:
                         print(f"    [cc] lama#{i} نوارِ سیاه! → رد", flush=True)
                 elif best_lama is None:
                     best_lama = (i, lama_out)
-                continue
+                if not _big:
+                    continue
             if _dbg:
                 print(f"    [cc] mask#{i}: lama none → بعدی", flush=True)
         # ۴) آخرِ کار: ماسکِ ریز → TELEA؛ بزرگ → بهترینِ LaMa؛ وگرنه TELEA
@@ -1163,6 +1312,30 @@ class _MangaTranslatorBody_85:
         _bm = masks[_bi] if _bi < len(masks) else msk1
         return self._cc_repair_stray_lines(base, best_lama[1], _bm), "lama"
 
+    @staticmethod
+    def _cc_feather_edges(orig: np.ndarray, out: np.ndarray,
+                          msk: np.ndarray, px: int = 3) -> np.ndarray:
+        """v1.14.501: پرِ نرمِ ۳px دورِ ماسک — انتقالِ تدریجی بینِ پرکردن و
+        اصل (حذفِ درزِ سختِ «جعبهٔ» که VLM آن را آرتیفکت می‌خواند)."""
+        try:
+            mm = (msk > 0)
+            if not mm.any():
+                return out
+            dt = cv2.distanceTransform(mm.astype(np.uint8),
+                                       cv2.DIST_L2, 3)
+            edge = (dt <= int(px)) & mm
+            if not edge.any():
+                return out
+            alpha = np.clip(dt / float(max(1, px)), 0.0, 1.0)
+            w = alpha[..., None]
+            blended = (out.astype(np.float32) * w
+                       + orig.astype(np.float32) * (1.0 - w)).astype(np.uint8)
+            res = out.copy()
+            res[edge] = blended[edge]
+            return res
+        except Exception:
+            return out
+
     def _cc_clean_job(self, out: np.ndarray, job: dict) -> str:
         x1, y1, x2, y2 = job["x1"], job["y1"], job["x2"], job["y2"]
         crop = out[y1:y2, x1:x2]
@@ -1177,6 +1350,13 @@ class _MangaTranslatorBody_85:
         _dbg = bool(os.environ.get("MANGA_CC_DEBUG"))
         _t0 = time.time() if _dbg else 0.0
         cleaned, tag = self._cc_clean_crop(crop, msk)
+        # v1.14.501: پرِ نرمِ لبه — فقط برای پرهای flat (اینپینتِ LaMa خودش
+        # نرم است و نیاز به پر ندارد)
+        if tag == "flat":
+            try:
+                cleaned = self._cc_feather_edges(crop, cleaned, msk, px=3)
+            except Exception:
+                pass
         out[y1:y2, x1:x2] = cleaned
         if _dbg:
             try:
