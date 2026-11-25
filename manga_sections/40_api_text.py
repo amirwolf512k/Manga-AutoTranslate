@@ -805,6 +805,11 @@ WATERMARK_PATTERNS = (
     # هم‌شکلها): اینها «متنِ واقعیِ داستان» نیستند → promo → پاک نمیشوند
     "faster update", "faster updates", "quality & quantity",
     "quality and quantity", "pay our staff", "pay the staff",
+    # v1.14.503 — واترمارکِ خودِ سایتِ mgeko/GENZTOONS (تستِ واقعی
+    # 514y: «GENZ TOONS -.ORG» و «GENZ TOONS» قبلاً dialogue میشدند و
+    # پاک میشدند) → promo → دست‌نخورده
+    "genz toons", "genztoons", "genz", "toons.org", "toons .org",
+    "mgeko",
     "read only at", "best content", "best manga", "official site",
     "official website", "early access", "exclusive chapter",
     "exclusive chapters", "patreon", "ko-fi", "kofi",

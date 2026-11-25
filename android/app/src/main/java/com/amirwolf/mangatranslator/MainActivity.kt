@@ -3595,29 +3595,53 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
+    // v1.14.503 — ریشهٔ «دکمهٔ نمایش هیچ نشان نمیدهد»: کلِ بدنه در
+    // try/catch — قبلاً هر خطا (مثل paths خالی) اپ را میانداخت و
+    // کاربر جز «هیچی» نمیدید. حالا همیشه دیالوگ باز میشود.
     private fun viewer(pathsRaw: List<String>, live: Boolean = false,
                        dbg: Boolean = false, dbgPaths: List<String> = emptyList(),
                        total: Int = 0) {
-        if (pathsRaw.isEmpty() && total <= 0) return
+        try {
+            viewerInner(pathsRaw, live, dbg, dbgPaths, total)
+        } catch (e: Exception) {
+            try {
+                android.util.Log.w("MangaView", "viewer failed", e)
+                Toast.makeText(this,
+                    "نمایشگر باز نشد: " + (e.message ?: e.toString()),
+                    Toast.LENGTH_LONG).show()
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun viewerInner(pathsRaw: List<String>, live: Boolean = false,
+                            dbg: Boolean = false, dbgPaths: List<String> = emptyList(),
+                            total: Int = 0) {
+        // v1.14.503 — قبلاً «paths خالی + total>0» از پاسِ اول رد میشد
+        // ولی در runTok با paths[0] کرش میکرد (IndexOutOfBounds) — دکمهٔ
+        // زندهٔ (۰/N صفحه) یعنی همین لحظه اپ میپرید. حالا با گاردِ
+        // dbgPaths و firstOrNull دیالوگ با جای‌نگهدار «در حال ترجمه…»
+        // باز میشود.
+        if (pathsRaw.isEmpty() && dbgPaths.isEmpty() && total <= 0) return
         val paths: MutableList<String> = java.util.Collections.synchronizedList(
             mutableListOf<String>().apply { addAll(pathsRaw) })
         val dpaths: MutableList<String> = java.util.Collections.synchronizedList(
             mutableListOf<String>().apply { addAll(dbgPaths) })
         if (paths.isEmpty() && dpaths.isEmpty() && total <= 0) return
         val runTok: String = try {
-            val dir = File(paths[0]).parentFile
-            val rf = File(dir, "run.txt")
-            val rt = if (dir != null && rf.isFile)
+            val p0 = pathsRaw.firstOrNull() ?: dbgPaths.firstOrNull()
+            val dir = p0?.let { File(it).parentFile }
+            val rf = if (dir != null) File(dir, "run.txt") else null
+            val rt = if (dir != null && rf != null && rf.isFile)
                 rf.readText().trim().filter { it.isLetterOrDigit() }.take(32) else ""
             if (rt.isNotEmpty()) rt
-            else {
-                val f0 = File(paths[0])
+            else if (p0 != null) {
+                val f0 = File(p0)
                 val src = (dir?.canonicalPath ?: "?") + "#" + f0.name +
                     "#" + f0.lastModified()
                 val dg = java.security.MessageDigest.getInstance("MD5")
                     .digest(src.toByteArray(Charsets.UTF_8))
                 "f" + dg.joinToString("") { "%02x".format(it) }.substring(0, 15)
-            }
+            } else stampNow()
         } catch (_: Exception) { stampNow() }
 
         val imgRx = Regex("/i/(\\d+)(?:\\?.*)?$")
@@ -3630,7 +3654,8 @@ class MainActivity : AppCompatActivity() {
 
         var uiT: org.json.JSONObject? = null
         try {
-            val udir = File(paths[0]).parentFile
+            val udir = (pathsRaw.firstOrNull() ?: dpaths.firstOrNull())
+                ?.let { File(it).parentFile }
             val ufile = if (udir != null) java.io.File(udir, "ui_texts.json") else null
             if (ufile != null && ufile.isFile)
                 uiT = org.json.JSONObject(ufile.readText().trim())

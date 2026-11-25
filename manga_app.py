@@ -373,6 +373,19 @@ def _web_host() -> bool:
             or os.environ.get("HF_SPACE_ID", "").strip() != "")
 
 
+def _on_colab() -> bool:
+    """v1.14.503 — کلودِ گوگل (Colab): مرورگرِ داخلیِ وب مجاز است."""
+    try:
+        if os.environ.get("COLAB_RELEASE_TAG", "").strip():
+            return True
+    except Exception:
+        pass
+    try:
+        return "google.colab" in sys.modules
+    except Exception:
+        return False
+
+
 _OCR_LANG_ORDER = {"ja": 0, "ko": 1, "zh": 2, "en": 3}
 
 def _ocr_lang_norm(v) -> str:
@@ -3956,6 +3969,17 @@ def _browser_extract_js() -> str:
             return;
           }
           if (__WEB_HOST__ && !neutr) return;
+          // v1.14.503 — درخواستِ سازنده: مرورگرِ داخلی فقط در «اپِ واقعی»
+          // (اجرایِ لوکال: پی‌سی/لینوکس → localhost) و کلود (neutralino /
+          // Colab) مجاز است — نسخهٔ وبِ از راه دور (VPS/هاست بدونِ
+          // متغیرِ محیطی) دیگر FAB نمیگیرد.
+          try {
+            const colab = !!__MT_COLAB__;
+            const lh = String(location.hostname || "");
+            const local = !lh || lh === "localhost" || lh === "127.0.0.1"
+                       || lh === "[::1]" || lh === "0.0.0.0";
+            if (!local && !colab && !neutr) return;
+          } catch (e) {}
           window.__mtWebFabInst = true;
           window.__mtWebFab = true;
           const bm = document.querySelector('details.mt-browser');
@@ -4912,7 +4936,9 @@ def _browser_extract_js() -> str:
     return (tpl
             .replace("__BM_CODE__", _json.dumps(_MT_BM_CODE))
             .replace("__WEB_HOST__",
-                     "true" if _web_host() else "false"))
+                     "true" if _web_host() else "false")
+            .replace("__MT_COLAB__",
+                     "true" if _on_colab() else "false"))
 
 
 def _prov_keys_js() -> str:

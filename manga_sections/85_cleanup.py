@@ -810,14 +810,19 @@ class _MangaTranslatorBody_85:
         bright_in = float((bright & zone_d).sum()) / zn
         if share3 >= 0.50:
             # زمینهٔ یکدست (کاغذ/حباب/بنرِ ساده) → جوهر = اقلیتِ نسبی
-            # متن همیشه «اقلیت» است (~۲٪..۴۵٪)؛ متنِ متراکم تا ۴۵٪ هم واقعی است
+            # v1.14.503 — سقفِ سهمِ روشن ۰٫۴۲→۰٫۶۰: متنِ سفیدِ متراکم روی
+            # حبابِ تیره (تستِ واقعی 514y: p11 bright=۰٫۴۴۶ و p12
+            # bright=۰٫۴۲۲) از سقفِ قدیمی میگذشت → ماسک None میشد →
+            # کلِ زون به LaMa میافتاد و «شبحِ حرف» بازسازی میشد. با
+            # share3≥۰٫۵ زمینه دست‌کم نیمی از زون است؛ جوهرِ ≤۰٫۶۰
+            # هنوز اقلیتِ واقعی است.
             if 0.02 <= dark_in <= 0.45:
                 raw = dark.astype(np.uint8) * 255
-                if bright_in >= 0.02 and bright_in <= 0.42:
+                if bright_in >= 0.02 and bright_in <= 0.60:
                     # هالهٔ روشن/متنِ روشن دورِ هم → هر دو جوهرند
                     raw = cv2.bitwise_or(raw, bright.astype(np.uint8) * 255)
-            elif 0.02 <= bright_in <= 0.42:
-                # متنِ روشن روی زمینهٔ تیره (واترمارک/بنر)
+            elif 0.02 <= bright_in <= 0.60:
+                # متنِ روشن روی زمینهٔ تیره (واترمارک/بنر/حبابِ تیره)
                 raw = bright.astype(np.uint8) * 255
             else:
                 return None
@@ -843,14 +848,23 @@ class _MangaTranslatorBody_85:
             else:
                 return None
         text_core = cv2.bitwise_and(raw, zone_d.astype(np.uint8) * 255)
-        # v1.14.502 — جوهرِ رنگی روی زمینهٔ بی‌رنگ: اگر زمینهٔ زون خودش
-        # کم‌اشباع است (کاغذ/سیاه/سفید — میانهٔ اشباع ≤ ۲۰) ولی جوهرِ
-        # پُراشباع (>۴۰) داریم، آن هم جوهر است (حبابِ زرد = زمینهٔ پُراشباع
-        # → قاعده خاموش؛ جوهر رنگی روی زمینهٔ رنگی جداکردنی نیست → None)
+        # v1.14.503 — میانهٔ اشباعِ زون یک‌بار بالای همهٔ قواعدِ رنگی:
+        #  • _med_sat ≤ 20 → زمینهٔ «بی‌رنگ» (کاغذ/سفید/سیاه) → قواعدِ
+        #    جوهرِ رنگی و هالهٔ کروما و soft-halo معتبرند؛
+        #  • _med_sat > 20 → زمینهٔ پُراشباع (حبابِ قرمز/زرد/آبی) →
+        #    این قواعد خاموش: خودِ گرادیانِ زمینه (Δ>۸ و اشباع>۱۶)
+        #    ماسک میشود و LaMa روی زمینهٔ سالم لکهٔ پُرپَر میسازد
+        #    (تستِ واقعی 514y: حبابهایِ قرمز OH..?/WHEN WAS THAT).
+        _med_sat = 0.0
         if _sat is not None:
             try:
                 _med_sat = float(np.median(_sat[zone_d])) \
                     if zone_d.any() else 0.0
+            except Exception:
+                _med_sat = 0.0
+        # v1.14.502 — جوهرِ رنگی روی زمینهٔ بی‌رنگ (فقط وقتی زمینه بی‌رنگ)
+        if _sat is not None:
+            try:
                 if _med_sat <= 20.0:
                     _col = ((_sat > 40) & zone_d
                             & (text_core == 0)).astype(np.uint8) * 255
@@ -875,20 +889,26 @@ class _MangaTranslatorBody_85:
         text_core = cv2.morphologyEx(text_core, cv2.MORPH_CLOSE,
                                       np.ones((5, 5), np.uint8))
         # soft-halo: Δ>۸ از زمینه در فاصلهٔ ≤۷px از جوهر (هالهٔ سفیدِ نازک)
-        try:
-            near = cv2.dilate(text_core, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (15, 15))) > 0
-            soft = ((np.abs(gi - int(round(bg))) > 8) & zone_d
-                    & near & (text_core == 0)).astype(np.uint8) * 255
-            text_core = cv2.bitwise_or(text_core, soft)
-            # v1.14.502 — هالهٔ کروما: لبهٔ آنتی‌آلیاسِ جوهرِ رنگی
-            # (اشباعِ ۱۶..۴۰ — در خاکستری دیده نمیشود) نزدیکِ جوهر
-            if _sat is not None:
-                col_soft = ((_sat > 16) & zone_d & near
-                            & (text_core == 0)).astype(np.uint8) * 255
-                text_core = cv2.bitwise_or(text_core, col_soft)
-        except Exception:
-            pass
+        # v1.14.503 — فقط روی زمینهٔ «بی‌رنگ»؛ روی زمینهٔ پُراشباع
+        # (حبابِ قرمز) گرادیانِ خودِ زمینه Δ>۸ میدهد و کلِ حباب ماسک
+        # میشد → لکهٔ پُرپَرِ LaMa (تستِ واقعی 514y: شبحِ قرمز داخلِ
+        # حبابهایِ قرمز p10/p17/p19/p20/p23/p24/p37). dilationِ ۷px خودش
+        # لبهٔ آنتی‌آلیاسِ استروک را میپوشاند.
+        if _med_sat <= 20.0:
+            try:
+                near = cv2.dilate(text_core, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (15, 15))) > 0
+                soft = ((np.abs(gi - int(round(bg))) > 8) & zone_d
+                        & near & (text_core == 0)).astype(np.uint8) * 255
+                text_core = cv2.bitwise_or(text_core, soft)
+                # v1.14.502 — هالهٔ کروما: لبهٔ آنتی‌آلیاسِ جوهرِ رنگی
+                # (اشباعِ ۱۶..۴۰ — در خاکستری دیده نمیشود) نزدیکِ جوهر
+                if _sat is not None:
+                    col_soft = ((_sat > 16) & zone_d & near
+                                & (text_core == 0)).astype(np.uint8) * 255
+                    text_core = cv2.bitwise_or(text_core, col_soft)
+            except Exception:
+                pass
         core_d = cv2.dilate(text_core, cv2.getStructuringElement(
             cv2.MORPH_ELLIPSE, (7, 7)))
         barrier = self._cc_barrier(g, core_d, grow=4)
@@ -1551,6 +1571,43 @@ class _MangaTranslatorBody_85:
         _dbg = bool(os.environ.get("MANGA_CC_DEBUG"))
         _t0 = time.time() if _dbg else 0.0
         self._cc_dump_tag = f"y{ry1}_{rx1}"
+        # v1.14.503 — زمینهٔ رنگی + LaMa → «بلوک‌ماسکِ بدونِ barrier»:
+        # ماسکِ نازکِ حرف‌مانند روی گرادیانِ رنگی (حبابِ قرمز/زرد) برای
+        # LaMa بدترین حالت است — مدل شکلِ ماسک را دنبال میکند و «شبحِ
+        # حرف» میسازد. بلوک = کادرِ جوهر + ۸px حاشیه. آزمونِ تنسوریِ
+        # p37 (OH..?): ماسکِ نازک ۵۰۱px شبح؛ بلوک+barrier ۵۰۱px (barrier
+        # روی گرادیانِ قرمز ۸۱هزارpx میشود و بلوک را سوراخ‌سوراخ
+        # میکند — لکه‌های پُرپَر)؛ بلوکِ خالص: صفرpx + خطِ حباب سالم.
+        # فقط وقتی زمینهٔ اطرافِ متن پُراشباع است (میانهٔ max-min > ۲۰
+        # در رینگِ زون) — زمینهٔ کاغذیِ سفید دست‌نخورده میماند.
+        if _cm != "opencv":
+            try:
+                _mx_c = crop.max(axis=2).astype(np.int32)
+                _mn_c = crop.min(axis=2).astype(np.int32)
+                _sat_c = _mx_c - _mn_c
+                _ring = (cv2.dilate(msk, np.ones((25, 25), np.uint8)) == 0) \
+                    & (zone > 0)
+                if int(_ring.sum()) > 60:
+                    _msat = float(np.median(_sat_c[_ring]))
+                    if _msat > 20.0:
+                        _ys, _xs = np.nonzero(msk)
+                        if len(_ys):
+                            _blk = np.zeros_like(msk)
+                            _blk[max(0, _ys.min() - 8):min(
+                                     msk.shape[0], _ys.max() + 9),
+                                 max(0, _xs.min() - 8):min(
+                                     msk.shape[1], _xs.max() + 9)] = 255
+                            if int(cv2.countNonZero(_blk)) \
+                                    > int(cv2.countNonZero(msk)):
+                                msk = cv2.bitwise_or(msk, _blk)
+                                if _dbg:
+                                    print(f"    [cc] زمینهٔ رنگی "
+                                          f"(sat={_msat:.0f}) → بلوک‌ماسکِ "
+                                          f"خالص "
+                                          f"{int(cv2.countNonZero(msk))}px",
+                                          flush=True)
+            except Exception:
+                pass
         try:
             _dz = os.environ.get("MANGA_CC_DUMP_PASSES")
             if _dz:

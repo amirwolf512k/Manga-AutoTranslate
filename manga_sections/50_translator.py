@@ -967,8 +967,9 @@ class MangaTranslator:
                 # استخراج صبر میکند (سقفِ ۳ دقیقه)؛ در این فاصله OCR همهٔ
                 # هسته‌ها را دارد. برای فصلهایِ چندصفحه‌ای اثرِ بزرگ، برای
                 # تک‌صفحه فقط ~۱ثانیهٔ پنهان.
+                # v1.14.503 — درخواستِ سازنده: سقفِ انتظار ۳دقیقه→۶۰ثانیه
                 _t_wait = time.time()
-                while time.time() - _t_wait < 180.0:
+                while time.time() - _t_wait < 60.0:
                     if getattr(self, "_extraction_done", True):
                         break
                     time.sleep(0.3)
