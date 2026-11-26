@@ -2353,6 +2353,22 @@ def _pc_ocr_small() -> bool:
     _v = str(os.environ.get("MANGA_OCR_SMALL", "") or "").strip().lower()
     return _v in ("1", "true", "yes", "on")
 
+def _ocr_det_pad_px() -> int:
+    # v1.14.510 — پدینگِ سفیدِ RapidOcrAndroidOnnx (padding=50): قابِ
+    # سفید دورِ تصویر/کراپ پیش از det. «پیش‌فرضِ خاموش» — چون در این
+    # پایپ‌لاین کراپها از قبل حاشیهِ دیتکتور را دارند و آزمونِ واقعیِ
+    # ۱۸عکسیِ ci_imgs نشان داد: پوششِ متن برابر، زمانِ +۱۰٪ و متنِ
+    # لبه‌ای (img4 PROPOSED/لبهٔ سند) بدتر — مرجع متن را کنارِ لبهٔ
+    # «تصویرِ کامل» ندارد، ما متن را کنارِ لبهٔ «کراپ» داریم. برایِ
+    # رفتارِ لفظ‌به‌لفظِ مرجع: MANGA_OCR_DET_PAD=50.
+    try:
+        _v = str(os.environ.get("MANGA_OCR_DET_PAD", "0") or "").strip()
+        if not _v:
+            return 0
+        return max(0, min(200, int(float(_v))))
+    except Exception:
+        return 0
+
 def _ocr_det_resize_policy(lang: str):
     try:
         _v = str(os.environ.get("MANGA_OCR_DET_FAST", "")).strip().lower()
@@ -2392,12 +2408,23 @@ def _ocr_det_resize_policy(lang: str):
         #   فقط با 960/max خوانده شدند) | 4e2e77: 27→10.6s (2.6x).
         # بازگرداندنِ رفتارِ قدیم: MANGA_OCR_DET_LIMIT=736
         # MANGA_OCR_DET_TYPE=min.
-        return {"Det.limit_side_len": 960, "Det.limit_type": "max"}
+        # v1.14.510 — سبکِ RapidOcrAndroidOnnx (padding=50): سقفِ
+        # بزرگ‌نمایی سهمِ پدینگ را هم میگیرد (resize = maxSideLen +
+        # 2*padding — همانِ main.cppِ مرجع) → رزولوشنِ محتوایِ متن
+        # عوض نمیشود و det قابِ سفید را هم میبیند. فقط وقتی کاربر
+        # MANGA_OCR_DET_LIMIT را صریح ست کرده نگیرد (حرفِ کاربر مقدس).
+        _out = {"Det.limit_side_len": 960, "Det.limit_type": "max"}
+        if _ocr_det_pad_px() > 0 and _e_lim <= 0:
+            _out["Det.limit_side_len"] = 960 + 2 * _ocr_det_pad_px()
+        return _out
     out = {"Det.limit_side_len": 960, "Det.limit_type": "max"}
     if _e_lim > 0:
         out["Det.limit_side_len"] = int(_e_lim)
     if _e_typ in ("min", "max"):
         out["Det.limit_type"] = _e_typ
+    if _ocr_det_pad_px() > 0 and _e_lim <= 0:
+        # v1.14.510 — همانِ بالا: سهمِ پدینگ در سقفِ بزرگ‌نمایی
+        out["Det.limit_side_len"] += 2 * _ocr_det_pad_px()
     return out
 
 def _latin_lang(tr) -> bool:

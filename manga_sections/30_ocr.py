@@ -31,6 +31,42 @@ def _mobile_lang(lang):
 
 _PAD_STATS = {"ms": 0.0, "n": 0, "lines": 0}
 
+def _ocr_pad_white(img, pad: int):
+    # v1.14.510 — قابِ سفیدِ BORDER_ISOLATED — همانِ makePaddingِ مرجعِ
+    # RapidOcrAndroidOnnx (padding=50, Scalar(255,255,255)).
+    if img is None or getattr(img, "size", 0) == 0 or pad <= 0:
+        return img
+    try:
+        return cv2.copyMakeBorder(
+            img, pad, pad, pad, pad, cv2.BORDER_ISOLATED,
+            (255.0, 255.0, 255.0))
+    except Exception:
+        return img
+
+def _ocr_unpad_boxes(lines, pad: int, src_wh):
+    # v1.14.510 — برگرداندنِ کووردها از فضایِ تصویرِ پدیده به کراپِ اصلی
+    # (کمکردنِ پدینگ + clamp به ابعادِ بدونِ پدینگ — همانِ مرجع).
+    if pad <= 0 or not lines:
+        return lines
+    _h, _w = int(src_wh[0]), int(src_wh[1])
+    try:
+        for _ln in lines:
+            _b = _ln[0]
+            _a = np.asarray(_b, dtype=np.float32)
+            if _a.ndim != 2 or _a.shape[1] != 2 or _a.shape[0] < 4:
+                continue
+            _a[:, 0] -= pad
+            _a[:, 1] -= pad
+            np.clip(_a[:, 0], 0.0, max(0.0, float(_w - 1)), out=_a[:, 0])
+            np.clip(_a[:, 1], 0.0, max(0.0, float(_h - 1)), out=_a[:, 1])
+            if isinstance(_b, np.ndarray):
+                _b[:] = _a
+            else:
+                _ln[0] = _a.tolist()
+    except Exception:
+        pass
+    return lines
+
 def _pad_stats_note(t0, nlines):
     try:
         _PAD_STATS["ms"] += (time.time() - t0) * 1000.0
@@ -112,7 +148,7 @@ class PaddleAndroidOCR:
         print(f"[+] OCR گوشی: RapidOCRِ اندروید آماده | "
               f"RapidOcrAndroidOnnx | det=PP-OCRv6_small "
               f"cls=v2.0_cls rec=PP-OCRv6_medium/{self.lang} "
-              f"(دانلودی) | threads={_intra} | pad=50")
+              f"(دانلودی) | threads={_intra}")
 
     _MULTI_CONF_FLOOR = 0.72
 
@@ -375,8 +411,7 @@ def _purge_loser_onnx_models() -> str:
             print("[🧹] %d فایلِ مدلِ بازنده (%s) از گوشی حذف شد"
                   % (_n, _fmt_mb(_freed)))
             return ("مدلهایِ بازنده حذف شد: %d فایل / %s آزاد شد — "
-                    "روشِ فعال = RapidOcrAndroidOnnx (پلِ native پدل — "
-                    "v1.14.509؛ مدلهایِ ONNX فقط فالبکند)"
+                    "روشِ فعال = RapidOCR (ONNX, PP-OCRv5/v6 — همانِ PC)"
                     % (_n, _fmt_mb(_freed)))
         return ""
     except Exception:
@@ -422,25 +457,11 @@ def speed_lab_env(p: dict) -> str:
         # v1.14.505 — یکسان‌سازیِ کامل با PC: استخراجِ گوشی همان
         # RapidOCRِ ONNX (PP-OCRv5/v6) با همان مدلهای PC است؛ نردبانِ
         # اندروید فقط برای «تستِ سرعت» ساخته میشود.
-        # v1.14.508 — بازگشتِ موتورِ سریعِ گوشی (سبکِ backup): استخراجِ
-        # گوشی دوباره با پلِ native پدل (RapidOcrAndroidOnnx — همانِ
-        # دموی رسمیِ PaddleOCR اندروید: det=PP-OCRv6_small +
-        # rec=PP-OCRv6_medium هر زبان) اجرا میشود؛ RapidOCRِ PC فقط
-        # فالبک است (APK قدیمی/پلِ خراب). PC/وب بی‌تغییر.
-        # v1.14.509 — استخراجِ گوشی = پلِ native پدل (RapidOcrAndroidOnnx)
-        # + پدینگِ سفیدِ ۵۰px پیش از det (رفتارِ پیش‌فرضِ مرجع):
-        # متنِ لبه‌ای کراپها هم دیده میشود؛ det=PP-OCRv6_small +
-        # rec=PP-OCRv6_medium هر زبان (آخرینِ v5/v6). RapidOCRِ PC فقط
-        # فالبک است (APK قدیمی/پلِ خراب). PC/وب بی‌تغییر.
-        if _on_android():
-            if _purge:
-                return ("[⚡] روشِ استخراج: RapidOcrAndroidOnnx (پلِ native "
-                        "پدل — det=small + rec=medium + pad=50)%s%s | v%s: %s"
-                        % (_ms_l, _sp, APP_VER, _purge))
-            return ("[⚡] روشِ استخراج: RapidOcrAndroidOnnx (پلِ native پدل — "
-                    "det=small + rec=medium + pad=50 | فالبک: RapidOCRِ PC — "
-                    "v%s)%s%s"
-                    % (APP_VER, _ms_l, _sp))
+        # v1.14.510 — اندروید = PC کاملاً (مسیرِ جدا حذف شد) + سبکِ
+        # RapidOcrAndroidOnnx: det=small + rec=medium (PP-OCRv6)، 960/max،
+        # بی‌cls — رویِ همهٔ پلتفرمها (گوشی/PC قدیمی/لینوکس).
+        # پدینگِ ۵۰pxِ مرجع به‌صورتِ اختیاری (MANGA_OCR_DET_PAD) موجود
+        # است — آزمونِ ۱۸عکسی پوششِ برابر و متنِ لبه‌ایِ بدتر داد.
         if _purge:
             return ("[⚡] روشِ استخراج: RapidOCR (ONNX, PP-OCRv5/v6) — "
                     "همانِ PC (det=small + rec=medium)%s%s | v%s: %s"
@@ -982,19 +1003,13 @@ class RapidOCRBackend:
             self._cjk_guard = False
         # v1.14.504 — یکسان‌سازیِ کامل با PC/وب/لینوکس: موتورِ اندروید از
         # استخراج حذف شد؛ همه از همان RapidOCR (onnx) استفاده میکنند.
-        # v1.14.508 — بازگشتِ موتورِ سریعِ گوشی (سبکِ backup): رویِ اندروید
-        # موتورِ native پدل (پلِ PaddleOcrBridge + RapidOcrAndroidOnnx)
-        # موتورِ اصلیِ استخراج است — موتورِ پایتونیِ RapidOCR دیگر رویِ گوشی
-        # ساخته نمیشود (سریع + کم‌رم)؛ اگر پل آماده نشد به همان مسیرِ
-        # RapidOCRِ PC (504..507) فالبک میکند. PC/وب/لینوکس بی‌تغییر.
+        # mobile_engine فقط برای «تستِ سرعتِ» نردبان روشن میشود.
         self._prefer_gpu = prefer_gpu
-        if mobile_engine and _on_android():
+        if mobile_engine:
             try:
                 self._init_mobile_engine(lang)
             except Exception:
                 self._mobile = None
-            if self._mobile is not None:
-                return
         try:
             if not _ensure_rapidocr_pkg():
                 raise ImportError("rapidocr نصب نیست و نصب خودکار ناموفق بود")
@@ -1212,6 +1227,14 @@ class RapidOCRBackend:
             if _det_speed:
                 _det_disp = (f" | det={_det_speed.get('Det.limit_side_len', 736)}"
                                 f"/{_det_speed.get('Det.limit_type', 'min')}")
+            # v1.14.510 — نمایشِ پدینگِ سفیدِ سبکِ RapidOcrAndroidOnnx
+            _det_pad_disp = ""
+            try:
+                _ppx = _ocr_det_pad_px()
+                if _ppx > 0:
+                    _det_pad_disp = f" | pad={_ppx}"
+            except Exception:
+                pass
             _intra_disp = _intra
             self.ocr_threads = int(_intra)
             if _rec_params is not None:
@@ -1247,7 +1270,7 @@ class RapidOCRBackend:
                 _ep_disp = (f" | EP={getattr(self, '_ocr_ep_active', '')}"
                                if str(getattr(self, "_ocr_ep_active", "") or "").strip()
                                else "")
-                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_android_ep_disp}{_det_disp} | cls=خاموش")
+                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_android_ep_disp}{_det_disp}{_det_pad_disp} | cls=خاموش")
                 return
             _pb = dict(_base)
             _pb.update(_threads)
@@ -1280,7 +1303,7 @@ class RapidOCRBackend:
             _ep_disp = (f" | EP={getattr(self, '_ocr_ep_active', '')}"
                            if str(getattr(self, "_ocr_ep_active", "") or "").strip()
                            else "")
-            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_android_ep_disp}{_det_disp} | cls=خاموش")
+            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_android_ep_disp}{_det_disp}{_det_pad_disp} | cls=خاموش")
             return
         except Exception as e:
             import traceback as _tb
@@ -1299,8 +1322,8 @@ class RapidOCRBackend:
         if _pb is not None:
             self._mobile = _pb
             return
-        print("[!] موتورِ native گوشی آماده نشد (پل/مدل؟) → "
-              "فالبک به RapidOCRِ PC")
+        print("[!] موتورِ نردبانِ تستِ سرعت آماده نشد (فقط تستِ "
+              "سرعت، نه استخراج)")
         self._mobile = None
 
     def _build_paddle_android(self, lang: str):
@@ -1348,14 +1371,15 @@ class RapidOCRBackend:
             return []
         if not getattr(self, "_new_api", False):
             return []
-        # v1.14.508 — موتورِ native گوشی: det جدا ندارد (det داخلِ پل است)
-        if getattr(self, "_mobile", None) is not None:
-            return []
         eng = self._det_dbg_engine()
         if eng is None:
             return []
+        # v1.14.510 — سبکِ RapidOcrAndroidOnnx: قابِ سفیدِ پدینگ پیش از det
+        # (متنِ لبه‌ای کراپ هم دیده میشود)؛ کووردها بعداً آنپَد میشوند.
+        _pad = _ocr_det_pad_px()
+        _img = _ocr_pad_white(image_bgr, _pad)
         try:
-            out = eng(image_bgr, use_det=True, use_cls=False, use_rec=False)
+            out = eng(_img, use_det=True, use_cls=False, use_rec=False)
         except Exception:
             return []
         boxes = getattr(out, "boxes", None)
@@ -1373,6 +1397,16 @@ class RapidOCRBackend:
                     continue
         except Exception:
             return []
+        if _pad > 0 and quads:
+            for _q in quads:
+                _q[:, 0] -= _pad
+                _q[:, 1] -= _pad
+                np.clip(_q[:, 0], 0.0, max(0.0, float(image_bgr.shape[1] - 1)),
+                        out=_q[:, 0])
+                np.clip(_q[:, 1], 0.0, max(0.0, float(image_bgr.shape[0] - 1)),
+                        out=_q[:, 1])
+            quads = [q for q in quads
+                     if np.ptp(q[:, 0]) >= 2 and np.ptp(q[:, 1]) >= 2]
         return quads
 
     def _rec_rescue_engine(self):
@@ -1402,9 +1436,6 @@ class RapidOCRBackend:
         if image_bgr is None or getattr(image_bgr, "size", 0) == 0:
             return None
         if not getattr(self, "_new_api", False):
-            return None
-        # v1.14.508 — موتورِ native گوشی: rec جدا ندارد (rec داخلِ پل است)
-        if getattr(self, "_mobile", None) is not None:
             return None
         eng = self._rec_rescue_engine()
         if eng is None:
@@ -1553,40 +1584,20 @@ class RapidOCRBackend:
 
         if image_bgr is None or image_bgr.size == 0:
             return None
-        # v1.14.508 — بازگشتِ مسیرِ موبایل (سبکِ backup): موتورِ native
-        # پدل از همین‌جا عبور میکند (det+rec رویِ کراپ)؛ PC/وب بی‌تغییر.
-        if self._mobile is not None:
-            try:
-                _out = self._mobile.ocr(image_bgr, crop_mode=crop_mode)
-            except Exception as _e:
-                print(f"[!] خطایِ OCRِ موبایل: {str(_e)[:150]}")
-                return None
-            if not _out or not _out[0]:
-                return None
-            _lines = []
-            _ncjk = 0
-            for _box, _pair in _out[0]:
-                try:
-                    _t = self._deaccent(str(_pair[0])).strip()
-                    if not _t:
-                        continue
-                    if self._cjk_guard and _cjk_dominant(_t):
-                        _ncjk += 1
-                        continue
-                    _s = float(_pair[1])
-                    _lines.append([_box, (_t, _s)])
-                except Exception:
-                    continue
-            if _ncjk:
-                print(f"    [OCR] {_ncjk} خطِ پر از نویسهٔ چینی حذف شد "
-                      "(گاردِ لاتین)")
-            return [_lines] if _lines else None
-        # v1.14.504 — یکسان‌سازی: مسیرِ crop_mode مخصوصِ موبایل حذف شد
+        # v1.14.510 — یکسان‌سازیِ کامل (اندروید = PC) + سبکِ
+        # RapidOcrAndroidOnnx: قابِ سفیدِ padding=50 دورِ کراپ پیش از det —
+        # متنِ چسبیده به لبهٔ کراپ هم دیده میشود؛ کووردها بعد از خواندن
+        # به فضایِ کراپِ اصلی برمیگردند. سهمِ پدینگ در سقفِ det از قبل
+        # جدا رزرو شده (1060/max) → رزولوشنِ متن عوض نمیشود.
+        _pad = _ocr_det_pad_px()
+        _img = _ocr_pad_white(image_bgr, _pad)
+        # v1.14.504 — یکسان‌سازی: مسیرِ موبایل حذف شد؛ همه (اندروید/PC/
+        # وب/لینوکس) از همان موتورِ RapidOCR میگذرند.
         if self._new_api:
             for _att in range(2):
                 try:
                     _t_oc = time.time()
-                    out = self._engine_run(image_bgr)
+                    out = self._engine_run(_img)
                     _ocr_stats_note(_t_oc)
                     txts = getattr(out, "txts", None)
                     if not txts:
@@ -1601,6 +1612,7 @@ class RapidOCRBackend:
                         score = float(scores[i]) if scores is not None and i < len(scores) else 1.0
                         box = boxes[i] if boxes is not None and i < len(boxes) else [[0, 0], [1, 0], [1, 1], [0, 1]]
                         lines.append([np.asarray(box, dtype=np.float32), (t, score)])
+                    _ocr_unpad_boxes(lines, _pad, image_bgr.shape[:2])
                     return [lines] if lines else None
                 except Exception as e:
                     msg = str(e).lower()
@@ -1611,14 +1623,14 @@ class RapidOCRBackend:
                     print(f"    [OCR] خطای موتور OCR: {str(e)[:150]}")
                     return None
         try:
-            result, _ = self._engine_run(image_bgr)
+            result, _ = self._engine_run(_img)
         except Exception as e:
             msg = str(e).lower()
             if "text detection result is empty" in msg or "detection result is empty" in msg:
                 return None
             if self._gpu_recover(e):
                 try:
-                    result, _ = self._engine_run(image_bgr)
+                    result, _ = self._engine_run(_img)
                 except Exception:
                     return None
             else:
@@ -1634,6 +1646,7 @@ class RapidOCRBackend:
             if not text:
                 continue
             lines.append([box, (text, float(score))])
+        _ocr_unpad_boxes(lines, _pad, image_bgr.shape[:2])
         return [lines] if lines else None
 
 
