@@ -1,6 +1,7 @@
 # v1.14.504 — گیتِ نمایشگرِ اندروید: دکمهٔ «نمایش» را میزند،
 # اسکرین‌شات میگیرد و بررسی میکند که صفحهٔ ترجمه واقعاً رندر شده
 # باشد (نه جعبهٔ سیاهِ خالی).
+import os
 import re
 import subprocess
 import sys
@@ -86,12 +87,19 @@ def main():
     sh("adb", "shell", "input", "tap", str(cx), str(cy))
     time.sleep(6)
     sh("adb", "shell", "screencap", "-p", "/sdcard/viewer.png")
-    r = sh("adb", "pull", "/sdcard/viewer.png", "/tmp/emulout/viewer.png",
-           timeout=120)
-    if not r.stdout or "1 file" not in (r.stdout or ""):
-        print("[view] اسکرین‌شات گرفته نشد ✘", r.stdout, r.stderr)
+    sh("adb", "pull", "/sdcard/viewer.png", "/tmp/emulout/viewer.png",
+       timeout=120)
+    # v1.14.509 — این adbِ CI خروجیِ «X file pulled» را در stderr مینویسد
+    # نه stdout (اثباتش در رانِ 509: فایلِ ۲.۳MB واقعاً کشیده شد ولی چکِ
+    # رشتهایِ stdout مردود شد) — حالا خودِ فایل قضاوت میکند.
+    out_path = "/tmp/emulout/viewer.png"
+    if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 50_000):
+        r = sh("adb", "pull", "/sdcard/viewer.png", out_path, timeout=120)
+        print("[view] اسکرین‌شات گرفته نشد ✘",
+              (r.stdout or "")[:120], (r.stderr or "")[:200])
         return 1
-    print("[view] اسکرین‌شات: /tmp/emulout/viewer.png ✔")
+    print("[view] اسکرین‌شات: %s ✔ (%d bytes)"
+          % (out_path, os.path.getsize(out_path)))
     return 0
 
 
