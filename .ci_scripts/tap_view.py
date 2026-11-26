@@ -85,21 +85,43 @@ def main():
     cy = (btn[1] + btn[3]) // 2
     print(f"[view] دکمهٔ نمایش: {btn} → tap ({cx},{cy})")
     sh("adb", "shell", "input", "tap", str(cx), str(cy))
-    time.sleep(6)
-    sh("adb", "shell", "screencap", "-p", "/sdcard/viewer.png")
-    sh("adb", "pull", "/sdcard/viewer.png", "/tmp/emulout/viewer.png",
-       timeout=120)
-    # v1.14.509 — این adbِ CI خروجیِ «X file pulled» را در stderr مینویسد
-    # نه stdout (اثباتش در رانِ 509: فایلِ ۲.۳MB واقعاً کشیده شد ولی چکِ
-    # رشتهایِ stdout مردود شد) — حالا خودِ فایل قضاوت میکند.
+    # v1.14.510a — نمایشگر رویِ شبیه‌سازِ x86_64 گاهی کندتر از ۶ ثانیه
+    # لود میشود (رانِ 509a با ~۱۰s محتوا داشت؛ رانِ 510 در ۶s سیاه بود) —
+    # حالا تا ۳ بار با فاصله برداشته میشود و همانِ معیارِ check_viewer
+    # (روشن>۸٪، لبه>۰٫۴٪، میانگین>۱۴) درجا قضاوت میکند؛ چکِ نهایی بعدی
+    # همانِ فایلِ آخر را میبیند.
     out_path = "/tmp/emulout/viewer.png"
-    if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 50_000):
-        r = sh("adb", "pull", "/sdcard/viewer.png", out_path, timeout=120)
-        print("[view] اسکرین‌شات گرفته نشد ✘",
-              (r.stdout or "")[:120], (r.stderr or "")[:200])
+    ok = False
+    for attempt in range(3):
+        time.sleep(6 if attempt == 0 else 5)
+        sh("adb", "shell", "screencap", "-p", "/sdcard/viewer.png")
+        sh("adb", "pull", "/sdcard/viewer.png", out_path, timeout=120)
+        if not (os.path.isfile(out_path) and os.path.getsize(out_path) > 50_000):
+            continue
+        try:
+            import cv2
+            import numpy as np
+            img = cv2.imread(out_path)
+            if img is None:
+                continue
+            g = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+            light = float((g > 150).mean())
+            edges = cv2.Canny(cv2.resize(g, (g.shape[1] // 2,
+                                            g.shape[0] // 2)), 60, 160)
+            ep = float((edges > 0).mean())
+            mean_v = float(g.mean())
+            if light > 0.08 and ep > 0.004 and mean_v > 14.0:
+                ok = True
+        except Exception:
+            pass
+        if ok:
+            print("[view] اسکرین‌شات: %s ✔ (تلاشِ %d، %d bytes)"
+                  % (out_path, attempt + 1, os.path.getsize(out_path)))
+            break
+        print("[view] نمایشگر هنوز خالی (تلاشِ %d/۳)…" % (attempt + 1))
+    if not ok:
+        print("[view] نمایشگر بعد از ۳ تلاش محتوا نشان نداد ✘")
         return 1
-    print("[view] اسکرین‌شات: %s ✔ (%d bytes)"
-          % (out_path, os.path.getsize(out_path)))
     return 0
 
 
