@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.PaddleOCRConfig
 import com.paddle.ocr.model.ModelConfig
+import com.paddle.ocr.model.OCRBox
 import com.paddle.ocr.model.OCRError
 import com.paddle.ocr.model.OCRResult
 import com.paddle.ocr.postprocess.BoxSorter
@@ -102,6 +103,49 @@ class RapidOcrEngine(
             throw OCRError.InvalidImage()
         }
         return runWithOwnedMat(srcMat)
+    }
+
+    // v1.14.511 — det جدا (بدونِ rec): برایِ «دیباگِ detِ» آبی و نجاتِ
+    // خطِ جامانده — همانِ مودِ det_onlyِ PC ولی نیتیو (سریع).
+    fun runDetOnly(imageBytes: ByteArray): List<OCRBox> {
+        if (imageBytes.isEmpty()) {
+            throw OCRError.InvalidImage()
+        }
+        val srcMat = BitmapUtils.imdecodeBGR(imageBytes)
+        if (srcMat.empty()) {
+            srcMat.release()
+            throw OCRError.InvalidImage()
+        }
+        try {
+            val detResult = detectionEngine.detect(srcMat)
+            return detResult.boxes
+        } finally {
+            srcMat.release()
+        }
+    }
+
+    // v1.14.511 — rec جدا (بدونِ det): نوارِ تک‌خطیِ از قبل برش‌خورده را
+    // میخواند — همانِ مودِ rec_onlyِ PC ولی نیتیو (سریع).
+    fun runRecOnly(imageBytes: ByteArray): Pair<String, Float> {
+        if (imageBytes.isEmpty()) {
+            throw OCRError.InvalidImage()
+        }
+        val srcMat = BitmapUtils.imdecodeBGR(imageBytes)
+        if (srcMat.empty()) {
+            srcMat.release()
+            throw OCRError.InvalidImage()
+        }
+        try {
+            synchronized(recLock) {
+                val pre = RecPreprocessor.preprocessBatch(listOf(srcMat))
+                val (outData, outShape) = ortManager.runRecognition(pre.tensorData, pre.shape)
+                val decoded = CTCDecoder.decode(outData, outShape, characters)
+                val best = decoded.firstOrNull()
+                return (best?.first ?: "") to (best?.second ?: 0f)
+            }
+        } finally {
+            srcMat.release()
+        }
     }
 
     private fun runWithOwnedMat(srcMat: Mat): OCREngineResult =

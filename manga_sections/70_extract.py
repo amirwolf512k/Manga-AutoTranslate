@@ -474,8 +474,15 @@ class _MangaTranslatorBody_70:
                 )
             try:
                 _oc = self.ocr
-                # v1.14.504 — یکسان‌سازی: مسیرِ crop_mode مخصوصِ موبایل حذف شد
-                results = _oc.ocr(crop_bgr)
+                # v1.14.511 — بازگشتِ مسیرِ موبایل نیتیو (همانِ K3):
+                # موتورِ native پدل det+rec را خودش رویِ کراپ میزند
+                # (crop_mode — پدینگ/بزرگ‌کردنِ سبکِ backup)؛ PC/وب همان
+                # مسیرِ قبلی بدونِ تغییر.
+                if _on_android() and getattr(_oc, "_mobile", None) \
+                        is not None:
+                    results = _oc.ocr(crop_bgr, crop_mode=True)
+                else:
+                    results = _oc.ocr(crop_bgr)
             except Exception as _e:
                 if getattr(self, "debug", False):
                     print(f"    [!] OCRِ برش خطا داد: {str(_e)[:140]}")
@@ -2523,13 +2530,19 @@ class _MangaTranslatorBody_70:
             n_workers = 1 if _img_par else max(
                 1, min(int(getattr(self, "max_workers", 3) or 1), len(cand)))
             _ocr_ts = isinstance(self.ocr, RapidOCRBackend)
+            # v1.14.511 — موتورِ نیتیوِ گوشی تک‌نمونه است (پلِ synchronized):
+            # استخرِ چندموتوریِ پایتونی نه سرعت میدهد نه لازم است — همانِ
+            # یک پل با ThreadPoolExecutor صف میشود (PNG-encode همپوشانی
+            # دارد) و هیچ موتورِ پایتونیِ اضافی در رم ساخته نمیشود.
+            _native_on = (_ocr_ts and getattr(
+                self.__dict__.get("_ocr_main"), "_mobile", None) is not None)
             _dev_gpu = (self._ocr_gpu_active()
                         and str(getattr(self, "device_pref", "auto") or "auto")
                         != "cpu")
             _split_engs: list = []
             # v1.14.504 — یکسان‌سازی: چندموتوری روی همهٔ پلتفرم‌ها
             if (not _img_par and _ocr_ts and len(cand) >= 2
-                    and n_workers >= 2):
+                    and n_workers >= 2 and not _native_on):
                 _pool: list = []
                 _main = self.__dict__.get("_ocr_main")
                 if isinstance(_main, RapidOCRBackend):

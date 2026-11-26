@@ -838,6 +838,33 @@ class MangaTranslator:
         except Exception:
             pass
 
+        # v1.14.508 — بازگشتِ موتورِ سریعِ گوشی (سبکِ backup — شاخهٔ
+        # backupِ «قسمتِ استخراجِ گوشی»): رویِ اندروید استخراج با پلِ native
+        # پدل (RapidOcrAndroidOnnx: det=small + rec=medium) اجرا میشود —
+        # همان چیزی که در backup سرعتش خوب بود؛ موتورِ پایتونی رویِ گوشی
+        # ساخته نمیشود (سریع + کم‌رم). اگر پل آماده نشد، خودِ سازنده به
+        # RapidOCRِ PC (رفتارِ 504..510) فالبک میکند — APK قدیمی هم عقب
+        # نمیماند. PC/وب/لینوکس بی‌تغییر.
+        # v1.14.511 — همانِ K3: همانِ مدلهایِ PP-OCRv6 ولی استنتاجِ
+        # نیتیو (کاتلین + onnxruntime) — نه پایتونی. گوشیِ ۸ هسته/۰.۶GB
+        # رم با پایتون ۱۸۵s/صفحه میکشید؛ نیتیو مثلِ K3 سریع است.
+        if self.ocr is None and _on_android():
+            try:
+                self.ocr = RapidOCRBackend(
+                    lang=main_lang, prefer_gpu=self.use_gpu,
+                    mobile_engine=True)
+                self._ocr_backend_name = "rapidocr"
+                if getattr(self.ocr, "_mobile", None) is not None:
+                    print("[*] اندروید: استخراجِ متن = پلِ native پدل "
+                          "(RapidOcrAndroidOnnx — همانِ K3: مدلهایِ "
+                          "PP-OCRv6 ولی نیتیو/سریع)")
+                else:
+                    print("[*] اندروید: پلِ native آماده نشد → RapidOCRِ "
+                          "پایتونیِ PC (فالبک — کندتر)")
+            except Exception as e:
+                print(f"[!] موتورِ OCR گوشی لود نشد ({e})")
+                raise
+
         if self.ocr is None:
             try:
                 self.ocr = RapidOCRBackend(lang=main_lang, prefer_gpu=self.use_gpu)

@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import com.paddle.ocr.engine.OCREngineResult
 import com.paddle.ocr.engine.RapidOcrEngine
 import com.paddle.ocr.engine.RapidOcrParams
+import com.paddle.ocr.model.OCRBox
 import com.paddle.ocr.model.OCRError
 import com.paddle.ocr.model.OCRRunResult
 import kotlinx.coroutines.Dispatchers
@@ -55,6 +56,26 @@ class RapidOcr private constructor(
             throw OCRError.InvalidImage()
         }
         return recognizeResult { engine.run(imageBytes) }
+    }
+
+    // v1.14.511 — det/rec جدا (نجاتِ خطِ جامانده + دیباگِ det) —
+    // همانِ مودهایِ det_only/rec_onlyِ PC ولی نیتیو (سریع).
+    suspend fun recognizeDetOnly(imageBytes: ByteArray): List<OCRBox> {
+        if (imageBytes.isEmpty()) {
+            throw OCRError.InvalidImage()
+        }
+        return withContext(Dispatchers.IO) {
+            engine.runDetOnly(imageBytes)
+        }
+    }
+
+    suspend fun recognizeRecOnly(imageBytes: ByteArray): Pair<String, Float> {
+        if (imageBytes.isEmpty()) {
+            throw OCRError.InvalidImage()
+        }
+        return withContext(Dispatchers.IO) {
+            engine.runRecOnly(imageBytes)
+        }
     }
 
     suspend fun setLanguageVariant(recModelAssetPath: String, recDictAssetPath: String) {

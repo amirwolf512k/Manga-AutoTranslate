@@ -5,6 +5,7 @@ import android.content.Context
 import android.util.Log
 import com.paddle.ocr.EngineConfig
 import com.paddle.ocr.RapidOcr
+import com.paddle.ocr.engine.RapidOcrParams
 import com.paddle.ocr.util.OpenCVUtils
 import kotlinx.coroutines.runBlocking
 
@@ -60,6 +61,10 @@ object PaddleOcrBridge {
         return try {
             OpenCVUtils.init(context)
             val threads = numThreads.coerceIn(1, 8)
+            // v1.14.511 — cls خاموش (همانِ PC: «cls=خاموش»): یک استنتاجِ
+            // اضافه به‌ازایِ هر خط کم میشود و رفتار با PC یکی میشود؛
+            // زاویه را خودِ پایپ‌لاینِ پایتون (ang_corr/verify) درست میکند.
+            val params = RapidOcrParams(doAngle = false)
             engine = runBlocking {
                 RapidOcr.create(
                     context = context,
@@ -68,11 +73,13 @@ object PaddleOcrBridge {
                     clsModelAssetPath = CLS_ASSET,
                     recModelAssetPath = REC_ASSET,
                     recDictAssetPath = REC_DICT_ASSET,
+                    params = params,
                 )
             }
             currentVariant = "ch"
             Log.i(TAG, "RapidOCR (RapidOcrAndroidOnnx pipeline) ready — " +
-                    "PP-OCRv6 det=small rec=MEDIUM, threads=$threads, padding=50")
+                    "PP-OCRv6 det=small rec=MEDIUM, threads=$threads, " +
+                    "padding=50, cls=off (same as PC)")
             true
         } catch (t: Throwable) {
             Log.e(TAG, "init failed", t)
@@ -141,7 +148,54 @@ object PaddleOcrBridge {
     @JvmStatic
     fun sdkInfo(): String =
         "RapidOCR ONNX (RapidOcrAndroidOnnx pipeline) — " +
-                "PP-OCRv6 (det=small + rec=MEDIUM)"
+                "PP-OCRv6 (det=small + rec=MEDIUM) | cls=off | det/rec-only native"
+
+    // v1.14.511 — det جدا (بدونِ rec): دیباگِ detِ آبی + نجاتِ خطِ جامانده
+    // — همانِ مودِ det_onlyِ PC ولی نیتیو. خروجی: META|det|N + هر خط:
+    // "x1,y1,x2,y2,x3,y3,x4,y4" (مختصاتِ کواد در فضایِ تصویرِ ورودی).
+    @JvmStatic
+    fun recognizeDet(png: ByteArray): Array<String>? = synchronized(lock) {
+        val eng = engine ?: return null
+        try {
+            val boxes = runBlocking { eng.recognizeDetOnly(png) }
+            val out = ArrayList<String>(boxes.size + 1)
+            out.add("META|det|" + boxes.size)
+            for (b in boxes) {
+                val sb = StringBuilder()
+                for (p in b.points) {
+                    if (sb.isNotEmpty()) sb.append(',')
+                    sb.append(fmt(p.x)).append(',').append(fmt(p.y))
+                }
+                out.add(sb.toString())
+            }
+            out.toTypedArray()
+        } catch (t: Throwable) {
+            Log.e(TAG, "recognizeDet failed", t)
+            arrayOf("ERR|" + t.javaClass.simpleName + "|" +
+                    (t.message ?: "no message").replace("|", " "))
+        }
+    }
+
+    // v1.14.511 — rec جدا (بدونِ det): نوارِ تک‌خطی — همانِ مودِ
+    // rec_onlyِ PC ولی نیتیو. خروجی: META|rec|1 + "0|conf|0,0,1,1|text|0".
+    @JvmStatic
+    fun recognizeRec(png: ByteArray): Array<String>? = synchronized(lock) {
+        val eng = engine ?: return null
+        try {
+            val (text, conf) = runBlocking { eng.recognizeRecOnly(png) }
+            val t = text.replace("|", " ").replace("\r", " ")
+                .replace("\n", " ").trim()
+            arrayOf(
+                "META|rec|1",
+                "0|" + String.format(java.util.Locale.US, "%.4f", conf) +
+                        "|0,0,1,1|" + t + "|0",
+            )
+        } catch (t: Throwable) {
+            Log.e(TAG, "recognizeRec failed", t)
+            arrayOf("ERR|" + t.javaClass.simpleName + "|" +
+                    (t.message ?: "no message").replace("|", " "))
+        }
+    }
 
     private fun fmt(v: Float): String =
         if (v == v.toLong().toFloat()) v.toLong().toString()
