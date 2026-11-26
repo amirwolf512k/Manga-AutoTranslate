@@ -54,19 +54,21 @@ object DetPreprocessor {
         val originalW = src.cols()
 
         // v1.14.509 — پدینگِ سفید ۵۰px دورِ تصویر قبل از det — همانِ
-        // RapidOcrAndroidOnnx (makePadding: copyMakeBorder BORDER_ISOLATED,
-        // Scalar(255,255,255)). متنِ لبه‌ای که قبلاً از دیتکتور میگریخت
-        // حالا داخلِ قاب میآید.
+        // RapidOcrAndroidOnnx (makePadding: BORDER_ISOLATED + سفید).
+        // پیادهسازی با Mat+submat+copyTo چون آرتیفکتِ org.opencv:opencv
+        // Imgproc.copyMakeBorder ندارد (کلاسِ Imgprocِ آن زیرمجموعه است) —
+        // نتیجه بایت‌به‌بایت همانِ BORDER_ISOLATED سفید است: قابِ سفید +
+        // تصویرِ دست‌نخورده در مرکز. متنِ لبه‌ای که قبلاً از دیتکتور
+        // میگریخت حالا داخلِ قاب میآید.
         var work = src
         var workOwned = false
         val pad = padding.coerceIn(0, 200)
         if (pad > 0) {
-            val padded = Mat()
-            Imgproc.copyMakeBorder(
-                src, padded, pad, pad, pad, pad,
-                Imgproc.BORDER_ISOLATED,
-                Scalar(255.0, 255.0, 255.0),
-            )
+            val padded = Mat(originalH + 2 * pad, originalW + 2 * pad,
+                src.type(), Scalar(255.0, 255.0, 255.0))
+            val roi = padded.submat(pad, pad + originalH, pad, pad + originalW)
+            src.copyTo(roi)
+            roi.release()
             work = padded
             workOwned = true
         }
