@@ -511,7 +511,6 @@ class _MangaTranslatorBody_95:
 
                     def _probe(u: str) -> tuple:
                         try:
-                            import requests as _rq
                             from urllib.parse import urlparse as _up
                             h = {
                                 "User-Agent": (
@@ -525,8 +524,8 @@ class _MangaTranslatorBody_95:
                                     f"//{_ou.netloc}/")
                             except Exception:
                                 pass
-                            r = _rq.head(u, headers=h, timeout=8,
-                                         allow_redirects=True)
+                            r = _HTTP_HEAD(u, headers=h, timeout=8,
+                                           allow_redirects=True)
                             ct = (r.headers.get("Content-Type") or "").lower()
                             if not ct.startswith("image/"):
                                 h["Range"] = "bytes=0-255"
@@ -569,7 +568,6 @@ class _MangaTranslatorBody_95:
                 self._independent_pages = True
                 os.makedirs(src_dir, exist_ok=True)
                 image_files = []
-                import requests as _req
                 headers = {
                     "User-Agent": (
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -642,7 +640,7 @@ class _MangaTranslatorBody_95:
                             continue
                         r = None
                         try:
-                            r = _req.get(u, headers=_hu, timeout=60)
+                            r = _HTTP_GET(u, headers=_hu, timeout=60)
                             r.raise_for_status()
                         except Exception:
                             r = None
@@ -652,7 +650,7 @@ class _MangaTranslatorBody_95:
                                 _hn.pop("Referer", None)
                                 _hn["Accept"] = (
                                     "image/jpeg,image/png,image/webp,*/*;q=0.8")
-                                r = _req.get(u, headers=_hn, timeout=60)
+                                r = _HTTP_GET(u, headers=_hn, timeout=60)
                                 r.raise_for_status()
                             except Exception:
                                 r = None
@@ -1265,6 +1263,64 @@ class _MangaTranslatorBody_95:
                 os.path.splitext(os.path.basename(_of))[0]
                 + "_debug" + page_ext)
 
+        def _live_dbg_from_files(page_i: int, out_file: str) -> None:
+            """v1.14.505 — دامپِ دیباگِ صفحاتِ ردشده (resume) و بدونِ متن:
+            قبلاً این صفحات هیچ فایلی در live_debug نمیداشتند و نمایشگرِ
+            دیباگ به‌جای عکسِ اصلی، عکسِ ترجمه‌شده را نشان میداد."""
+            try:
+                if not getattr(self, "debug", False):
+                    return
+                if not os.environ.get("MANGA_LIVE_DEBUG_DIR"):
+                    return
+                _dp = _dbg_file_of(out_file)
+                if os.path.isfile(_dp):
+                    _vis = MangaTranslator._imread_any(_dp)
+                    if _vis is None:
+                        return
+                    _ovl = None
+                    _jp = os.path.splitext(_dp)[0] + ".json"
+                    try:
+                        with open(_jp, encoding="utf-8") as _jf:
+                            _ovl = json.load(_jf)
+                    except Exception:
+                        _ovl = None
+                    _base = None
+                    _bp = os.path.join(
+                        _dbg_pages_dir,
+                        os.path.splitext(os.path.basename(out_file))[0]
+                        + "_base" + page_ext)
+                    if os.path.isfile(_bp):
+                        _base = MangaTranslator._imread_any(_bp)
+                    if _ovl is None or _base is None:
+                        return  # ناقص — فالبکِ نمایشگر خودش عکسِ دیباگ را می‌یابد
+                    _v = _vis.view(_DebugPageVis)
+                    _v.ovl = _ovl
+                    _v.base = _base
+                    _live_dump(_v, dbg=True, slot=page_i + 1)
+                    return
+                # فایلِ دیباگِ نهایی نیست (مثلاً صفحه بدونِ متن) → خودِ
+                # عکسِ اصلی با اورلیِ خالی دامپ میشود تا در حالتِ دیباگ
+                # «همیشه» عکسِ اصلی دیده شود، نه ترجمه‌شده.
+                _src = _src_of_page.get(page_i)
+                _img = None
+                if _src and os.path.isfile(_src):
+                    _img = MangaTranslator._imread_any(_src)
+                if _img is None:
+                    _of_i = os.path.join(out_dir, os.path.splitext(
+                        os.path.basename(out_file))[0] + page_ext)
+                    if os.path.isfile(_of_i):
+                        _img = MangaTranslator._imread_any(_of_i)
+                if _img is None:
+                    return
+                _h, _w = _img.shape[:2]
+                _v = _img.view(_DebugPageVis)
+                _v.ovl = {"size": [int(_w), int(_h)],
+                          "det": [], "pdet": [], "rec": []}
+                _v.base = _img
+                _live_dump(_v, dbg=True, slot=page_i + 1)
+            except Exception:
+                pass
+
         pending = []
         _src_of_page: Dict[int, str] = {}
         _page_of_src: Dict[str, int] = {}
@@ -1281,6 +1337,11 @@ class _MangaTranslatorBody_95:
                 skipped += 1
                 try:
                     _live_page_dump(out_file, key=out_file, slot=page_i + 1)
+                except Exception:
+                    pass
+                # v1.14.505 — صفحهٔ resume هم باید در دیباگِ زنده دیده شود
+                try:
+                    _live_dbg_from_files(page_i, out_file)
                 except Exception:
                     pass
                 continue
@@ -1636,6 +1697,12 @@ class _MangaTranslatorBody_95:
                                         slot=page_i + 1)
                     except Exception:
                         pass
+                    # v1.14.505 — صفحهٔ بدونِ متن: عکسِ اصلی در حالتِ دیباگ
+                    # دامپ میشود (قبلاً نمایشگر فالبک به ترجمه‌شده می‌رفت)
+                    try:
+                        _live_dbg_from_files(page_i, out_file)
+                    except Exception:
+                        pass
                     results_by_i[page_i] = (out_file, True, dbg)
                     _page_status[page_i] = "done"
                     return
@@ -1666,6 +1733,13 @@ class _MangaTranslatorBody_95:
                     _live_page_dump(out_file, key=out_file, slot=page_i + 1)
                     if self.debug and _dbg_view_now is not None:
                         _live_dump(_dbg_view_now, dbg=True, slot=page_i + 1)
+                    elif self.debug:
+                        # v1.14.505 — دیباگِ پایان‌صفحه نبود (خطا/ناقص) →
+                        # فایل‌های دیباگِ موجود یا عکسِ اصلی
+                        try:
+                            _live_dbg_from_files(page_i, out_file)
+                        except Exception:
+                            pass
                 except Exception as _werr:
                     print(f"  [!] ذخیرهٔ تصویر #{page_i + 1} ناموفق: {_werr}")
                     results_by_i[page_i] = (out_file, None,

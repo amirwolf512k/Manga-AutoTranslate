@@ -16,12 +16,18 @@ FIRST_PARTY = {
     "app_server.py",
     "onnxruntime",
     "pyclipper",
+    "shapely",
 }
 
 PINS = [
     ("openai",            "1.35.13",   "openai"),
     ("pydantic",          "1.10.17",   "pydantic"),
-    ("rapidocr",          "3.9.2",     "rapidocr"),
+    # v1.14.505 — همگام با PC: همان rapidocr 3.10.0 که روی PC نصب است
+    # (PP-OCRv5/v6 ONNX) + دو وابستگیِ خالصِ جا‌مانده (ریشهٔ کرشِ
+    # «No module named 'omegaconf'»).
+    ("rapidocr",          "3.10.0",    "rapidocr"),
+    ("omegaconf",         "2.4.0",     "omegaconf"),
+    ("colorlog",          "6.12.0",    "colorlog"),
     ("huggingface_hub",   "0.36.0",    "huggingface_hub"),
     ("httpx",             "0.27.2",    "httpx"),
     ("httpcore",          "1.0.9",     "httpcore"),
@@ -98,7 +104,7 @@ def install(target: Path) -> int:
         "-q",
         *reqs,
     ]
-    print("[*] دانلود و ریختن ۱۹ بستهٔ vendored …")
+    print("[*] دانلود و ریختن ۲۱ بستهٔ vendored …")
     r = subprocess.run(cmd)
     if r.returncode != 0:
         print("[!] pip ناموفق بود — خروجی بالا را ببین")

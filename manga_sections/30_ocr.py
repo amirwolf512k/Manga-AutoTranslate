@@ -392,8 +392,7 @@ def speed_lab_env(p: dict) -> str:
         try:
             _lm = (_w or {}).get("ladder_ms") or {}
             if _lm.get(_lad):
-                _ms_l = " (%.0fms/کراپ — تستِ %s)" % (float(_lm[_lad]),
-                                                    str((_w or {}).get("ts") or "?"))
+                _ms_l = " (%.0fms/کراپ — تستِ سرعت)" % float(_lm[_lad])
         except Exception:
             _ms_l = ""
 
@@ -404,15 +403,16 @@ def speed_lab_env(p: dict) -> str:
         for _k in ("ms", "n", "lines"):
             _PAD_STATS[_k] = 0 if _k != "ms" else 0.0
 
+        # v1.14.505 — یکسان‌سازیِ کامل با PC: استخراجِ گوشی همان
+        # RapidOCRِ ONNX (PP-OCRv5/v6) با همان مدلهای PC است؛ نردبانِ
+        # اندروید فقط برای «تستِ سرعت» ساخته میشود.
         if _purge:
-            return ("[⚡] روشِ استخراج: RapidOCRِ اندروید — "
-                    "PP-OCRv6ِ دانلودی (%s)%s | v%s: %s"
-                    % (_MT_MODE_FA.get(_lad, _lad), _ms_l,
-                       APP_VER, _purge))
-        return ("[⚡] روشِ استخراج: RapidOCRِ اندروید — "
-                "PP-OCRv6ِ دانلودی (det=small + rec=MEDIUM — "
-                "بدونِ باندل؛ اگ نباشد دانلود میشود — "
-                "v%s)%s"
+            return ("[⚡] روشِ استخراج: RapidOCR (ONNX, PP-OCRv5/v6) — "
+                    "همانِ PC (det=small + rec=medium)%s | v%s: %s"
+                    % (_ms_l, APP_VER, _purge))
+        return ("[⚡] روشِ استخراج: RapidOCR (ONNX, PP-OCRv5/v6) — "
+                "همانِ PC | det=small + rec=medium (اگ نباشند "
+                "دانلود میشوند — v%s)%s"
                 % (APP_VER, _ms_l))
     except Exception:
         return ""
@@ -958,7 +958,10 @@ class RapidOCRBackend:
             print(f"[!] RapidOCR (API جدید) لود نشد: {e}")
             print("[!] " + _tb.format_exc()[-900:])
         if not _HAS_RAPIDOCR:
-            raise ImportError("pip install rapidocr (یا rapidocr-onnxruntime)")
+            raise ImportError(
+                "pip install rapidocr (یا rapidocr-onnxruntime)"
+                + (" — روی اندروید: APKِ v1.14.505 به بالا نصب کن "
+                   "(rapidocr + omegaconf وتور شده)" if _on_android() else ""))
         self.engine = RapidOCR()
         print(f"[+] RapidOCR (ONNX, PP-OCRv3 قدیمی) آماده | lang={lang}")
 

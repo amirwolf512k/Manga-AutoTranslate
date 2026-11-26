@@ -13,8 +13,103 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.376"
+APP_VER = "1.14.505"
 HERE = os.path.dirname(os.path.abspath(__file__))
+
+# v1.14.505 — HTTP یکپارچهٔ اپ: aiohttp (درخواستِ سازنده) با فالبکِ خودکارِ
+# requests — برایِ fetchImg و هر_GET مستقیمِ داخلِ اپ (موتور لایهٔ خودش را
+# در 00_base دارد).
+_APP_HTTP_BACKEND = "none"
+try:
+    import aiohttp as _aiohttp_mod
+
+    class _AppAioResp:
+        __slots__ = ("status_code", "headers", "content", "_text")
+
+        def __init__(self, status, headers, content):
+            self.status_code = int(status)
+            self.headers = headers or {}
+            self.content = content or b""
+            self._text = None
+
+        @property
+        def text(self):
+            if self._text is None:
+                try:
+                    self._text = self.content.decode("utf-8", "replace")
+                except Exception:
+                    self._text = ""
+            return self._text
+
+        def json(self):
+            return json.loads(self.text or "null")
+
+        def raise_for_status(self):
+            if self.status_code >= 400:
+                raise RuntimeError("HTTP %s" % self.status_code)
+
+        def close(self):
+            pass
+
+    _APP_AIO_LOCK = threading.Lock()
+    _APP_AIO_STATE = {"loop": None, "sess": None, "t": None,
+                      "ready": threading.Event()}
+
+    def _app_aio_loop():
+        with _APP_AIO_LOCK:
+            if _APP_AIO_STATE["t"] is None:
+                import asyncio
+
+                def _run():
+                    import asyncio as _a
+                    _APP_AIO_STATE["loop"] = _a.new_event_loop()
+                    _a.set_event_loop(_APP_AIO_STATE["loop"])
+                    _APP_AIO_STATE["ready"].set()
+                    try:
+                        _APP_AIO_STATE["loop"].run_forever()
+                    except Exception:
+                        pass
+
+                _APP_AIO_STATE["t"] = threading.Thread(
+                    target=_run, daemon=True, name="mangaapp-aiohttp")
+                _APP_AIO_STATE["t"].start()
+            _APP_AIO_STATE["ready"].wait(30.0)
+            return _APP_AIO_STATE["loop"]
+
+    def _APP_HTTP_GET(u, headers=None, timeout=25.0, **kw):
+        import asyncio
+        loop = _app_aio_loop()
+
+        async def _go():
+            if _APP_AIO_STATE["sess"] is None \
+                    or _APP_AIO_STATE["sess"].closed:
+                _APP_AIO_STATE["sess"] = _aiohttp_mod.ClientSession(
+                    connector=_aiohttp_mod.TCPConnector(
+                        limit=12, ttl_dns_cache=300, enable_cleanup_closed=True),
+                    timeout=_aiohttp_mod.ClientTimeout(total=None))
+            to = _aiohttp_mod.ClientTimeout(total=max(5.0, float(timeout or 25)))
+            async with _APP_AIO_STATE["sess"].get(
+                    u, headers=headers, timeout=to,
+                    allow_redirects=True) as r:
+                return _AppAioResp(r.status, dict(r.headers), await r.read())
+
+        fut = asyncio.run_coroutine_threadsafe(_go(), loop)
+        try:
+            return fut.result(timeout=max(6.0, float(timeout or 25) + 5.0))
+        except Exception:
+            try:
+                fut.cancel()
+            except Exception:
+                pass
+            raise
+
+    _APP_HTTP_BACKEND = "aiohttp"
+except Exception:
+    def _APP_HTTP_GET(u, headers=None, timeout=25.0, **kw):
+        import requests as _rq
+        return _rq.get(u, headers=headers, timeout=timeout, **kw)
+
+    _APP_HTTP_BACKEND = "requests"
 MANGA_PY = os.path.join(HERE, "manga.py")
 WORK_DIR = os.path.join(HERE, "workspace")
 UPLOAD_DIR = os.path.join(WORK_DIR, "input")
@@ -2872,7 +2967,6 @@ class _DesktopApi:
     def fetchImg(self, u, ref, cookie=""):
         try:
             import base64 as _b64
-            import requests as _rq
             u = str(u or "").strip()
             ref = str(ref or "").strip()
             cookie = str(cookie or "").strip()
@@ -2888,7 +2982,8 @@ class _DesktopApi:
                 headers["Referer"] = ref
             if cookie:
                 headers["Cookie"] = cookie
-            r = _rq.get(u, headers=headers, timeout=25)
+            # v1.14.505 — aiohttp به‌جایِ requests (فالبکِ خودکار)
+            r = _APP_HTTP_GET(u, headers=headers, timeout=25)
             if r.status_code != 200 or not r.content:
                 return ""
             if len(r.content) > 48 * 1024 * 1024:
@@ -5970,8 +6065,17 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       im.decoding = 'async';
       node.appendChild(im);
       im.onload = function(){ place(1); };
+      var dstg = 0;
       im.onerror = function(){
-        if (String(im.getAttribute('src') || '').indexOf('_base') >= 0) {
+        if (dstg === 0) {
+          dstg = 1;
+          var du = P + DBG + 'live_' + pad(i + 1) + '.jpg';
+          imgGet(du).then(function(u){ im.src = u; })
+            .catch(function(){ im.src = du; });
+          return;
+        }
+        if (dstg === 1) {
+          dstg = 2;
           node.__baked = 1;
           placed = false;
           imgGet(bakedSrc(i)).then(function(u){ im.src = u; })
@@ -6373,19 +6477,24 @@ function UT(k,d){try{var t=window.UI_T;return (t&&t[k]!=null)?t[k]:d}catch(e){re
       }
     };
     if (mode) {
+      var tryBaked = function(){
+        fetch(bakedSrc(a), { method: 'HEAD', cache: 'no-store' })
+          .then(function(r2){ done(r2.ok); })
+          .catch(function(){ done(false); });
+      };
       fetch(P + DBG + 'live_' + pad(a + 1) + '_base.jpg',
             { method: 'HEAD', cache: 'no-store' })
         .then(function(r){
           if (r.ok) { done(true); return; }
-          fetch(bakedSrc(a), { method: 'HEAD', cache: 'no-store' })
-            .then(function(r2){ done(r2.ok); })
-            .catch(function(){ done(false); });
+          fetch(P + DBG + 'live_' + pad(a + 1) + '.jpg',
+                { method: 'HEAD', cache: 'no-store' })
+            .then(function(r1){
+              if (r1.ok) { done(true); return; }
+              tryBaked();
+            })
+            .catch(function(){ tryBaked(); });
         })
-        .catch(function(){
-          fetch(bakedSrc(a), { method: 'HEAD', cache: 'no-store' })
-            .then(function(r2){ done(r2.ok); })
-            .catch(function(){ done(false); });
-        });
+        .catch(function(){ tryBaked(); });
     } else {
       fetch(sliceMark(a) + '?r=' + Date.now(), { cache: 'no-store' })
         .then(function(r){

@@ -1416,7 +1416,6 @@ class MangaTranslator:
         return uniq
 
     def _discover_models_via_rest(self) -> List[str]:
-        import requests as _rq
         key = ""
         try:
             key = (self._current_api_key() or "").strip()
@@ -1433,7 +1432,7 @@ class MangaTranslator:
         )
         out: List[str] = []
         try:
-            r = _rq.get(
+            r = _HTTP_GET(
                 "https://generativelanguage.googleapis.com/v1beta/models",
                 params={"pageSize": 1000, "key": key},
                 timeout=20,

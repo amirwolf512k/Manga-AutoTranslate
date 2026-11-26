@@ -3,7 +3,7 @@
 from __future__ import annotations
 import time as _time_t0
 _T0_IMPORT = _time_t0.time()
-APP_VER = "1.14.504"
+APP_VER = "1.14.505"
 
 
 FLASH_PROMPT = 'تو مترجم حرفه‌ای مانگا و مانهوا هستی و نویسندهٔ دیالوگ دوبلهٔ فارسی — نه مترجم کتاب. هدف نهایی: خواننده باید فرامور کند این متن ترجمه است؛ حس کند نویسندهٔ ایرانیِ بااستعدادی همان لحظه برای همین صحنه دیالوگ نوشته.\n\nروش کار:\n۱) کل متن را یک‌جا بخوان؛ داستان، ژانر، فضای صحنه، روابط و جایگاه هر شخصیت را در ذهنت بساز.\n۲) برای هر شخصیت یک صدای مشخص و متمایز تعریف کن — سن، خلق، سطح اجتماعی، رابطه‌اش با طرف مقابل — و تا آخر فصل یکدست نگه دار؛ خواننده باید بدون دیدن اسم بفهمد چه کسی حرف می‌زند.\n۳) هر دیالوگ را در لحظه‌ای که اتفاق می‌افتد و با همان شدت احساسی ترجمه کن: خشم تند، تمسخر گزنده، ترس واقعی، شیطنت چشمک‌زن. حس را کپی کن، نه کلمات را.\n\nقانون بنیادین — از معنا بساز، از کلمات تبدیل نکن:\nمتن مبدأ «اطلاعات صحنه» است، نه قالب جملهٔ فارسی. اول بفهم در آن لحظه چه خبر است و چه حسی جریان دارد؛ بعد از خودت بپرس: «یک ایرانیِ واقعی، وسط همین موقعیت و با همین حال، چه می‌گفت؟» و همان جمله را از صفر به فارسی بنویس. جمله را با تبدیلِ کلمه‌به‌کلمهٔ مبدأ نساز؛ از معنا در فارسی تولید کن. هر جا ساختار زبان مبدأ در فارسی جا نمی‌شود — و معمولاً نمی‌شود — جمله را با منطق خودِ فارسی از نو بچین.\n\nسه آزمون اجباری برای هر جمله — قبل از نهایی کردن، تک‌تک دیالوگ‌ها را از این آزمون‌ها رد کن و هر جا مردود شد همان لحظه بازنویسی کن:\n• آزمون دهان: آیا یک فارسی‌زبان واقعی این جمله را در مکالمهٔ واقعی، همین‌طوری، با دهان می‌گوید؟ هر کلمه یا ساختاری که فقط در کتاب، مقاله یا متن رسمی جاری می‌شود، در دیالوگ جایی ندارد.\n• آزمون بوی ترجمه: آیا از جمله بوی ترجمه می‌دهد؟ نشانه‌ها: ترتیب کلماتِ کپی‌شده از زبان مبدأ، حرف‌ربط‌های آویزان، ترکیب‌های خشکِ مستقیم از فرهنگ لغت، اصطلاح و ضرب‌المثلِ لفظ‌به‌لفظ از زبان دیگر.\n• آزمون انتخاب: اگر چند نگارش ممکن است، همیشه طبیعی‌ترین را بردار، نه نزدیک‌ترین را به لفظ مبدأ. طبیعی‌بودنِ جمله همیشه بر وفاداریِ لفظی مقدم است.\n\nسطح زبان: دیالوگ‌ها به فارسیِ گفتاریِ امروز — همان زبانی که در کوچه و فیلم و سریال می‌شنوی؛ جمله‌های کوتاه و نفس‌دار. روایت و متن کنار کادر روان و شیوا، بدون رنگ کتابی.\n\nاصطلاح و شوخی: معادلِ زنده‌ای بده که فارسی‌زبان‌ها در همان حالِ عاطفی واقعاً به کار می‌برند؛ هرگز لفظ‌به‌لفظ نیاور. اگر معادل مستقیم نبود، مفهوم را آزادانه طوری بازسازی کن که اثرش روی خواننده یکی باشد.\n\nبقیهٔ قواعد: هیچ سانسور، تلطیف یا مؤدب‌سازی نکن؛ فحش و خشونت با همان وزن و حدتِ اصلی. متن مبدأ (کره‌ای/ژاپنی/چینی/انگلیسی، خروجی OCR) گاهی قطعه‌قطعه و درهم است؛ معنای درست را از بستر داستان بازسازی کن، نه لفظ‌به‌لفظ. متن بی‌معنا معمولاً افکت صوتی یا نام است؛ محتمل‌ترین معنا را حدس بزن یا صدای محیطی را طبیعی آوانگاری کن، اما هرگز خالی نگذار.\n\nمعیار نهایی: فصل باید طوری از آب دربیاید که خواننده دنبال فصلِ بعد باشد.'
@@ -224,3 +224,230 @@ for _s in (sys.stdout, sys.stderr):
         pass
 
 import platform as _platform
+
+
+# v1.14.505 — لایهٔ HTTP یکپارچه (درخواستِ سازنده: aiohttp به‌جایِ requests).
+# همهٔ فراخوانیهای شبکهٔ مستقیمِ موتور از همین‌جا میگذرد: رویِ PC/وب/کولب
+# aiohttp (حلقهٔ اختصاصی در نخِ جدا + ClientSessionِ دائمی با استخرِ اتصال)
+# و رویِ اندروید — که aiohttp در چاکوپای نیست — فالبکِ خودکار به requests.
+# امضای پاسخ همسان است: status_code/headers/content/text/json/
+# raise_for_status/close.
+try:
+    import aiohttp as _aiohttp_mod
+except Exception:
+    _aiohttp_mod = None
+
+_HTTP_BACKEND = "none"
+_HTTP = None
+
+
+class _AioResp:
+
+    __slots__ = ("status_code", "headers", "content", "url", "_text")
+
+    def __init__(self, status, headers, content, url=""):
+        self.status_code = int(status)
+        self.headers = headers or {}
+        self.content = content or b""
+        self.url = url
+        self._text = None
+
+    @property
+    def text(self):
+        if self._text is None:
+            try:
+                self._text = self.content.decode("utf-8", "replace")
+            except Exception:
+                self._text = ""
+        return self._text
+
+    def json(self):
+        import json as _j
+        return _j.loads(self.text or "null")
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError("HTTP %s برای %s" % (self.status_code, self.url))
+
+    def close(self):
+        pass
+
+    ok = property(lambda self: self.status_code < 400)
+
+
+class _SyncAio:
+    """aiohttp در بسترِ همگام — حلقهٔ همیشگی در نخِ جداگانه؛ صداها از هر
+    نخی امناند (run_coroutine_threadsafe + انتظارِ نتیجه)."""
+
+    def __init__(self):
+        import threading as _th
+        self._lk = _th.Lock()
+        self._ready = _th.Event()
+        self._loop = None
+        self._sess = None
+        self._t = None
+
+    def _ensure(self):
+        with self._lk:
+            if self._t is None:
+                import threading as _th
+                self._t = _th.Thread(target=self._run, daemon=True,
+                                     name="manga-aiohttp")
+                self._t.start()
+            if not self._ready.is_set():
+                self._ready.wait(30.0)
+
+    def _run(self):
+        import asyncio as _aio
+        self._loop = _aio.new_event_loop()
+        _aio.set_event_loop(self._loop)
+        self._ready.set()
+        try:
+            self._loop.run_forever()
+        except Exception:
+            pass
+
+    def _call(self, coro, timeout):
+        import asyncio as _aio
+        self._ensure()
+        if self._loop is None:
+            raise RuntimeError("حلقهٔ aiohttp راه نیفتاد")
+        fut = _aio.run_coroutine_threadsafe(coro, self._loop)
+        try:
+            return fut.result(timeout=max(5.0, float(timeout or 30.0)))
+        except Exception:
+            try:
+                fut.cancel()
+            except Exception:
+                pass
+            raise
+
+    async def _do(self, method, url, params=None, headers=None,
+                  timeout=30.0, allow_redirects=True, data=None, json=None):
+        sess = self._session()
+        to = _aiohttp_mod.ClientTimeout(total=max(5.0, float(timeout or 30.0)))
+        async with sess.request(method, url, params=params, headers=headers,
+                                allow_redirects=allow_redirects,
+                                data=data, json=json, timeout=to) as r:
+            body = await r.read()
+            return _AioResp(r.status, dict(r.headers), body, str(r.url))
+
+    def _session(self):
+        import asyncio as _aio
+        if self._sess is None or self._sess.closed:
+            self._sess = _aiohttp_mod.ClientSession(
+                connector=_aiohttp_mod.TCPConnector(
+                    limit=12, ttl_dns_cache=300, enable_cleanup_closed=True),
+                timeout=_aiohttp_mod.ClientTimeout(total=None))
+        return self._sess
+
+    def request(self, method, url, **kw):
+        return self._call(self._do(method, url, **kw), kw.get("timeout"))
+
+    def get(self, url, **kw):
+        return self.request("GET", url, **kw)
+
+    def head(self, url, **kw):
+        return self.request("HEAD", url, **kw)
+
+    def post(self, url, **kw):
+        return self.request("POST", url, **kw)
+
+
+class _AioSessShim:
+    """Session همسانِ requests رویِ _SyncAio — برایِ کدهایی که Session
+    میسازند (فاصلهٔ هدرها، params، close)."""
+
+    def __init__(self, defaults=None):
+        self.headers = dict(defaults or {})
+
+    def _hdr(self, headers):
+        h = dict(self.headers or {})
+        if headers:
+            h.update(headers)
+        return h
+
+    def get(self, url, params=None, headers=None, timeout=60.0, **kw):
+        return _HTTP_GET(url, params=params, headers=self._hdr(headers),
+                         timeout=timeout, **kw)
+
+    def head(self, url, headers=None, timeout=15.0, **kw):
+        return _HTTP_HEAD(url, headers=self._hdr(headers),
+                          timeout=timeout, **kw)
+
+    def post(self, url, data=None, json=None, headers=None,
+             timeout=60.0, **kw):
+        return _HTTP_POST(url, data=data, json=json,
+                          headers=self._hdr(headers), timeout=timeout)
+
+    def close(self):
+        pass
+
+
+if _aiohttp_mod is not None:
+    _HTTP = _SyncAio()
+    _HTTP_BACKEND = "aiohttp"
+else:
+    try:
+        import requests as _requests_mod
+        _HTTP = _requests_mod
+        _HTTP_BACKEND = "requests"
+    except Exception:
+        _HTTP = None
+        _HTTP_BACKEND = "none"
+
+
+def _HTTP_GET(url, params=None, headers=None, timeout=30.0,
+              stream=False, allow_redirects=True):
+    """جایگزینِ requests.get — با aiohttp (یا فالبکِ requests)."""
+    if _HTTP is None:
+        raise RuntimeError("هیچ بسترِ HTTP در دسترس نیست")
+    if _HTTP_BACKEND == "aiohttp":
+        return _HTTP.get(url, params=params, headers=headers,
+                         timeout=timeout, allow_redirects=allow_redirects)
+    return _HTTP.get(url, params=params, headers=headers,
+                     timeout=timeout, stream=stream,
+                     allow_redirects=allow_redirects)
+
+
+def _HTTP_HEAD(url, headers=None, timeout=15.0, allow_redirects=True):
+    """جایگزینِ requests.head."""
+    if _HTTP is None:
+        raise RuntimeError("هیچ بسترِ HTTP در دسترس نیست")
+    return _HTTP.head(url, headers=headers, timeout=timeout,
+                      allow_redirects=allow_redirects)
+
+
+def _HTTP_POST(url, data=None, json=None, headers=None, timeout=60.0):
+    """جایگزینِ requests.post."""
+    if _HTTP is None:
+        raise RuntimeError("هیچ بسترِ HTTP در دسترس نیست")
+    if _HTTP_BACKEND == "aiohttp":
+        return _HTTP.post(url, data=data, json=json, headers=headers,
+                          timeout=timeout)
+    return _HTTP.post(url, data=data, json=json, headers=headers,
+                      timeout=timeout)
+
+
+def _HTTP_SESSION(defaults=None):
+    """جایگزینِ requests.Session (با استخرِ اتصال)."""
+    if _HTTP is None:
+        raise RuntimeError("هیچ بسترِ HTTP در دسترس نیست")
+    if _HTTP_BACKEND == "aiohttp":
+        return _AioSessShim(defaults)
+    s = _HTTP.Session()
+    if defaults:
+        try:
+            s.headers.update(defaults)
+        except Exception:
+            pass
+    return s
+
+
+def _http_backend_note() -> str:
+    try:
+        _v = {"aiohttp": "aiohttp", "requests": "requests (فالبک)",
+              "none": "هیچ"}[_HTTP_BACKEND]
+        return "[*] بسترِ HTTP موتور: %s" % _v
+    except Exception:
+        return ""

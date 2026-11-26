@@ -3,9 +3,8 @@ class _MangaTranslatorBody_60:
 # BUILD-STRIP-END
     @staticmethod
     def _url_exists(url: str, headers: dict) -> bool:
-        import requests
         try:
-            r = requests.head(url, headers=headers, timeout=12, allow_redirects=True)
+            r = _HTTP_HEAD(url, headers=headers, timeout=12, allow_redirects=True)
             if r.status_code == 200:
                 ct = (r.headers.get("Content-Type") or "").lower()
 
@@ -19,7 +18,7 @@ class _MangaTranslatorBody_60:
 
             h = dict(headers)
             h["Range"] = "bytes=0-1023"
-            r = requests.get(url, headers=h, timeout=15, allow_redirects=True, stream=True)
+            r = _HTTP_GET(url, headers=h, timeout=15, allow_redirects=True)
             ok = r.status_code in (200, 206)
             ct = (r.headers.get("Content-Type") or "").lower()
             r.close()
@@ -138,7 +137,6 @@ class _MangaTranslatorBody_60:
 
     @staticmethod
     def _expand_input_urls(input_str: str) -> List[str]:
-        import requests
 
         _data_stash: List[str] = []
 
@@ -329,7 +327,6 @@ class _MangaTranslatorBody_60:
 
     @staticmethod
     def _try_extend_sequential(urls: List[str], headers: dict, max_extra: int = 80) -> List[str]:
-        import requests
 
         if len(urls) < 2:
             return urls
@@ -366,7 +363,7 @@ class _MangaTranslatorBody_60:
                 continue
             candidate = f"{prefix}{n}{suffix}"
             try:
-                r = requests.head(candidate, headers=headers, timeout=12, allow_redirects=True)
+                r = _HTTP_HEAD(candidate, headers=headers, timeout=12, allow_redirects=True)
                 if r.status_code == 200 and (r.headers.get("Content-Type") or "").startswith("image/"):
                     extra.append(candidate)
                     consecutive_fail = 0
@@ -652,7 +649,6 @@ class _MangaTranslatorBody_60:
 
     @staticmethod
     def _download_mangaplus_viewer(url: str, dest_dir: str) -> List[str]:
-        import requests
         from urllib.parse import urlparse
 
         m = re.search(r"/viewer/(\d+)", url)
@@ -671,8 +667,7 @@ class _MangaTranslatorBody_60:
             "Accept-Language": "en-US,en;q=0.9",
             "Referer": "https://mangaplus.shueisha.co.jp/",
         }
-        sess = requests.Session()
-        sess.headers.update(headers)
+        sess = _HTTP_SESSION(headers)
         pages = []
         for quality in ("super_high", "high", "low"):
             try:
@@ -757,7 +752,6 @@ class _MangaTranslatorBody_60:
     @staticmethod
     def _download_images_from_url(url: str, dest_dir: str,
                                   shared_seen: Optional[set] = None) -> List[str]:
-        import requests
         from bs4 import BeautifulSoup
         from urllib.parse import urljoin, urlparse
 
@@ -879,7 +873,7 @@ class _MangaTranslatorBody_60:
             return out_file
 
         path_ext = os.path.splitext(urlparse(url).path)[1].lower()
-        resp = requests.get(url, headers=headers, timeout=60, stream=True)
+        resp = _HTTP_GET(url, headers=headers, timeout=60)
         resp.raise_for_status()
         content_type = (resp.headers.get("Content-Type") or "").lower()
         is_direct_image = (
@@ -898,7 +892,7 @@ class _MangaTranslatorBody_60:
                 _alt = dict(headers)
                 _alt["Accept"] = "image/jpeg,image/png,image/webp,*/*;q=0.8"
                 _alt.pop("Referer", None)
-                _r2 = requests.get(url, headers=_alt, timeout=60)
+                _r2 = _HTTP_GET(url, headers=_alt, timeout=60)
                 _r2.raise_for_status()
                 if _r2.content:
                     _last = _r2.content
@@ -1016,14 +1010,7 @@ class _MangaTranslatorBody_60:
             for u in img_urls:
                 shared_seen.add(u.split("?")[0].lower())
 
-        _sess = requests.Session()
-        try:
-            _ad = requests.adapters.HTTPAdapter(
-                pool_connections=8, pool_maxsize=8, max_retries=1)
-            _sess.mount("https://", _ad)
-            _sess.mount("http://", _ad)
-        except Exception:
-            pass
+        _sess = _HTTP_SESSION()
 
         def _fetch_page(_u: str) -> Optional[bytes]:
             try:

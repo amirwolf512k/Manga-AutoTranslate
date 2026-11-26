@@ -1,7 +1,7 @@
 
 import numpy as np
 
-__version__ = "1.31.0-android-shim-v4"
+__version__ = "1.31.0-android-shim-v5"
 
 
 def preload_dlls(*a, **k):
@@ -491,12 +491,17 @@ class InferenceSession:
         if not _OK:
             raise ImportError("شیم ORT اندروید لود نشد: %s" % (_IMPORT_ERR,))
         try:
-            if providers:
-                for _p in providers:
+            # v1.14.505 — rapidocr 3.10 مانندِ ORTِ رسمی providers را به‌صورتِ
+            # لیستِ تاپلِ (name, cfg) می‌دهد — فقط نام را جدا کن (EPهای جاوا
+            # با addXnnapi/addNnapi از sess_options خوانده می‌شوند).
+            for _p in (providers or []):
+                if isinstance(_p, (tuple, list)) and _p:
+                    _pn = str(_p[0])
+                else:
                     _pn = str(_p)
-                    if _pn != "CPUExecutionProvider" and not any(
-                            e[0] == _pn for e in getattr(sess_options, "_eps", [])):
-                        sess_options.append_execution_provider(_pn)
+                if _pn != "CPUExecutionProvider" and not any(
+                        e[0] == _pn for e in getattr(sess_options, "_eps", [])):
+                    sess_options.append_execution_provider(_pn)
         except Exception:
             pass
         jopt = _build_java_session_options(sess_options)

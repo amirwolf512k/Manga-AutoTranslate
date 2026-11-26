@@ -7,7 +7,7 @@ import re as _re
 import sys as _sys
 import time as _time
 
-APP_VER = "1.14.504"
+APP_VER = "1.14.505"
 
 _HERE = _os.path.dirname(_os.path.abspath(__file__))
 _SECTIONS_DIR = _os.path.join(_HERE, "manga_sections")
@@ -16,13 +16,16 @@ _CACHE_DIR = _os.path.join(_SECTIONS_DIR, "__pycache__")
 _CACHE_PREFIX = "manga_loader_"
 _CACHE_MAGIC = b"MGLDR\x01"
 
+# v1.14.505 — منبعِ اول = مخزنِ اصلیِ تازه (512k)؛ 5122 فقط فالبک
 _UPDATE_MIRRORS = (
+    "https://raw.githubusercontent.com/"
+    "amirwolf512k/Manga-AutoTranslate/main/",
+    "https://gh-proxy.com/raw.githubusercontent.com/"
+    "amirwolf512k/Manga-AutoTranslate/main/",
     "https://raw.githubusercontent.com/"
     "amirwolf5122/Manga-AutoTranslate/main/",
     "https://cdn.jsdelivr.net/gh/"
     "amirwolf5122/Manga-AutoTranslate@main/",
-    "https://gh-proxy.com/raw.githubusercontent.com/"
-    "amirwolf5122/Manga-AutoTranslate/main/",
 )
 _REFRESH_STAMP = _os.path.join(_HERE, ".manga_sections_refresh")
 _STALE_RETRY_S = 600.0
