@@ -11,7 +11,11 @@ _GITHUB_RAW = ("https://raw.githubusercontent.com/"
                "amirwolf5122/Manga-AutoTranslate/main/")
 _UPDATE_FILES = ("manga.py", "manga_app.py")
 
+# v1.14.504a — منبعِ اول = مخزنِ اصلی (amirwolf512k) که با هر پوش تازه
+# میشود؛ قبلاً فقط amirwolf5122 بود که راکد مانده بود.
 _UPDATE_MIRRORS = (
+    "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
+    "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
     "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",
     "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/",
     "https://gh-proxy.com/raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",

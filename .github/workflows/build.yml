@@ -74,6 +74,22 @@ jobs:
           test $(stat -c%s $A/rec/dict.txt) -gt 60000
           test $(stat -c%s $A/rec_ko/inference.onnx) -gt 12000000
 
+      - name: Version consistency gate (VERSION vs gradle vs APP_VER)
+        run: |
+          # v1.14.504a — جلوی APKِ با برچسبِ کهنه: VERSION باید با gradle و
+          # APP_VER یکی باشد (اشکالِ قبلی: VERSION=501 راکد ماند و همهٔ
+          # ریلیزهای 502/503/504 با برچسبِ 1.14.501 ساخته شدند)
+          VV=$(sed -n 's/^versionName=//p' VERSION | tr -d '[:space:]')
+          VC=$(sed -n 's/^versionCode=//p' VERSION | tr -d '[:space:]')
+          GV=$(grep -oP 'versionName = "\K[^"]+' android/app/build.gradle.kts | head -1)
+          GC=$(grep -oP 'versionCode = \K[0-9]+' android/app/build.gradle.kts | head -1)
+          AV=$(grep -oP '^APP_VER = "\K[^"]+' manga_sections/00_base.py | head -1)
+          echo "VERSION=$VC/$VV | gradle=$GC/$GV | APP_VER=$AV"
+          if [ "$VV" != "$GV" ] || [ "$VC" != "$GC" ] || [ "$VV" != "$AV" ]; then
+            echo "::error::VERSION($VC/$VV) != gradle($GC/$GV) یا APP_VER($AV) — فایل VERSION را هم بامپ کن"
+            exit 1
+          fi
+
       - name: Inject version from VERSION
         run: |
           VC=$(sed -n 's/^versionCode=//p' VERSION | tr -d '[:space:]')

@@ -39,13 +39,23 @@ def nodes(xml):
 
 def find_view_btn(xml):
     # «📖  نمایش (N صفحه)» — نه «نمایش خروجی (PDF)»
-    best = None
     for txt, b in nodes(xml):
         if "نمایش" in txt and "PDF" not in txt and (b[2] - b[0]) > 60 \
                 and (b[3] - b[1]) > 30:
-            best = b
-            break
-    return best
+            return b
+    return None
+
+
+def swipe_up():
+    w, h = screen_size()
+    sh("adb", "shell", "input", "swipe", str(w // 2), str(int(h * 0.72)),
+       str(w // 2), str(int(h * 0.28)), "400")
+
+
+def screen_size():
+    r = sh("adb", "shell", "wm", "size")
+    m = re.search(r"(\d+)x(\d+)", r.stdout or "")
+    return (int(m.group(1)), int(m.group(2))) if m else (1080, 1920)
 
 
 def main():
@@ -54,7 +64,17 @@ def main():
         print("[view] UI dump خالی ✘")
         return 1
     btn = find_view_btn(xml)
-    if not btn:
+    # v1.14.504a — جعبهٔ نتایج پایینِ فرم است: تا ۶ بار بالا میکشیم تا
+    # دکمهٔ «نمایش» پیدا شود
+    tries = 0
+    while btn is None and tries < 6:
+        print(f"[view] دکمه پیدا نشد — اسکرول ({tries + 1}/6)")
+        swipe_up()
+        time.sleep(2)
+        xml = dump()
+        btn = find_view_btn(xml)
+        tries += 1
+    if btn is None:
         print("[view] دکمهٔ نمایش پیدا نشد ✘")
         for txt, b in list(nodes(xml))[:40]:
             if txt.strip():

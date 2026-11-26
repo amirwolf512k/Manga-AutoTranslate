@@ -659,10 +659,14 @@ class MainActivity : AppCompatActivity() {
         }, 120_000)
     }
 
+    // v1.14.504a — منبعِ اول = مخزنِ اصلی (amirwolf512k) که با هر پوش تازه
+    // میشود؛ قبلاً فقط amirwolf5122 بود که راکد مانده بود (VERSION=401)
+    // و آپدیت‌چکر هیچ‌وقت نسخهٔ جدید نمی‌دید.
     private val UPD_MIRRORS = listOf(
+        "https://raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
+        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf512k/Manga-AutoTranslate/main/",
         "https://raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",
-        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/",
-        "https://cdn.jsdelivr.net/gh/amirwolf5122/Manga-AutoTranslate@main/"
+        "https://gh-proxy.com/raw.githubusercontent.com/amirwolf5122/Manga-AutoTranslate/main/"
     )
     private var updRow: LinearLayout? = null
     private var updState = "idle"
