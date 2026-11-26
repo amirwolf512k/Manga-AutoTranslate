@@ -102,6 +102,42 @@ class _MangaTranslatorBody_80:
             return True
         return False
 
+    # v1.14.512 — الگوی سرتیترهای فصل/صفحه: متنِ واقعیِ داستان که در
+    # جایگاهِ «بنرِ لبهٔ صفحه» میافتد و نباید مثلِ اعتبارِ سایت رد شود.
+    _BANNER_HEADER_RE = re.compile(
+        r"(?i)\b(chapter|chap|episode|page|part|season|section|"
+        r"prologue|epilogue|volume|vol)\b"
+        r"|第\s*[0-9０-９一二三四五六七八九十]+\s*[話话话화]"
+        r"|[0-9０-９]+\s*(?:話|화|话)")
+
+    @staticmethod
+    def _banner_text_is_real(text: str) -> bool:
+        """v1.14.512 — آیا متنِ جایگاهِ بنرِ لبهٔ صفحه «متنِ واقعیِ
+        داستان» است (سرتیتر مثل CHAPTER 1 PAGE 1 / 第4話) یا اعتبارِ
+        ناشناختهٔ سایت (نامِ تیم/لوگو)؟ واترمارکها پیش از اینجا promo
+        شدهاند؛ این فقط متنِ باقی‌مانده را قضاوت میکند:
+        سرتیتر → واقعی؛ جملهٔ بلند → واقعی؛ نامِ کوتاه → اعتبار."""
+        t = str(text or "").strip()
+        if not t:
+            return False
+        if MangaTranslator._BANNER_HEADER_RE.search(t):
+            return True
+        try:
+            cjk = any(0x2E80 <= ord(c) <= 0x9FFF
+                      or 0x3040 <= ord(c) <= 0x30FF
+                      or 0xAC00 <= ord(c) <= 0xD7A3 for c in t)
+        except Exception:
+            cjk = False
+        if cjk:
+            toks_c = [c for c in t if not c.isspace()]
+            if len(toks_c) >= 5:
+                return True
+        toks = re.findall(r"[A-Za-z0-9]+", t.lower())
+        if len(toks) >= 4:
+            # جملهٔ واقعی (نه لوگو/نامِ تیم)
+            return True
+        return False
+
     @staticmethod
     def _is_watermark_text(text: str) -> bool:
 

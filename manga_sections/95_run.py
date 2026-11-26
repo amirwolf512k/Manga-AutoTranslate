@@ -2067,6 +2067,12 @@ class _MangaTranslatorBody_95:
                 if _CLEAN_PAGES > 1:
                     _shim = object.__new__(type(self))
                     _shim.__dict__.update(self.__dict__)
+                    # v1.14.512 — shim مالکِ LaMa نیست؛ با این پرچم
+                    # _get_lama/_get_lama_cpu_safe به نمونهٔ اصلی
+                    # وگزارده میشوند → در کلِ اجرا فقط «یک» سشنِ LaMa
+                    # ساخته میشود (ریشهٔ کرشِ 3221225477 ویندوز/DML:
+                    # چند سشنِ LaMa + runِ بدونِ قفلِ سنجشِ تطبیق).
+                    _shim._lama_owner = self
                     _pcn = _shim._clean_image_page(
                         im, regs, page_boxes=_pctxc.get("boxes"))
                 else:

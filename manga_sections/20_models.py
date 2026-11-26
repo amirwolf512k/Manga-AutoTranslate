@@ -1409,8 +1409,13 @@ class LamaMangaONNX:
                      t["mask_in"].astype(np.float32)}
             _t0 = time.time()
             try:
+                # v1.14.512 — runِ GPU این سنجش باید مثلِ خودِ پاکسازی از
+                # _dml_run (قفلِ سراسریِ DML) رد شود؛ بدونِ قفل، وقتی
+                # نمونهٔ دومی از LaMa در نخِ دیگری ساخته میشد، این runِ
+                # آزاد با runهایِ پاکسازیِ همزمان تصادم میکرد =
+                # کرشِ 0xC0000005 ویندوز (کدِ خروج 3221225477).
                 _out_g = np.asarray(
-                    self.session.run(None, feeds)[0], np.float32)
+                    _dml_run(self.session, feeds)[0], np.float32)
             except Exception:
                 return False
             cpu_sess = self.session_cpu

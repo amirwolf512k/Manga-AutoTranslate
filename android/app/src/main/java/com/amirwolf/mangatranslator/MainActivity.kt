@@ -3434,7 +3434,12 @@ class MainActivity : AppCompatActivity() {
                     try {
                         val pw = pg.width.coerceAtLeast(1)
                         val ph = pg.height.coerceAtLeast(1)
-                        val sc = (maxDim.toFloat() /
+                        // v1.14.512 — صفحهٔ «نوارِ بلندِ» وبتون را با
+                        // سقفِ ۳۴۰۰ کوچک نکن (ناخوانا میشد) — تا ۱۲۰۰۰
+                        // رندر میشود و نمایشگر خودش آن را به برشهایِ ~۳۰۷۲
+                        // بی‌درز تقسیم میکند (ریشهٔ «نمایشگرِ سیاه»).
+                        val cap = if (ph > pw * 2f) 12000 else maxDim
+                        val sc = (cap.toFloat() /
                                 maxOf(pw, ph).toFloat()).coerceIn(0.05f, 3.0f)
                         val w = (pw * sc).toInt().coerceAtLeast(48)
                         val h = (ph * sc).toInt().coerceAtLeast(48)
@@ -3635,6 +3640,251 @@ class MainActivity : AppCompatActivity() {
         } catch (_: Exception) {}
     }
 
+    // ══ v1.14.512 — برشِ نوارهای بلند در نمایشگر (ریشهٔ «نمایشگرِ سیاه») ══
+    // رویِ گوشیِ واقعی، نوارهایِ وبتونِ بلند (تا ۱۶هزار پیکسل) از سقفِ
+    // بافتِ GPU/حافظهٔ WebView بزرگترند → <img> سیاه/خالی میماند و کلِ
+    // نمایشگر جعبهٔ سیاه دیده میشد (شبیه‌سازِ x86_64 با عکسهایِ کوچک
+    // این را نشان نمیداد). راه‌حل: هر عکسِ بلندتر از ۴۰۹۶px با
+    // BitmapRegionDecoder (بدونِ بازکردنِ کلِ عکس در رم) به برشهایِ
+    // ~۳۰۷۲pxِ «بی‌درز» تقسیم میشود؛ برشها در reader.html بدونِ فاصله
+    // پشتِ سرِ هم میچسبند. برایِ دیباگ، فایلِ base و JSONِ اورلی هم با
+    // همانِ مرزها برش میخورند تا اورلیِ det/pdet/rec و مقایسهٔ
+    // قبل/بعد دقیق بمانند (مرزها تابعِ خودِ ارتفاع است → نسخهٔ نهایی و
+    // دیباگِ یک صفحه همیشه برشهایِ یکسانی میگیرند).
+    private val viewerSliceH = 3072
+    private val viewerSliceLimit = 4096
+    private val viewerSliceTail = 1024
+    private val viewerSliceExec: java.util.concurrent.ExecutorService by lazy {
+        java.util.concurrent.Executors.newSingleThreadExecutor { r ->
+            Thread(r, "viewer-slice").apply { isDaemon = true }
+        }
+    }
+
+    private fun imgDimOf(path: String): IntArray? = try {
+        val o = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeFile(path, o)
+        if (o.outWidth <= 0 || o.outHeight <= 0) null
+        else intArrayOf(o.outWidth, o.outHeight)
+    } catch (_: Exception) { null }
+
+    private fun viewerSliceBounds(h: Int): MutableList<IntArray>? {
+        if (h <= viewerSliceLimit) return null
+        val out = mutableListOf<IntArray>()
+        var y = 0
+        while (y < h) {
+            var y2 = minOf(y + viewerSliceH, h)
+            if (h - y2 in 1 until viewerSliceTail) y2 = h
+            out.add(intArrayOf(y, y2))
+            y = y2
+        }
+        return out
+    }
+
+    private fun viewerSliceKey(src: File): String = try {
+        java.security.MessageDigest.getInstance("MD5")
+            .digest((src.absolutePath + "#" + src.lastModified() + "#" + src.length())
+                .toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }.substring(0, 16)
+    } catch (_: Exception) { src.nameWithoutExtension + "_" + src.length() }
+
+    // برشِ یک عکسِ عادی (نهایی/زنده) — ناموفق = خودِ فایل (بدون تغییر)
+    private fun viewerSliceImage(src: File, bounds: List<IntArray>): List<File> {
+        val dir = File(cacheDir, "vslices/" + viewerSliceKey(src))
+        val ext = if (src.extension.lowercase() in IMG_EXT) src.extension.lowercase() else "jpg"
+        val files = bounds.mapIndexed { i, _ -> File(dir, "s%02d.%s".format(i, ext)) }
+        if (File(dir, "done").isFile && files.all { it.isFile() && it.length() > 0L })
+            return files
+        try { dir.deleteRecursively() } catch (_: Exception) {}
+        if (!dir.isDirectory && !dir.mkdirs()) return listOf(src)
+        return try {
+            val dim = imgDimOf(src.absolutePath) ?: return listOf(src)
+            val dec = BitmapRegionDecoder.newInstance(src.absolutePath, false)
+                ?: return listOf(src)
+            try {
+                for (i in bounds.indices) {
+                    val b = bounds[i]
+                    val bmp = dec.decodeRegion(
+                        android.graphics.Rect(0, b[0], dim[0], b[1]), null)
+                        ?: return listOf(src)
+                    try {
+                        java.io.FileOutputStream(files[i]).use { fo ->
+                            bmp.compress(Bitmap.CompressFormat.JPEG, 88, fo)
+                        }
+                    } finally { bmp.recycle() }
+                }
+            } finally { dec.recycle() }
+            File(dir, "done").writeText("1")
+            files
+        } catch (_: Exception) { listOf(src) }
+    }
+
+    // برشِ مجموعهٔ دیباگ: sNN.jpg (دیباگ) + sNN_base.jpg (base) +
+    // sNN.json (اورلی) — همانِ قراردادی که shouldInterceptRequest از
+    // نامِ فایلِ برش انتظار دارد (/db/ → *_base، /dj/ → *.json).
+    private fun viewerSliceDebugSet(src: File, bounds: List<IntArray>): List<File> {
+        val dir = File(cacheDir, "vslices/" + viewerSliceKey(src))
+        val ext = if (src.extension.lowercase() in IMG_EXT) src.extension.lowercase() else "jpg"
+        val files = bounds.mapIndexed { i, _ -> File(dir, "s%02d.%s".format(i, ext)) }
+        if (File(dir, "done").isFile && files.all { it.isFile() && it.length() > 0L })
+            return files
+        try { dir.deleteRecursively() } catch (_: Exception) {}
+        if (!dir.isDirectory && !dir.mkdirs()) return listOf(src)
+        return try {
+            val dim = imgDimOf(src.absolutePath) ?: return listOf(src)
+            val stem = src.nameWithoutExtension
+            val baseStem = if (stem.endsWith("_debug"))
+                stem.removeSuffix("_debug") else stem
+            val baseSrc = File(src.parentFile ?: dir,
+                baseStem + "_base." + src.extension)
+            val jsonSrc = File(src.parentFile ?: dir, "$stem.json")
+            var json: JSONObject? = null
+            if (jsonSrc.isFile) try { json = JSONObject(jsonSrc.readText()) } catch (_: Exception) {}
+            val dec = BitmapRegionDecoder.newInstance(src.absolutePath, false)
+                ?: return listOf(src)
+            val decBase = if (baseSrc.isFile)
+                try { BitmapRegionDecoder.newInstance(baseSrc.absolutePath, false) } catch (_: Exception) { null }
+            else null
+            val baseDim = if (decBase != null) imgDimOf(baseSrc.absolutePath) else null
+            val jsonParts = if (json != null) try {
+                viewerSplitJson(json, bounds)
+            } catch (_: Exception) { null } else null
+            try {
+                for (i in bounds.indices) {
+                    val b = bounds[i]
+                    val bmp = dec.decodeRegion(
+                        android.graphics.Rect(0, b[0], dim[0], b[1]), null)
+                        ?: return listOf(src)
+                    try {
+                        java.io.FileOutputStream(files[i]).use { fo ->
+                            bmp.compress(Bitmap.CompressFormat.JPEG, 88, fo)
+                        }
+                    } finally { bmp.recycle() }
+                    if (decBase != null && baseDim != null) {
+                        val by2 = minOf(b[1], baseDim[1])
+                        val bb = try {
+                            decBase.decodeRegion(
+                                android.graphics.Rect(
+                                    0, minOf(b[0], by2), baseDim[0], by2), null)
+                        } catch (_: Exception) { null }
+                        if (bb != null) {
+                            try {
+                                val bf = File(dir,
+                                    "s%02d_base.%s".format(i, ext))
+                                java.io.FileOutputStream(bf).use { fo ->
+                                    bb.compress(Bitmap.CompressFormat.JPEG, 86, fo)
+                                }
+                            } finally { bb.recycle() }
+                        }
+                    }
+                    if (jsonParts != null) {
+                        try {
+                            File(dir, "s%02d.json".format(i)).writeText(
+                                jsonParts[i].toString())
+                        } catch (_: Exception) {}
+                    }
+                }
+            } finally {
+                dec.recycle()
+                try { decBase?.recycle() } catch (_: Exception) {}
+            }
+            File(dir, "done").writeText("1")
+            files
+        } catch (_: Exception) { listOf(src) }
+    }
+
+    // JSONِ اورلی ({size,det,pdet,rec}) را با همانِ مرزهایِ برش میشکند
+    // (det: [x1,y1,x2,y2,...]، rec: [x,y,w,h,...]، pdet: چندضلعی [[x,y]..])
+    private fun viewerSplitJson(j: JSONObject, bounds: List<IntArray>): List<JSONObject> {
+        val out = mutableListOf<JSONObject>()
+        for (b in bounds) {
+            val y0 = b[0].toDouble()
+            val y1 = b[1].toDouble()
+            val n = JSONObject()
+            val sz = j.optJSONArray("size")
+            n.put("size", org.json.JSONArray()
+                .put(sz?.optDouble(0) ?: 900.0).put(y1 - y0))
+            for (key in arrayOf("det", "rec")) {
+                val arr = j.optJSONArray(key) ?: continue
+                val no = org.json.JSONArray()
+                for (i in 0 until arr.length()) {
+                    val e = arr.optJSONArray(i) ?: continue
+                    if (e.length() < 4) continue
+                    val hit = if (key == "det") {
+                        val yy1 = e.optDouble(1); val yy2 = e.optDouble(3)
+                        !(yy1 >= y1 || yy2 <= y0)
+                    } else {
+                        val yy = e.optDouble(1); val hh = e.optDouble(3)
+                        !(yy >= y1 || yy + hh <= y0)
+                    }
+                    if (!hit) continue
+                    val ne = org.json.JSONArray()
+                    if (key == "det") {
+                        ne.put(e.optDouble(0)).put(e.optDouble(1) - y0)
+                        ne.put(e.optDouble(2)).put(e.optDouble(3) - y0)
+                    } else {
+                        ne.put(e.optDouble(0)).put(e.optDouble(1) - y0)
+                        ne.put(e.optDouble(2)).put(e.optDouble(3))
+                    }
+                    for (k in 4 until e.length()) ne.put(e.opt(k))
+                    no.put(ne)
+                }
+                n.put(key, no)
+            }
+            val pd = j.optJSONArray("pdet")
+            if (pd != null) {
+                val no = org.json.JSONArray()
+                for (i in 0 until pd.length()) {
+                    val q = pd.optJSONArray(i) ?: continue
+                    var hit = false
+                    for (p in 0 until q.length()) {
+                        val pt = q.optJSONArray(p) ?: continue
+                        val yy = pt.optDouble(1)
+                        if (yy >= y0 && yy < y1) { hit = true; break }
+                    }
+                    if (!hit) continue
+                    val nq = org.json.JSONArray()
+                    for (p in 0 until q.length()) {
+                        val pt = q.optJSONArray(p) ?: continue
+                        nq.put(org.json.JSONArray()
+                            .put(pt.optDouble(0)).put(pt.optDouble(1) - y0))
+                    }
+                    no.put(nq)
+                }
+                n.put("pdet", no)
+            }
+            out.add(n)
+        }
+        return out
+    }
+
+    private fun needsViewerSlicing(paths: List<String>): Boolean {
+        for (p in paths) {
+            val d = imgDimOf(p) ?: continue
+            if (d[1] > viewerSliceLimit) return true
+        }
+        return false
+    }
+
+    // یک مسیر را به برشهایش گسترش میدهد (dbg: مجموعهٔ دیباگ با base/json)
+    private fun expandViewerPath(path: String, dbg: Boolean): List<String> {
+        val f = File(path)
+        if (!f.isFile()) return listOf(path)
+        val dim = imgDimOf(path) ?: return listOf(path)
+        val bounds = viewerSliceBounds(dim[1]) ?: return listOf(path)
+        val res = if (dbg) viewerSliceDebugSet(f, bounds)
+                  else viewerSliceImage(f, bounds)
+        return res.map { it.absolutePath }
+    }
+
+    private fun prepareViewerPaths(paths: List<String>, dpaths: List<String>)
+            : Pair<List<String>, List<String>> {
+        val ps = mutableListOf<String>()
+        for (p in paths) ps.addAll(expandViewerPath(p, dbg = false))
+        val ds = mutableListOf<String>()
+        for (p in dpaths) ds.addAll(expandViewerPath(p, dbg = true))
+        return Pair(ps, ds)
+    }
+
     // v1.14.503 — ریشهٔ «دکمهٔ نمایش هیچ نشان نمیدهد»: کلِ بدنه در
     // try/catch — قبلاً هر خطا (مثل paths خالی) اپ را میانداخت و
     // کاربر جز «هیچی» نمیدید. حالا همیشه دیالوگ باز میشود.
@@ -3642,6 +3892,32 @@ class MainActivity : AppCompatActivity() {
                        dbg: Boolean = false, dbgPaths: List<String> = emptyList(),
                        total: Int = 0) {
         try {
+            // v1.14.512 — نوارهایِ بلند قبل از بازشدنِ دیالوگ در
+            // پس‌زمینه برش میخورند (رویِ نخِ UI نیست) تا WebView سیاه نماند.
+            if (needsViewerSlicing(pathsRaw) || needsViewerSlicing(dbgPaths)) {
+                viewerSliceExec.execute {
+                    val prep = try { prepareViewerPaths(pathsRaw, dbgPaths) }
+                    catch (_: Exception) { null }
+                    ui.post {
+                        try {
+                            if (prep != null)
+                                viewerInner(prep.first, live, dbg, prep.second, total,
+                                            rawLive = pathsRaw.size,
+                                            rawDbg = dbgPaths.size)
+                            else
+                                viewerInner(pathsRaw, live, dbg, dbgPaths, total)
+                        } catch (e: Exception) {
+                            try {
+                                android.util.Log.w("MangaView", "viewer failed", e)
+                                Toast.makeText(this@MainActivity,
+                                    "نمایشگر باز نشد: " + (e.message ?: e.toString()),
+                                    Toast.LENGTH_LONG).show()
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
+                return
+            }
             viewerInner(pathsRaw, live, dbg, dbgPaths, total)
         } catch (e: Exception) {
             try {
@@ -3655,7 +3931,8 @@ class MainActivity : AppCompatActivity() {
 
     private fun viewerInner(pathsRaw: List<String>, live: Boolean = false,
                             dbg: Boolean = false, dbgPaths: List<String> = emptyList(),
-                            total: Int = 0) {
+                            total: Int = 0,
+                            rawLive: Int = -1, rawDbg: Int = -1) {
         // v1.14.503 — قبلاً «paths خالی + total>0» از پاسِ اول رد میشد
         // ولی در runTok با paths[0] کرش میکرد (IndexOutOfBounds) — دکمهٔ
         // زندهٔ (۰/N صفحه) یعنی همین لحظه اپ میپرید. حالا با گاردِ
@@ -3942,23 +4219,51 @@ class MainActivity : AppCompatActivity() {
         }
         dlg.show()
         if (live) {
+            // v1.14.512 — شمارِ فایلهایِ خامِ مصرفشده (برشها ممکن است
+            // چندتاکته باشند؛ شمارش خام از دوباره‌.append جلوگیری میکند).
+            // rawLive/rawDbg = شمارِ خامِ مصرفشده در لحظهٔ بازشدن (بدونِ
+            // برش: هر صفحه یک ورودی بود → همان paths.size).
+            val liveFed = java.util.concurrent.atomic.AtomicInteger(
+                if (rawLive >= 0) rawLive else paths.size)
+            val dbgFed = java.util.concurrent.atomic.AtomicInteger(
+                if (rawDbg >= 0) rawDbg else dpaths.size)
             livePush = { _ ->
                 try {
                     val curLive: List<String>
                     val curDbg: List<String>
                     synchronized(liveImages) { curLive = liveImages.toList() }
                     synchronized(liveDbgImages) { curDbg = liveDbgImages.toList() }
-                    synchronized(paths) {
-                        if (paths.size < curLive.size)
-                            for (i in paths.size until curLive.size) paths.add(curLive[i])
+                    // v1.14.512 — صفحه‌هایِ تازه هم از فیلترِ برشِ نوارِ
+                    // بلند رد میشوند (پس‌زمینه) و بعد append میشوند؛
+                    // برشها کش میشوند (viewerSliceKey = مسیر+mtime) →
+                    // دوباره‌کاری نیست.
+                    if (curLive.size > liveFed.get() || curDbg.size > dbgFed.get()) {
+                        viewerSliceExec.execute {
+                            val nl = liveFed.get()
+                            val nd = dbgFed.get()
+                            val addL = if (curLive.size > nl)
+                                curLive.drop(nl).flatMap { expandViewerPath(it, dbg = false) }
+                            else emptyList()
+                            val addD = if (curDbg.size > nd)
+                                curDbg.drop(nd).flatMap { expandViewerPath(it, dbg = true) }
+                            else emptyList()
+                            ui.post {
+                                try {
+                                    synchronized(paths) { addL.forEach { paths.add(it) } }
+                                    synchronized(dpaths) { addD.forEach { dpaths.add(it) } }
+                                    if (curLive.size > nl) liveFed.set(curLive.size)
+                                    if (curDbg.size > nd) dbgFed.set(curDbg.size)
+                                    wv.evaluateJavascript(
+                                        "window.__mangaLive && window.__mangaLive(${paths.size}, " +
+                                            "${liveTotal}, ${dpaths.size}, ${liveDone})", null)
+                                } catch (_: Exception) {}
+                            }
+                        }
+                    } else {
+                        wv.evaluateJavascript(
+                            "window.__mangaLive && window.__mangaLive(${paths.size}, " +
+                                "${liveTotal}, ${dpaths.size}, ${liveDone})", null)
                     }
-                    synchronized(dpaths) {
-                        if (dpaths.size < curDbg.size)
-                            for (i in dpaths.size until curDbg.size) dpaths.add(curDbg[i])
-                    }
-                    wv.evaluateJavascript(
-                        "window.__mangaLive && window.__mangaLive(${paths.size}, " +
-                            "${liveTotal}, ${dpaths.size}, ${liveDone})", null)
                 } catch (_: Exception) {}
             }
             livePush?.invoke(0)

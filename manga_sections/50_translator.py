@@ -1007,6 +1007,18 @@ class MangaTranslator:
             self._lama_preload_started = False
 
     def _get_lama(self, threads: int = 0, force: bool = False):
+        # v1.14.512 — شیءِ shim کارگرِ پاکسازی (کپیِ __dict__) مالکِ
+        # LaMa نیست؛ همیشه به نمونهٔ اصلی وگزارده میشود تا در هر اجرا
+        # فقط «یک» سشنِ LaMa ساخته شود. ریشهٔ کرشِ ویندوز (0xC0000005،
+        # کدِ خروج 3221225477): پیش‌بارگذاری + کارگرها هرکدام سشنِ
+        # DML خودشان را میساختند و سنجشِ تطبیقِ رنگ (runِ بدونِ قفل)
+        # با runهایِ پاکسازیِ همزمان تصادم میکرد.
+        _owner = getattr(self, "_lama_owner", None)
+        if _owner is not None and _owner is not self:
+            try:
+                return _owner._get_lama(threads=threads, force=force)
+            except Exception:
+                pass
         try:
             _tls = self.__dict__.get("_lama_tls")
             if _tls is not None:
@@ -1097,6 +1109,13 @@ class MangaTranslator:
             return None
 
     def _get_lama_cpu_safe(self):
+        # v1.14.512 — shim کارگر → نمونهٔ اصلی (یک سشنِ CPUِ امن در کل اجرا)
+        _owner = getattr(self, "_lama_owner", None)
+        if _owner is not None and _owner is not self:
+            try:
+                return _owner._get_lama_cpu_safe()
+            except Exception:
+                pass
         _s = getattr(self, "_lama_cpu_safe", None)
         if _s is not None:
             return _s
@@ -1193,9 +1212,16 @@ class MangaTranslator:
         if self._lama is None and self.use_lama:
             # v1.14.504 — یکسان‌سازی: همان گیتِ رمِ PC برای همه (شاخهٔ
             # اندروید حذف شد — خروجی یکسان، فقط گاردِ کرش)
+            # v1.14.512 — آستانهٔ گوشی ۱.۰→۰.۳۲GB: مدلِ nofft فقط
+            # ~۲۰۰MB رم میگیرد؛ رویِ گوشیهایِ ۰.۵GB آزاد LaMa باید
+            # کار کند (درخواستِ سازنده) — شکستِ ساخت/اینفرنس خودش به
+            # OpenCV/TELEA برمیگردد. PC (که معمولاً GPU است) همان ۱GB
+            # محتاطانه میماند.
             _av = self._available_ram_gb()
-            if _av and _av < 1.0:
-                print(f"[!] رم آزاد خیلی کم است ({_av:.1f}GB) → پاک‌سازی "
+            _gate_gb = 0.32 if _on_android() else 1.0
+            if _av and _av < _gate_gb:
+                print(f"[!] رم آزاد خیلی کم است ({_av:.1f}GB < "
+                      f"{_gate_gb}GB) → پاک‌سازی "
                       "OpenCV (بارگذاری LaMa حذف شد تا کرش نکند).")
                 self.use_lama = False
                 self._inpainter_name = "OpenCV"

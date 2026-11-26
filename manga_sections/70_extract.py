@@ -2486,10 +2486,16 @@ class _MangaTranslatorBody_70:
                 if self.debug:
                     print(f"    [*] باکسِ خیلی کوچک حذف شد: ({x1},{y1},{bw}x{bh})")
                 continue
-            # v1.14.502 — سرعت + «فقط متنِ واقعی»: نوارِ اعتبارِ سایت
+            # v1.14.502→512 — سرعت + «فقط متنِ واقعی»: نوارِ اعتبارِ سایت
             # (text_freeِ نازکِ چسبیده به لبهٔ بالا — و در وب‌تونِ بلند،
-            # لبهٔ پایین) اصلاً OCR نمیشود — تبلیغ نه ترجمه میشود نه
-            # پاکسازی. محافظه‌کارانه: فقط هندسهٔ بنرِ کلاسیکِ اعتبار.
+            # لبهٔ پایین). تا 511 این باکس «بدونِ OCR» کلاً رد میشد؛
+            # آزمونِ پوششِ ۱۸عکسیِ ci_imgs (v512) نشان داد همین فیلترِ
+            # هندسی سرتیترِ واقعیِ صفحه را هم میبلعید (IMG_20261018:
+            # «CHAPTER 1 PAGE 1» در (190,1,257x40) —detector دید، رد شد).
+            # حالا بنرِ کاندید «OCR میشود» ولی فقط در صورتی ناحیه
+            # میسازد که متنِ واقعی باشد: متنِ واترمارک/اعتبار → promo
+            # (نه ترجمه، نه پاکسازی — همان رفتارِ قبل)، متنِ واقعی مثل
+            # سرتیتر → مسیرِ عادی. هندسه فقط برای پرچم است، نه حذف.
             _bc = str(b.get("class_name") or "")
             if _bc == "text_free":
                 _tall_strip = (float(h) / max(1.0, float(w))) > 2.0
@@ -2498,19 +2504,20 @@ class _MangaTranslatorBody_70:
                     y2 >= h - max(120, int(0.03 * h)))
                 _thin = (bh <= 140)
                 # بنرِ اعتبار همیشه «وسط‌چین» است؛ کپشنِ راوی معمولاً
-                # گوشهٔ صفحه است → فقط وسط‌چینِ لبه‌ای رد میشود
+                # گوشهٔ صفحه است → فقط وسط‌چینِ لبه‌ای پرچم میخورد
                 _centered = abs((x1 + x2) / 2.0 - w / 2.0) <= 0.18 * w
                 if (_at_top or _at_bot) and _thin and _centered:
+                    _banner_flag = True
                     _banner_skip_n += 1
-                    if self.debug:
-                        print(f"    [*] بنرِ تبلیغاتی بدونِ OCR رد شد: "
-                              f"({x1},{y1},{bw}x{bh})")
-                    continue
+                    try:
+                        b["banner"] = True
+                    except Exception:
+                        pass
             cand.append((i, b, x1, y1, x2, y2, bw, bh))
         if _banner_skip_n:
             try:
-                print(f"[*] {_banner_skip_n} بنرِ تبلیغاتیِ سایت → بدونِ OCR، "
-                      f"دست‌نخورده (نه ترجمه، نه پاکسازی)")
+                print(f"[*] {_banner_skip_n} بنرِ لبهٔ صفحه → OCR میشود؛ "
+                      f"فقط متنِ اعتبار (واترمارک) دست‌نخورده میماند")
             except Exception:
                 pass
         ocr_results: List[Tuple[str, List[np.ndarray], List[float]]] = [
@@ -2805,6 +2812,19 @@ class _MangaTranslatorBody_70:
                     continue
 
             kind = self._classify_text(text)
+
+            # v1.14.512 — گیتِ بنرِ لبهٔ صفحه: متنِ واقعیِ داستان
+            # (سرتیتر مثل «CHAPTER 1 PAGE 1») نجات می‌یابد؛ اعتبارِ
+            # ناشناختهٔ سایت (نامِ تیم/لوگو که در هیچ الگویِ واترمارک
+            # نیست) مثلِ قبل کنار گذاشته میشود تا ترجمه/پاکسازی نشود.
+            if b.get("banner"):
+                if MangaTranslator._is_watermark_text(text):
+                    kind = "promo"
+                elif not MangaTranslator._banner_text_is_real(text):
+                    if self.debug:
+                        print(f"    [*] بنرِ اعتبارِ ناشناخته رد شد: "
+                              f"«{str(text)[:48]}»")
+                    continue
 
             if kind == "dialogue":
                 if MangaTranslator._is_watermark_text(text):
