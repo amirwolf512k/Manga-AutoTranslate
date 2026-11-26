@@ -1133,8 +1133,8 @@ def _run(job):
             _oe = str(p.get("ocr_engine") or "").strip().lower()
             if _oe:
                 _log(job, "[!] انتخابِ موتورِ «%s» دیگر پشتیبانی نمیشود "
-                          " — استخراج مثلِ PC با RapidOCR (onnx) "
-                          "اجرا میشود" % _oe)
+                          " — استخراج با پلِ native پدل (RapidOcrAndroidOnnx — "
+                          "v1.14.508، مثلِ backup) اجرا میشود" % _oe)
         except Exception:
             pass
         _src0 = str(p.get("src") or "")

@@ -750,8 +750,10 @@ class MangaTranslator:
         main_lang = "en"
         for lang in _prio:
             if lang == "multi":
-                # v1.14.504 — یکسان‌سازی: مثلِ PC
-                main_lang = "korean"
+                # v1.14.508 — بازگشتِ سبکِ backup: رویِ گوشی موتورِ native
+                # پدل «multi» را با جابهجاییِ multi↔ko (خودکار بر حسبِ
+                # اطمینان) میخواند؛ PC مثلِ قبل korean.
+                main_lang = "multi" if _on_android() else "korean"
                 break
             if lang in lang_map:
                 main_lang = lang_map[lang]
@@ -837,6 +839,29 @@ class MangaTranslator:
                 self.max_workers = min(8, _nw_env)
         except Exception:
             pass
+
+        # v1.14.508 — بازگشتِ موتورِ سریعِ گوشی (سبکِ backup — شاخهٔ
+        # backupِ «قسمتِ استخراجِ گوشی»): رویِ اندروید استخراج با پلِ native
+        # پدل (RapidOcrAndroidOnnx: det=small + rec=medium) اجرا میشود —
+        # همان چیزی که در backup سرعتش خوب بود؛ موتورِ پایتونی رویِ گوشی
+        # ساخته نمیشود (سریع + کم‌رم). اگر پل آماده نشد، خودِ سازنده به
+        # RapidOCRِ PC (رفتارِ 504..507) فالبک میکند — APK قدیمی هم عقب
+        # نمیماند. PC/وب/لینوکس بی‌تغییر.
+        if self.ocr is None and _on_android():
+            try:
+                self.ocr = RapidOCRBackend(
+                    lang=main_lang, prefer_gpu=self.use_gpu,
+                    mobile_engine=True)
+                self._ocr_backend_name = "rapidocr"
+                if getattr(self.ocr, "_mobile", None) is not None:
+                    print("[*] اندروید: استخراجِ متن = پلِ native پدل "
+                          "(RapidOcrAndroidOnnx — مثلِ backup، سریع)")
+                else:
+                    print("[*] اندروید: پلِ native آماده نشد → RapidOCRِ "
+                          "PC (فالبک — 504..507)")
+            except Exception as e:
+                print(f"[!] موتورِ OCR گوشی لود نشد ({e})")
+                raise
 
         if self.ocr is None:
             try:
