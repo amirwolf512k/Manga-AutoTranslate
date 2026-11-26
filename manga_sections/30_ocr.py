@@ -112,7 +112,7 @@ class PaddleAndroidOCR:
         print(f"[+] OCR گوشی: RapidOCRِ اندروید آماده | "
               f"RapidOcrAndroidOnnx | det=PP-OCRv6_small "
               f"cls=v2.0_cls rec=PP-OCRv6_medium/{self.lang} "
-              f"(دانلودی) | threads={_intra}")
+              f"(دانلودی) | threads={_intra} | pad=50")
 
     _MULTI_CONF_FLOOR = 0.72
 
@@ -376,7 +376,7 @@ def _purge_loser_onnx_models() -> str:
                   % (_n, _fmt_mb(_freed)))
             return ("مدلهایِ بازنده حذف شد: %d فایل / %s آزاد شد — "
                     "روشِ فعال = RapidOcrAndroidOnnx (پلِ native پدل — "
-                    "v1.14.508؛ مدلهایِ ONNX فقط فالبکند)"
+                    "v1.14.509؛ مدلهایِ ONNX فقط فالبکند)"
                     % (_n, _fmt_mb(_freed)))
         return ""
     except Exception:
@@ -427,13 +427,18 @@ def speed_lab_env(p: dict) -> str:
         # دموی رسمیِ PaddleOCR اندروید: det=PP-OCRv6_small +
         # rec=PP-OCRv6_medium هر زبان) اجرا میشود؛ RapidOCRِ PC فقط
         # فالبک است (APK قدیمی/پلِ خراب). PC/وب بی‌تغییر.
+        # v1.14.509 — استخراجِ گوشی = پلِ native پدل (RapidOcrAndroidOnnx)
+        # + پدینگِ سفیدِ ۵۰px پیش از det (رفتارِ پیش‌فرضِ مرجع):
+        # متنِ لبه‌ای کراپها هم دیده میشود؛ det=PP-OCRv6_small +
+        # rec=PP-OCRv6_medium هر زبان (آخرینِ v5/v6). RapidOCRِ PC فقط
+        # فالبک است (APK قدیمی/پلِ خراب). PC/وب بی‌تغییر.
         if _on_android():
             if _purge:
                 return ("[⚡] روشِ استخراج: RapidOcrAndroidOnnx (پلِ native "
-                        "پدل — det=small + rec=medium)%s%s | v%s: %s"
+                        "پدل — det=small + rec=medium + pad=50)%s%s | v%s: %s"
                         % (_ms_l, _sp, APP_VER, _purge))
             return ("[⚡] روشِ استخراج: RapidOcrAndroidOnnx (پلِ native پدل — "
-                    "det=small + rec=medium | فالبک: RapidOCRِ PC — "
+                    "det=small + rec=medium + pad=50 | فالبک: RapidOCRِ PC — "
                     "v%s)%s%s"
                     % (APP_VER, _ms_l, _sp))
         if _purge:

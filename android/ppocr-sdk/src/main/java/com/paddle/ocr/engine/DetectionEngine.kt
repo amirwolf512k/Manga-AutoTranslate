@@ -30,6 +30,7 @@ class DetectionEngine(
                 config.detLimitType,
                 config.detMaxSideLimit,
                 config.detImgMode,
+                config.detPadding,
             )
         }
     }
@@ -42,6 +43,7 @@ class DetectionEngine(
                 config.detLimitType,
                 config.detMaxSideLimit,
                 config.detImgMode,
+                config.detPadding,
             )
         }
     }
@@ -68,6 +70,7 @@ class DetectionEngine(
             boxType = config.detBoxType,
             originalH = preResult.originalH,
             originalW = preResult.originalW,
+            padding = preResult.padding,
         )
         val postprocessMs = System.currentTimeMillis() - postStart
 

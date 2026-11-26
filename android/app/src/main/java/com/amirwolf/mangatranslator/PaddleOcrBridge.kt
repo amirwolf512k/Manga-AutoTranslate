@@ -72,7 +72,7 @@ object PaddleOcrBridge {
             }
             currentVariant = "ch"
             Log.i(TAG, "RapidOCR (RapidOcrAndroidOnnx pipeline) ready — " +
-                    "PP-OCRv6 det=small rec=MEDIUM, threads=$threads")
+                    "PP-OCRv6 det=small rec=MEDIUM, threads=$threads, padding=50")
             true
         } catch (t: Throwable) {
             Log.e(TAG, "init failed", t)

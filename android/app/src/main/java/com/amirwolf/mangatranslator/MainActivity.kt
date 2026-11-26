@@ -67,6 +67,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var logBox: TextView
     private lateinit var resultsBox: LinearLayout
     private lateinit var liveBox: LinearLayout
+    // v1.14.509 — اسکرولِ اصلی فرم؛ بعد از پایانِ کار دکمه‌هایِ نتیجه
+    // (نمایش/دانلود) خودکار به دید میآیند.
+    private lateinit var mainScroll: ScrollView
+    private var resultsScrolled = false
     private lateinit var runBtn: Button
     private val liveImages = mutableListOf<String>()
     private val liveDbgImages = mutableListOf<String>()
@@ -473,7 +477,7 @@ class MainActivity : AppCompatActivity() {
             layoutDirection = View.LAYOUT_DIRECTION_RTL
             setPadding(dp(14), dp(10), dp(14), dp(20))
         }
-        setContentView(ScrollView(this).apply { addView(root) })
+        setContentView(ScrollView(this).apply { addView(root) }.also { mainScroll = it })
 
         root.addView(header())
         root.addView(chips())
@@ -490,6 +494,16 @@ class MainActivity : AppCompatActivity() {
         root.addView(runBtn, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
             topMargin = dp(14); bottomMargin = dp(6)
+        })
+
+        // v1.14.509 — جعبهٔ نتیجه‌ها (نمایش/دانلود) از داخلِ کارتِ لاگ بیرون
+        // آمد و مستقیماً زیرِ دکمهٔ شروع نشست: (۱) با جمع‌شدنِ لاگ دیگر
+        // دکمه‌ها مخفی نمیشوند (۲) رویِ گوشی نتیجه همیشه جلویِ چشم است —
+        // لاگِ ۲۳۰px دیگر دکمهٔ نمایش را زیرِ fold نمیگوید.
+        resultsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        root.addView(resultsBox, LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            bottomMargin = dp(4)
         })
 
         val logCard = LinearLayout(this).apply {
@@ -553,8 +567,6 @@ class MainActivity : AppCompatActivity() {
             ViewGroup.LayoutParams.MATCH_PARENT, dp(230)).apply { topMargin = dp(4) })
         liveBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         logContent.addView(liveBox)
-        resultsBox = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        logContent.addView(resultsBox)
         logCard.addView(logContent)
         root.addView(logCard, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
@@ -3265,6 +3277,7 @@ class MainActivity : AppCompatActivity() {
             shownLiveDbgTotal = 0
             livePush = null
             liveDone = false
+            resultsScrolled = false
             Thread {
                 var res: JSONObject? = null
                 var err: String? = null
@@ -3313,6 +3326,21 @@ class MainActivity : AppCompatActivity() {
         runBtn.setTextColor(Color.WHITE)
         runBtn.background = gradBtn()
         releaseKeepAwake()
+    }
+
+    // v1.14.509 — بعد از پایانِ کار (یا اولینِ صفحهٔ زنده) جعبهٔ نتیجه‌ها
+    // خودکار به دید میآید — رویِ گوشی دکمهٔ «نمایش» دیگر زیرِ لاگ گم
+    // نمیشود؛ گیتِ شبیه‌ساز هم همین‌طور دکمه را میبیند.
+    private fun scrollResultsIntoView() {
+        try {
+            if (resultsBox.childCount == 0) return
+            mainScroll.postDelayed({
+                try {
+                    mainScroll.smoothScrollTo(
+                        0, (resultsBox.top - dp(72)).coerceAtLeast(0))
+                } catch (_: Exception) {}
+            }, 150)
+        } catch (_: Exception) {}
     }
 
     private fun pollLoop() {
@@ -3368,6 +3396,7 @@ class MainActivity : AppCompatActivity() {
                         liveBox.removeAllViews()
                         liveBtn = null
                         showResults(s)
+                        scrollResultsIntoView()   // v1.14.509
                         autoSaveLog()
 
                     } else ui.postDelayed({ pollLoop() }, 800)
@@ -3551,6 +3580,12 @@ class MainActivity : AppCompatActivity() {
             val lp = resultsBox.getChildAt(i).layoutParams as LinearLayout.LayoutParams
             lp.topMargin = dp(7)
         }
+        // v1.14.509 — اولینِ بار که دکمهٔ زندهٔ «نمایش» ظاهر شد، یک بار
+        // اسکرول میکنیم تا کاربر ببیند؛ بعد از آن خودش میداند.
+        if (!resultsScrolled) {
+            resultsScrolled = true
+            scrollResultsIntoView()
+        }
         livePush?.invoke(0)
     }
 
@@ -3596,6 +3631,7 @@ class MainActivity : AppCompatActivity() {
                 setPadding(dp(6), dp(4), dp(6), dp(4))
             }
             resultsBox.addView(tv)
+            scrollResultsIntoView()   // v1.14.509
         } catch (_: Exception) {}
     }
 

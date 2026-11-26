@@ -29,6 +29,7 @@ object DBPostProcessor {
         boxType: String,
         originalH: Int,
         originalW: Int,
+        padding: Int = 0,
     ): List<OCRBox> {
         require(boxType == "quad") { "Only DBPostProcess box_type=quad is supported" }
 
@@ -36,6 +37,12 @@ object DBPostProcessor {
         val pW = predShape[3].toInt()
         val scaleX = originalW.toDouble() / pW
         val scaleY = originalH.toDouble() / pH
+        // v1.14.509 — پدینگِ سفیدِ RapidOcrAndroidOnnx: کووردها از فضایِ
+        // تصویرِ پدیده به فضایِ تصویرِ اصلی برمیگردند (کمکردنِ padding) و
+        // سقفِ clamp هم ابعادِ بدونِ پدینگ است.
+        val pad = padding.coerceIn(0, 200)
+        val clampW = (originalW - 2 * pad).coerceAtLeast(1)
+        val clampH = (originalH - 2 * pad).coerceAtLeast(1)
         val normalizedScoreMode = scoreMode.lowercase()
 
         val rawProb = Mat(pH, pW, CvType.CV_32FC1)
@@ -105,10 +112,10 @@ object DBPostProcessor {
                 expandedRect.points(expandedBox)
                 val ePts = QuadGeometry.orderMinAreaRectPoints(expandedBox)
                 val scaled = listOf(
-                    scalePoint(ePts[0], scaleX, scaleY, originalW, originalH),
-                    scalePoint(ePts[1], scaleX, scaleY, originalW, originalH),
-                    scalePoint(ePts[2], scaleX, scaleY, originalW, originalH),
-                    scalePoint(ePts[3], scaleX, scaleY, originalW, originalH),
+                    scalePoint(ePts[0], scaleX, scaleY, clampW, clampH, pad),
+                    scalePoint(ePts[1], scaleX, scaleY, clampW, clampH, pad),
+                    scalePoint(ePts[2], scaleX, scaleY, clampW, clampH, pad),
+                    scalePoint(ePts[3], scaleX, scaleY, clampW, clampH, pad),
                 )
 
                 val boxW = kotlin.math.hypot(
@@ -139,12 +146,17 @@ object DBPostProcessor {
         point: Point,
         scaleX: Double,
         scaleY: Double,
-        originalW: Int,
-        originalH: Int,
+        clampW: Int,
+        clampH: Int,
+        pad: Int = 0,
     ): PointF {
+        // v1.14.509 — اگر پدینگ بود، مختصات در فضایِ تصویرِ پدیده است:
+        // کمکردنِ پدینگ + clamp به ابعادِ اصلی.
+        val px = MathUtils.roundHalfToEven(point.x * scaleX) - pad
+        val py = MathUtils.roundHalfToEven(point.y * scaleY) - pad
         return PointF(
-            MathUtils.roundHalfToEven(point.x * scaleX).coerceIn(0, originalW).toFloat(),
-            MathUtils.roundHalfToEven(point.y * scaleY).coerceIn(0, originalH).toFloat(),
+            px.coerceIn(0, clampW).toFloat(),
+            py.coerceIn(0, clampH).toFloat(),
         )
     }
 

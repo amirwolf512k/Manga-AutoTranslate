@@ -15,6 +15,10 @@ data class DetPreprocessResult(
     val shape: LongArray,
     val originalH: Int,
     val originalW: Int,
+    // v1.14.509 — پدینگِ سفیدِ RapidOcrAndroidOnnx: originalH/W ابعادِ
+    // تصویرِ «پدیده» است؛ DBPostProcessor با کمکردنِ padding کووردها را
+    // به فضایِ تصویرِ اصلی برمیگرداند.
+    val padding: Int = 0,
 )
 
 object DetPreprocessor {
@@ -28,10 +32,11 @@ object DetPreprocessor {
         limitType: String,
         maxSideLimit: Int,
         imgMode: String,
+        padding: Int = 0,
     ): DetPreprocessResult {
         val src = BitmapUtils.bitmapToBGRMat(bitmap)
         return try {
-            preprocess(src, limitSideLen, limitType, maxSideLimit, imgMode)
+            preprocess(src, limitSideLen, limitType, maxSideLimit, imgMode, padding)
         } finally {
             src.release()
         }
@@ -43,17 +48,42 @@ object DetPreprocessor {
         limitType: String,
         maxSideLimit: Int,
         imgMode: String,
+        padding: Int = 0,
     ): DetPreprocessResult {
         val originalH = src.rows()
         val originalW = src.cols()
+
+        // v1.14.509 — پدینگِ سفید ۵۰px دورِ تصویر قبل از det — همانِ
+        // RapidOcrAndroidOnnx (makePadding: copyMakeBorder BORDER_ISOLATED,
+        // Scalar(255,255,255)). متنِ لبه‌ای که قبلاً از دیتکتور میگریخت
+        // حالا داخلِ قاب میآید.
+        var work = src
+        var workOwned = false
+        val pad = padding.coerceIn(0, 200)
+        if (pad > 0) {
+            val padded = Mat()
+            Imgproc.copyMakeBorder(
+                src, padded, pad, pad, pad, pad,
+                Imgproc.BORDER_ISOLATED,
+                Scalar(255.0, 255.0, 255.0),
+            )
+            work = padded
+            workOwned = true
+        }
         val input = if (imgMode.uppercase() == "RGB") {
-            Mat().also { Imgproc.cvtColor(src, it, Imgproc.COLOR_BGR2RGB) }
+            Mat().also { Imgproc.cvtColor(work, it, Imgproc.COLOR_BGR2RGB) }
         } else {
-            src
+            work
         }
 
-        val resized = ImageUtils.resizeToMultipleOf32(input, limitSideLen, limitType, maxSideLimit)
-        if (input !== src) input.release()
+        // main.cpp: resize = maxSideLen + 2*padding — رزولوشنِ محتوایِ
+        // اصلی همانِ حالتِ بدونِ پدینگ میماند (پدینگ سهمِ خودش را
+        // میگیرد، نه متن).
+        val effectiveLimit = if (pad > 0) limitSideLen + 2 * pad else limitSideLen
+        var resized = ImageUtils.resizeToMultipleOf32(input, effectiveLimit, limitType, maxSideLimit)
+        if (input !== work) input.release()
+        val paddedH = if (pad > 0) originalH + 2 * pad else originalH
+        val paddedW = if (pad > 0) originalW + 2 * pad else originalW
 
         val h = resized.rows()
         val w = resized.cols()
@@ -80,11 +110,14 @@ object DetPreprocessor {
             chan.release()
         }
 
+        if (workOwned) work.release()
+
         return DetPreprocessResult(
             tensorData = tensorData,
             shape = longArrayOf(1, 3, h.toLong(), w.toLong()),
-            originalH = originalH,
-            originalW = originalW,
+            originalH = paddedH,
+            originalW = paddedW,
+            padding = pad,
         )
     }
 }

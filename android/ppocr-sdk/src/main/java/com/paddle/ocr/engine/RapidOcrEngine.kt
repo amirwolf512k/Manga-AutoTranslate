@@ -29,6 +29,9 @@ data class RapidOcrParams(
     val angleScoreThresh: Float = 0.9f,
     val recBatchSize: Int = 1,
     val recScoreThresh: Float = 0.0f,
+    // v1.14.509 — پدینگِ سفیدِ ۵۰px پیش از det — همانِ پیش‌فرضِ
+    // RapidOcrAndroidOnnx (OcrEngine.padding = 50).
+    val detPadding: Int = 50,
 ) {
     internal fun toPaddleConfig(): PaddleOCRConfig = PaddleOCRConfig(
         detLimitSideLen = maxSideLen,
@@ -37,6 +40,7 @@ data class RapidOcrParams(
         detBoxThresh = boxScoreThresh,
         detUnclipRatio = unclipRatio,
         detUseDilation = true,
+        detPadding = detPadding,
         recBatchSize = recBatchSize,
         recScoreThresh = recScoreThresh,
     )
