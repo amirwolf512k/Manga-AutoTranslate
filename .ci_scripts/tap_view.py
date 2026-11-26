@@ -92,7 +92,11 @@ def main():
     # همانِ فایلِ آخر را میبیند.
     out_path = "/tmp/emulout/viewer.png"
     ok = False
-    for attempt in range(3):
+    # v1.14.513 — MT_VIEW_TRIES: گیتِ نوارِ بلند (16000px) دیالوگ را بعدِ
+    # برشِ پس‌زمینه باز میکند — برشِ 16000px رویِ شبیه‌ساز چند ثانیه
+    # طول میکشد → پنجرهٔ انتظارِ بزرگتر برایِ آن گیت.
+    tries = int(os.environ.get("MT_VIEW_TRIES", "3"))
+    for attempt in range(tries):
         time.sleep(6 if attempt == 0 else 5)
         sh("adb", "shell", "screencap", "-p", "/sdcard/viewer.png")
         sh("adb", "pull", "/sdcard/viewer.png", out_path, timeout=120)
@@ -118,9 +122,9 @@ def main():
             print("[view] اسکرین‌شات: %s ✔ (تلاشِ %d، %d bytes)"
                   % (out_path, attempt + 1, os.path.getsize(out_path)))
             break
-        print("[view] نمایشگر هنوز خالی (تلاشِ %d/۳)…" % (attempt + 1))
+        print("[view] نمایشگر هنوز خالی (تلاشِ %d/%d)…" % (attempt + 1, tries))
     if not ok:
-        print("[view] نمایشگر بعد از ۳ تلاش محتوا نشان نداد ✘")
+        print("[view] نمایشگر بعد از %d تلاش محتوا نشان نداد ✘" % tries)
         return 1
     return 0
 
