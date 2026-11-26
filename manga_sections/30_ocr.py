@@ -77,7 +77,10 @@ class PaddleAndroidOCR:
             _cpu_n = os.cpu_count() or 4
         except Exception:
             _cpu_n = 4
-        _intra = 4 if _cpu_n > 4 else 2
+        try:
+            _intra = _android_perf_threads()
+        except Exception:
+            _intra = 4 if _cpu_n > 4 else 2
         try:
             _env_th = int(os.environ.get("MANGA_OCR_THREADS", "0") or 0)
             if _env_th > 0:
@@ -372,7 +375,7 @@ def _purge_loser_onnx_models() -> str:
             print("[🧹] %d فایلِ مدلِ بازنده (%s) از گوشی حذف شد"
                   % (_n, _fmt_mb(_freed)))
             return ("مدلهایِ بازنده حذف شد: %d فایل / %s آزاد شد — "
-                    "روشِ فعال = RapidOCRِ اندروید"
+                    "روشِ فعال = RapidOCR (ONNX, PP-OCRv5/v6 — همانِ PC)"
                     % (_n, _fmt_mb(_freed)))
         return ""
     except Exception:
@@ -403,17 +406,29 @@ def speed_lab_env(p: dict) -> str:
         for _k in ("ms", "n", "lines"):
             _PAD_STATS[_k] = 0 if _k != "ms" else 0.0
 
+        # v1.14.506 — شتابِ گوشی (بدونِ تغییرِ مدل): نخهای بزرگِ CPU
+        # + EPِ سریعِ onnxruntime اندروید (XNNPACK/NEON با بنچمارکِ
+        # خودکار) — همانِ راهنمایِ استقرارِ PaddleOCR اندروید.
+        _sp = ""
+        if _on_android():
+            try:
+                _d = _android_ep_desc()
+                if _d:
+                    _sp = " | شتابِ گوشی: " + _d
+            except Exception:
+                _sp = ""
+
         # v1.14.505 — یکسان‌سازیِ کامل با PC: استخراجِ گوشی همان
         # RapidOCRِ ONNX (PP-OCRv5/v6) با همان مدلهای PC است؛ نردبانِ
         # اندروید فقط برای «تستِ سرعت» ساخته میشود.
         if _purge:
             return ("[⚡] روشِ استخراج: RapidOCR (ONNX, PP-OCRv5/v6) — "
-                    "همانِ PC (det=small + rec=medium)%s | v%s: %s"
-                    % (_ms_l, APP_VER, _purge))
+                    "همانِ PC (det=small + rec=medium)%s%s | v%s: %s"
+                    % (_ms_l, _sp, APP_VER, _purge))
         return ("[⚡] روشِ استخراج: RapidOCR (ONNX, PP-OCRv5/v6) — "
                 "همانِ PC | det=small + rec=medium (اگ نباشند "
-                "دانلود میشوند — v%s)%s"
-                % (APP_VER, _ms_l))
+                "دانلود میشوند — v%s)%s%s"
+                % (APP_VER, _ms_l, _sp))
     except Exception:
         return ""
 
@@ -690,6 +705,248 @@ def _mt_speed_report() -> str:
 
 _RAPIDOCR_RECOVER_LOCK = threading.Lock()
 
+# ─── v1.14.506 — شتابِ OCR گوشی «بدونِ تغییرِ مدل» ───
+# همانِ راهنمایِ رسمیِ استقرارِ PaddleOCR اندروید: (۱) کنترلِ نخها
+# (برابرِ هستههای بزرگِ CPU)، (۲) کرنلهای بهینهٔ NEON از طریقِ
+# XNNPACK (شتابدهندهٔ رسمیِ موبایلِ onnxruntime — همان AAR جاوای
+# داخلِ APK)، (۳) گرمکردنِ نشستها. مدلها و نتایج دقیقاً همانِ PC
+# (PP-OCRv5/v6 ONNX) میمانند؛ فقط موتورِ اجرا رویِ گوشی سریعتر
+# میشود. انتخابِ EP با بنچمارکِ واقعی رویِ خودِ گوشی انجام میشود
+# و در فایل ذخیره میشود (فقط بارِ اول ~۲-۴ ثانیه).
+_ANDROID_OCR_EP_STATE = {"ep": None, "threads": 0}
+_ANDROID_OCR_EP_CACHE = "android_ocr_ep.json"
+
+def _android_perf_threads() -> int:
+    """تعدادِ نخِ مناسب برای OCR گوشی = تعدادِ هستههای بزرگِ CPU
+    (خوشهٔ پرقدرت). مثلِ دموی رسمیِ PaddleOCR اندروید که intra_op
+    را برابرِ هستههای بزرگ میگذارد (پیشفرضِ ۴)."""
+    try:
+        _n = os.cpu_count() or 4
+    except Exception:
+        _n = 4
+    try:
+        _freqs = []
+        for _i in range(min(_n, 16)):
+            try:
+                with open("/sys/devices/system/cpu/cpu%d/cpufreq/"
+                          "cpuinfo_max_freq" % _i, "r") as _f:
+                    _freqs.append(int((_f.read() or "0").strip()))
+            except Exception:
+                continue
+        _freqs = [v for v in _freqs if v > 0]
+        if len(_freqs) >= 2:
+            _mx = max(_freqs)
+            _thr = int(_mx * 0.72)
+            _big = sum(1 for v in _freqs if v >= _thr)
+            if 1 <= _big <= len(_freqs):
+                return max(2, min(4, _big, _n))
+    except Exception:
+        pass
+    return 4 if _n >= 6 else max(1, min(2, _n))
+
+def _android_ep_cache_path() -> str:
+    return os.path.join(
+        os.environ.get("MANGA_FILES_DIR") or os.getcwd(),
+        _ANDROID_OCR_EP_CACHE)
+
+def _android_device_key() -> str:
+    try:
+        from java import jclass as _jc
+        return str(_jc("android.os.Build").MODEL or "")
+    except Exception:
+        return ""
+
+def _android_ep_cache_load() -> dict:
+    try:
+        with open(_android_ep_cache_path(), "r", encoding="utf-8") as _f:
+            _d = json.loads(_f.read() or "{}")
+        return _d if isinstance(_d, dict) else {}
+    except Exception:
+        return {}
+
+def _android_ep_cache_save(_d: dict) -> None:
+    try:
+        with open(_android_ep_cache_path(), "w", encoding="utf-8") as _f:
+            json.dump(_d, _f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def _android_ocr_ep_pick(det_path: str, threads: int, log=print):
+    """انتخابِ EPِ OCR رویِ گوشی: cpu | xnnpack | nnapi (فقط با
+    env) | auto (پیشفرض: بنچمارکِ واقعی cpu در برابرِ xnnpack رویِ
+    خودِ مدلِ det و انتخابِ برنده؛ نتیجه کش میشود)."""
+    _env = str(os.environ.get("MANGA_ANDROID_OCR_EP", "") or "").strip().lower()
+    if _env in ("cpu", "xnnpack"):
+        return _env, "env"
+    if _env == "nnapi":
+        log("[*] NNAPI برای OCRِ گوشی دستی روشن شد (وابسته به دستگاه "
+            "است؛ اگر ناپایدار/کند بود: MANGA_ANDROID_OCR_EP=auto)")
+        return "nnapi", "env"
+    if _env in ("0", "off", "no", "none", "false", "disabled"):
+        return None, "env"
+    try:
+        _key = "%s:%d:%s:%d:%s" % (
+            os.path.basename(det_path),
+            os.path.getsize(det_path),
+            str(getattr(ort, "__version__", "?")),
+            int(threads), _android_device_key())
+        _cached = _android_ep_cache_load()
+        if _cached.get("key") == _key \
+                and _cached.get("ep") in ("cpu", "xnnpack"):
+            return _cached["ep"], "cache"
+    except Exception:
+        _key = ""
+        _cached = {}
+    _ms = {}
+    _x = np.random.RandomState(7).rand(1, 3, 960, 640).astype(np.float32)
+    for _name in ("cpu", "xnnpack"):
+        _sess = None
+        try:
+            _so = ort.SessionOptions()
+            _so.graph_optimization_level = \
+                ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+            _so.intra_op_num_threads = int(threads)
+            _so.inter_op_num_threads = 1
+            if _name == "xnnpack":
+                _so.append_execution_provider(
+                    "XnnpackExecutionProvider",
+                    {"intra_op_num_threads": str(int(threads))})
+            _sess = ort.InferenceSession(
+                det_path, sess_options=_so,
+                providers=[("CPUExecutionProvider", {})])
+            _in_n = _sess.get_inputs()[0].name
+            _ou_n = _sess.get_outputs()[0].name
+            _sess.run([_ou_n], {_in_n: _x})
+            _best = None
+            for _ in range(3):
+                _t0 = time.perf_counter()
+                _sess.run([_ou_n], {_in_n: _x})
+                _dt = time.perf_counter() - _t0
+                _best = _dt if _best is None else min(_best, _dt)
+            _ms[_name] = (_best or 0.0) * 1000.0
+        except Exception as _e:
+            _ms[_name] = None
+            try:
+                _ms[_name + "_err"] = str(_e)[:90]
+            except Exception:
+                pass
+        finally:
+            try:
+                del _sess
+            except Exception:
+                pass
+    try:
+        import gc as _gc
+        _gc.collect()
+    except Exception:
+        pass
+    _cpu_ms, _xnn_ms = _ms.get("cpu"), _ms.get("xnnpack")
+    if _xnn_ms and (not _cpu_ms or _xnn_ms < _cpu_ms * 0.92):
+        _ep = "xnnpack"
+    elif _cpu_ms:
+        _ep = "cpu"
+    else:
+        log("[!] بنچمارکِ EPِ OCR گوشی جواب نداد → CPU (بدونِ تغییر)")
+        return None, "err"
+    try:
+        if _key:
+            _android_ep_cache_save({
+                "key": _key, "ep": _ep, "threads": int(threads),
+                "ms_cpu": (round(_cpu_ms, 1) if _cpu_ms else None),
+                "ms_xnnpack": (round(_xnn_ms, 1) if _xnn_ms else None),
+                "ts": time.strftime("%Y-%m-%d %H:%M")})
+    except Exception:
+        pass
+    try:
+        if _cpu_ms and _xnn_ms:
+            log("[*] بنچمارکِ شتابدهندهٔ OCR گوشی: CPU=%.0fms | "
+                "XNNPACK=%.0fms → %s%s"
+                % (_cpu_ms, _xnn_ms, _ep.upper(),
+                   (" (%.2fx)" % (_cpu_ms / _xnn_ms))
+                   if _ep == "xnnpack" else ""))
+        else:
+            _xerr = str(_ms.get("xnnpack_err") or "")[:60]
+            log("[*] بنچمارکِ شتابدهندهٔ OCR گوشی: CPU=%s | "
+                "XNNPACK=%s%s → %s"
+                % (("%.0fms" % _cpu_ms) if _cpu_ms else "ناموفق",
+                   ("%.0fms" % _xnn_ms) if _xnn_ms else "ناموجود",
+                   (" (%s)" % _xerr) if (_xnn_ms is None and _xerr) else "",
+                   _ep.upper()))
+    except Exception:
+        pass
+    return _ep, "bench"
+
+def _android_install_rapidocr_ep(ep: Optional[str], threads: int) -> bool:
+    """تزریقِ EPِ سریعِ گوشی به موتورِ RapidOCR (ساختارِ 3.10 مثلِ
+    PC فهرستِ EP ندارد؛ این وصله فقط رویِ اندروید نصب میشود و
+    انتخابِ CPU حالتِ خالص/پیشفرض است)."""
+    if not _on_android():
+        return False
+    try:
+        from rapidocr.inference_engine.onnxruntime.provider_config \
+            import ProviderConfig
+    except Exception:
+        return False
+    ep = str(ep or "").strip().lower()
+    threads = max(1, int(threads or 1))
+    if ep not in ("xnnpack", "nnapi"):
+        ep = "cpu"
+    if (_ANDROID_OCR_EP_STATE.get("ep") == ep
+            and int(_ANDROID_OCR_EP_STATE.get("threads") or 0) == threads):
+        return True
+    _orig = getattr(ProviderConfig, "_manga_orig_get_ep_list", None)
+    if _orig is None:
+        _orig = ProviderConfig.get_ep_list
+        ProviderConfig._manga_orig_get_ep_list = _orig
+    if ep == "cpu":
+        ProviderConfig.get_ep_list = _orig
+    else:
+        def _manga_get_ep_list(self):
+            _eps = ProviderConfig._manga_orig_get_ep_list(self)
+            try:
+                if ep == "xnnpack":
+                    _eps.insert(0, ("XnnpackExecutionProvider",
+                                    {"intra_op_num_threads":
+                                     str(threads)}))
+                elif ep == "nnapi":
+                    _eps.insert(0, ("NnapiExecutionProvider", {}))
+            except Exception:
+                pass
+            return _eps
+        ProviderConfig.get_ep_list = _manga_get_ep_list
+    _ANDROID_OCR_EP_STATE.update(ep=ep, threads=threads)
+    return True
+
+def _android_ep_desc() -> str:
+    """توضیحِ کوتاهِ EP/نخ برای بنر — از وضعیتِ زنده یا کش."""
+    try:
+        _ep = _ANDROID_OCR_EP_STATE.get("ep")
+        _th = int(_ANDROID_OCR_EP_STATE.get("threads") or 0)
+        if not _ep:
+            _c = _android_ep_cache_load()
+            _ep = _c.get("ep") if _c.get("ep") in ("cpu", "xnnpack") \
+                else None
+            _th = int(_c.get("threads") or 0)
+        if not _th:
+            _th = _android_perf_threads()
+        _eps = str(_ep or "auto").upper()
+        return "نخ=%d | EP=%s" % (_th, _eps)
+    except Exception:
+        return ""
+
+_OCR_STATS = {"n": 0, "ms": 0.0}
+
+def _ocr_stats_note(t0: float) -> None:
+    try:
+        _OCR_STATS["n"] += 1
+        _OCR_STATS["ms"] += (time.time() - t0) * 1000.0
+        if _OCR_STATS["n"] % 25 == 0:
+            print("[⚡] OCR: %d ناحیه | میانگینِ %.0fms"
+                  % (_OCR_STATS["n"],
+                     _OCR_STATS["ms"] / max(1, _OCR_STATS["n"])))
+    except Exception:
+        pass
+
 class RapidOCRBackend:
 
     def __init__(self, lang: str = "en", prefer_gpu: Optional[bool] = None,
@@ -874,9 +1131,8 @@ class RapidOCRBackend:
                 _gpu_flags = {}
             try:
                 import os as _os2
-                _cpu_n = _os2.cpu_count() or 4
             except Exception:
-                _cpu_n = 4
+                _os2 = os
             try:
                 _ocr_th = int(_os2.environ.get("MANGA_OCR_THREADS", "0") or 0)
             except Exception:
@@ -891,13 +1147,40 @@ class RapidOCRBackend:
             elif _env_ort_h4 > 0:
                 _intra = max(1, _env_ort_h4)
             elif _on_android():
-                _intra = 1 if _cpu_n <= 4 else 2
+                # v1.14.506 — شتابِ گوشی: نخها برابرِ هستههای بزرگِ CPU
+                # (مثلِ دموی رسمیِ PaddleOCR اندروید)؛ قبلاً ۱-۲ بود.
+                _intra = _android_perf_threads()
             else:
                 _intra = 2
             _threads = {
                 "EngineConfig.onnxruntime.intra_op_num_threads": int(_intra),
                 "EngineConfig.onnxruntime.inter_op_num_threads": 1,
             }
+            # v1.14.506 — شتابدهندهٔ گوشی (بدونِ تغییرِ مدل): انتخابِ EP
+            # با بنچمارکِ واقعی رویِ خودِ گوشی + وصلهٔ rapidocr.
+            _android_ep_disp = ""
+            if _on_android():
+                try:
+                    _detp = _os2.path.join(_mdir or "", str(_det_n or ""))
+                    if not _os2.path.isfile(_detp):
+                        _detp = ""
+                except Exception:
+                    _detp = ""
+                if _detp:
+                    try:
+                        _aep = _android_ocr_ep_pick(
+                            _detp, int(_intra))[0]
+                    except Exception as _ae:
+                        print(f"[!] انتخابِ شتابدهندهٔ OCR گوشی ناموفق "
+                              f"({str(_ae)[:90]}) → CPU")
+                        _aep = None
+                    if _aep and _aep != "cpu":
+                        if _android_install_rapidocr_ep(_aep, int(_intra)):
+                            _android_ep_disp = f" | EP گوشی={_aep.upper()}"
+                        else:
+                            _aep = None
+                    elif _aep == "cpu":
+                        _android_install_rapidocr_ep("cpu", int(_intra))
             _det_speed = _ocr_det_resize_policy(lang) or {}
             _det_disp = ""
             if _det_speed:
@@ -914,21 +1197,31 @@ class RapidOCRBackend:
                     self.engine = NewRapidOCR(params=_p)
                     self._eng_params = _p
                 except Exception as _eg:
-                    if not _gpu_flags:
+                    _aep_now = _ANDROID_OCR_EP_STATE.get("ep")
+                    if (not _gpu_flags) and _on_android() \
+                            and _aep_now not in (None, "cpu"):
+                        print(f"[!] EPِ {_aep_now.upper()} برایِ OCR نشد "
+                              f"({str(_eg)[:110]}) → CPU")
+                        _android_install_rapidocr_ep("cpu", int(_intra))
+                        self.engine = NewRapidOCR(params=_p)
+                        self._eng_params = _p
+                    elif not _gpu_flags:
                         raise
-                    print(f"[!] EPِ GPU برایِ OCR نشد ({str(_eg)[:130]}) → CPU")
-                    _p2 = {k: v for k, v in _p.items() if k not in _gpu_flags}
-                    self.engine = NewRapidOCR(params=_p2)
-                    self._eng_params = _p2
-                    self._dml_locked = False
-                    self._gpu_locked = False
-                    self._ocr_ep_active = "CPUExecutionProvider"
+                    else:
+                        print(f"[!] EPِ GPU برایِ OCR نشد ({str(_eg)[:130]}) → CPU")
+                        _p2 = {k: v for k, v in _p.items() if k not in _gpu_flags}
+                        self.engine = NewRapidOCR(params=_p2)
+                        self._eng_params = _p2
+                        self._dml_locked = False
+                        self._gpu_locked = False
+                        self._ocr_ep_active = "CPUExecutionProvider"
                 self._new_api = True
                 self._gpu_warmup()
+                self._android_ep_warmup()
                 _ep_disp = (f" | EP={getattr(self, '_ocr_ep_active', '')}"
                                if str(getattr(self, "_ocr_ep_active", "") or "").strip()
                                else "")
-                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_det_disp} | cls=خاموش")
+                print(f"[+] RapidOCR (ONNX, PP-OCRv5) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_android_ep_disp}{_det_disp} | cls=خاموش")
                 return
             _pb = dict(_base)
             _pb.update(_threads)
@@ -937,21 +1230,31 @@ class RapidOCRBackend:
                 self.engine = NewRapidOCR(params=_pb)
                 self._eng_params = _pb
             except Exception as _eg:
-                if not _gpu_flags:
+                _aep_now = _ANDROID_OCR_EP_STATE.get("ep")
+                if (not _gpu_flags) and _on_android() \
+                        and _aep_now not in (None, "cpu"):
+                    print(f"[!] EPِ {_aep_now.upper()} برایِ OCR نشد "
+                          f"({str(_eg)[:110]}) → CPU")
+                    _android_install_rapidocr_ep("cpu", int(_intra))
+                    self.engine = NewRapidOCR(params=_pb)
+                    self._eng_params = _pb
+                elif not _gpu_flags:
                     raise
-                print(f"[!] EPِ GPU برایِ OCR نشد ({str(_eg)[:130]}) → CPU")
-                _pb2 = {k: v for k, v in _pb.items() if k not in _gpu_flags}
-                self.engine = NewRapidOCR(params=_pb2)
-                self._eng_params = _pb2
-                self._dml_locked = False
-                self._gpu_locked = False
-                self._ocr_ep_active = "CPUExecutionProvider"
+                else:
+                    print(f"[!] EPِ GPU برایِ OCR نشد ({str(_eg)[:130]}) → CPU")
+                    _pb2 = {k: v for k, v in _pb.items() if k not in _gpu_flags}
+                    self.engine = NewRapidOCR(params=_pb2)
+                    self._eng_params = _pb2
+                    self._dml_locked = False
+                    self._gpu_locked = False
+                    self._ocr_ep_active = "CPUExecutionProvider"
             self._new_api = True
             self._gpu_warmup()
+            self._android_ep_warmup()
             _ep_disp = (f" | EP={getattr(self, '_ocr_ep_active', '')}"
                            if str(getattr(self, "_ocr_ep_active", "") or "").strip()
                            else "")
-            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_det_disp} | cls=خاموش")
+            print(f"[+] RapidOCR (ONNX, PP-OCRv5/v6) آماده | lang={lang} | threads={_intra_disp}{_ep_disp}{_android_ep_disp}{_det_disp} | cls=خاموش")
             return
         except Exception as e:
             import traceback as _tb
@@ -1178,6 +1481,42 @@ class RapidOCRBackend:
             except Exception:
                 pass
 
+    def _android_ep_warmup(self):
+        """v1.14.506 — گرمکردنِ نشستهای det/rec رویِ گوشی: ساختِ
+        نشست + کامپایلِ کرنلها (XNNPACK) همینجا انجام میشود تا
+        صفحهٔ اولِ واقعی این هزینه را نپردازد."""
+        if not _on_android():
+            return
+        _ep = _ANDROID_OCR_EP_STATE.get("ep")
+        try:
+            _hh, _ww = 300, 900
+            _img = np.full((_hh, _ww, 3), 255, np.uint8)
+            try:
+                cv2.rectangle(_img, (8, 8), (_ww - 8, _hh - 8),
+                              (0, 0, 0), 2)
+                cv2.putText(_img, "MANGA 12345", (24, _hh // 2),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.1, (0, 0, 0), 3)
+            except Exception:
+                pass
+            self._engine_run(_img)
+        except Exception as _e:
+            _m = str(_e).lower()
+            if "detection result is empty" in _m \
+                    or "text detection result is empty" in _m:
+                return
+            if _ep not in (None, "cpu"):
+                print(f"[!] گرمکردنِ EPِ {_ep.upper()} مردود شد "
+                      f"({str(_e)[:90]}) → CPU")
+                try:
+                    from rapidocr import RapidOCR as NewRapidOCR
+                    _android_install_rapidocr_ep(
+                        "cpu", int(getattr(self, "ocr_threads", 4)))
+                    _p = dict(getattr(self, "_eng_params", None) or {})
+                    if _p:
+                        self.engine = NewRapidOCR(params=_p)
+                except Exception:
+                    pass
+
     def ocr(self, image_bgr: np.ndarray, crop_mode: bool = False):
 
         if image_bgr is None or image_bgr.size == 0:
@@ -1187,7 +1526,9 @@ class RapidOCRBackend:
         if self._new_api:
             for _att in range(2):
                 try:
+                    _t_oc = time.time()
                     out = self._engine_run(image_bgr)
+                    _ocr_stats_note(_t_oc)
                     txts = getattr(out, "txts", None)
                     if not txts:
                         return None

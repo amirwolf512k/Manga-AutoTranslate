@@ -13,7 +13,7 @@ from datetime import datetime
 from typing import Optional
 
 APP_NAME = "مانگا مترجم"
-APP_VER = "1.14.505"
+APP_VER = "1.14.506"
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # v1.14.505 — HTTP یکپارچهٔ اپ: aiohttp (درخواستِ سازنده) با فالبکِ خودکارِ
