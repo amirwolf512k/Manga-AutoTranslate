@@ -568,6 +568,20 @@ class _MangaTranslatorBody_70:
             base_scale = 1.35
         else:
             base_scale = 1.0
+        # v1.14.507 — صفحهٔ رزولوشن‌بلند (اسکنِ ≥۲۲۰۰px): متنِ داخلِ
+        # حباب از قبل بزرگ است؛ بزرگ‌کردنِ نرم‌افزاریِ ۱٫۸-۲٫۴x فقط
+        # پیکسلِ بی‌فایده است و det را روی کراپِ ۲-۴ برابری میاندازد.
+        # متن در طولِ ≥۱۶۰۰px همیشه ارتفاعِ کافی برای det دارد.
+        # (مثلاً img6 ۲۴۸۰px: scale 1.8→1.16؛ فصلِ ۱۱۲۰۰px: →1.0)
+        # کیفیتِ rec هم تغیر نمیکند — rec ارتفاعِ خط را خودش به ۴۸px
+        # نرمال میکند. برایِ گوشیِ کند و PC قدیمی ۲-۴ برابر صرفه.
+        try:
+            _plong = float(max(h, w))
+            if _plong >= 2200.0:
+                _over = _plong / 1600.0
+                base_scale = max(1.0, base_scale / _over)
+        except Exception:
+            pass
 
         inset = int(min(ch0, cw0) * 0.06)
         if min(ch0, cw0) >= 160 and ch0 > 2 * inset + 20 and cw0 > 2 * inset + 20:

@@ -2377,7 +2377,22 @@ def _ocr_det_resize_policy(lang: str):
             if _e_typ in ("min", "max"):
                 out["Det.limit_type"] = _e_typ
             return out or None
-        return None
+        # v1.14.507 — شتابِ CJK (گوشی + PC قدیمی ۱-۲GB): ریشهٔ کندیِ
+        # استخراج این بود که rapidocr به‌طورِ پیش‌فرض 736/min است و
+        # «هر کراپِ کوچکِ حباب» را تا کنارِ ۷۳۶ پیکسل بزرگ میکرد
+        # (۲..۵ برابرِ پیکسلِ بی‌فایده)؛ و پایپ‌لاین به‌ازایِ هر ناحیه
+        # ۲-۴ واریانتِ OCR میزند → هزینه ضرب میشود. حالا همهٔ زبانها
+        # 960/max میگیرند: کراپِ حباب دیگر بزرگ نمیشود و فقط صفحهٔ
+        # بزرگتر از ۹۶۰ کوچک میشود. مدل همان PP-OCRv6 میماند و rec
+        # ارتفاعِ خط را خودش به ۴۸px نرمال میکند. آزمونِ پایپ‌لاینِ
+        # واقعی (det → _ocr_crop روی ci_imgs، ۲ هسته):
+        #   ko: 27.4→3.8s (7.2x) | zh: 20.2→5.1s (4x) | up0929_zh:
+        #   54.8→17.2s (3.2x، یک خطِ بیشتر) | ja: 16→6.6s (2.4x،
+        #   پوششِ برابر/بهتر — «無限の力» و «一緒にかんはりましょう»
+        #   فقط با 960/max خوانده شدند) | 4e2e77: 27→10.6s (2.6x).
+        # بازگرداندنِ رفتارِ قدیم: MANGA_OCR_DET_LIMIT=736
+        # MANGA_OCR_DET_TYPE=min.
+        return {"Det.limit_side_len": 960, "Det.limit_type": "max"}
     out = {"Det.limit_side_len": 960, "Det.limit_type": "max"}
     if _e_lim > 0:
         out["Det.limit_side_len"] = int(_e_lim)
