@@ -9,3 +9,8 @@ arabic-reshaper>=3.0
 python-bidi>=0.4
 pymupdf>=1.24
 pycryptodome>=3.19
+# v1.14.515 — اختیاری: موتور OCR OpenVINO برای PC x86_64 (لینوکس/ویندوز)
+# تا ۴ برابر سریع‌تر از ORT-CPU روی همان مدل‌ها. اگر نصب نباشد، اپ
+# بی‌صدا با ORT-CPU ادامه میدهد. خاموش‌کردن: MANGA_OV_OCR=0
+openvino==2024.1.0
+rapidocr-openvino==1.4.4 ; platform_machine == "x86_64"

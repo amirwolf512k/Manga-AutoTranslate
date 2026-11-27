@@ -1308,10 +1308,21 @@ def _run(job):
                     translate_retranslate=bool(p.get("retranslate")),
                 )
 
+                # v1.14.515 — چسباندنِ نوارها (stitch) رویِ گوشی دیگر
+                # پیش‌فرض نیست: صفحاتِ مستقل (هر صفحه مثلِ حالتِ تکی)
+                # تشخیصِ متنِ ریزِ کنارِ حباب را حفظ میکند (img6:
+                # «You're the real attraction here.» در حالتِ چند-عکسیِ
+                # 510/511 گم میشد). برایِ برگشتنِ به رفتارِ چسباندن:
+                # MANGA_STITCH_ANDROID=1
                 if (getattr(manga, "_on_android", lambda: False)()
-                        and getattr(tr, "det", None) is not None):
+                        and getattr(tr, "det", None) is not None
+                        and str(os.environ.get(
+                            "MANGA_STITCH_ANDROID", "")).strip() == "1"):
                     tr.stitch_max_height = 4000
                     tr.stitch_explicit = True
+                else:
+                    tr.stitch_max_height = 0
+                    tr.stitch_explicit = False
                 tr.batch_workers = _i("batchw", 3)
                 if _glos_path:
                     try:

@@ -29,6 +29,177 @@ _MOBILE_LANG_MAP = {
 def _mobile_lang(lang):
     return _MOBILE_LANG_MAP.get(str(lang or "en").lower(), "latin")
 
+# ─────────── v1.14.515 — موتورِ OpenVINO برایِ OCR رویِ PC (x86_64) ───────────
+# درخواستِ کاربر: «برایِ CPUِ لینوکس/پی‌سی چیزی مثلِ NNAPI داریم؟»
+# پاسخ: OpenVINO (اینتل) — همانِ مدل‌های PP-OCRv6 رویِ موتورِ OpenVINO.
+# آزمونِ واقعیِ سندباکس (۲ هسته): img6 = 1.5s با OpenVINO در برابرِ 6.3s
+# با ORT-CPU = ۴.۲ برابر سریع‌تر، با همانِ مدلِ det-small/rec-medium.
+# نصب: pip install rapidocr-openvino==1.4.4 openvino==2024.1.0
+# (سریع‌تر: کافی است نصب باش؛ اگر نبود، بی‌صدا همان ORT-CPU میماند.)
+# خاموش‌کردن: MANGA_OV_OCR=0
+
+def _pc_x86_64() -> bool:
+    """PC واقعی (نه اندروید) با CPUِ x86_64 — هدفِ موتورِ OpenVINO."""
+    try:
+        if _on_android():
+            return False
+        import platform as _pf
+        return _pf.machine().lower() in ("x86_64", "amd64", "x64")
+    except Exception:
+        return False
+
+
+def _ov_ocr_enabled() -> bool:
+    try:
+        _v = str(os.environ.get("MANGA_OV_OCR", "1") or "1").strip().lower()
+    except Exception:
+        return True
+    return _v not in ("0", "off", "false", "no", "disabled")
+
+
+class _OvOcrResult:
+    __slots__ = ("boxes", "txts", "scores")
+
+    def __init__(self, boxes, txts, scores):
+        self.boxes = boxes
+        self.txts = txts
+        self.scores = scores
+
+
+class _OvOcrEngineAdapter:
+    """rapidocr_openvino (فرمِ قدیمیِ خروجی: list[box, text, score])
+    → رابطِ API جدیدِ rapidocr (boxes/txts/scores) — همهٔ مسیرهای
+    داخلِ اپ همانندِ ORT کار میکنند."""
+
+    def __init__(self, ov_eng):
+        self._ov = ov_eng
+
+    def __call__(self, image_bgr, use_det=True, use_cls=False,
+                 use_rec=True, **kw):
+        try:
+            res = self._ov(image_bgr, use_det=use_det,
+                           use_cls=use_cls, use_rec=use_rec)
+        except TypeError:
+            res = self._ov(image_bgr)
+        if isinstance(res, tuple):
+            res = res[0]
+        boxes, txts, scores = [], [], []
+        for it in (res or []):
+            try:
+                if not isinstance(it, (list, tuple)) or not it:
+                    continue
+                first = it[0]
+                _is_box = False
+                _arr = None
+                try:
+                    _arr = np.asarray(first)
+                    _is_box = (_arr.ndim == 2 and _arr.shape[0] >= 4)
+                except Exception:
+                    _is_box = False
+                if len(it) >= 3 and _is_box:
+                    boxes.append(_arr.astype(np.float32))
+                    txts.append(str(it[1]))
+                    scores.append(float(it[2]))
+                elif _is_box and len(it) == 1:
+                    # det-only: [box]
+                    boxes.append(_arr.astype(np.float32))
+                    txts.append("")
+                    scores.append(0.0)
+                elif len(it) >= 2 and isinstance(first, str):
+                    # rec-only: [text, score]
+                    txts.append(str(first))
+                    scores.append(float(it[1]))
+                elif _is_box:
+                    boxes.append(_arr.astype(np.float32))
+            except Exception:
+                continue
+        return _OvOcrResult(boxes, txts, scores)
+
+
+def _build_openvino_ocr_engine(mdir, det_name, rec_name,
+                                det_speed=None):
+    """ساختِ موتورِ OCR با OpenVINO رویِ PCِ x86_64 — همانِ مدل‌های
+    v6 خودِ اپ (det-small + rec-medium + همانِ فایلِ کلیدها).
+    خروجی: engine (آداپتور) یا None (فالبکِ ORT)."""
+    if not _pc_x86_64() or not _ov_ocr_enabled():
+        return None
+    try:
+        if _ORT_CUDA_OK is True:
+            return None  # GPU فعال است — ORT-GPU بهتر است
+    except Exception:
+        pass
+    try:
+        from rapidocr_openvino import RapidOCR as _OvRapidOCR
+    except Exception:
+        return None
+    try:
+        import os as _os
+        det_path = _os.path.join(mdir or "", str(det_name or ""))
+        rec_path = _os.path.join(mdir or "", str(rec_name or ""))
+        if not (_os.path.isfile(det_path) and _os.path.isfile(rec_path)
+                and _os.path.getsize(det_path) > 100_000
+                and _os.path.getsize(rec_path) > 100_000):
+            return None
+        keys_path = ""
+        for _k in ("ppocrv6_chars.txt", "korean_chars.txt",
+                   "ppocr_keys_v1.txt", "en_dict.txt"):
+            _kp = _os.path.join(mdir or "", _k)
+            if _os.path.isfile(_kp) and _os.path.getsize(_kp) > 100:
+                keys_path = _kp
+                break
+        kw = {"det_model_path": det_path, "rec_model_path": rec_path}
+        try:
+            _ls = int((det_speed or {}).get("Det.limit_side_len", 960))
+            _lt = str((det_speed or {}).get("Det.limit_type", "max"))
+            kw["det_limit_side_len"] = max(320, min(1280, _ls))
+            kw["det_limit_type"] = _lt if _lt in ("min", "max") else "max"
+        except Exception:
+            kw["det_limit_side_len"] = 960
+            kw["det_limit_type"] = "max"
+        # v1.14.515 — Global.max_side_lenِ موتورِ قدیمی (۲۰۰۰) وب‌تونِ
+        # بلند (4e2e77: ۹۰۰×۱۶۰۰۰) را قبل از det کوچک میکرد و خطِ نجات
+        # گم میشد → مثلِ rapidocrِ جدید: بدونِ پیش‌کوچک‌شدن.
+        kw["max_side_len"] = 100000
+        if keys_path:
+            kw["rec_keys_path"] = keys_path
+        eng = _OvRapidOCR(**kw)
+        # v1.14.515 — وصلهٔ فرهنگِ v6/v5: موتورِ قدیمی [blank]+chars
+        # میسازد؛ مدلِ v6 سرِ [space] هم دارد (len+1) → IndexError.
+        # بازسازی: [blank] + chars + [space] (همانِ rapidocrِ جدید).
+        if keys_path:
+            try:
+                _pp = eng.text_rec.postprocess_op
+                _chars = [l.decode("utf-8").strip("\n").strip("\r\n")
+                          for l in open(keys_path, "rb").readlines()]
+                if len(_pp.character) == len(_chars) + 1:
+                    _pp.character = ["blank"] + _chars + [" "]
+                    _pp.dict = {c: i for i, c in enumerate(_pp.character)}
+            except Exception:
+                pass
+        # پروبِ واقعی: یک کراپِ کوچک با متنِ واقعی بخوان تا مطمئن شویم
+        # موتور سالم است (خواندنِ متنِ واقعی = جریانِ کاملِ det+rec).
+        try:
+            _probe = np.full((96, 384, 3), 255, np.uint8)
+            cv2.putText(_probe, "OCR PROBE 123", (12, 62),
+                        cv2.FONT_HERSHEY_SIMPLEX, 1.4, (0, 0, 0), 3)
+            _pr = eng(_probe)
+            _pi = _pr[0] if isinstance(_pr, tuple) else _pr
+            _pt = " ".join(str(x[1]) for x in (_pi or [])
+                           if isinstance(x, (list, tuple)) and len(x) >= 2)
+            if "PROBE" not in _pt and "OCR" not in _pt:
+                return None
+        except Exception:
+            return None
+        return _OvOcrEngineAdapter(eng)
+    except Exception as _e:
+        try:
+            print(f"[!] موتورِ OpenVINO OCR فعال نشد ({str(_e)[:110]}) "
+                  f"→ ORT-CPU")
+        except Exception:
+            pass
+        return None
+
+
 _PAD_STATS = {"ms": 0.0, "n": 0, "lines": 0}
 
 def _ocr_pad_white(img, pad: int):
@@ -1317,6 +1488,29 @@ class RapidOCRBackend:
                 pass
             _intra_disp = _intra
             self.ocr_threads = int(_intra)
+            # v1.14.515 — PCِ x86_64 بدونِ GPU: موتورِ OpenVINO (تا ۴ برابر
+            # سریع‌تر از ORT-CPU رویِ همانِ مدل‌ها — آزمونِ img6: 1.5s/6.3s).
+            # فقط وقتی rapidocr-openvino + openvino نصب باشند؛ وگرنه بی‌صدا
+            # همان ORT-CPU. خاموش: MANGA_OV_OCR=0
+            _ov_eng = None
+            if not _gpu_flags:
+                try:
+                    _ov_eng = _build_openvino_ocr_engine(
+                        _mdir, _det_n, _rec_n, _det_speed)
+                except Exception:
+                    _ov_eng = None
+            if _ov_eng is not None:
+                self.engine = _ov_eng
+                self._eng_params = {}
+                self._new_api = True
+                self._ov_ocr_active = True
+                try:
+                    print(f"[+] RapidOCR (OpenVINO, PP-OCRv5/v6) آماده | "
+                          f"lang={lang} | موتور=OpenVINO (شتابِ CPUِ PC)"
+                          f"{_det_disp}{_det_pad_disp} | cls=خاموش")
+                except Exception:
+                    pass
+                return
             if _rec_params is not None:
                 _p = dict(_rec_params)
                 _p.update(_base)

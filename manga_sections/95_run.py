@@ -887,6 +887,22 @@ class _MangaTranslatorBody_95:
                  if os.path.splitext(f)[1].lower() in IMAGE_EXTS),
                 key=MangaTranslator._natural_sort_key,
             )
+            # v1.14.515 — پوشهٔ محلی با چند عکس = صفحاتِ مستقل: هر صفحه
+            # دقیقاً مثلِ حالتِ تکی پردازش میشود — بدونِ چسباندنِ نوار
+            # (stitch) و بدونِ ریسایزِ گروهیِ عرض. ریشهٔ باگِ چند-عکسیِ
+            # گوشی: در حالتِ چسبیده، صفحات به عرضِ مشترک کوچک‌شده و در
+            # نوارِ ۴۰۰۰px چسبانده میشدند و متنِ ریزِ کنارِ حباب (img6:
+            # «You're the real attraction here.» بالای-چپ) در تشخیصِ
+            # نوارِ چسبیده گم میشد؛ حالتِ تکی همان متن را میگرفت.
+            # پرچمِ MANGA_STITCH_ANDROID=1 رفتارِ چسباندن را برمیگرداند.
+            try:
+                if len(image_files) > 1 \
+                        and not getattr(self, "stitch_explicit", False):
+                    self._independent_pages = True
+                    print(f"[*] پوشهٔ {len(image_files)} عکس → صفحاتِ مستقل "
+                          f"(هر صفحه مثلِ حالتِ تکی؛ بدون چسباندن/ریسایزِ گروهی)")
+            except Exception:
+                pass
         elif os.path.isfile(input_path) and os.path.splitext(input_path)[1].lower() in IMAGE_EXTS:
             image_files = [input_path]
         else:
