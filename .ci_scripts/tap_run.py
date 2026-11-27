@@ -95,6 +95,26 @@ def main():
             print(f"[tap-run] dump failed (attempt {attempt})")
             time.sleep(3)
             continue
+        # v1.14.514a — فلکِ ANRِ لانچر (Pixel Launcher isn't responding):
+        # دیالوگِ سیستم رویِ اپ می‌نشیند و دکمهٔ شروع پنهان میشود؛
+        # «Wait» میزنیم (اِپ زنده میماند) و تلاش ادامه می‌یابد.
+        _all_nodes = list(nodes(xml))
+        if any(("isn't responding" in t) or ("پاسخ نمی‌دهد" in t)
+               for t, _ in _all_nodes):
+            _wt = None
+            for t, b_ in _all_nodes:
+                if t.strip() in ("Wait", "صبر کن", "Wait for", "انتظار"):
+                    _wt = b_
+                    break
+            if _wt:
+                sh("adb", "shell", "input", "tap",
+                   str((_wt[0] + _wt[2]) // 2), str((_wt[1] + _wt[3]) // 2))
+                print("[tap-run] launcher-ANR dialog → tapped Wait")
+            else:
+                sh("adb", "shell", "input", "keyevent", "4")
+                print("[tap-run] launcher-ANR dialog → back key")
+            time.sleep(2)
+            continue
         b = find_run(xml)
         if b:
             cx, cy = (b[0] + b[2]) // 2, (b[1] + b[3]) // 2
