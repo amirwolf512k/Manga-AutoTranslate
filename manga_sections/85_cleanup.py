@@ -882,9 +882,11 @@ class _MangaTranslatorBody_85:
         # v1.14.514 — جوهرِ «هم‌خاکستریِ رنگی» (آمبر رویِ آبیِ روشنِ
         # جعبهٔ 4e2e77: Δ خاکستری=۱۰ ولی Δ رنگ=۱۷۰): انحرافِ هر کانال از
         # میانگینِ هموارِ خودش (medianBlur ۲۱ — گرادیان را رد میکند)
-        # > ۲۶ = جوهر؛ فقط وقتی زمینه پُررنگ است (زمینهٔ بی‌رنگ قواعدِ
-        # خودش را دارد) و همگن (share3≥۵۰٪ — آرت اینجا نمیرسد).
-        if _med_sat > 20.0:
+        # > ۲۶ = جوهر؛ فقط وقتی (۱) قواعدِ تیره/روشن جوهر نیافتهاند
+        # (متنِ سفید رویِ قرمزِ img5: جوهرِ روشن هست → این قاعده خاموش
+        # تا لبههایِ اُبرِ قرمزِ نجات‌یافته پاک نشوند) و (۲) زمینه
+        # پُررنگ است و همگن (share3≥۵۰٪ — آرت اینجا نمیرسد).
+        if _med_sat > 20.0 and cv2.countNonZero(text_core) < 24:
             try:
                 dev = np.zeros(g.shape, np.float32)
                 for _ci in range(3):
@@ -1221,6 +1223,20 @@ class _MangaTranslatorBody_85:
             if int(ring.sum()) < 30:
                 return m
             bg = float(np.median(g[ring]))
+            # v1.14.514c — فقط رویِ زمینهِ «هموار»: رینگِ بافت‌دار (اُبرِ
+            # قرمزِ img5) جوهرش و لبههایِ بافتش از هم جدا نمیشوند؛
+            # پیوند، قطعههایِ بافتِ چسبیده به متن را میبلعد و «شبحِ
+            # لبه» میسازد. σ مقاومِ رینگ ≤۷ = زمینهٔ هموار (جعبهٔ سیستم).
+            try:
+                _g_r = g.astype(np.float32)
+                _nv = _g_r - cv2.medianBlur(g, 5).astype(np.float32)
+                _vals = _nv[ring]
+                _sig = 1.4826 * float(np.median(np.abs(
+                    _vals - np.median(_vals))))
+                if _sig > 7.0:
+                    return m
+            except Exception:
+                pass
             # v1.14.514a — band ≤ رینگِ گیتِ گرادیان (۲۱px): جوهرِ
             # دورتر از رینگ = آرت/چیزِ دیگر — گیت آن را نمیبیند و
             # پیوندش خطرناک است (آزمونِ lang_zh: نوارِ عمودیِ تیره).
@@ -2046,22 +2062,30 @@ class _MangaTranslatorBody_85:
                 if int(_ring.sum()) > 60:
                     _msat = float(np.median(_sat_c[_ring]))
                     if _msat > 20.0:
-                        # v1.14.514 — بلوک فقط وقتی جوهرِ جاماندهٔ واقعی
-                        # هست: با پیوندِ جوهرِ نزدیک (near-band) پوششِ ماسک
-                        # خوب است و بلوک فقط «نوارِ روشن/لکه» میسازد
-                        # (جعبه‌هایِ سیستمِ 4e2e77: بلوک ۱۹۹هزارpx →
-                        # نوارهایِ پخش؛ با ماسکِ جوهر: گرادیانِ تمیز).
-                        # پوششِ جوهر ≥ ۷۵٪ → بدونِ بلوک.
+                        # v1.14.514c — بلوکِ v503 فقط برایِ زمینهٔ
+                        # «بافت‌دار» (σ رینگ > ۷): LaMa بافت را
+                        # بازسازی میکند (اُبرِ قرمزِ img5 — بدونِ بلوک،
+                        # لبههایِ بافتِ چسبیده به متن خورده میشوند =
+                        # شبحِ لبه ۸٪). زمینهٔ «هموار» (گرادیانِ
+                        # جعبه‌هایِ سیستمِ 4e2e77) بلوک = نوارِ پخش؛
+                        # با ماسکِ جوهر + پیوندِ نزدیک، گرادیانِ تمیز.
                         _g_c = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
-                        _bg_c = float(np.median(_g_c[_ring]))
-                        _ink_c = (np.abs(
-                            _g_c.astype(np.int32) - int(round(_bg_c))) > 22) \
-                            & (zone > 0)
-                        _need_blk = True
-                        if int(_ink_c.sum()) >= 40:
-                            _cov = float((_ink_c & (msk > 0)).sum()) \
-                                / float(_ink_c.sum())
-                            _need_blk = _cov < 0.75
+                        # v1.14.514d — رنگیِ «تخت» (دامنهٔ رینگ ≤۲۸:
+                        # اُبرِ قرمزِ img5) → بلوکِ v503 (LaMa بافت را
+                        # بازسازی میکند و لبهها میمانند). رنگیِ «گرادیان»
+                        # (جعبه‌هایِ سیستم) → ماسکِ جوهر.
+                        _rng = float(np.max(_g_c[_ring])) \
+                            - float(np.min(_g_c[_ring]))
+                        _need_blk = _rng <= 28.0
+                        if not _need_blk:
+                            _bg_c = float(np.median(_g_c[_ring]))
+                            _ink_c = (np.abs(
+                                _g_c.astype(np.int32) - int(round(_bg_c))) > 22) \
+                                & (zone > 0)
+                            if int(_ink_c.sum()) >= 40:
+                                _cov = float((_ink_c & (msk > 0)).sum()) \
+                                    / float(_ink_c.sum())
+                                _need_blk = _cov < 0.75
                         if _need_blk:
                             _ys, _xs = np.nonzero(msk)
                             if len(_ys):
