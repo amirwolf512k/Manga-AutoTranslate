@@ -1603,7 +1603,19 @@ class LamaMangaONNX:
                 msk = cv2.copyMakeBorder(msk, 0, s - rh, 0, s - rw,
                                          cv2.BORDER_CONSTANT, value=0)
         elif not self._fixed_size and _mx <= s:
-            _tgt = max(_mx, 128)
+            # v1.14.514 — کفِ مقیاس ۲۵۶ (قبلاً ۱۲۸): برشهایِ کوچکِ
+            # پاکسازی در ۱۲۸px دانه/لکه میسازند (آزمونِ img7: پرِ
+            # hpstd=19 در ۱۲۸ → ۷ در ۲۵۶)؛ یکدست‌سازیِ زمینهٔ حباب
+            # از این مسیر رد میشود پس فقط برشهایِ آرت/گرادیان هزینه
+            # را میپردازند.
+            _min_side = 256
+            try:
+                _env_ms = int(os.environ.get("MANGA_LAMA_MIN_SIDE", "0") or 0)
+                if _env_ms > 0:
+                    _min_side = _env_ms
+            except Exception:
+                _min_side = 256
+            _tgt = max(_mx, _min_side)
             _sc = _tgt / _mx
             if abs(_sc - 1.0) < 1e-6:
                 rw, rh = ow, oh

@@ -3688,6 +3688,26 @@ class MainActivity : AppCompatActivity() {
             .joinToString("") { "%02x".format(it) }.substring(0, 16)
     } catch (_: Exception) { src.nameWithoutExtension + "_" + src.length() }
 
+    // v1.14.514 — لاگِ نمایشگر: هر خطا/قدمِ مهمِ نمایشگر با ساعت در
+    // files/viewer_log.txt میرود (سقفِ ۱۲۰KB) — عیب‌یابیِ «مشکلِ نمایشِ
+    // گوشی» بدونِ کاتل لاگ (این adb از دور در دسترس نیست).
+    private fun viewerLog(msg: String, t: Throwable? = null) {
+        try {
+            android.util.Log.w("MangaView", msg, t)
+            val f = File(filesDir, "viewer_log.txt")
+            try {
+                if (f.isFile() && f.length() > 120_000L) {
+                    val keep = f.readLines().takeLast(200)
+                    f.writeText(keep.joinToString("\n") + "\n")
+                }
+            } catch (_: Exception) {}
+            val line = java.text.SimpleDateFormat("MM-dd HH:mm:ss",
+                java.util.Locale.US).format(java.util.Date()) +
+                "  " + msg + (t?.let { " | " + it.toString() } ?: "")
+            f.appendText(line + "\n")
+        } catch (_: Exception) {}
+    }
+
     // برشِ یک عکسِ عادی (نهایی/زنده) — ناموفق = خودِ فایل (بدون تغییر)
     private fun viewerSliceImage(src: File, bounds: List<IntArray>): List<File> {
         val dir = File(cacheDir, "vslices/" + viewerSliceKey(src))
@@ -3698,15 +3718,25 @@ class MainActivity : AppCompatActivity() {
         try { dir.deleteRecursively() } catch (_: Exception) {}
         if (!dir.isDirectory && !dir.mkdirs()) return listOf(src)
         return try {
-            val dim = imgDimOf(src.absolutePath) ?: return listOf(src)
+            val dim = imgDimOf(src.absolutePath) ?: run {
+                viewerLog("slice: imgDimOf null → ${src.name}")
+                return listOf(src)
+            }
             val dec = BitmapRegionDecoder.newInstance(src.absolutePath, false)
-                ?: return listOf(src)
+                ?: run {
+                    viewerLog("slice: decoder null → ${src.name}")
+                    return listOf(src)
+                }
             try {
                 for (i in bounds.indices) {
                     val b = bounds[i]
                     val bmp = dec.decodeRegion(
                         android.graphics.Rect(0, b[0], dim[0], b[1]), null)
-                        ?: return listOf(src)
+                        ?: run {
+                            viewerLog("slice: decodeRegion null #${i} " +
+                                "(y=${b[0]}..${b[1]} dim=${dim[0]}x${dim[1]}) ${src.name}")
+                            return listOf(src)
+                        }
                     try {
                         java.io.FileOutputStream(files[i]).use { fo ->
                             bmp.compress(Bitmap.CompressFormat.JPEG, 88, fo)
@@ -3715,8 +3745,12 @@ class MainActivity : AppCompatActivity() {
                 }
             } finally { dec.recycle() }
             File(dir, "done").writeText("1")
+            viewerLog("slice ok: ${src.name} → ${bounds.size} برش")
             files
-        } catch (_: Exception) { listOf(src) }
+        } catch (e: Exception) {
+            viewerLog("slice error: ${src.name}", e)
+            listOf(src)
+        }
     }
 
     // برشِ مجموعهٔ دیباگ: sNN.jpg (دیباگ) + sNN_base.jpg (base) +
@@ -3790,7 +3824,10 @@ class MainActivity : AppCompatActivity() {
             }
             File(dir, "done").writeText("1")
             files
-        } catch (_: Exception) { listOf(src) }
+        } catch (e: Exception) {
+            viewerLog("slice(dbg) error: ${src.name}", e)
+            listOf(src)
+        }
     }
 
     // JSONِ اورلی ({size,det,pdet,rec}) را با همانِ مرزهایِ برش میشکند
@@ -3892,13 +3929,18 @@ class MainActivity : AppCompatActivity() {
     private fun viewer(pathsRaw: List<String>, live: Boolean = false,
                        dbg: Boolean = false, dbgPaths: List<String> = emptyList(),
                        total: Int = 0) {
+        viewerLog("viewer open: live=$live dbg=$dbg pages=${pathsRaw.size}" +
+                " dbgPages=${dbgPaths.size} total=$total")
         try {
             // v1.14.512 — نوارهایِ بلند قبل از بازشدنِ دیالوگ در
             // پس‌زمینه برش میخورند (رویِ نخِ UI نیست) تا WebView سیاه نماند.
             if (needsViewerSlicing(pathsRaw) || needsViewerSlicing(dbgPaths)) {
                 viewerSliceExec.execute {
                     val prep = try { prepareViewerPaths(pathsRaw, dbgPaths) }
-                    catch (_: Exception) { null }
+                    catch (e: Exception) {
+                        viewerLog("prepareViewerPaths error", e)
+                        null
+                    }
                     ui.post {
                         try {
                             if (prep != null)
@@ -3908,10 +3950,12 @@ class MainActivity : AppCompatActivity() {
                             else
                                 viewerInner(pathsRaw, live, dbg, dbgPaths, total)
                         } catch (e: Exception) {
+                            viewerLog("viewerInner (sliced) error", e)
                             try {
                                 android.util.Log.w("MangaView", "viewer failed", e)
                                 Toast.makeText(this@MainActivity,
-                                    "نمایشگر باز نشد: " + (e.message ?: e.toString()),
+                                    "نمایشگر باز نشد: " + (e.message ?: e.toString()) +
+                                    " — جزئیات در files/viewer_log.txt",
                                     Toast.LENGTH_LONG).show()
                             } catch (_: Exception) {}
                         }
@@ -3921,10 +3965,12 @@ class MainActivity : AppCompatActivity() {
             }
             viewerInner(pathsRaw, live, dbg, dbgPaths, total)
         } catch (e: Exception) {
+            viewerLog("viewer error", e)
             try {
                 android.util.Log.w("MangaView", "viewer failed", e)
                 Toast.makeText(this,
-                    "نمایشگر باز نشد: " + (e.message ?: e.toString()),
+                    "نمایشگر باز نشد: " + (e.message ?: e.toString()) +
+                    " — جزئیات در files/viewer_log.txt",
                     Toast.LENGTH_LONG).show()
             } catch (_: Exception) {}
         }
@@ -4204,10 +4250,17 @@ class MainActivity : AppCompatActivity() {
             ): Boolean {
                 try {
                     val m = msg?.message()
-                    if (m != null)
+                    if (m != null) {
                         android.util.Log.i("MangaViewJS",
                             "(" + (msg.lineNumber()) + ") " +
                                 m.take(400))
+                        val lvl = (msg.messageLevel()
+                            ?: android.webkit.ConsoleMessage.MessageLevel.ERROR)
+                        if (lvl == android.webkit.ConsoleMessage.MessageLevel.ERROR) {
+                            viewerLog("JS error (line " + (msg.lineNumber()) +
+                                "): " + m.take(300))
+                        }
+                    }
                 } catch (_: Exception) { }
                 return false
             }
