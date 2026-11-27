@@ -19,9 +19,11 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 os.environ.setdefault("MANGA_FILES_DIR", ROOT)
 
-import cv2  # noqa: E402
+# بوتِ کاملِ اپ اول: نصبِ pip (cv2/numpy/openvino/rapidocr) + مدل‌ها —
+# بعد از این بقیهٔ importها امن‌اند (روی رانرِ تازهٔ GH هنوز cv2 نیست).
+import manga  # noqa: E402
 
-import manga  # noqa: E402  (بوتِ کامل: نصبِ pip + مدلها — همانِ اپ)
+import cv2  # noqa: E402
 from manga import MangaTranslator  # type: ignore
 
 OUT = os.environ.get("SPEED_OUT", "/tmp/speed.json")
