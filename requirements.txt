@@ -12,5 +12,10 @@ pycryptodome>=3.19
 # v1.14.515 — اختیاری: موتور OCR OpenVINO برای PC x86_64 (لینوکس/ویندوز)
 # تا ۴ برابر سریع‌تر از ORT-CPU روی همان مدل‌ها. اگر نصب نباشد، اپ
 # بی‌صدا با ORT-CPU ادامه میدهد. خاموش‌کردن: MANGA_OV_OCR=0
-openvino==2024.1.0
-rapidocr-openvino==1.4.4 ; platform_machine == "x86_64"
+# v1.14.516 — فیکسِ کانفلیکتِ pip (بوتِ HF Space خراب شده‌بود):
+# rapidocr-openvino==1.4.4 سقفِ «openvino<=2024.0.0» دارد و با پینِ
+# openvino==2024.1.0 در یک نصبِ واحد → ResolutionImpossible. پس فقط
+# openvino اینجاست (با نشانگرِ x86_64)؛ rapidocr-openvino را خودِ اپ
+# در 10_install.py با «--no-deps» نصب میکند — همان ترکیبِ آزمونِ واقعی
+# (img6: 1.5s در برابرِ 6.3s ORT-CPU).
+openvino==2024.1.0 ; platform_machine == "x86_64"
