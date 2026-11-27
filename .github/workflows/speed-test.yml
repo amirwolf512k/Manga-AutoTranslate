@@ -1,0 +1,50 @@
+name: Speed Test (OCR + Clean)
+
+# v1.14.517 — آزمونِ سرعتِ استخراج/پاکسازی رویِ همان محیطِ واقعیِ
+# بوتِ اپ (import manga → نصبِ pip + مدلها). برایِ A/B موتور:
+#    MANGA_OV_OCR=1 (پیش‌فرض — OpenVINO) در برابرِ MANGA_OV_OCR=0 (ORT)
+# گیتِ اصلی: «ارورهای موتور» باید صفر باشد و هر عکس ناحیه بدهد.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ov:
+        description: "OpenVINO OCR (1=فعال، 0=ORT برایِ A/B)"
+        required: false
+        default: "1"
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  speed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get install -y libgl1 libglib2.0-0 libsm6 libxext6 libxrender-dev
+
+      - name: Download fonts
+        run: |
+          set -e
+          mkdir -p fonts
+          curl -fL "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Bold.ttf" -o fonts/Vazirmatn-Bold.ttf
+          curl -fL "https://raw.githubusercontent.com/rastikerdar/vazirmatn/master/fonts/ttf/Vazirmatn-Regular.ttf" -o fonts/Vazirmatn-Regular.ttf
+
+      - name: Speed test (OV=${{ inputs.ov }})
+        env:
+          MANGA_OV_OCR: ${{ inputs.ov }}
+          MANGA_OCR_THREADS: "2"
+        run: |
+          set -o pipefail
+          python -u scripts/bench_speed_gh.py 2>&1 | tee speed.log
