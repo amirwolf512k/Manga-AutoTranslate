@@ -57,6 +57,66 @@ def _ov_ocr_enabled() -> bool:
     return _v not in ("0", "off", "false", "no", "disabled")
 
 
+def _ov_make_thread_safe(ov_eng) -> bool:
+    """v1.14.517 — ریشهٔ «خطای موتور OCR + کندی» رویِ PC x86_64:
+    InferRequestِ OpenVINO تک‌نخی است — دو نخِ همزمانِ پایپ‌لاین
+    (workers=2) رویِ یک request «RuntimeError: Infer Request is busy»
+    میگیرند؛ نتیجه: ارورهای پیاپی + نجاتِ تک‌کواردیِ کند با ORT
+    (آزمونِ واقعی: img6 از 1.5s تک‌نخی به 15s دو-نخیِ خراب افتاد).
+    فیکس: هر نخ requestِ خودش را از همانِ CompiledModel میسازد
+    (get_compiled_model → create_infer_request) — وزنها بینِ نخها
+    مشترکاند، فقط بافرِ ورودی/خروجی جدا (آزمون: ۲ نخ × ۲۰ استنتاجِ
+    det = صفر خطا). اسمِ سشن در det «infer» و در rec «session» است؛
+    هر دو با یک پوششِ قابل‌فراخوان عوض میشوند. خروجی: True=وصله شد
+    (چند-نخیِ کامل) / False=نشد (فراخواننده قفل میاندازد)."""
+    _names = ("text_det", "text_cls", "text_rec")
+    _sess_attrs = ("infer", "session")
+    _patched = 0
+
+    class _TlSession:
+        __slots__ = ("_base", "_model", "_local")
+
+        def __init__(self, base, model):
+            self._base = base
+            self._model = model
+            self._local = threading.local()
+
+        def _req(self):
+            _r = getattr(self._local, "req", None)
+            if _r is None:
+                _r = self._model.create_infer_request()
+                self._local.req = _r
+            return _r
+
+        def __call__(self, input_content):
+            _r = self._req()
+            _r.infer(inputs=[input_content])
+            return _r.get_output_tensor().data
+
+        def __getattr__(self, name):
+            return getattr(self._base, name)
+
+    for _pn in _names:
+        try:
+            _part = getattr(ov_eng, _pn, None)
+            if _part is None:
+                continue
+            for _sa in _sess_attrs:
+                _sess = getattr(_part, _sa, None)
+                _req = getattr(_sess, "session", None)
+                if _req is None or not hasattr(_req, "get_compiled_model"):
+                    continue
+                _model = _req.get_compiled_model()
+                if _model is None:
+                    continue
+                setattr(_part, _sa, _TlSession(_sess, _model))
+                _patched += 1
+                break
+        except Exception:
+            continue
+    return _patched >= 1
+
+
 class _OvOcrResult:
     __slots__ = ("boxes", "txts", "scores")
 
@@ -73,9 +133,24 @@ class _OvOcrEngineAdapter:
 
     def __init__(self, ov_eng):
         self._ov = ov_eng
+        # v1.14.517 — InferRequestِ OpenVINO تک‌نخی است؛ با workers=2 دو
+        # نخِ همزمان «Infer Request is busy» میگرفتند → خطای موتور +
+        # مسیرِ نجاتِ کند (خواندنِ تک‌تکِ کواردها با ORT). هر نخ requestِ
+        # خودش را از همانِ CompiledModel میگیرد (وزنها مشترک). اگر وصله
+        # نشد → قفلِ کامل (درست ولی سریال).
+        self._ov_lock = None
+        if not _ov_make_thread_safe(ov_eng):
+            self._ov_lock = threading.Lock()
 
     def __call__(self, image_bgr, use_det=True, use_cls=False,
                  use_rec=True, **kw):
+        if self._ov_lock is not None:
+            with self._ov_lock:
+                return self._run_ov(image_bgr, use_det, use_cls,
+                                    use_rec, **kw)
+        return self._run_ov(image_bgr, use_det, use_cls, use_rec, **kw)
+
+    def _run_ov(self, image_bgr, use_det, use_cls, use_rec, **kw):
         try:
             res = self._ov(image_bgr, use_det=use_det,
                            use_cls=use_cls, use_rec=use_rec)

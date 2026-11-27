@@ -587,9 +587,35 @@ def _ensure_all_dependencies() -> None:
         print("[*] اندروید: وابستگی‌ها داخل APK موجود است — بررسی pip رد شد.")
         return
     print("[*] بررسی وابستگی‌ها ...")
+    # v1.14.517 — سازگاریِ numpy: موتورِ OpenVINOِ OCR سقفِ numpy<2 دارد
+    # (openvino==2024.1.0). اگر ترتیبِ نصب «اول numpy 2.x، بعد openvino»
+    # باشد، openvino وسطِ پروسه numpy را به 1.26 downgrade میکند در حالی
+    # که cv2ِ 4.13 برایِ numpy 2 بیلد شده (فرورفتگیِ وابستگی). راه‌حل:
+    # وقتی قرار است پشتهٔ OV نصب شود (PCِ x86_64 بدونِ GPU)، از همان
+    # اول numpy<2 میآوریم تا pip خودش cv2ِ سازگار با numpy 1.26 را
+    # انتخاب کند و دیگر هیچ downgrade وسطِ پروسه‌ای نباشد.
+    _ov_wanted = False
+    try:
+        import platform as _pl_mod
+        _ov_dis = str(os.environ.get("MANGA_OV_OCR", "1") or "1") \
+            .strip().lower() not in ("0", "off", "false", "no",
+                                     "disabled")
+        _ov_wanted = (_ov_dis
+                      and _pl_mod.machine().lower()
+                      in ("x86_64", "amd64", "x64")
+                      and not _nvidia_gpu_present())
+    except Exception:
+        _ov_wanted = False
     core = []
     if not _can_import("numpy"):
-        core.append("numpy")
+        core.append("numpy<2" if _ov_wanted else "numpy")
+    elif _ov_wanted:
+        try:
+            import numpy as _np_chk
+            if int(_np_chk.__version__.split(".")[0]) >= 2:
+                core.append("numpy<2")
+        except Exception:
+            pass
     cv2_ok = _can_import("cv2")
     if not cv2_ok and sys.platform.startswith("linux"):
 
