@@ -13,6 +13,11 @@ on:
         required: false
         default: "1"
         type: string
+      ov_threads:
+        description: "نخِ OV (خالی=تطبیقی، off=بی‌محدود، عدد=صریح)"
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -45,6 +50,7 @@ jobs:
         env:
           MANGA_OV_OCR: ${{ inputs.ov }}
           MANGA_OCR_THREADS: "2"
+          MANGA_OV_THREADS: ${{ inputs.ov_threads }}
         run: |
           set -o pipefail
           python -u scripts/bench_speed_gh.py 2>&1 | tee speed.log
