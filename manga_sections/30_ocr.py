@@ -226,14 +226,19 @@ def _build_openvino_ocr_engine(mdir, det_name, rec_name,
         # v1.14.517 — نخِ داخلیِ OpenVINO: به‌طورِ پیش‌فرض هر request
         # «همهٔ هستهها» را میگیرد؛ با N کارگرِ همزمانِ ناحیه →
         # oversubscription (رانِ واقعیِ GH با ۴ هسته و ۳ کارگر: ۱۲ نخ
-        # رویِ ۴ هسته → OV دو برابرِ ORT کند شد: 35.9s در برابرِ 16.4s).
-        # هر request حالا cores//workers نخ میگیرد (۲هسته/۲کارگر=۱،
-        # ۴هسته/۳کارگر=۱، ۸هسته/۴کارگر=۲). Override: MANGA_OV_THREADS.
+        # رویِ ۴ هسته). هر request حالا cores//workers نخ میگیرد
+        # (۲هسته/۲کارگر=۱، ۴هسته/۳کارگر=۱، ۸هسته/۴کارگر=۲).
+        # MANGA_OV_THREADS=N → عددِ صریح؛ MANGA_OV_THREADS=off → بی‌محدود.
+        _ov_threads = 0
         try:
-            _ov_threads = int(os.environ.get("MANGA_OV_THREADS", "0") or 0)
+            _ovt_raw = str(os.environ.get("MANGA_OV_THREADS", "") or "").strip().lower()
+            if _ovt_raw in ("off", "none", "unlimited", "-1"):
+                _ov_threads = -1
+            elif _ovt_raw:
+                _ov_threads = int(float(_ovt_raw))
         except Exception:
             _ov_threads = 0
-        if _ov_threads <= 0:
+        if _ov_threads == 0:
             try:
                 _w = _parallel_budget("ocr")
                 _c = os.cpu_count() or 4
@@ -1595,7 +1600,23 @@ class RapidOCRBackend:
                     _ov_eng = None
             if _ov_eng is not None:
                 self.engine = _ov_eng
-                self._eng_params = {}
+                # v1.14.517 — پارامترهای موتورِ نجات (det_dbg برایِ
+                # det_only/نجاتِ خطِ جامانده و rec_rescue برایِ rec_only)
+                # همانِ مسیرِ ORT: قبلاً اینجا {} میگذاشتیم → هر دو با
+                # «پیش‌فرضِ rapidocr» (det=736/min + مدلِ پیش‌فرض + دانلودِ
+                # مجدد) ساخته میشدند → نجاتِ det رویِ 4e2e77 تنها ۲۰.۵s
+                # میخورد (۲۷ فراخوانی × ۷۵۸ms — کراپهایِ کوچک تا ۷۳۶
+                # بزرگ میشدند؛ همانِ ریشهٔ کندیِ v507) و کیفیتِ نجات با
+                # مدلِ متفاوتِ v5-mobile بود. حالا: همان مدلهایِ v6 +
+                # همان det=960/max + همان نخها.
+                try:
+                    _p_ov = dict(_rec_params or {})
+                except Exception:
+                    _p_ov = {}
+                _p_ov.update(_base)
+                _p_ov.update(_threads)
+                _p_ov.update(_det_speed)
+                self._eng_params = _p_ov
                 self._new_api = True
                 self._ov_ocr_active = True
                 try:

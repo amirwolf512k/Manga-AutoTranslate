@@ -58,10 +58,38 @@ def _mk_tr(method="lama-manga"):
     )
 
 
-# ─── ۱) استخراج ───
+# ─── ۱) استخراج + تایمینگِ فازها (هوکِ موتور/det/نجات) ───
 tr = _mk_tr()
 report["engine"] = type(getattr(tr.ocr, "engine", None)).__name__
 _regions_cache = {}
+
+# هوکها: هر فراخوانیِ موتور/det/نجات شمرده و زمانش جمع میشود
+_PHASE = {"ocr": [0, 0.0], "det_only": [0, 0.0], "rec_only": [0, 0.0],
+          "bubble_det": [0, 0.0]}
+
+
+def _spy_attr(obj, name, key):
+    _orig = getattr(obj, name)
+
+    def _w(*a, **kw):
+        t0 = time.time()
+        try:
+            return _orig(*a, **kw)
+        finally:
+            _PHASE[key][0] += 1
+            _PHASE[key][1] += time.time() - t0
+    setattr(obj, name, _w)
+
+
+try:
+    _spy_attr(tr.ocr, "ocr", "ocr")
+    _spy_attr(tr.ocr, "det_only", "det_only")
+    _spy_attr(tr.ocr, "rec_only", "rec_only")
+    if getattr(tr, "det", None) is not None:
+        _spy_attr(tr.det, "detect", "bubble_det")
+except Exception as _he:
+    _orig_print(f"[!] هوکِ فازها نشد: {_he}")
+
 for name in IMGS:
     src = os.path.join(ROOT, "ci_imgs", name)
     img = cv2.imread(src)
@@ -69,17 +97,20 @@ for name in IMGS:
         _orig_print(f"[skip] {name}")
         continue
     _e0 = _ERR["n"]
+    _p0 = {k: list(v) for k, v in _PHASE.items()}
     t0 = time.time()
     regions, _dbg, _ctx = tr.extract_regions_phase(img)
     dt = time.time() - t0
+    _ph = {k: (round(_PHASE[k][1] - _p0[k][1], 2),
+               _PHASE[k][0] - _p0[k][0]) for k in _PHASE}
     _regions_cache[name] = (img, regions)
     report["extract"][name] = {
         "s": round(dt, 1), "regions": len(regions or []),
-        "engine_errors": _ERR["n"] - _e0,
+        "engine_errors": _ERR["n"] - _e0, "phases": _ph,
     }
     _orig_print(f"[SPEED] extract {name}: {dt:.1f}s "
-                f"regions={len(regions or [])} engine={report['engine']}",
-                flush=True)
+                f"regions={len(regions or [])} engine={report['engine']} "
+                f"phases={_ph}", flush=True)
 
 # ─── ۲) پاکسازی — مسیرِ LaMa (کراپِ نویزی/آرتی) ───
 import numpy as np  # noqa: E402
