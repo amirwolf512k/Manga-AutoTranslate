@@ -15,6 +15,47 @@
 class _MangaTranslatorBody_85:
 # BUILD-STRIP-END
 
+    # ── v1.14.519 — واترمارکِ خالصِ دامنه‌دار: پاک شود (نه ترجمه) ──
+    # کاربر: پرچمِ سایتِ جا‌مانده (ASURASCANS.COM) در خروجی میماند و «متنِ
+    # انگلیسیِ جامانده» دیده میشود. فقط متنِ «دامنه/سایت» پاک میشود؛
+    # اعتبارِ تیم/سایرِ promoها مثلِ قبل دست‌نخورده. خاموش: MANGA_CLEAN_WM=0
+    _WM_TEXT_RE = None
+
+    @staticmethod
+    def _wm_cleanable_text(text: str) -> bool:
+        import os as _os, re as _re
+        try:
+            if str(_os.environ.get("MANGA_CLEAN_WM", "1") or "1") \
+                    .strip().lower() in ("0", "off", "false", "no",
+                                         "disabled"):
+                return False
+        except Exception:
+            pass
+        try:
+            if MangaTranslator._WM_TEXT_RE is None:
+                # جعبهٔ مجاز: حروف/عدد/نقطه/جداکنندهها (+'>»' جونکِ OCR)
+                MangaTranslator._WM_TEXT_RE = _re.compile(
+                    r"^[A-Z0-9 .\-|&'>]{2,40}$")
+                # دامنه یا نامِ سایت (ASURASCANS بدونِ TLD هم — پرچمِ 1.webp)
+                MangaTranslator._WM_DOM_RE = _re.compile(
+                    r"\.(?:COM|NET|ORG|IO|CC|ME|XYZ|TO|APP|SCANS)\b")
+                MangaTranslator._WM_NAME_RE = _re.compile(
+                    r"\b(?:ASURA|SCANS|MANGA ?SCI|KLMANGA)\b")
+        except Exception:
+            return False
+        t = str(text or "").strip().upper()
+        t = " ".join(t.split())
+        if not t or len(t) > 40:
+            return False
+        if not MangaTranslator._WM_TEXT_RE.match(t):
+            return False
+        if MangaTranslator._WM_DOM_RE.search(t):
+            return True
+        # نامِ سایتِ بدونِ TLD (ASURASCANS): زیررشته — چون فقط promoهای
+        # کوتاهِ ≤۴۰ نویسه اینجا میآیند، ریسکِ تصادم نزدیکِ صفر است.
+        if "ASURA" in t or "SCANS" in t:
+            return True
+        return False
 
 
 # ─────────── حفظ‌شدهٔ عرفی (قراردادِ بیرونی) ───────────
@@ -554,7 +595,15 @@ class _MangaTranslatorBody_85:
                 # آرت‌ورک و بنرِ اعتبارِ سایت دست‌نخورده میماند.
                 _kd = str(getattr(r, "kind", "dialogue") or "dialogue")
                 if _kd in ("promo", "junk"):
-                    continue
+                    # v1.14.519 — واترمارکِ خالصِ دامنه‌دار (ASURASCANS.COM):
+                    # کاربر خواست پرچمِ سایتِ جا‌مانده پاک شود (نه ترجمه).
+                    # فقط متنِ «دامنه/سایت» — اعتبارِ تیم و متنهایِ دیگر
+                    # از قاعده دست‌نخورده میمانند. خاموش: MANGA_CLEAN_WM=0
+                    if _kd == "promo" and self._wm_cleanable_text(
+                            str(getattr(r, "source_text", "") or "")):
+                        pass  # ← پاکسازی میشود
+                    else:
+                        continue
                 if _kd == "sfx" and not _sfx_on:
                     continue
                 rx, ry, rw, rh = [int(v) for v in r.rect[:4]]
@@ -589,6 +638,29 @@ class _MangaTranslatorBody_85:
                 _pa = float(np.abs(getattr(r, "angle", 0.0) or 0.0))
                 if _pa < 3.0:
                     polys = boxes
+            # v1.14.519 — قاعدهٔ کاربر «هم‌اندازه‌ایِ جعبه‌ها»: اگر
+            # جعبهٔ detِ ریپو (rect) و جعبهٔ detِ rapidocr (bboxِ polys)
+            # تقریباً یکی باشند (فاصلهٔ هر ضلع < ۵px)، برشِ پاکسازی باید
+            # «کمی بیشتر از حدِ detector onnx» باشد؛ وگرنه متنِ بزرگِ
+            # لبه‌دار بیرون از قاب، با رنگِ خودش/رنگِ غلط پاک میشود.
+            _cut_extra = 0
+            if polys:
+                try:
+                    _pminx = min(float(pp[:, 0].min()) for pp in polys)
+                    _pminy = min(float(pp[:, 1].min()) for pp in polys)
+                    _pmaxx = max(float(pp[:, 0].max()) for pp in polys)
+                    _pmaxy = max(float(pp[:, 1].max()) for pp in polys)
+                    _same = (abs(_pminx - rx) < 5 and abs(_pminy - ry) < 5
+                             and abs(_pmaxx - (rx + rw)) < 5
+                             and abs(_pmaxy - (ry + rh)) < 5)
+                    if _same:
+                        _cut_extra = 6
+                        x1 = min(x1, max(0, rx - _cut_extra))
+                        y1 = min(y1, max(0, ry - _cut_extra))
+                        x2 = max(x2, min(w, rx + rw + _cut_extra))
+                        y2 = max(y2, min(h, ry + rh + _cut_extra))
+                except Exception:
+                    _cut_extra = 0
             # v1.14.502 — ریشهٔ «متنِ نجات‌یافتهٔ جا‌مانده» (تستِ واقعی
             # dxa_10: EHH~ بالایِ rect): خطوطی که بعد از det با نجات به
             # ناحیه چسبیدهاند poly بیرون از rect دارند؛ برش باید همهٔ
@@ -612,7 +684,8 @@ class _MangaTranslatorBody_85:
                          "x2": int(x2), "y2": int(y2),
                          "rx1": int(rx), "ry1": int(ry),
                          "rx2": int(rx + rw), "ry2": int(ry + rh),
-                         "polys": polys, "rid": int(getattr(r, "id", -1))})
+                         "polys": polys, "rid": int(getattr(r, "id", -1)),
+                         "cut_extra": int(_cut_extra)})
         return jobs
 
     @staticmethod
@@ -1156,6 +1229,11 @@ class _MangaTranslatorBody_85:
     def _cc_crop_mask(self, crop_bgr: np.ndarray, job: dict,
                       dilate_px: int = 3):
         ch, cw = crop_bgr.shape[:2]
+        # v1.14.519 — قاعدهٔ کاربر: پنجرهٔ رشدِ جوهرِ یتیم (_lim) وقتی
+        # جعبهٔ det و جعبهٔ rapidocr هم‌اندازه‌اند، «۶px بیشتر از حدِ
+        # detector onnx» برش میزند تا متنِ لبه‌دارِ بیرونِ قاب هم پاک شود
+        # و با رنگِ غلط پر نشود (فقط مالِ هم‌جعبه‌ایِ هم‌اندازه).
+        _extra = int(job.get("cut_extra", 0) or 0)
         # v1.14.501: dilation پیش‌فرض = ۵ (درخواستِ سازنده) — هالهٔ
         # آنتی‌آلیاسِ متنِ چاق/واترمارکِ کمی‌راه‌راه کامل پاک شود
         dilate_px = max(5, int(dilate_px))
@@ -1172,8 +1250,90 @@ class _MangaTranslatorBody_85:
                 _ly2 = min(ch, int(job.get("ry2", ch)) - int(job["y1"]))
                 if _lx2 > _lx1 and _ly2 > _ly1:
                     _lim[_ly1:_ly2, _lx1:_lx2] = 255
+                    if _extra > 0:
+                        try:
+                            _ex1 = max(0, _lx1 - _extra)
+                            _ey1 = max(0, _ly1 - _extra)
+                            _ex2 = min(cw, _lx2 + _extra)
+                            _ey2 = min(ch, _ly2 + _extra)
+                            _lim[_ey1:_ey2, _ex1:_ex2] = 255
+                        except Exception:
+                            pass
                     zone = self._cc_zone_adjacent_ink_grow(
                         crop_bgr, zone, _lim)
+                    # v1.14.519b — «خطِ جاماندهٔ داخل/لبهٔ جعبهٔ det»
+                    # (درخواستِ صریحِ کاربر): (۱) «متنِ وسط/پایین که
+                    # rapidocr det در ناحیه نگرفته — مثلِ asura ch1
+                    # 16.webp r09: «A HOT SPRING» تا ۶۳۹۵ پایین میرود
+                    # ولی جعبهٔ det تا ۶۳۸۶ → هیچ ناحیه‌ای مالش نیست و
+                    # شبحِ کامل میماند» (۲) برشِ پاکسازی باید «کمی
+                    # بیشتر از حدِ detector onnx» باشد — پنجرهٔ رشد =
+                    # جعبهٔ det + ۱۰px. جوهرِ متن‌مانند درونِ پنجره با
+                    # «باندِ افقی» جدا میشود (قابِ حبابِ نازک، فقط
+                    # چند-پیکسل در هر ردیف؛ خطِ متن دهها-پیکسل)؛
+                    # barrier بعدش خطِ حباب را از پرکردن محافظت میکند.
+                    try:
+                        _g16 = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
+                        _ext16 = max(10, int(_extra))
+                        _ex1_16 = max(0, _lx1 - _ext16)
+                        _ey1_16 = max(0, _ly1 - _ext16)
+                        _ex2_16 = min(cw, _lx2 + _ext16)
+                        _ey2_16 = min(ch, _ly2 + _ext16)
+                        _win16 = np.zeros((ch, cw), bool)
+                        _win16[_ey1_16:_ey2_16, _ex1_16:_ex2_16] = True
+                        _cand16 = _win16 & (zone == 0)
+                        _ox16 = self._cc_other_polys_mask(job, ch, cw)
+                        if cv2.countNonZero(_ox16):
+                            _cand16 &= (_ox16 == 0)
+                        if int(_cand16.sum()) > 0:
+                            _zbg16 = float(np.median(_g16[zone > 0]))
+                            _ink16 = np.abs(
+                                _g16.astype(np.int16) - int(_zbg16)) > 22
+                            _ink16 &= _cand16
+                            _rowcnt16 = _ink16.sum(axis=1)
+                            _rows16 = _rowcnt16 >= 8
+                            _bands16 = []
+                            _s16 = -1
+                            for _y16 in range(ch):
+                                if _rows16[_y16] and _s16 < 0:
+                                    _s16 = _y16
+                                elif not _rows16[_y16] and _s16 >= 0:
+                                    _bands16.append((_s16, _y16 - 1))
+                                    _s16 = -1
+                            if _s16 >= 0:
+                                _bands16.append((_s16, ch - 1))
+                            _add16 = np.zeros_like(zone)
+                            for _b0, _b1 in _bands16:
+                                _bh16 = _b1 - _b0 + 1
+                                if _bh16 < 10 or _bh16 > 130:
+                                    continue
+                                _bm16 = _ink16[_b0:_b1 + 1]
+                                if int(_bm16.sum()) < 100:
+                                    continue
+                                # v1.14.519c — سقف: باندِ غول‌آسا = آرتِ
+                                # تیرهٔ پنل (asura 16.webp r09: متنِ سفیدِ
+                                # «A HOT SPRING» رویِ آرتِ گورمِ آتشفشانی —
+                                # ۱۶۶۷۶px؛ جوهرِ خطِ واقعی ≤۸۰۰۰px) — پاک
+                                # کردنِ آرت ممنوع؛ خط جامانده فقط در
+                                # حباب/زمینهٔ روشن.
+                                if int(_bm16.sum()) > 8000:
+                                    continue
+                                _xs16 = np.flatnonzero(
+                                    _bm16.any(axis=0))
+                                if _xs16.size == 0:
+                                    continue
+                                _bw16 = int(_xs16[-1] - _xs16[0] + 1)
+                                if _bw16 < 30:
+                                    continue
+                                _sub16 = np.zeros_like(zone)
+                                _sub16[_b0:_b1 + 1, _xs16[0]:
+                                       _xs16[-1] + 1] = 255
+                                _sub16 &= _ink16.astype(np.uint8) * 255
+                                _add16 = cv2.bitwise_or(_add16, _sub16)
+                            if cv2.countNonZero(_add16):
+                                zone = cv2.bitwise_or(zone, _add16)
+                    except Exception:
+                        pass
             except Exception:
                 pass
             # ۱) سبکِ HF: فقط جوهرِ متنِ داخلِ زون
@@ -1411,6 +1571,24 @@ class _MangaTranslatorBody_85:
             std = float(f.std(axis=0).max())
             if std > max_std:
                 return None
+            # v1.14.519 — همان گیتِ همگنیِ hue برای پرکردِ یکدست:
+            # نمونهٔ دوسطحی (مثلاً نارنجی+سبز) σ کوچک میدهد ولی رنگِ
+            # پرکرد از خانوادهٔ دیگر میشود (لاکهٔ مربعیِ عجیب).
+            try:
+                _hsv_u = cv2.cvtColor(
+                    f.reshape(-1, 1, 3).astype(np.uint8),
+                    cv2.COLOR_BGR2HSV)
+                _sat_u = _hsv_u[..., 1].astype(np.float32)
+                _hue_u = _hsv_u[..., 0].astype(np.float32)
+                if float(_sat_u.mean()) > 60.0:
+                    _su = float(np.sin(np.deg2rad(_hue_u * 2.0)).mean())
+                    _cu = float(np.cos(np.deg2rad(_hue_u * 2.0)).mean())
+                    _hsd_u = float(np.sqrt(max(
+                        0.0, 1.0 - (_su * _su + _cu * _cu))) * 90.0)
+                    if _hsd_u > 28.0:
+                        return None
+            except Exception:
+                pass
             sig = float(np.clip(std, 0.8, 2.2))
             out = crop_bgr.copy()
             rng = np.random.default_rng(4321)
@@ -1467,6 +1645,27 @@ class _MangaTranslatorBody_85:
             if int(ring.sum()) < min_px:
                 return None
             ys, xs = np.nonzero(ring)
+            # v1.14.519 — گیتِ همگنیِ رنگ (باگِ «آبی→صورتی/فیروزه‌ای»):
+            # آزمونِ واقعیِ فصلِ asura 6.webp r13: زمینهٔ گرمِ زرد/نارنجی،
+            # رینگِ نمونه سبزِ آرت را هم میگرفت → برازشِ درجه۲ پاس
+            # میشد ولی پرکردِ فیروزه‌ایِ تخت + لکه‌های صورتی میساخت.
+            # رینگِ دوسرِ hue (σ مداریِ >۲۸° با اشباعِ >۶۰) → LaMa.
+            try:
+                _rp = crop_bgr[ys, xs].astype(np.float32)
+                _hsv_r = cv2.cvtColor(
+                    _rp.reshape(-1, 1, 3).astype(np.uint8),
+                    cv2.COLOR_BGR2HSV)
+                _sat = _hsv_r[..., 1].astype(np.float32)
+                _hue = _hsv_r[..., 0].astype(np.float32)
+                if float(_sat.mean()) > 60.0:
+                    _sin = float(np.sin(np.deg2rad(_hue * 2.0)).mean())
+                    _cos = float(np.cos(np.deg2rad(_hue * 2.0)).mean())
+                    _hsd = float(np.sqrt(max(
+                        0.0, 1.0 - (_sin * _sin + _cos * _cos))) * 90.0)
+                    if _hsd > 28.0:
+                        return None
+            except Exception:
+                pass
             # نرمال‌سازیِ مختصات (خوب-شرط‌سازیِ برازشِ درجه‌۲)
             X = (xs / max(1, cw) - 0.5).astype(np.float32)
             Y = (ys / max(1, ch) - 0.5).astype(np.float32)
