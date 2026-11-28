@@ -71,18 +71,21 @@ dilate تا ۲۵px خطِ ۳px دیوار را میکُشد (protect در ترک
 
 ## تاریخچه
 
-- **v1.14.517** — ریشهٔ «کندی + ارورِ استخراج از 514b به بعد رویِ
-  PC/GH Actions»: موتورِ OpenVINOِ OCRِ v515 با workers=2 دو نخِ همزمان
-  رویِ یک InferRequest → «RuntimeError: Infer Request is busy» → ارورهای
-  پیاپی + نجاتِ تک‌کواردیِ کند. فیکس: هر نخ requestِ خودش از همانِ
-  CompiledModel (وزن مشترک) + فالبکِ قفل؛ + numpy<2 از اولِ نصب وقتی
-  پشتهٔ OV wanted است (openvino downgrade وسطِ پروسه=cv2 شکننده).
-  A/B (۲نخ): img6 = 10.3s فیکس / 14.9s ORT / 16.2s+۱۱ارور خراب؛ صفر
-  ارور رویِ ۳ عکس. پاکسازی تغییری نکرده (lama: 5.19→5.25s کراپِ
-  نویزی؛ flat: +۰.۱-۰.۳s/صفحه) — کندیِ ظاهریِ پاکسازی رقابتِ CPU با
-  طوفانِ OCR بود. نکتهٔ تست: مقدارِ درستِ متد = «lama-manga» (مقدارِ
-  «lama» بی‌صدا به opencv-resolution میافتد ولی bgfill/gradfill کار
-  میکنند و LaMa «در دسترس نیست»).
+- **v1.14.517** — چهار ریشهٔ «کندی + ارورِ استخراج از 514b به بعد»:
+  (۱) InferRequestِ OV تک‌نخی → «Infer Request is busy» با workers≥2 →
+  فیکس: requestِ هر نخ از همانِ CompiledModel + فالبکِ قفل؛ (۲)
+  موتورهایِ نجاتِ مسیرِ OV با _eng_params={} → پیش‌فرضِ rapidocr
+  (det=736/min + مدلِ v5-mobile) — det_only رویِ 4e2e77 تنها 20.5s!
+  → فیکس: _eng_params مثلِ ORT (مدلهای v6 + 960/max)؛ (۳) oversubscriptionِ
+  نخِ OV → cores//workers؛ (۴) انتخابِ تطبیقیِ موتور: ≤۲هسته=OV (آزمون:
+  40.6s در برابرِ 63.6s ORT)، ۳+هسته=ORT (GH: 16.4s در برابرِ 23.7s OV)
+  → رانهایِ GH مثلِ v514 و PC ضعیف ۱.۵ برابرِ سریعتر. صریح:
+  MANGA_OV_OCR=1/0؛ helperِ واحد: 10_install._ov_ocr_wanted. +numpy<2
+  از اول وقتی OV wanted. پاکسازی: بدونِ تغییر (lama: 5.19→5.25s؛
+  flat: +۰.۱-۰.۳s/صفحه) — کندیِ ظاهری رقابتِ CPU با طوفانِ OCR بود.
+  ابزارِ ماندگار: workflowِ «Speed Test (OCR + Clean)» با هوکِ فازها.
+  نکتهٔ تست: مقدارِ درستِ متد = «lama-manga» (مقدارِ «lama» بی‌صدا به
+  TELEA-اضطراری میافتد).
 
 - **v1.14.394** — عکس‌های محافظت‌شده از «حافظهٔ خود صفحه» خوانده می‌شوند
   (مثل پنل Sources دیو‌تولز): (۱) هوک URL.createObjectURL در همهٔ
