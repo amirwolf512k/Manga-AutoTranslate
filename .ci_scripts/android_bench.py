@@ -86,9 +86,24 @@ def parse_metrics(log):
                    log)
     if oc:
         m["ocr_avg_ms"] = int(oc.group(2))
-    cl = re.search(r"\[\+\] پاکسازی:\s*([\d.]+)\s*ثانیه", log)
+    # فرمتِ اندروید: «[+] پاکسازیِ برش‌ها (خالص): N برش | lama=A
+    # bgfill=B gradfill=C telea=D skip=E | X.Ys» — تفکیکِ روشها ریشهٔ
+    # کندیِ گوشی (برشهایِ LaMa) را نشان میدهد.
+    cl = re.search(
+        r"پاکسازیِ برش‌ها \(خالص\):\s*(\d+) برش\s*\|"
+        r"\s*lama=(\d+)\s+bgfill=(\d+)\s+gradfill=(\d+)"
+        r"\s+telea=(\d+)\s+skip=(\d+)\s*\|\s*([\d.]+)s", log)
     if cl:
-        m["clean_s"] = float(cl.group(1))
+        m["clean_s"] = float(cl.group(7))
+        m["clean_crops"] = int(cl.group(1))
+        m["clean_lama"] = int(cl.group(2))
+        m["clean_bgfill"] = int(cl.group(3))
+        m["clean_gradfill"] = int(cl.group(4))
+    else:
+        # فرمتِ PC: «[+] پاکسازی: X ثانیه با …»
+        cl2 = re.search(r"\[\+\] پاکسازی:\s*([\d.]+)\s*ثانیه", log)
+        if cl2:
+            m["clean_s"] = float(cl2.group(1))
     m["engine_errors"] = len(re.findall(r"خطای موتور OCR", log))
     m["opencv_fallbacks"] = len(
         re.findall(r"'OpenCV':\s*[1-9]", log))
@@ -148,8 +163,12 @@ def main():
         report["engine_errors"] += m.get("engine_errors", 0)
         print(f"[BENCH] {name}: wall={wall:.1f}s | "
               f"extract={m.get('extract_s', '?')}s/{m.get('regions', '?')}منطقه "
-              f"| ocr_avg={m.get('ocr_avg_ms', '?')}ms | "
-              f"clean={m.get('clean_s', '?')}s | "
+              f"| ocr_avg={m.get('ocr_avg_ms', '—')}ms | "
+              f"clean={m.get('clean_s', '?')}s"
+              f" (lama={m.get('clean_lama', '?')}"
+              f"/grad={m.get('clean_gradfill', '?')}"
+              f"/bg={m.get('clean_bgfill', '?')}"
+              f" از {m.get('clean_crops', '?')}) | "
               f"engine_errors={m.get('engine_errors', '?')} | "
               f"pdf={'OK' if pdf_ok else 'MISSING'}", flush=True)
         if not m.get("regions"):
@@ -174,8 +193,11 @@ def main():
             continue
         print(f"  {name:14s}: wall={v.get('wall_s')}s | "
               f"extract={v.get('extract_s')}s/{v.get('regions')} | "
-              f"ocr_avg={v.get('ocr_avg_ms')}ms | clean={v.get('clean_s')}s "
-              f"| err={v.get('engine_errors')}", flush=True)
+              f"clean={v.get('clean_s')}s "
+              f"(lama={v.get('clean_lama', '—')}/"
+              f"grad={v.get('clean_gradfill', '—')}/"
+              f"bg={v.get('clean_bgfill', '—')}) | "
+              f"err={v.get('engine_errors')}", flush=True)
     print(f"  موتور: {report['engine'] or '?'} | "
           f"مجموعِ استخراج: {tot_e:.1f}s | مجموعِ پاکسازی: {tot_c:.1f}s | "
           f"ارورهای موتور: {report['engine_errors']}", flush=True)
