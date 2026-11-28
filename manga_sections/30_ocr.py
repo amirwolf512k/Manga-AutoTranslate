@@ -223,6 +223,25 @@ def _build_openvino_ocr_engine(mdir, det_name, rec_name,
                 keys_path = _kp
                 break
         kw = {"det_model_path": det_path, "rec_model_path": rec_path}
+        # v1.14.517 — نخِ داخلیِ OpenVINO: به‌طورِ پیش‌فرض هر request
+        # «همهٔ هستهها» را میگیرد؛ با N کارگرِ همزمانِ ناحیه →
+        # oversubscription (رانِ واقعیِ GH با ۴ هسته و ۳ کارگر: ۱۲ نخ
+        # رویِ ۴ هسته → OV دو برابرِ ORT کند شد: 35.9s در برابرِ 16.4s).
+        # هر request حالا cores//workers نخ میگیرد (۲هسته/۲کارگر=۱،
+        # ۴هسته/۳کارگر=۱، ۸هسته/۴کارگر=۲). Override: MANGA_OV_THREADS.
+        try:
+            _ov_threads = int(os.environ.get("MANGA_OV_THREADS", "0") or 0)
+        except Exception:
+            _ov_threads = 0
+        if _ov_threads <= 0:
+            try:
+                _w = _parallel_budget("ocr")
+                _c = os.cpu_count() or 4
+                _ov_threads = max(1, int(_c) // max(1, int(_w)))
+            except Exception:
+                _ov_threads = 0
+        if _ov_threads > 0:
+            kw["inference_num_threads"] = int(_ov_threads)
         try:
             _ls = int((det_speed or {}).get("Det.limit_side_len", 960))
             _lt = str((det_speed or {}).get("Det.limit_type", "max"))
