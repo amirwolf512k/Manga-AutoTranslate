@@ -195,6 +195,53 @@ def _preload_pip_cuda_libs() -> None:
     except Exception:
         pass
 
+def _pip_cuda_libs_present() -> bool:
+    """v1.14.518 — آیا کتابخانه‌های CUDA از قبل در دسترسند؟
+    رویِ کُلَب GPU، torch با nvidia-*-cu12 wheelها نصب میشود (cudart/
+    cublas/cufft/curand/nvrtc/cudnn در site-packages/nvidia/*/lib و
+    torch/lib). در آن حالت نصبِ «onnxruntime-gpu[cuda,cudnn]» یعنی
+    دانلودِ چند گیگابایتِ تکراری در هر بوت — همینها با
+    _preload_pip_cuda_libs بارگذاری میشوند و کافی‌اند."""
+    try:
+        import glob as _glob
+        import site as _site
+        _roots = list(_site.getsitepackages() or [])
+        try:
+            _us = _site.getusersitepackages()
+            if _us and os.path.isdir(_us):
+                _roots.append(_us)
+        except Exception:
+            pass
+        try:
+            import importlib.util as _ilu
+            _tspec = _ilu.find_spec("torch")
+            if _tspec and _tspec.submodule_search_locations:
+                _tlib = os.path.join(
+                    list(_tspec.submodule_search_locations)[0], "lib")
+                if os.path.isdir(_tlib):
+                    _roots.append(_tlib)
+        except Exception:
+            pass
+        _need = {
+            "cudart": "nvidia/cuda_runtime/lib/libcudart*.so*",
+            "cublas": "nvidia/cublas/lib/libcublas*.so*",
+            "cufft": "nvidia/cufft/lib/libcufft*.so*",
+            "curand": "nvidia/curand/lib/libcurand*.so*",
+            "cudnn": "nvidia/cudnn/lib/libcudnn*.so*",
+        }
+        for _key, _pat in _need.items():
+            _found = False
+            for _root in _roots:
+                if _glob.glob(os.path.join(_root, _pat)):
+                    _found = True
+                    break
+            if not _found:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def _ort_has_dml() -> bool:
     try:
         import onnxruntime as _ort
@@ -615,27 +662,17 @@ def _ensure_all_dependencies() -> None:
         print("[*] اندروید: وابستگی‌ها داخل APK موجود است — بررسی pip رد شد.")
         return
     print("[*] بررسی وابستگی‌ها ...")
-    # v1.14.517 — سازگاریِ numpy: موتورِ OpenVINOِ OCR سقفِ numpy<2 دارد
-    # (openvino==2024.1.0). اگر ترتیبِ نصب «اول numpy 2.x، بعد openvino»
-    # باشد، openvino وسطِ پروسه numpy را به 1.26 downgrade میکند در حالی
-    # که cv2ِ 4.13 برایِ numpy 2 بیلد شده (فرورفتگیِ وابستگی). راه‌حل:
-    # وقتی قرار است پشتهٔ OV نصب شود، از همان اول numpy<2 میآوریم تا
-    # pip خودش cv2ِ سازگار با numpy 1.26 را انتخاب کند.
-    _ov_wanted = False
-    try:
-        _ov_wanted = _ov_ocr_wanted()
-    except Exception:
-        _ov_wanted = False
+    # v1.14.518 — هرگز numpyِ نصب‌شده را دست نمی‌زنیم (درخواستِ کاربر:
+    # «اگ نسخه نصب هست همون بمونه»). v1.14.517 وقتی پشتهٔ OV لازم بود
+    # «numpy<2» را نصب میکرد → رویِ کُلَب numpy 2.5.5 به 1.26 downgrade
+    # میشد و torch/cv2ِ بیلد‌شده برایِ numpy2 میشکستند (GPU runtime:
+    # LaMa شکسته؛ CPU runtime: نصبِ مجددِ cv2 در هر بوت). runtimeِ
+    # OpenVINO با numpy2 کاملاً سالم است (آزمونِ کامل: det+rec رویِ img6
+    # با numpy 2.5.5 → 45 خط/1.7s) → openvino با --no-deps نصب میشود
+    # و numpy فقط وقتی نصب میشود که اصلاً نباشد.
     core = []
     if not _can_import("numpy"):
-        core.append("numpy<2" if _ov_wanted else "numpy")
-    elif _ov_wanted:
-        try:
-            import numpy as _np_chk
-            if int(_np_chk.__version__.split(".")[0]) >= 2:
-                core.append("numpy<2")
-        except Exception:
-            pass
+        core.append("numpy")
     cv2_ok = _can_import("cv2")
     if not cv2_ok and sys.platform.startswith("linux"):
 
@@ -705,7 +742,14 @@ def _ensure_all_dependencies() -> None:
                 if not _have_ov:
                     print("[*] نصبِ موتورِ OpenVINO برایِ OCRِ سریعِ CPU "
                           "(PC x86_64) ...")
-                    _pip_install("openvino==2024.1.0")
+                    # v1.14.518 — --no-deps: openvino==2024.1.0 سقفِ
+                    # numpy<2 دارد و وگرنه numpyِ نصب‌شده (مثلاً 2.5
+                    # کُلَب) را downgrade میکرد. runtime با numpy2 سالم
+                    # است (آزمونِ کاملِ det+rec). دو وابستگیِ سبکِ
+                    # بدونِ numpyِ آن جدا نصب میشوند.
+                    _pip_install("--no-deps", "openvino==2024.1.0")
+                    if not _can_import("openvino"):
+                        _pip_install("openvino-telemetry", "packaging")
                     _pip_install("--no-deps", "rapidocr-openvino==1.4.4")
                 if _can_import("openvino"):
                     try:
@@ -875,7 +919,15 @@ def _ensure_all_dependencies() -> None:
                         ok_pip = True
                         break
             if ok_pip:
-                if not _pip_install("onnxruntime-gpu[cuda,cudnn]==1.26.0"):
+                # v1.14.518 — اگر کتابخانه‌های CUDA از قبل موجودند
+                # (کُلَب: torch با nvidia-*-cu12 wheelها)، نصبِ چند-
+                # گیگابایتیِ [cuda,cudnn] extras زائد است — همانها
+                # preload میشوند و CUDA EP بالا میآید.
+                if _pip_cuda_libs_present():
+                    print("[*] کتابخانه‌های CUDA از قبل موجودند "
+                          "(torch/nvidia wheels) → نصبِ extras چند-"
+                          "گیگابایتی رد شد.")
+                elif not _pip_install("onnxruntime-gpu[cuda,cudnn]==1.26.0"):
                     _pip_install(
                         "nvidia-cublas-cu12",
                         "nvidia-cudnn-cu12",

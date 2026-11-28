@@ -54,3 +54,183 @@ jobs:
         run: |
           set -o pipefail
           python -u scripts/bench_speed_gh.py 2>&1 | tee speed.log
+
+      - name: Upload speed report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-speed-pc
+          path: |
+            speed.log
+            /tmp/speed.json
+          if-no-files-found: warn
+          retention-days: 10
+
+  # v1.14.518 — بنچِ سرعتِ گوشی (درخواستِ کاربر): همان سه عکسِ بنچِ PC
+  # (img6/img2/4e2e77) رویِ شبیه‌سازِ واقعیِ اندروید (APKِ واقعی، دکمهٔ
+  # «شروع ترجمه» با tap_run) → زمانِ استخراج/میانگین OCR/زمانِ پاکسازی
+  # از manga.log پارس میشود — اعداد مستقیماً با رانِ PC قابلِ مقایسه‌اند.
+  speed-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Python 3.10 (Chaquopy buildPython)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Fetch vendored Python packages
+        run: |
+          python3 android/scripts/fetch_vendor.py --check || \
+            python3 android/scripts/fetch_vendor.py
+
+      - name: Sync engine sources into APK
+        run: python3 android/scripts/sync_sources.py
+
+      - name: Fetch RapidOCR models (PP-OCRv6 — det small + rec MEDIUM)
+        run: |
+          base="https://www.modelscope.cn/models/RapidAI/RapidOCR/resolve/v3.9.2"
+          rel="https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models"
+          A=android/app/src/main/assets/models
+          mkdir -p $A/det $A/cls $A/rec $A/rec_ko
+          curl -fL --retry 3 --max-time 600 -o $A/det/inference.onnx \
+            "$base/onnx/PP-OCRv6/det/PP-OCRv6_det_small.onnx"
+          curl -fL --retry 3 --max-time 900 -o $A/rec/inference.onnx \
+            "$rel/PP-OCRv6_medium_rec_onnx.onnx"
+          curl -fL --retry 3 --max-time 300 -o $A/rec/dict.txt \
+            "$rel/ppocrv6_chars.txt"
+          curl -fL --retry 3 --max-time 600 -o $A/cls/inference.onnx \
+            "$base/onnx/PP-OCRv4/cls/ch_ppocr_mobile_v2.0_cls_mobile.onnx"
+          curl -fL --retry 3 --max-time 600 -o $A/rec_ko/inference.onnx \
+            "$base/onnx/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile.onnx"
+          curl -fL --retry 3 --max-time 600 -o $A/rec_ko/dict.txt \
+            "$base/paddle/PP-OCRv5/rec/korean_PP-OCRv5_rec_mobile/ppocrv5_korean_dict.txt"
+          test $(stat -c%s $A/det/inference.onnx) -gt 8000000
+          test $(stat -c%s $A/rec/inference.onnx) -gt 60000000
+
+      - name: Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.10.2"
+
+      - name: Build x86_64 debug APK (emulator)
+        working-directory: android
+        run: |
+          gradle :app:assembleDebug -PappAbis="x86_64" -PlegacyJni=true \
+            -PchaquopyBuildPython="$(command -v python3)"
+          mkdir -p ../dist
+          cp app/build/outputs/apk/debug/app-debug.apk ../dist/MangaTranslator-x86_64.apk
+          ls -la ../dist
+
+      - name: Prepare models (RT-DETR det + LaMa + rapidocr)
+        run: |
+          mkdir -p /tmp/models
+          curl -fL --retry 3 --max-time 300 -o /tmp/models/detector-v4-s_int8.onnx \
+            "https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models/detector-v4-s_int8.onnx"
+          curl -fL --retry 3 --max-time 600 -o /tmp/models/lama-manga-dyn.onnx \
+            "https://github.com/amirwolf5122/Manga-AutoTranslate/releases/download/models/lama-manga-dyn.onnx"
+          ls -la /tmp/models
+
+      - name: Check KVM
+        run: |
+          ls -la /dev/kvm || true
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          "${ANDROID_HOME}/emulator/emulator" -accel-check || true
+
+      - name: Install platform-tools (adb)
+        run: |
+          P="$ANDROID_HOME/platform-tools/adb"
+          if [ ! -x "$P" ]; then yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platform-tools" > /dev/null 2>&1 || true; fi
+          "$P" version
+          "$P" start-server
+
+      - name: Create AVD (4 cores, 5GB)
+        run: |
+          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"; AVDM="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"; yes | "$SDKM" "system-images;android-30;google_apis;x86_64" > /dev/null 2>&1 || true
+          echo no | "$AVDM" create avd -n ciavd -k "system-images;android-30;google_apis;x86_64" -d pixel_4 --force
+          CFG=$("$AVDM" list avd | grep -A5 'Name: ciavd' | grep 'Path:' | awk '{print $2}')
+          CFG="${CFG:-$HOME/.android/avd/ciavd.avd}"
+          echo "AVD path: $CFG"
+          grep -q "hw.cpu.ncore" "$CFG/config.ini" && sed -i 's/hw.cpu.ncore=.*/hw.cpu.ncore=4/' "$CFG/config.ini" || echo "hw.cpu.ncore=4" >> "$CFG/config.ini"
+          echo "hw.ramSize=5120MB" >> "$CFG/config.ini"
+          mkdir -p "$HOME/.android/avd"
+          ln -sfn "$CFG" "$HOME/.android/avd/ciavd.avd"
+          INI="$(dirname "$CFG")/ciavd.ini"
+          if [ -f "$INI" ]; then ln -sfn "$INI" "$HOME/.android/avd/ciavd.ini"; else printf 'avd.ini.encoding=UTF-8\npath=%s\n' "$CFG" > "$HOME/.android/avd/ciavd.ini"; fi
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          tail -5 "$CFG/config.ini"
+
+      - name: Boot emulator
+        run: |
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb start-server || true
+          "$ANDROID_HOME/emulator/emulator" -avd ciavd -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim -camera-back none -memory 5120 > /tmp/emu_boot.log 2>&1 &
+          EMU_PID=$!
+          OK=0
+          for i in $(seq 1 144); do
+            if ! kill -0 "$EMU_PID" 2>/dev/null; then echo "=== emulator DIED ==="; break; fi
+            V=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$V" = "1" ]; then OK=1; echo "boot completed after ~$((i*5))s"; break; fi
+            sleep 5
+          done
+          if [ "$OK" != "1" ]; then tail -40 /tmp/emu_boot.log; exit 1; fi
+          adb shell input keyevent 82 || true
+          adb devices
+
+      - name: Install APK + push models
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb install -r -t dist/MangaTranslator-x86_64.apk
+          # مدلهای موتور: RT-DETR + LaMa + rapidocr (همان چیدمانِ emulator.yml)
+          adb push /tmp/models/detector-v4-s_int8.onnx /data/local/tmp/det.onnx
+          adb push /tmp/models/lama-manga-dyn.onnx /data/local/tmp/lama.onnx
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models && cp /data/local/tmp/det.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/detector-v4-s_int8.onnx && cp /data/local/tmp/lama.onnx /data/user/0/com.amirwolf.mangatranslator/files/.cache/manga_translator_models/lama-manga-dyn.onnx'"
+          A=android/app/src/main/assets/models
+          adb push $A/det/inference.onnx /data/local/tmp/ocr_det.onnx
+          adb push $A/rec/inference.onnx /data/local/tmp/ocr_rec.onnx
+          adb push $A/rec/dict.txt /data/local/tmp/ocr_chars.txt
+          adb push $A/cls/inference.onnx /data/local/tmp/ocr_cls.onnx
+          adb shell "run-as com.amirwolf.mangatranslator sh -c 'mkdir -p files/rapidocr_models && cp /data/local/tmp/ocr_det.onnx files/rapidocr_models/PP-OCRv6_det_small.onnx && cp /data/local/tmp/ocr_rec.onnx files/rapidocr_models/PP-OCRv6_medium_rec_onnx.onnx && cp /data/local/tmp/ocr_chars.txt files/rapidocr_models/ppocrv6_chars.txt && cp /data/local/tmp/ocr_cls.onnx files/rapidocr_models/ch_ppocr_mobile_v2.0_cls_mobile.onnx'"
+          adb shell rm -f /data/local/tmp/*.onnx /data/local/tmp/ocr_chars.txt || true
+
+      - name: Android speed bench (extract + clean per image)
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          mkdir -p emul-artifacts
+          set +e
+          python3 .ci_scripts/android_bench.py 2>&1 | tee android_bench.log
+          R=${PIPESTATUS[0]}
+          set -e
+          adb exec-out run-as com.amirwolf.mangatranslator cat files/manga.log > emul-artifacts/manga_last.log || true
+          cp android_bench.log /tmp/android_bench.json emul-artifacts/ 2>/dev/null || true
+          if [ -n "$R" ] && [ "$R" != "0" ]; then exit "$R"; fi
+
+      - name: Shutdown emulator
+        if: always()
+        run: |
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          adb emu kill || true
+          sleep 5
+
+      - name: Upload bench artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: out-speed-android
+          path: |
+            emul-artifacts/**
+            android_bench.log
+          if-no-files-found: warn
+          retention-days: 10
