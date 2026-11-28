@@ -1,17 +1,18 @@
 # BUILD-STRIP-START
-# v1.14.502 — پاکسازیِ «خالص» به سبکِ manga-cleaner-api (HF):
-# detector-v4-s_int8.onnx ناحیهٔ «متنِ واقعی» را می‌یابد → هر ناحیه جداگانه
-# از صفحه «برش» زده میشود → فقط داخلِ برش، جوهرِ متن ماسک میشود
-# (زمینه=مدِ هیستوگرام + جوهر=|Δ|>۲۲ دوطرفه + soft-halo؛ دورِ حباب و
-# خطوطِ هنری با barrier محفوظ) → پاکسازی فقط با «یک» موتورِ انتخابی:
-#   lama-manga → فقط LaMa (lama.onnx)
-#   lama-big  → فقط big-lama.pt
-#   opencv    → فقط cv2.inpaint (TELEA)
-# هیچ flat، هیچ ترکیب، هیچ سقوطِ پنهانی به موتورِ دیگر (درخواستِ سازنده).
-# حداکثرِ ۲ پاسِ LaMa (پاسِ دوم فقط برای شبحِ جامانده) — سرعت.
-# فقط نواحیِ kind=dialogue پاک میشوند؛ تبلیغِ سایت (promo)، SFX و junk
-# و بنرِ اعتبار هرگز دست نمیخورند. برشِ تمیز دقیقاً همان جایِ اصلی روی
-# عکس برمی‌گردد — هیچ‌چیزِ خارج از برش تغییر نمیکند.
+# v1.14.521 — پاکسازیِ «برش + انتقال» (قاعدهٔ صریحِ کاربر):
+#   دو عکس از عکسِ اصلی ساخته میشود:
+#   عکسِ ۱ (تمیز): جعبه‌های خطِ paddle-det (خط به خط / متن به متن) بریده
+#   میشود و جایِ هر خط با رنگِ زمینهٔ خودِ همان ردیف — نمونه از چهار
+#   جهتِ اطرافِ خط (چپ/راست و در لبه، بالا/پایین) — پر میشود؛ لبهٔ پرکرد
+#   با فیدرِ نرم میشود تا «برشِ مربعی» دیده نشود.
+#   عکسِ ۲ (متن): پیکسل‌های بریده‌شدهٔ متن در همان مختصاتِ اصلی روی بومِ
+#   سفید گذاشته میشوند (self._cc_last_text_layer → ذخیرهٔ {خروجی}_text).
+#   هیچ LaMa، هیچ barrier، هیچ تشخیصِ ساختار، هیچ آشکارسازِ شبح — رنگِ
+#   هر ردیف از خودِ تصویر خوانده میشود؛ سرریزِ رنگ (آبی/صورتی/مشکیِ
+#   ناکجاآباد) و شبحِ متن از پایه ناممکن میشوند. خطِ دورِ حباب و آرت
+#   هیچ‌وقت ماسک نمیشوند چون ماسک فقط «جعبهٔ خطِ متن» است.
+#   ناحیهٔ بدونِ poly (OCR خط خوانده) رد میشود — متنِ جامانده بهتر از
+#   حبابِ پاک‌شده است.
 class _MangaTranslatorBody_85:
 # BUILD-STRIP-END
 
@@ -685,7 +686,7 @@ class _MangaTranslatorBody_85:
                          "rx1": int(rx), "ry1": int(ry),
                          "rx2": int(rx + rw), "ry2": int(ry + rh),
                          "polys": polys, "rid": int(getattr(r, "id", -1)),
-                         "cut_extra": int(_cut_extra)})
+                         "kind": _kd, "cut_extra": int(_cut_extra)})
         return jobs
 
     @staticmethod
@@ -763,2217 +764,312 @@ class _MangaTranslatorBody_85:
                 cv2.MORPH_ELLIPSE, (k, k)))
         return m
 
-    @staticmethod
-    def _cc_drop_junk_components(ink: np.ndarray) -> np.ndarray:
-        try:
-            n, lab, st, _ = cv2.connectedComponentsWithStats(
-                ink, connectivity=8)
-        except Exception:
-            return ink
-        ch, cw = ink.shape[:2]
-        area = float(max(1, ch * cw))
-        keep = np.zeros_like(ink)
-        for i in range(1, n):
-            a = int(st[i, cv2.CC_STAT_AREA])
-            if a < 6:
-                continue
-            bw = int(st[i, cv2.CC_STAT_WIDTH])
-            bh = int(st[i, cv2.CC_STAT_HEIGHT])
-            if a > 0.25 * area:
-                continue
-            if bh > 0.60 * ch and bw > 0.60 * cw:
-                continue
-            keep[lab == i] = 255
-        return keep
-
-    def _cc_ink_mask(self, crop_bgr: np.ndarray,
-                     grow: int = 4) -> np.ndarray:
-        ch, cw = crop_bgr.shape[:2]
-        if ch < 6 or cw < 6:
-            return np.zeros((max(1, ch), max(1, cw)), np.uint8)
-        g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-        med = float(np.median(g))
-        ink = (g < max(80.0, med - 45.0)).astype(np.uint8) * 255
-        cov = float(np.count_nonzero(ink)) / float(max(1, g.size))
-        if cov < 0.015 or cov > 0.55:
-            bright = (g > min(210.0, med + 55.0)).astype(np.uint8) * 255
-            bcov = float(np.count_nonzero(bright)) / float(max(1, g.size))
-            if 0.015 < bcov < 0.55 and (cov < 0.015 or bcov < cov):
-                ink = bright
-        if not np.any(ink):
-            return ink
-        ink = cv2.morphologyEx(ink, cv2.MORPH_CLOSE,
-                               np.ones((5, 5), np.uint8))
-        ink = self._cc_drop_junk_components(ink)
-        if not np.any(ink):
-            return ink
-        if grow > 0:
-            k = 2 * int(grow) + 1
-            ink = cv2.dilate(ink, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (k, k)))
-        return ink
+    # ═══ v1.14.521 — قاعدهٔ «برش + انتقال» (درخواستِ صریحِ کاربر) ═══
 
     @staticmethod
-    def _cc_barrier(gray: np.ndarray, text_core: np.ndarray,
-                    ink_thr: int = 110, min_area: int = 60,
-                    grow: int = 2) -> np.ndarray:
-        """دورِ حباب/خطوطِ هنری = کامپوننت‌های تیرهٔ بزرگِ غیرِمتنی →
-        باید محفوظ بمانند (سبکِ HF manga-cleaner-api)."""
-        try:
-            ink = (gray < ink_thr).astype(np.uint8)
-            n, lab, st, _ = cv2.connectedComponentsWithStats(
-                ink, connectivity=8)
-            if n <= 1:
-                return np.zeros_like(gray, dtype=np.uint8)
-            text_px = np.bincount(lab[text_core > 0],
-                                   minlength=n).astype(np.float32)
-            areas = st[:, cv2.CC_STAT_AREA].astype(np.float32)
-            widths = st[:, cv2.CC_STAT_WIDTH].astype(np.float32)
-            heights = st[:, cv2.CC_STAT_HEIGHT].astype(np.float32)
-            fill = areas / np.maximum(1.0, widths * heights)
-            # v1.14.520 — ساختار = کامپوننتِ تیرهٔ بزرگِ غیرمتنی. معیارِ
-            # «متنِ روی آن» تنها کافی نیست: خطِ دورِ حباب وقتی به متن
-            # میچسبد text_px میگیرد و از barrier میافتاد. حالا پهنای
-            # بزرگ (area>800)، لکهٔ پُر (fill>۰٫۵ و area>150) هم ساختارند.
-            _H0, _W0 = gray.shape[:2]
-            structure = (areas >= min_area) & (
-                ((text_px / np.maximum(areas, 1.0)) < 0.5)
-                | ((widths > 0.60 * _W0) & (heights > 0.60 * _H0))
-            )
-            # v1.14.520 — «زمینهٔ تیرهٔ کل صفحه» ساختار نیست: در پنلِ
-            # مشکی، کلِ پسزمینه یک کامپوننتِ تیرهٔ غولآسا است و barrier
-            # کلِ ماسک را میبلعيد (img2: EXECUTED). کامپوننتی که بیش از
-            # ۳۵٪ صفحه را گرفته، زمینه است، نه خطِ حباب/آرت.
-            structure &= (areas <= 0.35 * float(_H0 * _W0))
-            structure[0] = False
-            # v1.14.520 — پیکسلهایِ ساختار حتی اگر در raw/جوهر آمده باشند
-            # barrier میشوند؛ شرطِ قدیمیِ `text_core == 0` باعث میشد خطِ
-            # دورِ حباب که با متن چسبیده بود از barrier بیرون بماند.
-            struct_px = structure[lab]
-            barrier = (struct_px.astype(np.uint8)) * 255
-            if grow > 0 and barrier.any():
-                k = 2 * int(grow) + 1
-                barrier = cv2.dilate(barrier, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (k, k)))
-            return barrier
-        except Exception:
-            return np.zeros_like(gray, dtype=np.uint8)
+    def _box_mask(bx: tuple, ch: int, cw: int) -> np.ndarray:
+        bm = np.zeros((ch, cw), bool)
+        x1 = max(0, int(bx[0])); y1 = max(0, int(bx[1]))
+        x2 = min(cw, int(bx[2])); y2 = min(ch, int(bx[3]))
+        if x2 > x1 and y2 > y1:
+            bm[y1:y2, x1:x2] = True
+        return bm
 
-    def _cc_zone_ink_mask(self, crop_bgr: np.ndarray, zone: np.ndarray,
-                          dilate_px: int = 3) -> Optional[np.ndarray]:
-        """v1.14.501 — ماسکِ جوهرِ متن، «نسبت به زمینهٔ خودِ زون» (نه Otsu):
-        زمینه = میانهٔ خاکستریِ زون؛ جوهر = |Δ|>۲۲ از زمینه (تیره یا روشن).
-        ریشهٔ شبح: Otsu روی متنِ کم‌کنتراست (۱۹۶ روی ۲۴۱) آستانه را داخلِ
-        خوشهٔ متن میگذاشت و نیمی از جوهر نیم‌پاک میماند؛ هالهٔ سفید دورِ
-        حروف (۲۵۵ روی ۲۴۱؛ Δ=۱۴) هم هیچ‌وقت گرفته نمیشد. قاعدهٔ جدید:
-        ۱) core = تیره‌تر از bg-۲۲ «یا» روشن‌تر از bg+۲۲ (هاله + متنِ
-        روشن روی زمینهٔ تیره)؛
-        ۲) soft-halo = Δ>۸ در فاصلهٔ ≤۷px از core (هالهٔ نازکِ چسبیده)؛
-        ۳) close(5) → لکه‌های <۶px حذف؛ barrier دورِ خطوطِ هنری محفوظ.
-        خروجی None یعنی جوهر پیدا نشد (→ کلِ زون)."""
-        ch, cw = crop_bgr.shape[:2]
-        if ch < 6 or cw < 6 or not np.any(zone):
-            return None
-        g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-        # v1.14.502 — کروما (اشباعِ رنگ): متنِ رنگی (قرمز روی سیاه و…)
-        # در خاکستریِ کم‌کنتراست می‌ماند و لبه‌های آنتی‌آلیاسِ اشباعِ
-        # کم بیرونِ ماسک می‌مانند؛ LaMa از روی همین لکه‌های ریزِ رنگی
-        # حرف را «بازسازی» میکند (تستِ واقعی img2: TAXES/EXECUTED قرمز).
+    @staticmethod
+    def _cc_row_bg_color(crop: np.ndarray, row: int, xl: int, xr: int,
+                          msk: np.ndarray,
+                          bx: Optional[tuple] = None):
+        """رنگِ زمینهٔ همان ردیف — جدا برایِ چپ و راست (گرادیانِ افقیِ
+        زمینه حفظ میشود): «اسکنِ پیوسته» از لبهٔ جعبهٔ خط تا اولین مرزِ
+        سطح؛ اگر جعبهٔ detectorِ حباب موجود باشد نمونه فقط از درونِ آن
+        است (رنگِ خودِ حباب، نه آرتِ بیرون). خروجی: (رنگِ چپ، رنگِ راست).
+        اگر دو طرف خیلی متفاوت باشند (پلی از حباب بیرون زده) عمودی
+        (درونِ حباب) به‌جایِ طرفِ متفاوت مینشیند."""
         try:
-            _mx_c = crop_bgr.max(axis=2).astype(np.int32)
-            _mn_c = crop_bgr.min(axis=2).astype(np.int32)
-            _sat = _mx_c - _mn_c
-        except Exception:
-            _sat = None
-        zone_d = cv2.dilate(zone, cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (9, 9))) > 0
-        zn = float(zone_d.sum()) or 1.0
-        # v1.14.501: زمینهٔ زون = «مدِ هیستوگرام» (نه میانه) — میانه روی
-        # زونِ نیمه‌تیره (متن روی آرت‌ورک تیره) آلوده میشود؛ مد + سهمِ ۳-بنِ
-        # همسایه میگوید زمینه واقعاً یکدست هست یا نه:
-        #   share3 ≥ 0.5 → کاغذ/حبابِ یکدست → شاخهٔ جوهر معتبر؛
-        #   share3 < 0.5 → آرت‌ورکِ پربافت → جوهر جداکردنی نیست → None
-        #   (کلِ زون به LaMa می‌افتد که آرت را بازسازی میکند — ریشهٔ
-        #   «جعبهٔ سفید روی آرت» همین بود که flat روی آرت می‌ریخت)
-        vals = g[zone_d].astype(np.int32) // 16
-        h16 = np.bincount(vals.ravel(), minlength=16)
-        b = int(np.argmax(h16))
-        share3 = float(h16[max(0, b - 1):min(16, b + 2)].sum()) / zn
-        bg = float(b * 16 + 8)
-        gi = g.astype(np.int32)
-        dark = (g < bg - 22.0)
-        bright = (g > bg + 22.0)
-        dark_in = float((dark & zone_d).sum()) / zn
-        bright_in = float((bright & zone_d).sum()) / zn
-        if share3 >= 0.50:
-            # زمینهٔ یکدست (کاغذ/حباب/بنرِ ساده) → جوهر = اقلیتِ نسبی
-            # v1.14.503 — سقفِ سهمِ روشن ۰٫۴۲→۰٫۶۰: متنِ سفیدِ متراکم روی
-            # حبابِ تیره (تستِ واقعی 514y: p11 bright=۰٫۴۴۶ و p12
-            # bright=۰٫۴۲۲) از سقفِ قدیمی میگذشت → ماسک None میشد →
-            # کلِ زون به LaMa میافتاد و «شبحِ حرف» بازسازی میشد. با
-            # share3≥۰٫۵ زمینه دست‌کم نیمی از زون است؛ جوهرِ ≤۰٫۶۰
-            # هنوز اقلیتِ واقعی است.
-            # v1.14.515 — سقفِ تیره ۰٫۴۵→۰٫۶۲: متنِ متراکمِ حبابِ سفید
-            # (کاربرِ img7: حبابِ پر از حرف) → مسیرِ فالبکِ «کلِ زون»
-            # می‌رفت و کلِ حباب (با خطِ دور) پاک میشد. با سهمِ ≥۵۰٪ زمینه
-            # و جوهرِ ≤۶۲٪، جوهر جدا میشود و فقط متن پاک میشود.
-            if 0.02 <= dark_in <= 0.62:
-                raw = dark.astype(np.uint8) * 255
-                if bright_in >= 0.02 and bright_in <= 0.60:
-                    # هالهٔ روشن/متنِ روشن دورِ هم → هر دو جوهرند
-                    raw = cv2.bitwise_or(raw, bright.astype(np.uint8) * 255)
-            elif 0.02 <= bright_in <= 0.60:
-                # متنِ روشن روی زمینهٔ تیره (واترمارک/بنر/حبابِ تیره)
-                raw = bright.astype(np.uint8) * 255
-            else:
-                return None
-        else:
-            # v1.14.501: بنرِ تیرهٔ تمام‌عرض (QIMANGA و هم‌سایه‌ها): زمینهٔ
-            # کل ناهمگن است ولی نیمهٔ تیرهٔ هیستوگرام غالب است → متنِ روشنِ
-            # روی زمینهٔ تیره از نیمهٔ تیره جدا میشود
-            dark_share = float(h16[:8].sum()) / zn
-            if dark_share >= 0.40:
-                db = int(np.argmax(h16[:8]))
-                dbg = float(db * 16 + 8)
-                br = (g > dbg + 22.0)
-                br_in = float((br & zone_d).sum()) / zn
-                if 0.005 <= br_in <= 0.42:
-                    bg = dbg
-                    bright = br
-                    bright_in = br_in
-                    dark = (g < dbg - 22.0)
-                    dark_in = float((dark & zone_d).sum()) / zn
-                    raw = br.astype(np.uint8) * 255
-                else:
+            ch, cw = crop.shape[:2]
+            r = int(row)
+            side = 25
+
+            def _ok(col: int, rr: int) -> bool:
+                if bx is not None:
+                    return (bx[0] <= col < bx[2]) and (bx[1] <= rr < bx[3])
+                return True
+
+            def _run(seg: np.ndarray, good: np.ndarray,
+                     base_col: int, base_row: int, step_col: int):
+                if len(good) < 2:
+                    return []
+                ref = np.median(seg[good[:3]], axis=0)
+                kept = []
+                for gi in good:
+                    px = seg[gi]
+                    if not _ok(base_col + step_col * int(gi), base_row):
+                        break
+                    if np.abs(px.astype(np.int32)
+                              - ref.astype(np.int32)).max() > 45:
+                        break  # مرزِ سطح (خطِ حباب/آرت/متنِ دیگر)
+                    kept.append(px)
+                return kept
+
+            def _med(px_list) -> Optional[np.ndarray]:
+                if len(px_list) < 2:
                     return None
-            else:
-                return None
-        text_core = cv2.bitwise_and(raw, zone_d.astype(np.uint8) * 255)
-        # v1.14.503 — میانهٔ اشباعِ زون یک‌بار بالای همهٔ قواعدِ رنگی:
-        #  • _med_sat ≤ 20 → زمینهٔ «بی‌رنگ» (کاغذ/سفید/سیاه) → قواعدِ
-        #    جوهرِ رنگی و هالهٔ کروما و soft-halo معتبرند؛
-        #  • _med_sat > 20 → زمینهٔ پُراشباع (حبابِ قرمز/زرد/آبی) →
-        #    این قواعد خاموش: خودِ گرادیانِ زمینه (Δ>۸ و اشباع>۱۶)
-        #    ماسک میشود و LaMa روی زمینهٔ سالم لکهٔ پُرپَر میسازد
-        #    (تستِ واقعی 514y: حبابهایِ قرمز OH..?/WHEN WAS THAT).
-        _med_sat = 0.0
-        if _sat is not None:
-            try:
-                _med_sat = float(np.median(_sat[zone_d])) \
-                    if zone_d.any() else 0.0
-            except Exception:
-                _med_sat = 0.0
-        # v1.14.502 — جوهرِ رنگی روی زمینهٔ بی‌رنگ (فقط وقتی زمینه بی‌رنگ)
-        if _sat is not None:
-            try:
-                if _med_sat <= 20.0:
-                    _col = ((_sat > 40) & zone_d
-                            & (text_core == 0)).astype(np.uint8) * 255
-                    if int(cv2.countNonZero(_col)) \
-                            < 0.42 * zn:
-                        text_core = cv2.bitwise_or(text_core, _col)
-            except Exception:
-                pass
-        # v1.14.514 — جوهرِ «هم‌خاکستریِ رنگی» (آمبر رویِ آبیِ روشنِ
-        # جعبهٔ 4e2e77: Δ خاکستری=۱۰ ولی Δ رنگ=۱۷۰): انحرافِ هر کانال از
-        # میانگینِ هموارِ خودش (medianBlur ۲۱ — گرادیان را رد میکند)
-        # > ۲۶ = جوهر؛ فقط وقتی (۱) قواعدِ تیره/روشن جوهر نیافتهاند
-        # (متنِ سفید رویِ قرمزِ img5: جوهرِ روشن هست → این قاعده خاموش
-        # تا لبههایِ اُبرِ قرمزِ نجات‌یافته پاک نشوند) و (۲) زمینه
-        # پُررنگ است و همگن (share3≥۵۰٪ — آرت اینجا نمیرسد).
-        # v1.14.515 — زونِ «گرادیانِ رنگیِ هموار» (جعبهٔ سیستمِ 4e2e77:
-        # رینگِ خاکستریِ زون > ۲۸ یعنی زمینه شیبِ واقعی دارد): انحراف از
-        # medianBlurِ ۲۱ (که خودش گرادیانِ نرم را دنبال میکند) = جوهرِ
-        # متنی — اینجا «همیشه» روشن میشود، نه فقط وقتی قواعدِ تیره/روشن
-        # هیچ جوهری نیافتهاند. ریشهٔ شبحِ «WHINY/FREELDADING» رویِ
-        # گرادیان: قواعدِ عمومی فقط بخشی از حروف را میگرفتند و بقیه
-        # میماند (لکهٔ متنِ قبلی).
-        _gz_rng = 0.0
-        try:
-            if zone_d.any():
-                _gz_rng = float(np.max(g[zone_d])) \
-                    - float(np.min(g[zone_d]))
-        except Exception:
-            _gz_rng = 0.0
-        _grad_zone = bool(_med_sat > 20.0 and _gz_rng > 28.0)
-        if _med_sat > 20.0 and (cv2.countNonZero(text_core) < 24
-                                or _grad_zone):
-            try:
-                dev = np.zeros(g.shape, np.float32)
-                for _ci in range(3):
-                    _ch = crop_bgr[:, :, _ci]
-                    _sm = cv2.medianBlur(_ch, 21)
-                    dev = np.maximum(
-                        dev, np.abs(_ch.astype(np.int32)
-                                    - _sm.astype(np.int32)))
-                _cdev = ((dev > 26) & zone_d & (text_core == 0)) \
-                    .astype(np.uint8) * 255
-                if bool(os.environ.get("MANGA_CC_DEBUG")):
-                    try:
-                        print(f"    [cc] جوهرِ هم‌خاکستریِ رنگی: "
-                              f"cdev={int(cv2.countNonZero(_cdev))} "
-                              f"medsat={_med_sat:.0f}", flush=True)
-                    except Exception:
-                        pass
-                if cv2.countNonZero(_cdev) > 0:
-                    _n, _lab, _st, _ = cv2.connectedComponentsWithStats(
-                        _cdev, 8)
-                    _keep = np.zeros(_n, bool)
-                    for _k in range(1, _n):
-                        _a = int(_st[_k, cv2.CC_STAT_AREA])
-                        _h = int(_st[_k, cv2.CC_STAT_HEIGHT])
-                        if _a < 6 or _h > 96:
+                alls = np.array(px_list, dtype=np.float32)
+                med = np.median(alls, axis=0)
+                keep = np.abs(alls - med).max(axis=1) < 40.0
+                if int(keep.sum()) >= 2:
+                    alls = alls[keep]
+                    med = np.median(alls, axis=0)
+                return med.astype(np.float32)
+
+            # چپ
+            cL = None
+            lx = max(0, int(xl) - side)
+            if lx < int(xl):
+                seg = crop[r, lx:int(xl)][::-1]
+                mseg = msk[r, lx:int(xl)][::-1]
+                kept = _run(seg, np.flatnonzero(mseg == 0),
+                            int(xl) - 1, r, -1)
+                if kept:
+                    cL = _med(kept)
+            # راست
+            cR = None
+            rx = min(cw, int(xr) + 1 + side)
+            if rx > int(xr) + 1:
+                seg = crop[r, int(xr) + 1:rx]
+                mseg = msk[r, int(xr) + 1:rx]
+                kept = _run(seg, np.flatnonzero(mseg == 0),
+                            int(xr) + 1, r, +1)
+                if kept:
+                    cR = _med(kept)
+            # عمودی (فالبک/داور): بالا/پایین — گپِ بینِ خطوطِ حباب
+            cV = None
+            vzone = []
+            for dr in (-3, -5, -8, 3, 5, 8):
+                rr = r + dr
+                if 0 <= rr < ch:
+                    seg = crop[rr, int(xl):int(xr) + 1]
+                    mseg = msk[rr, int(xl):int(xr) + 1]
+                    for gi in np.flatnonzero(mseg == 0):
+                        if not _ok(int(xl) + int(gi), rr):
                             continue
-                        _keep[_k] = True
-                    if _n > 1:
-                        _cdev = (_keep[_lab].astype(np.uint8)) * 255
-                        text_core = cv2.bitwise_or(text_core, _cdev)
-            except Exception:
-                pass
-        # حذفِ خرده‌نویز
-        try:
-            n, lab, st, _ = cv2.connectedComponentsWithStats(
-                text_core, connectivity=8)
-            keep = np.zeros(n, bool)
-            keep[1:] = st[1:, cv2.CC_STAT_AREA] >= 6
-            text_core = (keep[lab].astype(np.uint8)) * 255 \
-                if n > 1 else text_core
+                        vzone.append(seg[gi])
+                        if len(vzone) > 40:
+                            break
+            if vzone:
+                cV = _med(vzone)
+
+            if cL is None and cR is None:
+                return (cV, cV)
+            if cL is None:
+                cL = cR
+            if cR is None:
+                cR = cL
+            if cV is not None:
+                _dL = float(np.abs(cV - cL).max())
+                _dR = float(np.abs(cV - cR).max())
+                if _dL > 60.0 and _dR > 60.0:
+                    # هر دو طرفِ افقی با عمودی می‌جنگند → خط از جعبه/حباب
+                    # بیرون زده و طرفین آرت‌اند؛ عمودی (درونِ جعبه) درست
+                    # است (4e2e77: جعبهٔ آبیِ گرادیانی).
+                    cL = cV
+                    cR = cV
+                elif float(np.abs(cL - cR).max()) > 100.0:
+                    # فقط یک طرفِ خراب: طرفِ نزدیک به عمودی نگه، دیگری
+                    # خودِ عمودی میشود
+                    if _dL < 45.0:
+                        cR = cV
+                    elif _dR < 45.0:
+                        cL = cV
+            return (cL, cR)
         except Exception:
-            pass
-        if int(cv2.countNonZero(text_core)) < 24:
-            return None
-        # پرکردنِ داخلِ حروف توپر
-        text_core = cv2.morphologyEx(text_core, cv2.MORPH_CLOSE,
-                                      np.ones((5, 5), np.uint8))
-        # soft-halo: Δ>۸ از زمینه در فاصلهٔ ≤۷px از جوهر (هالهٔ سفیدِ نازک)
-        # v1.14.503 — فقط روی زمینهٔ «بی‌رنگ»؛ روی زمینهٔ پُراشباع
-        # (حبابِ قرمز) گرادیانِ خودِ زمینه Δ>۸ میدهد و کلِ حباب ماسک
-        # میشد → لکهٔ پُرپَرِ LaMa (تستِ واقعی 514y: شبحِ قرمز داخلِ
-        # حبابهایِ قرمز p10/p17/p19/p20/p23/p24/p37). dilationِ ۷px خودش
-        # لبهٔ آنتی‌آلیاسِ استروک را میپوشاند.
-        if _med_sat <= 20.0:
-            try:
-                near = cv2.dilate(text_core, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (15, 15))) > 0
-                soft = ((np.abs(gi - int(round(bg))) > 8) & zone_d
-                        & near & (text_core == 0)).astype(np.uint8) * 255
-                text_core = cv2.bitwise_or(text_core, soft)
-                # v1.14.502 — هالهٔ کروما: لبهٔ آنتی‌آلیاسِ جوهرِ رنگی
-                # (اشباعِ ۱۶..۴۰ — در خاکستری دیده نمیشود) نزدیکِ جوهر
-                if _sat is not None:
-                    col_soft = ((_sat > 16) & zone_d & near
-                                & (text_core == 0)).astype(np.uint8) * 255
-                    text_core = cv2.bitwise_or(text_core, col_soft)
-            except Exception:
-                pass
-        core_d = cv2.dilate(text_core, cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (7, 7)))
-        # v1.14.520 — در زمینهٔ تیره (پنلِ مشکی) barrier معنا ندارد:
-        # خودِ پسزمینه/متنِ قرمزِ تیره «ساختار» حساب میشود و لبههایِ
-        # حروف را از ماسک میبرد → TELEA/LaMa حلقهٔ سفیدِ دورِ حرف
-        # میگذاشت (img2: TAXES). ماسک = جوهر + هاله، بدونِ برش.
-        barrier = (np.zeros_like(g, dtype=np.uint8)
-                   if bg < 80.0
-                   else self._cc_barrier(g, core_d, grow=4))
-        # v1.14.520 — خودِ ماسکِ جوهر هرگز شاملِ barrier (خطِ حباب/کادر)
-        # نمیشود؛ قبلاً `m |= text_core` خطِ دورِ حباب را دوباره برمیگرداند.
-        text_core = cv2.bitwise_and(text_core, cv2.bitwise_not(barrier))
-        # v1.14.520 — هالهٔ ۵px رویِ متنِ چگال، خطوط را به هم میچسباند و
-        # کلِ حباب را پر میکند؛ ۳px برایِ پوششِ آنتی‌آلیاس کافی است.
-        r = max(2, min(3, int(dilate_px)))
-        halo = cv2.dilate(text_core, cv2.getStructuringElement(
-            cv2.MORPH_ELLIPSE, (2 * r + 1, 2 * r + 1)))
-        m = cv2.bitwise_and(halo, cv2.bitwise_not(barrier))
-        m = cv2.bitwise_or(m, text_core)  # خودِ استروک‌ها همیشه پاک
-        # v1.14.501: خطِ لبهٔ حباب/کادر حتی اگر با متن چسبیده باشد محفوظ
-        # بماند — نوارِ ۲px دورِ بلوکِ جوهرِ متراکم از ماسک خارج شود وقتی
-        # آن نوار تیره و خط‌مانند است (rim) نه متن.
-        # v1.14.502 — فیکسِ «استابِ حروف در لبهٔ صفحه» (تستِ واقعی
-        # dxa_10: EHH~ بالای صفحه): عقب‌کشیدنِ کورکورانهٔ ردیفهایِ
-        # اول/آخر، بالایِ حروفِ بریده در لبهٔ صفحه را هم میبرد و جوهرِ
-        # ۲ردیفی میماند. حالا فقط ردیفِ «خط‌مانند» (پوششِ ≥۶۰٪ عرضِ
-        # زون = خطِ حباب/کادر) عقب کشیده میشود؛ ردیفِ پراکنده از
-        # حروف (پوششِ کم) متن است و باید پاک شود.
+            return (None, None)
+
+    def _cc_cut_fill_job(self, page: np.ndarray, job: dict,
+                         out: np.ndarray, text_layer: np.ndarray) -> str:
+        """برشِ خط‌به‌خطِ paddle-det → انتقال به عکسِ ۲ + پرکردِ محلی
+        با رنگِ زمینهٔ خودِ ردیف (چهار جهت) و لبهٔ فیدرِ نرم."""
         try:
-            _dense = float(cv2.countNonZero(m)) / float(max(1, zone_d.sum()))
-            if _dense > 0.45:
-                ys, xs = np.nonzero(m)
-                if len(ys):
-                    y0, y1 = int(ys.min()), int(ys.max())
-                    _zw = zone_d.sum(axis=1).astype(np.float32)
-                    for _yy in (y0, y0 + 1, y1, y1 - 1):
-                        if 0 <= _yy < m.shape[0]:
-                            _rowcov = float((m[_yy] > 0).sum()) \
-                                / float(max(1.0, _zw[_yy]))
-                            if _rowcov >= 0.60:
-                                m[_yy, :] &= 0
-        except Exception:
-            pass
-        # محدود به پیرامونِ زون
-        lim = cv2.dilate(zone.astype(np.uint8) * 255,
-                          cv2.getStructuringElement(
-                              cv2.MORPH_ELLIPSE, (2 * (r + 2) + 1,) * 2))
-        m = cv2.bitwise_and(m, lim)
-        return m
-
-    @staticmethod
-    def _cc_zone_adjacent_ink_grow(crop_bgr: np.ndarray, zone: np.ndarray,
-                                   lim: np.ndarray) -> np.ndarray:
-        """v1.14.502 — نوارِ جوهرِ یتیمِ چسبیده به زون (تستِ واقعی
-        img4: «ORDINANCE» نیمه‌بریده در لبهٔ صفحه — OCR نیمه‌حرفها را
-        نمیخواند → poly ندارد → ماسک نمیگیرد و لبهٔ حروف میماند):
-        جوهرِ انحرافی/رنگی که در ≤۱۸px بالای/پایینِ زون، داخلِ محدودهٔ
-        rect و هم‌پوشانِ افقیِ زون است به زون چسبانده میشود؛ خطوطِ
-        هنری بعداً barrier خودش را دارد."""
-        try:
-            zn = zone > 0
-            if not zn.any() or lim is None or not np.any(lim):
-                return zone
-            g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            ref = cv2.medianBlur(g, 31)
-            ink = (np.abs(g.astype(np.int32)
-                          - ref.astype(np.int32)) > 34)
-            try:
-                _mx = crop_bgr.max(axis=2).astype(np.int32)
-                _mn = crop_bgr.min(axis=2).astype(np.int32)
-                ink |= ((_mx - _mn) > 40)
-            except Exception:
-                pass
-            near = cv2.dilate(zone, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (9, 37))) > 0
-            cand = (ink & near & (lim > 0) & (~zn))
-            if not cand.any():
-                return zone
-            m = cand.astype(np.uint8) * 255
-            n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
-            if n <= 1:
-                return zone
-            zs = zn.sum(axis=0)
-            zcols = np.flatnonzero(zs > 0)
-            if not len(zcols):
-                return zone
-            zx1, zx2 = int(zcols[0]), int(zcols[-1])
-            out = zone.copy()
-            for ci in range(1, n):
-                a = int(st[ci, cv2.CC_STAT_AREA])
-                if a < 6:
-                    continue
-                x0 = int(st[ci, cv2.CC_STAT_LEFT])
-                y0 = int(st[ci, cv2.CC_STAT_TOP])
-                w = int(st[ci, cv2.CC_STAT_WIDTH])
-                h = int(st[ci, cv2.CC_STAT_HEIGHT])
-                if h > 64 or w > (zx2 - zx1) + 40:
-                    continue
-                ix1, ix2 = max(x0, zx1), min(x0 + w, zx2 + 1)
-                if ix2 - ix1 < 0.25 * max(1, w):
-                    continue
-                out[y0:y0 + h, x0:x0 + w] = 255
-            return out
-        except Exception:
-            return zone
-
-    @staticmethod
-    def _cc_mask_edge_bands(crop_bgr: np.ndarray, m: np.ndarray,
-                            zone: np.ndarray) -> np.ndarray:
-        """v1.14.502 — نوارِ لبهٔ برش: LaMa از جوهرِ بی‌ماسکِ نزدیک،
-        همان حرف را «بازسازی» میکند (تستِ واقعی img4: «ORDINANCE»
-        نیمه‌بریده — نوارِ ۰..۱۶ فقط با ماسکِ تمام‌عرض صفر شد؛ با ماسکِ
-        ناقص ~۴۰٪ جوهر ماند). قاعده: اگر جوهر به لبهٔ برش چسبیده و
-        ماسک از ردیفِ دوم به بعد پوشش دارد، کلِ نوارِ لبه (در عرضِ
-        زون ±۸px، تا ۲۴px عمق) ماسک میشود — هنرِ حاشیهٔ ctx دست‌نخورده."""
-        try:
-            if m is None or not np.any(m) or zone is None \
-                    or not np.any(zone):
-                return m
-            g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            ref = cv2.medianBlur(g, 31)
-            ink = (np.abs(g.astype(np.int32)
-                          - ref.astype(np.int32)) > 34)
-            try:
-                _mx = crop_bgr.max(axis=2).astype(np.int32)
-                _mn = crop_bgr.min(axis=2).astype(np.int32)
-                ink |= ((_mx - _mn) > 40)
-            except Exception:
-                pass
-            zn = (zone > 0)
-            ink &= (cv2.dilate(zn.astype(np.uint8) * 255,
-                               np.ones((41, 41), np.uint8)) > 0)
-            H, W = m.shape[:2]
-            zc = np.flatnonzero(zn.sum(axis=0) > 0)
-            zr = np.flatnonzero(zn.sum(axis=1) > 0)
-            if not len(zc) or not len(zr):
-                return m
-            m2 = m.copy()
-
-            def _row_ink(y: int) -> int:
-                return int(ink[y].sum())
-
-            def _row_mask(y: int) -> int:
-                return int((m[y] > 0).sum())
-
-            # بالای برش: اولین ردیفِ ماسک‌دار؛ جوهرِ بالای آن چسبیده؟
-            ys_m = np.flatnonzero((m > 0).any(axis=1))
-            if len(ys_m):
-                y_m = int(ys_m[0])
-                if 0 < y_m <= 24:
-                    _bad = sum(1 for y in range(0, y_m)
-                               if _row_ink(y) >= 12)
-                    if _bad >= max(1, y_m - 1):
-                        x1 = max(0, int(zc[0]) - 8)
-                        x2 = min(W, int(zc[-1]) + 9)
-                        m2[0:min(H, y_m + 4), x1:x2] = 255
-            # پایینِ برش
-            if len(ys_m):
-                y_m = int(ys_m[-1])
-                if 0 <= H - 1 - y_m <= 24:
-                    _bad = sum(1 for y in range(y_m + 1, H)
-                               if _row_ink(y) >= 12)
-                    if _bad >= max(1, H - 1 - y_m):
-                        x1 = max(0, int(zc[0]) - 8)
-                        x2 = min(W, int(zc[-1]) + 9)
-                        m2[max(0, y_m - 3):H, x1:x2] = 255
-            # چپ/راست (متنِ عمودی)
-            xs_m = np.flatnonzero((m > 0).any(axis=0))
-            if len(xs_m):
-                x_m = int(xs_m[0])
-                if 0 < x_m <= 24:
-                    _bad = sum(1 for x in range(0, x_m)
-                               if int(ink[:, x].sum()) >= 12)
-                    if _bad >= max(1, x_m - 1):
-                        y1 = max(0, int(zr[0]) - 8)
-                        y2 = min(H, int(zr[-1]) + 9)
-                        m2[y1:y2, 0:min(W, x_m + 4)] = 255
-                x_m = int(xs_m[-1])
-                if 0 <= W - 1 - x_m <= 24:
-                    _bad = sum(1 for x in range(x_m + 1, W)
-                               if int(ink[:, x].sum()) >= 12)
-                    if _bad >= max(1, W - 1 - x_m):
-                        y1 = max(0, int(zr[0]) - 8)
-                        y2 = min(H, int(zr[-1]) + 9)
-                        m2[y1:y2, max(0, x_m - 3):W] = 255
-            return m2
-        except Exception:
-            return m
-
-    def _cc_clip_mask_to_polys(self, m: np.ndarray, job: dict,
-                               ch: int, cw: int) -> np.ndarray:
-        """v1.14.520 — ماسکِ پاکسازی به جعبههایِ خطِ OCR (+۳px) محدود
-        میشود. زونِ رشدیافته (برایِ نمونهبرداریِ زمینه) روی مو/آرتِ
-        همسایه میافتاد؛ حالا فقط استروکهایِ نازکِ بیرونِ جعبه (متنِ
-        نیمهبریده در لبه) نگه داشته میشوند، نه لکهٔ پُرِ مو/حباب."""
-        try:
-            if m is None or not np.any(m):
-                return m
+            x1, y1 = int(job["x1"]), int(job["y1"])
+            x2, y2 = int(job["x2"]), int(job["y2"])
+            crop = page[y1:y2, x1:x2]
+            ch, cw = crop.shape[:2]
+            if ch < 4 or cw < 4:
+                return "skip"
             polys = list(job.get("polys") or [])
             if not polys:
-                return m
-            poly = self._cc_polys_mask(ch, cw, polys, int(job["x1"]),
-                                       int(job["y1"]), grow=5)
-            if int(cv2.countNonZero(poly)) < 30:
-                return m
-            outside = cv2.bitwise_and(m, cv2.bitwise_not(poly))
-            if not np.any(outside):
-                return m
-            # فقط استروکِ «چسبیده به لبهٔ جعبه» (متنِ نیمهبریده) بیرونِ
-            # جعبه میماند؛ دُمِ حباب/مو که چند px پایینتر است حذف میشود.
-            near_poly = cv2.dilate(poly, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (7, 7))) > 0
-            n, lab, st, _ = cv2.connectedComponentsWithStats(
-                outside, connectivity=8)
-            keep = np.zeros(n, bool)
-            for k in range(1, n):
-                a = int(st[k, cv2.CC_STAT_AREA])
-                w = int(st[k, cv2.CC_STAT_WIDTH])
-                h = int(st[k, cv2.CC_STAT_HEIGHT])
-                if a < 6:
-                    continue
-                fill = float(a) / float(max(1, w * h))
-                # استروکِ متنیِ نازک/کوتاه؛ مو/لکهٔ آرت پُر و بلند است.
-                if (fill < 0.38 and a < 800 and h <= 45
-                        and bool(((lab == k) & near_poly).any())):
-                    keep[k] = True
-            keep_m = (keep[lab].astype(np.uint8)) * 255
-            return cv2.bitwise_or(
-                cv2.bitwise_and(m, poly),
-                cv2.bitwise_and(keep_m, outside))
-        except Exception:
-            return m
-
-    def _cc_crop_mask(self, crop_bgr: np.ndarray, job: dict,
-                      dilate_px: int = 3):
-        ch, cw = crop_bgr.shape[:2]
-        # v1.14.519 — قاعدهٔ کاربر: پنجرهٔ رشدِ جوهرِ یتیم (_lim) وقتی
-        # جعبهٔ det و جعبهٔ rapidocr هم‌اندازه‌اند، «۶px بیشتر از حدِ
-        # detector onnx» برش میزند تا متنِ لبه‌دارِ بیرونِ قاب هم پاک شود
-        # و با رنگِ غلط پر نشود (فقط مالِ هم‌جعبه‌ایِ هم‌اندازه).
-        _extra = int(job.get("cut_extra", 0) or 0)
-        # v1.14.501: dilation پیش‌فرض = ۵ (درخواستِ سازنده) — هالهٔ
-        # آنتی‌آلیاسِ متنِ چاق/واترمارکِ کمی‌راه‌راه کامل پاک شود
-        dilate_px = max(5, int(dilate_px))
-        zone = self._cc_polys_mask(ch, cw, job.get("polys") or [],
-                                   int(job["x1"]), int(job["y1"]),
-                                   grow=4)
-        if int(cv2.countNonZero(zone)) >= 30:
-            # v1.14.502 — جوهرِ یتیمِ چسبیده (لبهٔ صفحه/بی‌poly) به زون
+                return "skip"
+            m = self._cc_polys_mask(ch, cw, polys, x1, y1, grow=3)
+            if int(cv2.countNonZero(m)) < 12:
+                return "skip"
+            # رنگِ زمینهٔ هر ردیف — چپ و راست جدا (گرادیانِ افقی)
+            rows = np.flatnonzero(m.any(axis=1))
+            # جعبهٔ detector (ناحیهٔ اصلی) در مختصاتِ برش — نمونه‌برداریِ
+            # زمینه فقط از درونِ آن (رنگِ خودِ حباب، نه آرتِ بیرون)
+            _bx = None
             try:
-                _lim = np.zeros((ch, cw), np.uint8)
-                _lx1 = max(0, int(job.get("rx1", 0)) - int(job["x1"]))
-                _ly1 = max(0, int(job.get("ry1", 0)) - int(job["y1"]))
-                _lx2 = min(cw, int(job.get("rx2", cw)) - int(job["x1"]))
-                _ly2 = min(ch, int(job.get("ry2", ch)) - int(job["y1"]))
-                if _lx2 > _lx1 and _ly2 > _ly1:
-                    _lim[_ly1:_ly2, _lx1:_lx2] = 255
-                    if _extra > 0:
-                        try:
-                            _ex1 = max(0, _lx1 - _extra)
-                            _ey1 = max(0, _ly1 - _extra)
-                            _ex2 = min(cw, _lx2 + _extra)
-                            _ey2 = min(ch, _ly2 + _extra)
-                            _lim[_ey1:_ey2, _ex1:_ex2] = 255
-                        except Exception:
-                            pass
-                    zone = self._cc_zone_adjacent_ink_grow(
-                        crop_bgr, zone, _lim)
-                    # v1.14.519b — «خطِ جاماندهٔ داخل/لبهٔ جعبهٔ det»
-                    # (درخواستِ صریحِ کاربر): (۱) «متنِ وسط/پایین که
-                    # rapidocr det در ناحیه نگرفته — مثلِ asura ch1
-                    # 16.webp r09: «A HOT SPRING» تا ۶۳۹۵ پایین میرود
-                    # ولی جعبهٔ det تا ۶۳۸۶ → هیچ ناحیه‌ای مالش نیست و
-                    # شبحِ کامل میماند» (۲) برشِ پاکسازی باید «کمی
-                    # بیشتر از حدِ detector onnx» باشد — پنجرهٔ رشد =
-                    # جعبهٔ det + ۱۰px. جوهرِ متن‌مانند درونِ پنجره با
-                    # «باندِ افقی» جدا میشود (قابِ حبابِ نازک، فقط
-                    # چند-پیکسل در هر ردیف؛ خطِ متن دهها-پیکسل)؛
-                    # barrier بعدش خطِ حباب را از پرکردن محافظت میکند.
-                    try:
-                        _g16 = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-                        _ext16 = max(10, int(_extra))
-                        _ex1_16 = max(0, _lx1 - _ext16)
-                        _ey1_16 = max(0, _ly1 - _ext16)
-                        _ex2_16 = min(cw, _lx2 + _ext16)
-                        _ey2_16 = min(ch, _ly2 + _ext16)
-                        _win16 = np.zeros((ch, cw), bool)
-                        _win16[_ey1_16:_ey2_16, _ex1_16:_ex2_16] = True
-                        _cand16 = _win16 & (zone == 0)
-                        _ox16 = self._cc_other_polys_mask(job, ch, cw)
-                        if cv2.countNonZero(_ox16):
-                            _cand16 &= (_ox16 == 0)
-                        if int(_cand16.sum()) > 0:
-                            _zbg16 = float(np.median(_g16[zone > 0]))
-                            _ink16 = np.abs(
-                                _g16.astype(np.int16) - int(_zbg16)) > 22
-                            _ink16 &= _cand16
-                            _rowcnt16 = _ink16.sum(axis=1)
-                            _rows16 = _rowcnt16 >= 8
-                            _bands16 = []
-                            _s16 = -1
-                            for _y16 in range(ch):
-                                if _rows16[_y16] and _s16 < 0:
-                                    _s16 = _y16
-                                elif not _rows16[_y16] and _s16 >= 0:
-                                    _bands16.append((_s16, _y16 - 1))
-                                    _s16 = -1
-                            if _s16 >= 0:
-                                _bands16.append((_s16, ch - 1))
-                            _add16 = np.zeros_like(zone)
-                            for _b0, _b1 in _bands16:
-                                _bh16 = _b1 - _b0 + 1
-                                if _bh16 < 10 or _bh16 > 130:
-                                    continue
-                                _bm16 = _ink16[_b0:_b1 + 1]
-                                if int(_bm16.sum()) < 100:
-                                    continue
-                                # v1.14.519c — سقف: باندِ غول‌آسا = آرتِ
-                                # تیرهٔ پنل (asura 16.webp r09: متنِ سفیدِ
-                                # «A HOT SPRING» رویِ آرتِ گورمِ آتشفشانی —
-                                # ۱۶۶۷۶px؛ جوهرِ خطِ واقعی ≤۸۰۰۰px) — پاک
-                                # کردنِ آرت ممنوع؛ خط جامانده فقط در
-                                # حباب/زمینهٔ روشن.
-                                if int(_bm16.sum()) > 8000:
-                                    continue
-                                _xs16 = np.flatnonzero(
-                                    _bm16.any(axis=0))
-                                if _xs16.size == 0:
-                                    continue
-                                _bw16 = int(_xs16[-1] - _xs16[0] + 1)
-                                if _bw16 < 30:
-                                    continue
-                                _sub16 = np.zeros_like(zone)
-                                _sub16[_b0:_b1 + 1, _xs16[0]:
-                                       _xs16[-1] + 1] = 255
-                                _sub16 &= _ink16.astype(np.uint8) * 255
-                                _add16 = cv2.bitwise_or(_add16, _sub16)
-                            if cv2.countNonZero(_add16):
-                                zone = cv2.bitwise_or(zone, _add16)
-                    except Exception:
-                        pass
+                _rx1 = int(job.get("rx1", x1)); _ry1 = int(job.get("ry1", y1))
+                _rx2 = int(job.get("rx2", x2)); _ry2 = int(job.get("ry2", y2))
+                _bx = (max(0, _rx1 - x1), max(0, _ry1 - y1),
+                       min(cw, _rx2 - x1), min(ch, _ry2 - y1))
+                if (_bx[2] - _bx[0]) < 8 or (_bx[3] - _bx[1]) < 8:
+                    _bx = None
             except Exception:
-                pass
-            # ۱) سبکِ HF: فقط جوهرِ متنِ داخلِ جعبههایِ خطِ OCR
-            # v1.14.520 — ماسک از «زونِ رشدیافته» ساخته نمیشود: زونِ
-            # رشدیافته روی مو/آرتِ همسایه میافتاد. جعبههایِ خطِ OCR
-            # (±۲px) مرزِ متناند؛ برایِ نمونهبرداریِ زمینه همان کافی است.
-            _poly_zone = self._cc_polys_mask(
-                ch, cw, job.get("polys") or [], int(job["x1"]),
-                int(job["y1"]), grow=2)
-            # v1.14.520 — سیاستِ «حباب روشن» در برابرِ «پنلِ تیره»:
-            #  • زمینهٔ روشن (حبابِ سفید/کرم): فقط جوهرِ متنِ داخلِ
-            #    جعبههایِ خطِ OCR پاک میشود؛ خطِ حباب/آرت دستنخورده.
-            #  • زمینهٔ تیره (پنلِ مشکی/متنِ آزاد): ماسکِ زونِ کامل
-            #    مجاز است تا همهٔ متن (سفید/قرمز) پاک شود؛ آرتِ
-            #    تیرهٔ پنل هم رنگِ خودش را حفظ میکند.
+                _bx = None
+            cl: List[Optional[np.ndarray]] = [None] * ch
+            cr: List[Optional[np.ndarray]] = [None] * ch
+            prevL = prevR = None
+            for r in rows:
+                cols = np.flatnonzero(m[r] > 0)
+                xl, xr = int(cols[0]), int(cols[-1])
+                cLt, cRt = self._cc_row_bg_color(crop, int(r), xl, xr, m,
+                                                  bx=_bx)
+                if cLt is None:
+                    cLt = prevL
+                if cRt is None:
+                    cRt = prevR
+                cl[int(r)] = cLt
+                cr[int(r)] = cRt
+                if cLt is not None:
+                    prevL = cLt
+                if cRt is not None:
+                    prevR = cRt
+            if prevL is None and prevR is None:
+                return "skip"  # هیچ زمینه‌ای پیدا نشد → دست‌نخورده
+            if prevL is None:
+                prevL = prevR
+            if prevR is None:
+                prevR = prevL
+            # پرکردِ جای‌های خالی با نزدیک‌ترین رنگِ معتبر (جلو/عقب)
+            def _fill_series(series, fallback):
+                fwd = fallback
+                for r in range(int(rows[0]), int(rows[-1]) + 1):
+                    if series[r] is None:
+                        series[r] = fwd if fwd is not None else fallback
+                    else:
+                        fwd = series[r]
+                bwd = fallback
+                for r in range(int(rows[-1]), int(rows[0]) - 1, -1):
+                    if series[r] is None:
+                        series[r] = bwd if bwd is not None else fallback
+                    else:
+                        bwd = series[r]
+                return series
+            cl = _fill_series(cl, prevL)
+            cr = _fill_series(cr, prevR)
+            # هموارسازیِ عمودی «میانه» (فیلترِ ۵) + میانگینِ ۳ → نرمی
+            cmatL = np.array([cl[r] if cl[r] is not None else prevL
+                              for r in range(int(rows[0]), int(rows[-1]) + 1)],
+                             dtype=np.float32)
+            cmatR = np.array([cr[r] if cr[r] is not None else prevR
+                              for r in range(int(rows[0]), int(rows[-1]) + 1)],
+                             dtype=np.float32)
+            n = cmatL.shape[0]
+            for cmat in (cmatL, cmatR):
+                if n >= 5:
+                    for k in range(3):
+                        pad = np.pad(cmat[:, k], (2, 2), mode="edge")
+                        cmat[:, k] = np.convolve(
+                            np.pad(np.median(
+                                np.lib.stride_tricks.sliding_window_view(
+                                    pad, 5), axis=1), (1, 1), mode="edge"),
+                            np.ones(3) / 3.0, mode="valid")
+                elif n >= 3:
+                    for k in range(3):
+                        pad = np.pad(cmat[:, k], (1, 1), mode="edge")
+                        cmat[:, k] = np.convolve(pad, np.ones(3) / 3.0,
+                                                 mode="valid")
+            # تصویرِ پرکرد — گرادیانِ افقیِ ردیف (چپ→راست)
+            fill = np.empty_like(crop)
+            k = 0
+            for r in range(ch):
+                if int(rows[0]) <= r <= int(rows[-1]):
+                    cL3 = cmatL[k].reshape(1, 3)
+                    cR3 = cmatR[k].reshape(1, 3)
+                    # درون‌یابیِ افقی در کلِ عرض (خارجِ بازهٔ ماسک هم‌رنگِ
+                    # همان سمت میماند — لبهٔ فیدر یکنواخت است)
+                    t = np.linspace(0.0, 1.0, cw, dtype=np.float32) \
+                        .reshape(cw, 1)
+                    rowf = cL3 * (1.0 - t) + cR3 * t
+                    fill[r, :, :] = np.clip(np.rint(rowf), 0, 255)
+                    k += 1
+                else:
+                    fill[r, :, :] = prevL
+            # v1.14.521 — «جوهرِ جاافتاده» (فقط حباب‌ها): مؤلفه‌هایِ
+            # جوهریِ درونِ جعبهٔ detector که به لبهٔ جعبه نمی‌چسبند (خطِ
+            # دورِ حباب به لبه می‌چسبد) و det پلی‌شان را ندیده — مثلِ
+            # خطِ آخرِ حباب — به برش اضافه میشوند.
             try:
-                _gz = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-                _zd0 = cv2.dilate(zone, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (9, 9))) > 0
-                _bg0 = float(np.median(_gz[_zd0])) if _zd0.any() else 128.0
-            except Exception:
-                _bg0 = 128.0
-            _light = _bg0 > 180.0
-            _mask_zone = (_poly_zone
-                          if (_light
-                              and int(cv2.countNonZero(_poly_zone)) >= 30)
-                          else zone)
-            m = self._cc_zone_ink_mask(crop_bgr, _mask_zone,
-                                      dilate_px=dilate_px)
-            # برشِ ماسک به جعبههایِ خطِ OCR فقط برایِ زمینهٔ روشن
-            # (حباب) لازم است؛ در پنلِ تیره، جوهرِ جاماندهٔ لبهٔ خطِ
-            # بالا/پایین (متنِ نیمهبریده) باید در ماسک بماند وگرنه
-            # شبحِ سفیدِ لبه میماند (img2: TAXES). در زمینهٔ تیره،
-            # barrier پسزمینهٔ کل صفحه را حذف میکند و ماسک فقط متن است.
-            try:
-                _gzc = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-                _zdc = cv2.dilate(zone, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (9, 9))) > 0
-                _bgc = float(np.median(_gzc[_zdc])) if _zdc.any() else 128.0
-            except Exception:
-                _bgc = 128.0
-            _light_crop = _bgc > 180.0
-            if m is not None and int(cv2.countNonZero(m)) >= 30:
-                # v1.14.520 — ماسک به «جعبههایِ خطِ OCR» (+۳px) بریده
-                # میشود: زونِ رشدیافته روی مو/آرتِ همسایه میافتاد و
-                # پاکسازیِ صورت/مو رخ میداد (img7). فقط استروکهایِ
-                # نازکِ بیرونِ جعبه (متنِ نیمهبریده) نگه داشته میشوند.
-                if _light_crop:
-                    m = self._cc_clip_mask_to_polys(m, job, ch, cw)
-                # v1.14.514 — جوهرِ جاماندهٔ نزدیک (کفِ حروف/هاله) به
-                # ماسک چسبانده میشود — شبحِ حروف (4e2e77) میرود.
-                m = self._cc_near_band_ink(crop_bgr, m, zone, job)
-                if _light_crop:
-                    m = self._cc_clip_mask_to_polys(m, job, ch, cw)
-                # v1.14.502 — نوارِ لبه (جوهرِ چسبیده به لبهٔ برش)
-                m = self._cc_mask_edge_bands(crop_bgr, m, zone)
-                if _light_crop:
-                    m = self._cc_clip_mask_to_polys(m, job, ch, cw)
-                # v1.14.515 — «خطِ حباب هرگز پاک نشود»: مؤلفههایِ ماسک
-                # که «قابِ نازکِ کم‌تراکمِ بسته» هستند (خطِ دورِ حباب:
-                # bbox بزرگ، تراکمِ مساحت ≤۱۶٪، مساحت ≥۳۰۰) از ماسک
-                # حذف میشوند — حبابِ سفید با خطِ سالم میماند و فقط
-                # متن (حروفِ کوچکِ پرتراکم) پاک میشود (img7: YEP! /
-                # OH BOY — کاربر: «کلِ حباب حذف میشد»).
-                try:
-                    _ncc, _lcc, _scc, _ = cv2.connectedComponentsWithStats(
-                        m, connectivity=8)
-                    _drop = np.zeros(_ncc, bool)
-                    for _k in range(1, _ncc):
-                        _a = int(_scc[_k, cv2.CC_STAT_AREA])
-                        _w = int(_scc[_k, cv2.CC_STAT_WIDTH])
-                        _h = int(_scc[_k, cv2.CC_STAT_HEIGHT])
-                        if _a < 300 or max(_w, _h) < 40:
+                if str(job.get("kind") or "") == "dialogue" \
+                        and _bx is not None:
+                    _dif = np.abs(crop.astype(np.int32)
+                                  - fill.astype(np.int32)).max(axis=2)
+                    _inkx = ((_dif > 55) & (m == 0)).astype(np.uint8)
+                    _inkx = cv2.morphologyEx(
+                        _inkx * 255, cv2.MORPH_OPEN,
+                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                                   (3, 3))) > 0
+                    _n, _lab, _st, _ = cv2.connectedComponentsWithStats(
+                        _inkx.astype(np.uint8), connectivity=8)
+                    _inner = np.zeros_like(_inkx)
+                    _bx_area = max(1, (_bx[2] - _bx[0])
+                                   * (_bx[3] - _bx[1]))
+                    for _ci in range(1, _n):
+                        _cx = _st[_ci, cv2.CC_STAT_LEFT]
+                        _cy = _st[_ci, cv2.CC_STAT_TOP]
+                        _cw2 = _st[_ci, cv2.CC_STAT_WIDTH]
+                        _ch2 = _st[_ci, cv2.CC_STAT_HEIGHT]
+                        _ca = int(_st[_ci, cv2.CC_STAT_AREA])
+                        if _ca < 12 or _ca > 0.25 * _bx_area:
                             continue
-                        _fill = float(_a) / float(max(1, _w * _h))
-                        if _fill <= 0.16:
-                            _drop[_k] = True
-                    if _drop.any():
-                        m = np.where(_drop[_lcc], 0, m).astype(np.uint8)
-                except Exception:
-                    pass
-                return m, zone
-            # ۲) وگرنه ماسکِ محافظهکارانهٔ «جوهرِ متنی» — هرگز کلِ زون
-            # (برشِ کاملِ حباب/آرت ممنوع است؛ درخواستِ صریحِ کاربر).
-            # اگر جوهرِ متنی جدا نشد، پاکسازی رد میشود (skip) تا حباب
-            # سالم بماند؛ متنِ جامانده بهتر از حبابِ پاکشده نیست.
-            try:
-                _g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-                _zd = cv2.dilate(zone, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (9, 9))) > 0
-                _bg = float(np.median(_g[_zd])) if _zd.any() else 128.0
-                # v1.14.520 — متنِ «دو‌قطبی» (سفیدِ با پَردورِ سیاه،
-                # یا سیاه روی زمینهٔ روشن): هر دو سرِ توزیع متن است.
-                # آستانهٔ |Δ|>۲۲ رویِ گرادیانِ روشن، سفیدیِ حروف را
-                # نمیگرفت و کلِ عنوانِ سند (img4) بدونِ ماسک میماند.
-                _bright_f = _g > max(_bg + 30.0, 220.0)
-                _dark_f = _g < min(_bg - 30.0, 100.0)
-                _ink = ((_bright_f | _dark_f) & _zd) \
-                    .astype(np.uint8) * 255
-                try:
-                    _mx = crop_bgr.max(axis=2).astype(np.int32)
-                    _mn = crop_bgr.min(axis=2).astype(np.int32)
-                    _ink = cv2.bitwise_or(
-                        _ink, (((_mx - _mn) > 40) & _zd)
-                        .astype(np.uint8) * 255)
-                except Exception:
-                    pass
-                # فقط خردهنویزِ ریز حذف شود؛ خطوطِ متنِ چگالِ بزرگ
-                # (عنوانِ سند) باید بمانند.
-                _nf, _lf, _sf, _ = cv2.connectedComponentsWithStats(
-                    _ink, connectivity=8)
-                if _nf > 1:
-                    _kf = np.zeros(_nf, bool)
-                    for _k in range(1, _nf):
-                        _a = int(_sf[_k, cv2.CC_STAT_AREA])
-                        _h = int(_sf[_k, cv2.CC_STAT_HEIGHT])
-                        if _a < 6 or _h > 70:
+                        # چسبیده به لبهٔ جعبه → خطِ دورِ حباب/آرت است
+                        if (_cx <= _bx[0] or _cy <= _bx[1]
+                                or _cx + _cw2 >= _bx[2]
+                                or _cy + _ch2 >= _bx[3]):
                             continue
-                        _kf[_k] = True
-                    _ink = (_kf[_lf].astype(np.uint8)) * 255
-                if int(cv2.countNonZero(_ink)) >= 30:
-                    _ink = cv2.dilate(_ink, cv2.getStructuringElement(
-                        cv2.MORPH_ELLIPSE, (7, 7)))
-                    return _ink, zone
+                        # خیلی کشیده/پهن → آرت، نه متن
+                        if _cw2 > (_bx[2] - _bx[0]) * 0.9:
+                            continue
+                        _inner |= (_lab == _ci)
+                    if _inner.any():
+                        _inner = cv2.dilate(
+                            _inner.astype(np.uint8) * 255,
+                            cv2.getStructuringElement(
+                                cv2.MORPH_ELLIPSE, (5, 5))) > 0
+                        m = cv2.bitwise_or(m.astype(np.uint8) * 255,
+                                          _inner.astype(np.uint8) * 255) > 0
+                        m = m.astype(np.uint8) * 255
             except Exception:
                 pass
-            return None, zone
-        m = self._cc_ink_mask(crop_bgr, grow=dilate_px)
-        return m, m
-
-    def _cc_other_polys_mask(self, job: dict, ch: int, cw: int):
-        """v1.14.514 — ماسکِ زونِ «کارهایِ دیگر» در مختصاتِ برش —
-        مالکیتِ جوهر: هر خط/ناحیه مالِ کارِ خودش است."""
-        ox_all = np.zeros((ch, cw), np.uint8)
-        try:
-            _own = int(job.get("rid", -1))
-            for _rid, _polys in (self.__dict__.get("_cc_page_job_polys")
-                                 or []):
-                if _rid == _own:
-                    continue
-                for pp in _polys:
-                    try:
-                        pts = np.asarray(pp, dtype=np.float32).reshape(-1, 2)
-                    except Exception:
-                        continue
-                    if pts.shape[0] < 3:
-                        continue
-                    pts = pts.copy()
-                    pts[:, 0] -= int(job["x1"])
-                    pts[:, 1] -= int(job["y1"])
-                    cv2.fillPoly(ox_all, [np.round(pts).astype(np.int32)], 255)
-            ox_all = cv2.dilate(ox_all, np.ones((3, 3), np.uint8))
-        except Exception:
-            return ox_all
-        return ox_all
-
-    def _cc_near_band_ink(self, crop_bgr: np.ndarray, m: np.ndarray,
-                          zone: np.ndarray, job: dict) -> np.ndarray:
-        """v1.14.514 — پیوندِ جوهرِ جاماندهٔ نزدیک (ضدِ شبحِ حروف):
-        آزمونِ 4e2e77: کفِ حروف + هالهٔ درخشانِ متن تا ~۲۵px بیرونِ زون
-        در ماسک نمیآمد → LaMa کنارِشان پر میکرد و «حرفِ شبحِ» نیمه‌خوانا
-        میماند (TRAITS/ARROGANT/CLEAR OBJECTIVE). حالا جوهرِ انحرافی
-        (|Δ|>۲۲ از زمینهٔ زون) در نوارِ ~۲۵px دورِ ماسک، بیرون از
-        barrier (خطِ حباب) و بیرون از زونِ کارهایِ دیگر (هر خط، مالِ
-        کارِ خودش) به ماسک چسبانده میشود."""
-        try:
-            if m is None or not np.any(m) or zone is None or not np.any(zone):
-                return m
-            ch, cw = crop_bgr.shape[:2]
-            g = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            zn = zone > 0
-            # v1.14.514a — متنِ چگال: رینگِ داخلِ زون تقریباً خالی است؛
-            # زمینه از رینگِ پهنِ دورِ ماسک خوانده میشود (همانِ
-            # نمونهٔ موفقِ fullcov).
-            ring = zn & (cv2.dilate(m, np.ones((9, 9), np.uint8)) == 0)
-            if int(ring.sum()) < 30:
-                ring = (cv2.dilate(m, np.ones((31, 31), np.uint8)) > 0) \
-                    & (~((m > 0)))
-            if int(ring.sum()) < 30:
-                return m
-            bg = float(np.median(g[ring]))
-            # v1.14.514c — فقط رویِ زمینهِ «هموار»: رینگِ بافت‌دار (اُبرِ
-            # قرمزِ img5) جوهرش و لبههایِ بافتش از هم جدا نمیشوند؛
-            # پیوند، قطعههایِ بافتِ چسبیده به متن را میبلعد و «شبحِ
-            # لبه» میسازد. σ مقاومِ رینگ ≤۷ = زمینهٔ هموار (جعبهٔ سیستم).
-            try:
-                _g_r = g.astype(np.float32)
-                _nv = _g_r - cv2.medianBlur(g, 5).astype(np.float32)
-                _vals = _nv[ring]
-                _sig = 1.4826 * float(np.median(np.abs(
-                    _vals - np.median(_vals))))
-                if _sig > 7.0:
-                    return m
-            except Exception:
-                pass
-            # v1.14.514a — band ≤ رینگِ گیتِ گرادیان (۲۱px): جوهرِ
-            # دورتر از رینگ = آرت/چیزِ دیگر — گیت آن را نمیبیند و
-            # پیوندش خطرناک است (آزمونِ lang_zh: نوارِ عمودیِ تیره).
-            band = cv2.dilate(m, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (21, 21))) > 0
-            cand = ((np.abs(g.astype(np.int32) - int(round(bg))) > 22)
-                    & band & (m == 0))
-            if not cand.any():
-                return m
-            barrier = self._cc_barrier(
-                g, cv2.dilate(m, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (7, 7))), grow=4)
-            if barrier is not None and barrier.any():
-                cand &= (cv2.dilate(barrier, np.ones((3, 3), np.uint8)) == 0)
-            # زونِ کارهایِ دیگر: جوهرِ خطِ بعدی مالِ کارِ خودش است
-            try:
-                ox_all = self._cc_other_polys_mask(job, ch, cw)
-                if cv2.countNonZero(ox_all):
-                    cand &= (ox_all == 0)
-            except Exception:
-                pass
-            if not cand.any():
-                return m
-            cc = cand.astype(np.uint8) * 255
-            n, lab, st, _ = cv2.connectedComponentsWithStats(cc, 8)
-            if n <= 1:
-                return m
-            zcols = np.flatnonzero(zn.sum(axis=0) > 0)
-            zw = int(zcols[-1] - zcols[0] + 1) if len(zcols) else cw
-            keep = np.zeros(n, bool)
-            for ci in range(1, n):
-                a = int(st[ci, cv2.CC_STAT_AREA])
-                h = int(st[ci, cv2.CC_STAT_HEIGHT])
-                w = int(st[ci, cv2.CC_STAT_WIDTH])
-                if a < 6 or h > 40 or w > zw + 16:
-                    continue
-                _fill = float(a) / float(max(1, w * h))
-                # فقط استروکِ نازکِ متنی؛ بلوک/لکهٔ آرت پُر نه.
-                if a > 500 or _fill > 0.45:
-                    continue
-                keep[ci] = True
-            m2 = (keep[lab].astype(np.uint8)) * 255
-            m2 = cv2.dilate(m2, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (3, 3)))
+            # فیدرِ نرمِ لبه (چهار جهت) — blur ماسک = آلفا
+            alpha = cv2.GaussianBlur(
+                m.astype(np.float32), (0, 0), 1.0) / 255.0
+            alpha3 = alpha[..., None]
+            blend = (crop.astype(np.float32) * (1.0 - alpha3)
+                     + fill.astype(np.float32) * alpha3)
+            res = np.clip(np.rint(blend), 0, 255).astype(np.uint8)
+            sel = alpha > 0.008
+            roi = out[y1:y2, x1:x2]
+            roi[sel] = res[sel]
+            # انتقال به عکسِ ۲ (بومِ خاکستریِ میانه — متنِ سفید و
+            # تیره هر دو دیده میشوند؛ همان مختصات): برشِ کاملِ خط
+            # (متن + زمینهٔ خودِ خط) روی بوم گذاشته میشود.
+            treg = text_layer[y1:y2, x1:x2]
+            treg[sel] = crop[sel]
             if bool(os.environ.get("MANGA_CC_DEBUG")):
                 try:
-                    _add_px = int(cv2.countNonZero(
-                        cv2.bitwise_and(m2, cv2.bitwise_not(m))))
-                    print(f"    [cc] near-band: cand={int(cand.sum())} "
-                          f"kept={int(keep.sum())} add={_add_px}px",
+                    print(f"    [cc] job y={y1}-{y2} x={x1}-{x2} "
+                          f"maskpx={int(cv2.countNonZero(m))} → cutfill",
                           flush=True)
                 except Exception:
                     pass
-            return cv2.bitwise_or(m, m2)
-        except Exception:
-            return m
-
-    def _cc_local_bg_fill(self, crop_bgr: np.ndarray, msk0: np.ndarray,
-                          barrier: np.ndarray = None,
-                          job: dict = None) -> Optional[np.ndarray]:
-        """v1.14.520 — پرکردِ «ردیفیِ» متن با رنگِ خودِ زمینه: برایِ هر
-        ردیفِ ماسک، میانهٔ رینگِ ۳px دورِ همان ردیف (چپ/راستِ متن) رنگِ
-        پرکرد است. ریشهٔ لکهٔ خاکستری/شبحِ LaMa رویِ حبابِ سفید (img7:
-        OH BOY، I GOT TO QUIT): LaMa ماسکِ حرفمانند را با بافتِ هنرِ
-        اطراف پر میکرد و لکهٔ خاکستری میگذاشت. اینجا رنگِ هر ردیف از
-        همان ردیفِ زمینه خوانده میشود → سفیدیِ خودِ حباب، بدونِ درز و
-        شبح. خطِ حباب (barrier) و زونِ کارهایِ دیگر هرگز در نمونه نیست."""
-        try:
-            if msk0 is None or not np.any(msk0):
-                return None
-            ch, cw = crop_bgr.shape[:2]
-            mm = msk0 > 0
-            if int(mm.sum()) < 24:
-                return None
-            # ماسکِ پرکرد ۱px بزرگتر: لبهٔ آنتیآلیاسِ حروف بیرونِ ماسک
-            # میماند و خطِ خاکستریِ دورِ متن میساخت. ۱px داخلِ حباب
-            # سفید است و خطِ حباب با barrier محافظت میشود.
-            _mm_fill = cv2.dilate(msk0, np.ones((5, 5), np.uint8)) > 0
-            _bd = None
-            if barrier is not None and np.any(barrier):
-                _bd = (barrier > 0)
-            _ox = None
-            if job is not None:
-                try:
-                    _ox = self._cc_other_polys_mask(job, ch, cw)
-                except Exception:
-                    _ox = None
-            if _bd is not None:
-                _mm_fill &= (~_bd)
-            if _ox is not None and cv2.countNonZero(_ox):
-                _mm_fill &= (_ox == 0)
-            ring = (cv2.dilate(_mm_fill.astype(np.uint8) * 255,
-                               cv2.getStructuringElement(
-                                   cv2.MORPH_ELLIPSE, (9, 9))) > 0) \
-                & (~_mm_fill)
-            if _bd is not None:
-                ring &= (~_bd)
-            if _ox is not None and cv2.countNonZero(_ox):
-                ring &= (_ox == 0)
-            # رنگِ متن تیره است یا روشن؟ زمینه در طرفِ مقابل است.
-            # ماسک یک «بلوک» است (متن + سفیدیِ بینِ حروف)، پس میانهٔ
-            # ماسک زمینه را میگوید نه متن؛ باید «دورِ» ماسک را با
-            # دو سرِ توزیعِ ماسک مقایسه کرد: دورِ روشن + متنِ تیره →
-            # زمینه روشن؛ دورِ تیره + متنِ روشن → زمینه تیره.
-            _g0 = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            _vals = _g0[mm].astype(np.float32)
-            _lo = float(np.percentile(_vals, 10))
-            _hi = float(np.percentile(_vals, 90))
-            _ring_med = (float(np.median(_g0[ring]))
-                         if ring.any() else 128.0)
-            _bright_bg = abs(_lo - _ring_med) > abs(_hi - _ring_med)
-            if _bright_bg:
-                _gmask = _g0 > max(160.0, _ring_med - 20.0)
-            else:
-                _gmask = _g0 < min(100.0, _ring_med + 20.0)
-            _gmask &= (~_mm_fill)
-            _gmed = None
-            if int(_gmask.sum()) >= 30:
-                _gmed = np.median(crop_bgr[_gmask].astype(np.float32),
-                                  axis=0)
-            out = crop_bgr.copy()
-            rng = np.random.default_rng(4321)
-            # رنگِ محلی: مدِ هیستوگرامِ رینگِ ۵px دورِ متن. اگر رینگِ
-            # نزدیک سفید/سیاهِ واقعی است (درونِ حباب/پنل)، همان رنگ
-            # پرکرد است؛ وگرنه مدِ سراسری. ریشهٔ حبابِ خاکستریِ lang_zh:
-            # مدِ سراسریِ روشن، کاغذِ بژِ بیرونِ حباب را میگرفت.
-            _last = _gmed
-            try:
-                _rn = (cv2.dilate(_mm_fill.astype(np.uint8) * 255,
-                                  cv2.getStructuringElement(
-                                      cv2.MORPH_ELLIPSE, (5, 5))) > 0) \
-                    & (~_mm_fill)
-                if _bd is not None:
-                    _rn &= (~_bd)
-                if _ox is not None and cv2.countNonZero(_ox):
-                    _rn &= (_ox == 0)
-                # نمونهٔ زمینه = نوارِ میانهٔ رینگ (±۳۰): دُمهایِ
-                # توزیع (متنِ سفید/سیاه و خطِ دور) حذف میشوند و رنگِ
-                # خودِ زمینه (سفیدِ حباب، آبیِ جعبه، سیاهِ پنل) میماند.
-                if int(_rn.sum()) >= 8:
-                    _rmed = float(np.median(_g0[_rn]))
-                    _rsel = _rn & (np.abs(
-                        _g0.astype(np.int32) - _rmed) <= 30)
-                    if int(_rsel.sum()) >= 8:
-                        _last = np.median(
-                            crop_bgr[_rsel].astype(np.float32), axis=0)
-            except Exception:
-                pass
-            filled = 0
-            for y in range(ch):
-                my = _mm_fill[y]
-                if not my.any():
-                    continue
-                ry = ring[y]
-                # رنگِ سراسریِ زمینه (سفیدیِ خودِ حباب): پرکردِ یکدست
-                # بدونِ درزِ ردیفی. گرادیانِ خیلی نرمِ حباب با همین
-                # همخوانیِ رنگ پوشش داده میشود؛ خطِ دورِ حباب هم
-                # بیرونِ ماسک دستنخورده میماند.
-                if _last is None:
-                    continue
-                _base = np.asarray(_last, np.float32).reshape(-1)
-                if _base.size == 1:
-                    _base = np.repeat(_base, 3)
-                _base = _base[:3]
-                _sig = 1.0
-                _noise = rng.normal(0.0, _sig, size=(int(my.sum()), 3))
-                _fill = np.clip(_base.reshape(1, 3) + _noise,
-                                0, 255).astype(np.uint8)
-                for _c in range(3):
-                    out[y, :, _c][my] = _fill[:, _c]
-                filled += int(my.sum())
-            if filled < max(24, int(0.35 * _mm_fill.sum())):
-                return None
-            try:
-                self._cc_lf_mask = (_mm_fill.astype(np.uint8)) * 255
-            except Exception:
-                self._cc_lf_mask = None
-            return out
-        except Exception as _e:
-            return None
-
-    def _cc_uniform_bg_fill(self, crop_bgr: np.ndarray, msk0: np.ndarray,
-                            zone: np.ndarray, barrier: np.ndarray = None,
-                            min_px: int = 360, max_std: float = 4.0,
-                            job: dict = None):
-        """v1.14.514 — پرکردِ مستقیمِ زمینهٔ «واقعاً یکدست» (σ≤۴):
-        ریشهٔ «خش‌دار/نویزدار»ِ حبابها: LaMa رویِ برشِ کوچک با ماسکِ
-        چگال از آمارِ هنرِ اطراف پر میکند (آزمونِ img7: زمینهٔ حباب
-        ۲۵۴±۱٫۹ ولی پرِ LaMa ۱۹۵±۶۴ + دانه). چون زمینهٔ خودِ حباب
-        یکدست و قابل‌اندازهگیری است، ماسک با همانِ رنگ/نویزِ زمینه
-        پر میشود — تمیزِ مطلق (همانِ حبابِ سالمِ مجاور) + سریعتر
-        (LaMa اصلاً صدا زده نمیشود). زمینهٔ تُکستوردار/گرادیان → None
-        (مسیرِ LaMa). خطِ حباب (barrier) هرگز پر نمیشود."""
-        try:
-            if msk0 is None or zone is None \
-                    or not np.any(msk0) or not np.any(zone):
-                return None
-            mm = msk0 > 0
-            zn = zone > 0
-            if int(mm.sum()) < 24 or int(zn.sum()) < 60:
-                return None
-            # v1.14.514b — ماسکِ «کلِ زون» (مسیرِ فالبک، msk is zone):
-            # جوهر جدا نشد (زمینِ ناهمگن/آرت) → مسیرِ LaMa؛ پرکردِ
-            # یکدستِ سفید رویِ زونِ آمیخته، آرت را میپاکد (lang_zh).
-            if msk0 is zone:
-                return None
-            bg_area = zn & (cv2.dilate(msk0, np.ones((5, 5), np.uint8)) == 0)
-            if barrier is not None and np.any(barrier):
-                bg_area &= (cv2.dilate(barrier, np.ones((3, 3), np.uint8)) == 0)
-            # v1.14.514a — جوهرِ کارهایِ دیگر داخلِ نمونه نیست
-            if job is not None:
-                try:
-                    _ox = self._cc_other_polys_mask(
-                        job, crop_bgr.shape[0], crop_bgr.shape[1])
-                    if cv2.countNonZero(_ox):
-                        bg_area &= (_ox == 0)
-                except Exception:
-                    pass
-            # v1.14.514 — متنِ چگال (حبابِ پر از حرف): نمونهٔ داخلِ زون
-            # کم است (آزمونِ img7: ۱۱۸px با σ=۰٫۳ یا فقط ۱۶px) → لنگرِ
-            # کوچک (≥۱۲px) + رشدِ همرنگ در نوارِ ~۱۳px دورِ زون — فقط
-            # پیکسلهایِ «همرنگِ» زمینه میآیند؛ هنرِ اطراف رد میشود.
-            _anchor_px = 12
-            if int(bg_area.sum()) < min_px:
-                if int(bg_area.sum()) >= _anchor_px:
-                    _med0 = np.median(
-                        crop_bgr[bg_area].astype(np.float32), axis=0)
-                    _near = (cv2.dilate(zone, np.ones((13, 13), np.uint8))
-                             > 0) & (~zn) \
-                        & (cv2.dilate(msk0, np.ones((5, 5), np.uint8)) == 0)
-                    if barrier is not None and np.any(barrier):
-                        _near &= (cv2.dilate(
-                            barrier, np.ones((3, 3), np.uint8)) == 0)
-                    _d = np.abs(crop_bgr.astype(np.float32) - _med0)
-                    _match = np.all(_d < 6.0, axis=2) & _near
-                    if int(_match.sum()) > 0:
-                        bg_area = bg_area | _match
-            if int(bg_area.sum()) < min_px:
-                return None
-            # v1.14.515 — دامنهٔ خاکستریِ نمونهٔ زمینه > ۱۴ = گرادیانِ نرم
-            # (جعبهٔ آبیِ 4e2e77): σ کوچک است ولی شیبِ واقعی؛ پرکردِ «تخت»
-            # با یک رنگ لکهٔ مربعیِ قابل‌دیدن میسازد → مسیرِ gradfill
-            # (درون‌یابیِ دقیقِ شیب).
-            try:
-                _g_bg = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-                if bg_area.any():
-                    _rng_bg = float(_g_bg[bg_area].max()) \
-                        - float(_g_bg[bg_area].min())
-                else:
-                    _rng_bg = 0.0
-            except Exception:
-                _rng_bg = 0.0
-            f = crop_bgr[bg_area].astype(np.float32)
-            med = np.median(f, axis=0)
-            std = float(f.std(axis=0).max())
-            # v1.14.520 — زمینهٔ «تقریباً سفید» (حبابِ سفید): آستانههایِ
-            # سختِ گرادیان/σ را شل میکنیم. حبابِ سفیدِ سایهدار (b0/b2)
-            # range~۲۰ و σ~۸ داشت → bgfill رد میشد → LaMa شبح/لکهٔ
-            # خاکستری میساخت. برایِ زمینهٔ روشن، range≤۲۵ و σ≤۱۲ کافی
-            # است؛ رنگِ پرکرد = میانهٔ خودِ حباب (سفیدِ محلی).
-            _med_gray = float(np.mean(med))
-            if _med_gray > 225.0:
-                if _rng_bg > 25.0 or std > 12.0:
-                    return None
-            else:
-                if _rng_bg > 14.0 or std > max_std:
-                    return None
-            # v1.14.519 — همان گیتِ همگنیِ hue برای پرکردِ یکدست:
-            # نمونهٔ دوسطحی (مثلاً نارنجی+سبز) σ کوچک میدهد ولی رنگِ
-            # پرکرد از خانوادهٔ دیگر میشود (لاکهٔ مربعیِ عجیب).
-            try:
-                _hsv_u = cv2.cvtColor(
-                    f.reshape(-1, 1, 3).astype(np.uint8),
-                    cv2.COLOR_BGR2HSV)
-                _sat_u = _hsv_u[..., 1].astype(np.float32)
-                _hue_u = _hsv_u[..., 0].astype(np.float32)
-                if float(_sat_u.mean()) > 60.0:
-                    _su = float(np.sin(np.deg2rad(_hue_u * 2.0)).mean())
-                    _cu = float(np.cos(np.deg2rad(_hue_u * 2.0)).mean())
-                    _hsd_u = float(np.sqrt(max(
-                        0.0, 1.0 - (_su * _su + _cu * _cu))) * 90.0)
-                    if _hsd_u > 28.0:
-                        return None
-            except Exception:
-                pass
-            sig = float(np.clip(std, 0.8, 2.2))
-            out = crop_bgr.copy()
-            rng = np.random.default_rng(4321)
-            noise = rng.normal(0.0, sig, size=out.shape[:2])
-            fill = np.empty(out.shape[:2] + (3,), np.float32)
-            for c in range(3):
-                fill[:, :, c] = float(med[c]) + noise
-            fm = mm.copy()
-            if barrier is not None and np.any(barrier):
-                fm &= (cv2.dilate(barrier, np.ones((3, 3), np.uint8)) == 0)
-            out[fm] = np.clip(fill[fm], 0, 255).astype(np.uint8)
-            return out
-        except Exception:
-            return None
-
-    def _cc_gradient_bg_fill(self, crop_bgr: np.ndarray, msk0: np.ndarray,
-                             zone: np.ndarray, barrier: np.ndarray = None,
-                             min_px: int = 300, max_res: float = 7.5,
-                             job: dict = None):
-        """v1.14.514 — پرکردِ تحلیلیِ «گرادیانِ نرم» (جعبهٔ سیستمِ
-        4e2e77): اگر زمینهِ اطرافِ متن با صفحهٔ شیب (مرتبهٔ ۲) توصیف
-        شود و باقیمانده کوچک باشد (σ≤۷٫۵)، هر ستونِ ماسک با
-        «درون‌یابیِ عمودیِ دقیقِ مرزبه‌مرز» پر میشود — مقدارِ پیکسلِ
-        سالمِ بالای ماسک تا پایینِ آن شیب میکشد؛ در نقطهٔ مرز، پرکردن
-        دقیقاً همانِ مرز است → بدونِ درز/لکه. زمینهٔ نویزدار/بافت‌دار →
-        None → مسیرِ LaMa."""
-        try:
-            if msk0 is None or zone is None \
-                    or not np.any(msk0) or not np.any(zone):
-                return None
-            mm = msk0 > 0
-            if int(mm.sum()) < 24:
-                return None
-            # v1.14.514b — ماسکِ «کلِ زون» (مسیرِ فالبک، msk is zone):
-            # جوهر جدا نشد (زمینِ ناهمگن/آرت) → مسیرِ LaMa
-            # (آزمونِ lang_zh: جعبهٔ روایت رویِ آرت).
-            if msk0 is zone:
-                return None
-            ring = (cv2.dilate(msk0, np.ones((33, 33), np.uint8)) > 0) \
-                & (~mm) \
-                & (cv2.dilate(zone.astype(np.uint8) * 255,
-                              np.ones((15, 15), np.uint8)) > 0)
-            if barrier is not None and np.any(barrier):
-                ring &= (cv2.dilate(barrier, np.ones((3, 3), np.uint8)) == 0)
-            ch, cw = crop_bgr.shape[:2]
-            # v1.14.514a — جوهرِ کارهایِ دیگر داخلِ رینگ نیست (مالکیت)
-            if job is not None:
-                try:
-                    _ox = self._cc_other_polys_mask(job, ch, cw)
-                    if cv2.countNonZero(_ox):
-                        ring &= (_ox == 0)
-                except Exception:
-                    pass
-            if int(ring.sum()) < min_px:
-                return None
-            ys, xs = np.nonzero(ring)
-            # v1.14.519 — گیتِ همگنیِ رنگ (باگِ «آبی→صورتی/فیروزه‌ای»):
-            # آزمونِ واقعیِ فصلِ asura 6.webp r13: زمینهٔ گرمِ زرد/نارنجی،
-            # رینگِ نمونه سبزِ آرت را هم میگرفت → برازشِ درجه۲ پاس
-            # میشد ولی پرکردِ فیروزه‌ایِ تخت + لکه‌های صورتی میساخت.
-            # رینگِ دوسرِ hue (σ مداریِ >۲۸° با اشباعِ >۶۰) → LaMa.
-            try:
-                _rp = crop_bgr[ys, xs].astype(np.float32)
-                _hsv_r = cv2.cvtColor(
-                    _rp.reshape(-1, 1, 3).astype(np.uint8),
-                    cv2.COLOR_BGR2HSV)
-                _sat = _hsv_r[..., 1].astype(np.float32)
-                _hue = _hsv_r[..., 0].astype(np.float32)
-                if float(_sat.mean()) > 60.0:
-                    _sin = float(np.sin(np.deg2rad(_hue * 2.0)).mean())
-                    _cos = float(np.cos(np.deg2rad(_hue * 2.0)).mean())
-                    _hsd = float(np.sqrt(max(
-                        0.0, 1.0 - (_sin * _sin + _cos * _cos))) * 90.0)
-                    if _hsd > 28.0:
-                        return None
-            except Exception:
-                pass
-            # نرمال‌سازیِ مختصات (خوب-شرط‌سازیِ برازشِ درجه‌۲)
-            X = (xs / max(1, cw) - 0.5).astype(np.float32)
-            Y = (ys / max(1, ch) - 0.5).astype(np.float32)
-            A2 = np.stack([np.ones(len(ys), np.float32), X, Y,
-                           X * X, Y * Y, X * Y], axis=1)
-            sigs = []
-            coefs = []
-            for c in range(3):
-                v = crop_bgr[ys, xs, c].astype(np.float32)
-                coef, *_ = np.linalg.lstsq(A2, v, rcond=None)
-                r = v - A2 @ coef
-                keep = np.abs(r) < 12.0
-                # v1.14.514b — سهمِ پرت‌ها ≤۱۲٪: آرتِ رینگ با پرتزدایی
-                # پنهان میشد و گیت بیجهت پاس میشد (آزمونِ lang_zh).
-                if keep.sum() < 0.88 * len(ys):
-                    return None
-                if int(keep.sum()) >= max(60, int(len(ys)) // 2):
-                    coef, *_ = np.linalg.lstsq(A2[keep], v[keep], rcond=None)
-                    r = v[keep] - A2[keep] @ coef
-                sigs.append(float(r.std()))
-                if float(r.std()) > max_res:
-                    return None
-                coefs.append(coef)
-            sig = float(np.clip(max(sigs), 0.8, 2.5))
-            # v1.14.514a — بدونِ کسرِ barrier: رویِ گرادیان، خودِ زمینه
-            # تیره است و barrier نیمی از متن را میپوشاند (ساقههایِ حروفِ
-            # جامانده — آزمونِ TRAITS/ARROGANT). گیتِ گرادیان فقط رویِ
-            # زمینهِ «هموار» پاس میشود؛ خطِ حبابِ واقعی رینگ را ناهموار
-            # میکند و گیت را میاندازد.
-            fm = mm.copy()
-            if not fm.any():
-                return None
-            rng = np.random.default_rng(97531)
-            noise = rng.normal(0.0, sig, size=(ch, cw))
-            out = crop_bgr.copy()
-            fmu = fm.astype(np.uint8)
-            # مدلِ صفحه (فقط برای ردیفهای لبه که مرزی ندارند)
-            yy, xx = np.mgrid[0:ch, 0:cw]
-            planes = []
-            XX = (xx.astype(np.float32) / max(1, cw) - 0.5)
-            YY = (yy.astype(np.float32) / max(1, ch) - 0.5)
-            for c in range(3):
-                a0, ax, ay, axx, ayy, axy = coefs[c]
-                planes.append(a0 + ax * XX + ay * YY
-                              + axx * (XX * XX) + ayy * (YY * YY)
-                              + axy * (XX * YY))
-            # v1.14.514c — «صفحه + تصحیحِ مرز»: هر ران با «صفحهٔ منحنیِ
-            # درجه‌۲» (خمِ گرادیان را دقیق دنبال میکند) پر میشود +
-            # تصحیحِ خطیِ دو سرِ ران (اندازه‌گیری از پیکسلهایِ سالمِ
-            # چسبیده به مرز — میانگینِ ≥۲ ردیفِ معتبرِ «غیرِ زونِ دیگر»).
-            # ستونِ کاملاً ادغام‌شده (چند خط + بینِ خطوط در یک ران):
-            # درون‌یابیِ خطیِ سرتاسری خمِ گرادیان را نمیگرفت (نوارِ
-            # تیره)؛ صفحه + تصحیحِ مرزِ محلی هم خم را دنبال میکند هم
-            # در مرز دقیق است.
-            _oxm = None
-            if job is not None:
-                try:
-                    _oxm = self._cc_other_polys_mask(job, ch, cw)
-                except Exception:
-                    _oxm = None
-            out = crop_bgr.copy()
-            col_any = fmu.any(axis=0)
-            for x in np.flatnonzero(col_any):
-                colmask = fmu[:, x] > 0
-                d = np.diff(np.concatenate(
-                    ([0], colmask.astype(np.int8), [0])))
-                starts = np.flatnonzero(d == 1)
-                ends = np.flatnonzero(d == -1) - 1
-                for s, e in zip(starts.tolist(), ends.tolist()):
-                    n = e - s + 1
-                    if n <= 0:
-                        continue
-                    rowsA = []
-                    ry = s - 1
-                    while ry >= 0 and len(rowsA) < 4:
-                        if _oxm is None or _oxm[ry, x] == 0:
-                            rowsA.append(ry)
-                        ry -= 1
-                    rowsB = []
-                    ry = e + 1
-                    while ry < ch and len(rowsB) < 4:
-                        if _oxm is None or _oxm[ry, x] == 0:
-                            rowsB.append(ry)
-                        ry += 1
-                    t = (np.arange(n, dtype=np.float32) + 1.0) \
-                        / float(n + 1.0)
-                    for c in range(3):
-                        yA = s - 0.5 if rowsA else max(0, s)
-                        yB = e + 0.5 if rowsB else min(ch - 1, e)
-                        pa = float(planes[c][int(max(0, min(ch - 1, yA))), x])
-                        pb = float(planes[c][int(max(0, min(ch - 1, yB))), x])
-                        if rowsA:
-                            da = float(np.median(
-                                crop_bgr[rowsA, x, c])) - pa
-                        else:
-                            da = 0.0
-                        if rowsB:
-                            db = float(np.median(
-                                crop_bgr[rowsB, x, c])) - pb
-                        else:
-                            db = 0.0
-                        base = planes[c][s:e + 1, x]
-                        out[s:e + 1, x, c] = np.clip(
-                            base + da * (1.0 - t) + db * t
-                            + noise[s:e + 1, x], 0, 255).astype(np.uint8)
-            return out
-        except Exception:
-            return None
-
-    @staticmethod
-    def _cc_lama_black_artifact(crop_bgr: np.ndarray, lama_out: np.ndarray,
-                                msk: np.ndarray) -> bool:
-        """نوار/لکهٔ سیاهِ توهمیِ LaMa — v1.14.502 «نسبی به زمینهٔ
-        پیرامونِ خودِ ماسک»: اگر پس‌زمینهٔ دورِ ماسک خودش تیره است
-        (بنرِ بنفشِ تیره/آرتِ تیره)، پرشدنِ تیره درست است و رد نمیشود
-        (آزمونِ واقعی mgeko: زمینهٔ [۵۹,۱۱,۳۵] و پرِ LaMa [۵۷,۹,۳۴]
-        یکی بود اما گاردِ قدیمیِ آستانهٔ ثابت ۲۲ آن را سیاه میخواند و
-        پاسِ تمیز را می‌انداخت). توهم = خروجیِ خیلی تیره‌تر از همان
-        زمینه، یا روی زمینهٔ روشن سیاهِ مطلق."""
-        try:
-            mm = (msk > 0)
-            if not mm.any() or int(mm.sum()) < 400:
-                return False
-            g0 = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            g1 = cv2.cvtColor(lama_out, cv2.COLOR_BGR2GRAY)
-            ring = (cv2.dilate(mm.astype(np.uint8),
-                               np.ones((25, 25), np.uint8)) > 0) & (~mm)
-            if not ring.any():
-                return False
-            ring_med = float(np.median(g0[ring]))
-            out_med = float(np.median(g1[mm]))
-            if out_med < ring_med - 40.0:
-                return True
-            if ring_med < 60.0:
-                # زمینهٔ تیره → پرشدنِ تیره مشروع؛ فقط انحرافِ شدید رد شد
-                return False
-            a_in = float((g1[mm] < 22).mean())
-            b_in = float((g0[mm] < 22).mean())
-            if a_in > 0.30 and a_in > b_in + 0.18:
-                return True
-            ys, xs = np.nonzero(mm)
-            y0, y1 = int(ys.min()), int(ys.max()) + 1
-            x0, x1 = int(xs.min()), int(xs.max()) + 1
-            bad_rows = 0
-            for y in range(y0, y1):
-                r0 = float((g0[y, x0:x1] < 22).mean())
-                r1 = float((g1[y, x0:x1] < 22).mean())
-                if r1 - r0 > 0.22 and r1 > 0.40:
-                    bad_rows += 1
-            if bad_rows >= 3:
-                return True
-            return False
-        except Exception:
-            return False
-
-    def _cc_lama_call(self, crop_bgr: np.ndarray, msk: np.ndarray):
-        """v1.14.502 — اجرای LaMa روی برش؛ سشنِ مشترکِ آمادهٔ
-        `_cc_lama_obj` (بدون قفل/ساختِ دوباره در نخِ کارگر)."""
-        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
-        if _cm == "opencv":
-            return None
-        lama = self.__dict__.get("_cc_lama_obj")
-        if lama is None:
-            try:
-                lama = self._get_lama()
-            except Exception:
-                lama = None
-            if lama is None:
-                return None
-            self._cc_lama_obj = lama
-        try:
-            pil = lama(crop_bgr, msk)
-            arr = np.array(pil.convert("RGB")) if hasattr(pil, "convert") \
-                else np.asarray(pil)
-            if arr.ndim == 2:
-                arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
-            else:
-                arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-            if arr.shape[:2] != crop_bgr.shape[:2]:
-                arr = cv2.resize(arr, (crop_bgr.shape[1],
-                                        crop_bgr.shape[0]),
-                                  interpolation=cv2.INTER_LANCZOS4)
-            return arr
-        except Exception as _e0:
-            try:
-                print(f"    [!] فراخوانیِ LaMa خطا داد "
-                      f"({str(_e0)[:110]}) → تلاشِ دوباره …", flush=True)
-            except Exception:
-                pass
-            try:
-                time.sleep(0.35)
-                pil = lama(crop_bgr, msk)
-                arr = np.array(pil.convert("RGB")) if hasattr(pil, "convert") \
-                    else np.asarray(pil)
-                if arr.ndim == 2:
-                    arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
-                else:
-                    arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                if arr.shape[:2] != crop_bgr.shape[:2]:
-                    arr = cv2.resize(arr, (crop_bgr.shape[1],
-                                            crop_bgr.shape[0]),
-                                      interpolation=cv2.INTER_LANCZOS4)
-                return arr
-            except Exception:
-                pass
-            try:
-                _safe = self._get_lama_cpu_safe()
-                if _safe is not None:
-                    pil = _safe(crop_bgr, msk)
-                    arr = np.array(pil.convert("RGB")) \
-                        if hasattr(pil, "convert") else np.asarray(pil)
-                    if arr.ndim == 2:
-                        arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
-                    else:
-                        arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
-                    if arr.shape[:2] != crop_bgr.shape[:2]:
-                        arr = cv2.resize(arr, (crop_bgr.shape[1],
-                                                crop_bgr.shape[0]),
-                                          interpolation=cv2.INTER_LANCZOS4)
-                    return arr
-            except Exception:
-                pass
-            return None
-
-    @staticmethod
-    def _cc_residue_mask(out_bgr: np.ndarray, zone: np.ndarray,
-                         barrier: np.ndarray,
-                         near: Optional[np.ndarray] = None):
-        """v1.14.502 — شبحِ جوهرِ جامانده در «خروجی»: فقط بقایای
-        «متنی» (ضربه‌های قلم‌مانند) گرفته میشوند، نه بافتِ بازسازی‌شدهٔ
-        LaMa (لکهٔ صاف/محو روی نرده/چمن = پرکردنِ مشروع مدل است و پاسِ
-        دومِ بی‌فایده فقط وقت میسوزاند). قواعد:
-          - انحرافِ شدید (±۳۰) از مرجعِ محلیِ هموار (medianBlur ۳۱ —
-            گرادیانِ بنر دیده میشود و خطا نمیدهد)، داخلِ زون، بیرون از
-            barrier، چسبیده به محلِ متن (ماسک ±۱۵px)؛
-          - شکلِ ضربه: قطعه‌های ریزِ ۶..۶۰px ارتفاع با پرشدگیِ کم
-            (حروف/پایهٔ حروف) «یا» انحرافِ خیلی شدید (±۵۵) در هر شکلی؛
-          - قطعه‌های کلانِ پهن (w>64 و h>64) فقط با انحرافِ شدید.
-        خروجی: ماسکِ شبح یا None (= تمیز)."""
-        try:
-            zn = zone > 0
-            if not zn.any():
-                return None
-            g = cv2.cvtColor(out_bgr, cv2.COLOR_BGR2GRAY)
-            ref = cv2.medianBlur(g, 31)
-            _d32 = np.abs(g.astype(np.int32) - ref.astype(np.int32))
-            dev = ((_d32 > 30) & zn)
-            strong = ((_d32 > 55) & zn)
-            if barrier is not None and barrier.any():
-                _nb = ~(cv2.dilate(barrier, np.ones((3, 3), np.uint8)) > 0)
-                dev &= _nb
-                strong &= _nb
-            if int(dev.sum()) < 24:
-                return None
-            m = dev.astype(np.uint8) * 255
-            m = cv2.morphologyEx(m, cv2.MORPH_CLOSE,
-                                 np.ones((3, 3), np.uint8))
-            n, lab, st, _ = cv2.connectedComponentsWithStats(m, 8)
-            if n <= 1:
-                return None
-            strong_m = strong.astype(np.uint8) * 255
-            keep = np.zeros(n, bool)
-            for ci in range(1, n):
-                a = int(st[ci, cv2.CC_STAT_AREA])
-                if a < 6:
-                    continue
-                w = int(st[ci, cv2.CC_STAT_WIDTH])
-                h = int(st[ci, cv2.CC_STAT_HEIGHT])
-                fill = float(a) / float(max(1, w * h))
-                # ضربهٔ قلمی: باریک/ریز، نه بلابِ پهنِ بافتی
-                stroke_like = (h <= 60 and w <= 64
-                               and (fill <= 0.55 or a <= 400))
-                blob_text_like = (6 <= h <= 44 and 4 <= w <= 52
-                                  and fill >= 0.30)
-                if not (stroke_like or blob_text_like):
-                    # قطعهٔ کلان فقط اگر «خیلی» تیره/روشن از زمینه باشد
-                    if w > 64 and h > 64 and a > 2600:
-                        _seg = (lab == ci)
-                        if float(strong_m[_seg].mean() / 255.0) > 0.25:
-                            keep[ci] = True
-                    continue
-                keep[ci] = True
-            if near is not None:
-                _nr = (near > 0)
-                if _nr.any():
-                    _touch = np.bincount(lab[_nr & (m > 0)],
-                                         minlength=n).astype(bool)
-                    keep &= _touch
-            m = (keep[lab].astype(np.uint8)) * 255
-            if int(cv2.countNonZero(m)) < 24:
-                return None
-            return m
-        except Exception:
-            return None
-
-    @staticmethod
-    def _cc_repair_stray_lines(crop_bgr: np.ndarray, out: np.ndarray,
-                               msk: np.ndarray) -> np.ndarray:
-        """ردیف/ستونِ سرکش: گاهی LaMa یک خطِ سیاهِ تنها میسازد (ردیفی که
-        در اصلِ کار سیاه نبود در خروجی ~۹۰٪ سیاه شد) — با میانگینِ دو همسایه
-        تعمیر میشود."""
-        try:
-            mm = (msk > 0)
-            if not mm.any() or int(mm.sum()) < 400:
-                return out
-            g0 = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-            g1 = cv2.cvtColor(out, cv2.COLOR_BGR2GRAY)
-            ys, xs = np.nonzero(mm)
-            y0, y1 = int(ys.min()), int(ys.max()) + 1
-            x0, x1 = int(xs.min()), int(xs.max()) + 1
-            h, w = out.shape[:2]
-            for y in range(max(1, y0), min(h - 1, y1)):
-                r0 = float((g0[y, x0:x1] < 22).mean())
-                r1 = float((g1[y, x0:x1] < 22).mean())
-                if r1 > 0.85 and r0 < 0.35:
-                    sel = mm[y]
-                    if sel.any():
-                        up = out[y - 1].astype(np.int32)
-                        dn = out[y + 1].astype(np.int32)
-                        out[y][sel] = ((up[sel] + dn[sel]) >> 1) \
-                            .astype(np.uint8)
-            for x in range(max(1, x0), min(w - 1, x1)):
-                c0 = float((g0[y0:y1, x] < 22).mean())
-                c1 = float((g1[y0:y1, x] < 22).mean())
-                if c1 > 0.85 and c0 < 0.35:
-                    sel = mm[:, x]
-                    if sel.any():
-                        lf = out[:, x - 1].astype(np.int32)
-                        rt = out[:, x + 1].astype(np.int32)
-                        out[:, x][sel] = ((lf[sel] + rt[sel]) >> 1) \
-                            .astype(np.uint8)
-            return out
-        except Exception:
-            return out
-
-    @staticmethod
-    def _cc_harmonize_fill(crop_bgr: np.ndarray, out: np.ndarray,
-                           msk: np.ndarray) -> np.ndarray:
-        """v1.14.502 — هم‌ترازسازیِ پرکردنِ LaMa با زمینهٔ محلی: مدلِ
-        سیاه‌سفید گاهی چند سطح تیره‌تر/صاف‌تر از زمینهٔ رنگی پر میکند
-        (آزمونِ mgeko: پرِ [۵۳،۱۰،۳۲] در برابر زمینهٔ [۵۹،۱۱،۳۵] +
-        بافتِ صافِ بی‌دانه در بنرِ نویزدار → شبحِ کم‌کنتراستِ قابلِخواندن).
-        هر نوارِ ۳۲px داخلِ ماسک با میانگینِ رینگِ همان نوار هم‌سطح
-        میشود (گرادیان حفظ میشود) و دانهٔ نویزِ زمینه به همان اندازه
-        به پرکردن برمی‌گردد."""
-        try:
-            mm = (msk > 0)
-            if not mm.any():
-                return out
-            ring = (cv2.dilate(msk, np.ones((25, 25), np.uint8)) > 0) \
-                & (~mm)
-            if int(ring.sum()) < 60:
-                return out
-            res = out.astype(np.float32)
-            h = res.shape[0]
-            # v1.14.514 — هم‌ترازیِ «نرم» (نه نوارهایِ ۳۲px پلّه‌ای):
-            # رویِ گرادیان، تصحیحِ هر نوار ±۱۸ پلهٔ افقی میساخت =
-            # «نوارهایِ مستطیلیِ پخش» در جعبه‌هایِ سیستمِ 4e2e77.
-            # حالا Δ در نقاطِ ۳۲px سنجیده و بینِ آنها درون‌یابیِ خطی
-            # میشود — شیبِ تصحیح نرم میماند و پله نیست.
-            _band = 32
-            _centers = list(range(0, h, _band))
-            _deltas = []
-            for y0 in _centers:
-                y1 = min(h, y0 + _band)
-                rm = mm[y0:y1]
-                rr = ring[y0:y1]
-                if rm.sum() < 40 or rr.sum() < 40:
-                    _deltas.append(None)
-                    continue
-                dcs = []
-                for c in range(3):
-                    _d = float(crop_bgr[y0:y1, :, c][rr].mean()
-                               - out[y0:y1, :, c][rm].mean())
-                    dcs.append(float(np.clip(_d, -18.0, 18.0)))
-                _deltas.append(dcs)
-            _valid = [i for i, dv in enumerate(_deltas) if dv is not None]
-            if _valid:
-                import bisect as _bs
-                _ys_c = [_centers[i] + _band // 2 for i in _valid]
-                _vs = [_deltas[i] for i in _valid]
-                for c in range(3):
-                    _col = [v[c] for v in _vs]
-                    for yy in range(h):
-                        rmy = mm[yy]
-                        if not rmy.any():
-                            continue
-                        _k = _bs.bisect_left(_ys_c, yy)
-                        if _k <= 0:
-                            _dy = _col[0]
-                        elif _k >= len(_ys_c):
-                            _dy = _col[-1]
-                        else:
-                            yA, yB = _ys_c[_k - 1], _ys_c[_k]
-                            t = 0.0 if yB == yA else (yy - yA) / (yB - yA)
-                            _dy = _col[_k - 1] * (1 - t) + _col[_k] * t
-                        res[yy, :, c][rmy] += _dy
-            # دانهٔ زمینه (نویزِ JPEG/کاغذ) — اندازه‌گیری از رینگ
-            # v1.14.514 — «دامنهٔ مقاوم» (MAD): استاندردِ رینگ با خطِ
-            # تیرهٔ حباب (±۱۰۰ در چند درصدِ پیکسل) تا σ=۲۸ متورم میشد
-            # → دانهٔ ±۲۱ داخلِ پرکردن = «خش‌دار»ِ img7. MAD دانهٔ واقعی
-            # (۱٫۵-۴) را جدا میکند؛ فقط زمینهٔ واقعاً نویزدار (بنرِ
-            # مگِکو، σ≥۵٫۵) دانه میگیرد و سقف ۱۰ است.
-            try:
-                g_r = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-                _noise = g_r.astype(np.float32) \
-                    - cv2.medianBlur(g_r, 5).astype(np.float32)
-                _nv = _noise[ring]
-                _sig = 1.4826 * float(np.median(np.abs(_nv
-                                                       - np.median(_nv))))
-                if _sig >= 5.5:
-                    rng = np.random.default_rng(12345)
-                    _n = rng.normal(0.0, min(_sig, 10.0) * 0.85,
-                                    size=res.shape[:2])
-                    for c in range(3):
-                        ch = res[:, :, c]
-                        ch[mm] += _n[mm]
-            except Exception:
-                pass
-            return np.clip(res, 0, 255).astype(np.uint8)
-        except Exception:
-            return out
-
-    @staticmethod
-    def _cc_vinterp_fill(crop_bgr: np.ndarray, msk0: np.ndarray,
-                         oxm: np.ndarray = None):
-        """v1.14.515 — درون‌یابیِ خطیِ عمودیِ خالص: هر رانِ ماسک با
-        دو سرِ سالمِ همان ستون (تا ۵ ردیفِ جست‌وجو) خطی پر میشود —
-        بدونِ هیچ برازش/مدل. برایِ جعبه‌هایِ رنگیِ هموار (4e2e77) که
-        LaMa رویشان «شبحِ سفید» میسازد: خروجی دقیقاً خودِ زمینه است."""
-        try:
-            mm = msk0 > 0
-            if not mm.any() or int(mm.sum()) < 24:
-                return None
-            ch, cw = crop_bgr.shape[:2]
-            out = crop_bgr.copy()
-            rng = np.random.default_rng(24680)
-            noise = rng.normal(0.0, 1.1, size=(ch, cw))
-            fmu = mm.astype(np.uint8)
-            if oxm is None:
-                oxm = np.zeros((ch, cw), np.uint8)
-            oxf = (oxm > 0)
-            col_any = fmu.any(axis=0)
-            # v1.14.515 — زمینهٔ هر ستون (میانهٔ ردیفهایِ «آزاد»: بدونِ
-            # ماسک و بدونِ زونِ کارهایِ دیگر): نقطهٔ سالمِ پایانی باید
-            # «زمینه» باشد نه جوهرِ خطِ مجاور — ریشهٔ رگه‌هایِ سفید:
-            # ستونِ پرماسک، ردیفهایِ آزادش = حروفِ سفیدِ خطِ مجاور بود.
-            _gb_all = np.zeros((cw, 3), np.float32)
-            try:
-                _freeall = crop_bgr[(fmu == 0) & (oxf == 0)]
-                if len(_freeall):
-                    _gb_all[:] = np.median(_freeall, axis=0)
-            except Exception:
-                pass
-            try:
-                _colbg = np.zeros((cw, 3), np.float32)
-                _okcol = np.zeros(cw, bool)
-                for x in range(cw):
-                    _free = crop_bgr[:, x, :][(fmu[:, x] == 0)
-                                              & (oxf[:, x] == 0)]
-                    if len(_free) >= 3:
-                        _colbg[x] = np.median(_free, axis=0)
-                        _okcol[x] = True
-                _colbg[~_okcol] = _gb_all[0]
-            except Exception:
-                _colbg = np.zeros((cw, 3), np.float32) + _gb_all[0]
-
-            def _healthy_row(x: int, y: int, step: int) -> int:
-                yy = y
-                for _ in range(8):
-                    yy += step
-                    if yy < 0 or yy >= ch:
-                        return -1
-                    if fmu[yy, x] or oxf[yy, x]:
-                        continue
-                    try:
-                        _d = np.abs(crop_bgr[yy, x].astype(np.float32)
-                                    - _colbg[x])
-                        if float(_d.max()) > 40.0:
-                            continue  # جوهر/لبه — ردیفِ بعدی
-                    except Exception:
-                        pass
-                    return yy
-                return -1
-
-            for x in np.flatnonzero(col_any):
-                colmask = fmu[:, x] > 0
-                d = np.diff(np.concatenate(
-                    ([0], colmask.astype(np.int8), [0])))
-                starts = np.flatnonzero(d == 1)
-                ends = np.flatnonzero(d == -1) - 1
-                for s, e in zip(starts.tolist(), ends.tolist()):
-                    n = e - s + 1
-                    if n <= 0:
-                        continue
-                    ya = _healthy_row(x, s - 1, -1)
-                    yb = _healthy_row(x, e + 1, 1)
-                    t = (np.arange(n, dtype=np.float32) + 1.0) \
-                        / float(n + 1.0)
-                    for c in range(3):
-                        va = float(crop_bgr[ya, x, c]) if ya >= 0 else None
-                        vb = float(crop_bgr[yb, x, c]) if yb >= 0 else None
-                        if va is not None and vb is not None:
-                            base = va * (1.0 - t) + vb * t
-                        elif va is not None:
-                            base = np.full(n, va, np.float32)
-                        elif vb is not None:
-                            base = np.full(n, vb, np.float32)
-                        else:
-                            base = np.full(n, float(_colbg[x, c]),
-                                           np.float32)
-                        out[s:e + 1, x, c] = np.clip(
-                            base + noise[s:e + 1, x], 0, 255
-                        ).astype(np.uint8)
-            return out
-        except Exception:
-            return None
-
-    def _cc_clean_crop(self, crop_bgr: np.ndarray, msk0: np.ndarray,
-                       zone: np.ndarray, job: dict = None):
-        """v1.14.502 — پاکسازیِ «خالص» (درخواستِ صریحِ سازنده):
-          lama-manga / lama-big → فقط LaMa؛ هیچ flat، هیچ TELEA، هیچ ترکیب.
-          opencv → فقط cv2.inpaint (TELEA).
-        LaMa تا ۴ پاس روی برش: پاسِ ۱ با ماسکِ جوهر؛ اگر شبحی داخلِ زون
-        بماند، پاس‌های بعدی فقط روی همان شبح دوباره LaMa میزند (فقط lama).
-        خطِ حباب/کادر (barrier) و بیرونِ ماسک هرگز تغییر نمی‌کند — LaMa
-        خودش فقط پیکسل‌های ماسک را بازمی‌سازد."""
-        _dbg = bool(os.environ.get("MANGA_CC_DEBUG"))
-        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
-        try:
-            _ir = int(getattr(self, "inpaint_radius", 3) or 3)
-        except Exception:
-            _ir = 3
-
-        # ── lama-manga / lama-big: فقط LaMa ──
-        g0 = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
-        # v1.14.520 — زمینهٔ تیره: barrier/برشِ حباب خاموش (همانِ دلیلِ
-        # بالا؛ در پنلِ مشکی خطِ حباب وجود ندارد و متنِ تیره اشتباه
-        # ساختار میشود).
-        if float(np.median(g0)) < 80.0:
-            barrier = None
-        else:
-            barrier = self._cc_barrier(
-                g0, cv2.dilate(msk0, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (7, 7))), grow=4)
-        # v1.14.515 — «حباب هرگز نابود نشود»: ماسکِ پاکسازی به «درونِ
-        # حباب» برش میخورد — خطِ دورِ حباب (barrier = منحنیِ بسته) با
-        # flood-fill بیرون/درون جدا میشود؛ هرچه بیرونِ قاب است (هنر،
-        # زمینه، سرریزِ هالهٔ متن) از ماسک حذف میشود و خودِ خطِ حباب
-        # هم پاک نمیشود (درخواستِ صریحِ کاربر: img7 — پرکردِ سفید فقط
-        # «همان قسمتِ متن»، حباب سالم). اگر قاب بسته نبود (روایتِ رویِ
-        # آرت) و برش بیش از ۵۵٪ ماسک میخورد، برش رد میشود.
-        try:
-            if barrier is not None and np.any(barrier):
-                _n0 = int(cv2.countNonZero(msk0))
-                if _n0 >= 24:
-                    _bb = cv2.dilate(barrier, np.ones((3, 3), np.uint8))
-                    _pass = (_bb == 0).astype(np.uint8)
-                    _nc, _lab = cv2.connectedComponents(_pass, 4)[:2]
-                    if _nc > 1:
-                        _bl = set(_lab[0, :].tolist()) \
-                            | set(_lab[-1, :].tolist()) \
-                            | set(_lab[:, 0].tolist()) \
-                            | set(_lab[:, -1, :].tolist())
-                        _bl.discard(0)
-                        if _bl:
-                            _outside = np.isin(
-                                _lab, np.fromiter(_bl, np.int32))
-                            _m2 = cv2.bitwise_and(
-                                msk0, cv2.bitwise_not(
-                                    _outside.astype(np.uint8) * 255))
-                            _m2 = cv2.bitwise_and(_m2, cv2.bitwise_not(_bb))
-                            _n2 = int(cv2.countNonZero(_m2))
-                            if _n2 >= 0.45 * _n0 and _n2 >= 12:
-                                msk0 = _m2
-                                _dbg and print(
-                                    "    [cc] برشِ ماسک به درونِ حباب: "
-                                    f"{_n0}→{_n2}px",
-                                    flush=True)
-        except Exception:
-            pass
-
-        # ── opencv: خالص — فقط اینپینتِ کلاسیک ──
-        if _cm == "opencv":
-            out = cv2.inpaint(crop_bgr, msk0, max(2, _ir),
-                              cv2.INPAINT_TELEA)
-            return out, "telea"
-
-        # v1.14.514 — زمینهٔ «واقعاً یکدست» (سفیدیِ خالصِ حباب، σ≤۴):
-        # پرکردِ مستقیم با همانِ رنگ/نویزِ زمینه — تمیزِ مطلق و سریعتر
-        # (LaMa برایِ این برش اصلاً صدا زده نمیشود). زمینهٔ تُکستوردار/
-        # گرادیان (آرت/جعبهٔ سیستم) → None → مسیرِ LaMa.
-        def _fill_residue(fill_img):
-            """v1.14.515 — پسِ هر پرکرد (bgfill/gradfill): شبحِ متنی
-            جامانده؟ (همان آشکارسازِ شبحِ LaMa — ارزان). True=تمیز."""
-            try:
-                _near = cv2.dilate(msk0, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (31, 31)))
-                _r = self._cc_residue_mask(fill_img, _zone_fill, barrier,
-                                           _near)
-                return (_r is None
-                        or int(cv2.countNonZero(_r)) < 200), _r
-            except Exception:
-                return True, None
-
-        # v1.14.515 — زونِ نمونه‌برداریِ زمینه (۹px گسترده‌تر): جوهرِ
-        # روشنِ رویِ زمینهٔ رنگی (4e2e77: متنِ سفید رویِ آبی) زونِ تنگِ
-        # OCR دارد و موتورهایِ پرکرد نمونهٔ زمینه نداشتند → LaMa.
-        # پرکردن همیشه فقط رویِ پیکسلهایِ ماسک رخ میدهد؛ گسترشِ زون
-        # فقط نمونه‌برداریِ زمینه را بهتر میکند.
-        _zone_fill = zone
-        try:
-            _zone_fill = cv2.dilate(
-                zone, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (11, 11)))
-        except Exception:
-            _zone_fill = zone
-
-        _bgf = self._cc_uniform_bg_fill(crop_bgr, msk0, _zone_fill,
-                                        barrier, job=job)
-        if _bgf is not None:
-            _ok, _r1 = _fill_residue(_bgf)
-            if _ok:
-                if _dbg:
-                    try:
-                        print("    [cc] زمینهٔ یکدست → پرکردِ مستقیم "
-                              f"({int(cv2.countNonZero(msk0))}px)",
-                              flush=True)
-                    except Exception:
-                        pass
-                return _bgf, "bgfill"
-            # v1.14.515 — شبح جامانده → ماسک پهن‌تر (شبح + جوهر) و
-            # پرکردِ دوباره؛ اگر باز ناقص ماند مسیرِ پایین (گرادیان/LaMa)
-            # ادامه می‌یابد.
-            try:
-                msk0 = cv2.bitwise_or(
-                    msk0, cv2.dilate(_r1, cv2.getStructuringElement(
-                        cv2.MORPH_ELLIPSE, (5, 5))))
-                _bgf2 = self._cc_uniform_bg_fill(crop_bgr, msk0, _zone_fill,
-                                                 barrier, job=job)
-                if _bgf2 is not None:
-                    _ok2, _ = _fill_residue(_bgf2)
-                    if _ok2:
-                        return _bgf2, "bgfill"
-            except Exception:
-                pass
-        # v1.14.520 — پرکردِ محلیِ هر استروک (رنگِ خودِ حباب): اگر
-        # تمیز بود، LaMa صدا زده نمیشود. ریشهٔ لکهٔ خاکستریِ LaMa.
-        # فقط برایِ زمینهٔ «روشن» (حباب) یا «تیره» (پنل)؛ جعبهٔ رنگیِ
-        # میانه (آبی/نارنجی) باید مسیرِ گرادیانِ تحلیلی برود — پرکردِ
-        # محلیِ تک‌رنگ رویِ شیبِ آبی، حلقهٔ سفیدِ دورِ حروف میساخت
-        # (4e2e77). آستانه: bg>180 یا bg<80.
-        _use_local = True
-        try:
-            _bg_est = (float(np.median(g0[zone > 0]))
-                       if zone is not None and np.any(zone) else 128.0)
-            _use_local = (_bg_est > 180.0) or (_bg_est < 80.0)
-        except Exception:
-            _use_local = True
-        if _use_local:
-            try:
-                _lbf = self._cc_local_bg_fill(crop_bgr, msk0, barrier, job)
-            except Exception:
-                _lbf = None
-            if _lbf is not None:
-                _okl, _rl = _fill_residue(_lbf)
-                if _dbg:
-                    try:
-                        print(f"    [cc] localfill: ok={_okl} "
-                              f"maskpx={int(cv2.countNonZero(msk0))}",
-                              flush=True)
-                    except Exception:
-                        pass
-                if _okl:
-                    if _dbg:
-                        try:
-                            print("    [cc] پرکردِ محلیِ استروک → تمیز",
-                                  flush=True)
-                        except Exception:
-                            pass
-                    return _lbf, "localfill"
-        # v1.14.514 — «گرادیانِ نرم» (جعبهٔ سیستمِ آبی/نارنجی): ادامهٔ
-        # خودِ گرادیان با برازشِ صفحهٔ شیب — بدونِ لکه و فوری.
-        _ggf = self._cc_gradient_bg_fill(crop_bgr, msk0, _zone_fill,
-                                         barrier, job=job)
-        if _ggf is not None:
-            _okg, _rg = _fill_residue(_ggf)
-            if _okg:
-                if _dbg:
-                    try:
-                        print("    [cc] گرادیانِ نرم → پرکردِ تحلیلی "
-                              f"({int(cv2.countNonZero(msk0))}px)",
-                              flush=True)
-                    except Exception:
-                        pass
-                return _ggf, "gradfill"
-            # v1.14.515 — شبح جامانده رویِ گرادیان (4e2e77: WHINY):
-            # شبح + هاله به ماسک چسبانده شود و گرادیان دوباره
-            # درون‌یابی شود — شیب تمیز، بدونِ لکه.
-            try:
-                msk0 = cv2.bitwise_or(
-                    msk0, cv2.dilate(_rg, cv2.getStructuringElement(
-                        cv2.MORPH_ELLIPSE, (5, 5))))
-                _ggf2 = self._cc_gradient_bg_fill(crop_bgr, msk0,
-                                                  _zone_fill, barrier,
-                                                  job=job)
-                if _ggf2 is not None:
-                    return _ggf2, "gradfill"
-            except Exception:
-                pass
-        # v1.14.515 — درون‌یابیِ عمودیِ خالص برایِ زمینهٔ رنگیِ هموار
-        # (پرچمِ colored_block): هر رانِ ماسک با دو سرِ سالمِ ستون پر
-        # میشود — بدونِ برازش، بدونِ توهم. LaMa رویِ بلوکِ رنگیِ هموار
-        # شبحِ سفید میسازد (کاربرِ 4e2e77: «لگه/صورتی لگ»)؛ اینجا هیچ
-        # چیزی جز خودِ زمینه بازسازی نمیشود.
-        if job is not None and job.get("colored_block"):
-            try:
-                _oxm_v = self._cc_other_polys_mask(
-                    job, crop_bgr.shape[0], crop_bgr.shape[1])
-            except Exception:
-                _oxm_v = None
-            _vif = self._cc_vinterp_fill(crop_bgr, msk0, _oxm_v)
-            if _vif is not None:
-                _okv, _rv = _fill_residue(_vif)
-                if _okv:
-                    return _vif, "gradfill"
-                try:
-                    _msk3 = cv2.bitwise_or(
-                        msk0, cv2.dilate(_rv, cv2.getStructuringElement(
-                            cv2.MORPH_ELLIPSE, (5, 5))))
-                    _vif2 = self._cc_vinterp_fill(crop_bgr, _msk3,
-                                                  _oxm_v)
-                    if _vif2 is not None:
-                        return _vif2, "gradfill"
-                except Exception:
-                    pass
-        work = crop_bgr
-        msk = msk0
-        best = None
-        _shrink_tried = False
-        for _pass in range(2):
-            out = self._cc_lama_call(work, msk)
-            if out is None:
-                break
-            try:
-                _dp = os.environ.get("MANGA_CC_DUMP_PASSES")
-                if _dp:
-                    _tg = str(self.__dict__.get("_cc_dump_tag")
-                              or "j")
-                    cv2.imwrite(f"{_dp}_{_tg}_p{_pass}.png", out)
-                    cv2.imwrite(f"{_dp}_{_tg}_p{_pass}_msk.png", msk)
-            except Exception:
-                pass
-            if self._cc_lama_black_artifact(work, out, msk):
-                if _dbg:
-                    print(f"    [cc] lama#{_pass} نوارِ سیاه → رد",
-                          flush=True)
-                if not _shrink_tried \
-                        and int(cv2.countNonZero(msk)) > 400:
-                    _shrink_tried = True
-                    m2 = msk.copy()
-                    m2[:3, :] = 0
-                    m2[-3:, :] = 0
-                    m2[:, :3] = 0
-                    m2[:, -3:] = 0
-                    m2 = cv2.erode(m2, cv2.getStructuringElement(
-                        cv2.MORPH_ELLIPSE, (5, 5)))
-                    if int(cv2.countNonZero(m2)) >= 20:
-                        msk = m2
-                        continue
-                break
-            work = out
-            out = self._cc_harmonize_fill(crop_bgr, out, msk)
-            _near = cv2.dilate(msk, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (31, 31)))
-            # v1.14.514 — جست‌وجویِ شبح تا نوارِ ۱۳px دورِ ماسک (نه
-            # فقط زون): کفِ حروفِ جامانده زیرِ poly شبح میساخت و
-            # پاسِ دومِ نجاتِ خودش را پیدا نمیکرد.
-            _zn_s = cv2.bitwise_or(zone.astype(np.uint8) * 255,
-                                   cv2.dilate(msk, np.ones((13, 13),
-                                                           np.uint8)))
-            residue = self._cc_residue_mask(out, _zn_s, barrier, _near)
-            if residue is None or _pass >= 1:
-                best = out
-                break
-            # پاسِ دوم فقط روی «زیربرشِ کوچکِ دورِ شبح» — نه کلِ برش
-            # (شبح معمولاً چند صد پیکسل است؛ LaMa روی زیربرشِ ~۱۰۰px
-            # ده‌ها برابر سریع‌تر از کلِ برشِ ۶۰۰px است)
-            r2 = cv2.dilate(residue, cv2.getStructuringElement(
-                cv2.MORPH_ELLIPSE, (7, 7)))
-            r2 = cv2.bitwise_and(r2, cv2.dilate(
-                zone, cv2.getStructuringElement(
-                    cv2.MORPH_ELLIPSE, (9, 9))))
-            if int(cv2.countNonZero(r2)) < 20:
-                best = out
-                break
-            ys, xs = np.nonzero(r2)
-            ry0 = max(0, int(ys.min()) - 24)
-            ry1 = min(crop_bgr.shape[0], int(ys.max()) + 25)
-            rx0 = max(0, int(xs.min()) - 24)
-            rx1 = min(crop_bgr.shape[1], int(xs.max()) + 25)
-            sub_in = work[ry0:ry1, rx0:rx1]
-            sub_m = r2[ry0:ry1, rx0:rx1]
-            sub_out = self._cc_lama_call(sub_in, sub_m)
-            if sub_out is not None and not self._cc_lama_black_artifact(
-                    sub_in, sub_out, sub_m):
-                sub_out = self._cc_harmonize_fill(sub_in, sub_out, sub_m)
-                _sm = (sub_m > 0)
-                _sub_final = sub_out
-                _sub_final[~_sm] = sub_in[~_sm]
-                work = out.copy()
-                work[ry0:ry1, rx0:rx1] = _sub_final
-                best = work
-                if _dbg:
-                    print(f"    [cc] lama#{_pass} شبحِ جامانده → "
-                          f"زیربرشِ {rx1 - rx0}x{ry1 - ry0}", flush=True)
-                break
-            if _dbg:
-                print(f"    [cc] lama#{_pass} شبحِ جامانده → "
-                      f"پاسِ دوم رد شد؛ همان پاسِ اول", flush=True)
-            best = out
-            break
-        if best is not None:
-            return self._cc_repair_stray_lines(crop_bgr, best, msk0), \
-                "lama"
-        # LaMa پاس نداد — یک‌بار سشن از نو (force) و تلاشِ آخر با lama؛
-        # TELEA فقط اگر واقعاً هیچ راهی نماند (متنِ نیمه‌پاک بدتر است)
-        self._cc_lama_obj = None
-        try:
-            self._cc_lama_obj = self._get_lama(force=True)
-        except Exception:
-            self._cc_lama_obj = None
-        if self._cc_lama_obj is not None:
-            out = self._cc_lama_call(crop_bgr, msk0)
-            if out is not None:
-                out = self._cc_harmonize_fill(crop_bgr, out, msk0)
-                return self._cc_repair_stray_lines(
-                    crop_bgr, out, msk0), "lama"
-        try:
-            print("    [!] LaMa در دسترس نیست → TELEA (اضطراری)",
-                  flush=True)
-        except Exception:
-            pass
-        out = cv2.inpaint(crop_bgr, msk0, max(2, _ir),
-                          cv2.INPAINT_TELEA)
-        return out, "telea"
-
-    def _cc_clean_job(self, out: np.ndarray, job: dict) -> str:
-        H, W = out.shape[:2]
-        rx1, ry1, rx2, ry2 = job["x1"], job["y1"], job["x2"], job["y2"]
-        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
-        # v1.14.502: بسترِ دید برای LaMa — حاشیهٔ زمینهٔ اضافه دورِ زون
-        # تا بازسازیِ بافتِ پیرامون ممکن شود (flat حذف شد؛ زمینه از همین
-        # حاشیه خوانده میشود). جای‌گذاری فقط روی مستطیلِ خودِ زون است
-        # (پیکسلِ تغییرکرده ⊆ ماسک ⊆ زون) — پس دو برشِ همسایه هرگز روی
-        # هم نمی‌نویسند.
-        x1, y1, x2, y2 = rx1, ry1, rx2, ry2
-        if _cm != "opencv":
-            try:
-                _side = min(x2 - x1, y2 - y1)
-                # v1.14.502 — سرعت: ۳۲px زمینه برای LaMa کافی است (میدانِ
-                # دیدِ مدل)؛ ۶۴px روی نواحیِ تمام‌عرض هزینه را دو برابر میکرد
-                _ctx = int(max(16, min(32, _side // 2)))
-                x1 = max(0, x1 - _ctx)
-                y1 = max(0, y1 - _ctx)
-                x2 = min(W, x2 + _ctx)
-                y2 = min(H, y2 + _ctx)
-            except Exception:
-                x1, y1, x2, y2 = rx1, ry1, rx2, ry2
-        # v1.14.514 — برش از «عکسِ اصلی» (نه خروجیِ زندهٔ کارگرهایِ
-        # همزمان): قطعیِ همیشگی.
-        _page_img = self.__dict__.get("_cc_page_image")
-        if _page_img is not None:
-            crop = _page_img[y1:y2, x1:x2].copy()
-        else:
-            crop = out[y1:y2, x1:x2].copy()
-        if crop is None or crop.size == 0:
-            return "skip"
-        j2 = {"x1": x1, "y1": y1, "x2": x2, "y2": y2,
-              "rx1": job.get("rx1", rx1), "ry1": job.get("ry1", ry1),
-              "rx2": job.get("rx2", rx2), "ry2": job.get("ry2", ry2),
-              "polys": job.get("polys") or [],
-              "rid": job.get("rid", -1)}
-        try:
-            msk, zone = self._cc_crop_mask(crop, j2)
+            return "cutfill"
         except Exception:
             return "skip"
-        # v1.14.520 — ۱px بزرگتر: لبهٔ آنتیآلیاسِ حروف (سفیدیِ دورِ
-        # متنِ سفید رویِ آبی) بیرونِ ماسک میماند و حلقهٔ شبح میساخت.
-        try:
-            if msk is not None and np.any(msk):
-                _dm = cv2.dilate(msk, np.ones((3, 3), np.uint8))
-                if int(cv2.countNonZero(_dm)) > int(cv2.countNonZero(msk)):
-                    msk = _dm
-        except Exception:
-            pass
-        if msk is None or not np.any(msk) or int(cv2.countNonZero(msk)) < 12:
-            if os.environ.get("MANGA_CC_DEBUG"):
-                try:
-                    print(f"    [cc] skip job y={ry1}-{ry2} "
-                          f"x={rx1}-{rx2} (mask empty)", flush=True)
-                except Exception:
-                    pass
-            return "skip"
-        _dbg = bool(os.environ.get("MANGA_CC_DEBUG"))
-        _t0 = time.time() if _dbg else 0.0
-        self._cc_dump_tag = f"y{ry1}_{rx1}"
-        # v1.14.520 — مسیرِ «بلوک‌ماسکِ رنگی» حذف شد. این مسیر کلِ
-        # مستطیلِ متن (و گاهی حباب/آرتِ قهوهایِ اطراف) را ماسک میکرد و
-        # vinterp/LaMa روی آن نوار/لگهٔ رنگی میساخت (img7: OH BOY —
-        # کلِ حباب قهوهای شد). درخواستِ کاربر: پاکسازی فقط «همان متن»،
-        # نه کلِ عکس. حالا همیشه ماسکِ جوهرِ متنی (استروک + ۳px) به
-        # LaMa میرود؛ هیچ بلوک/پرکردِ مستطیلی وجود ندارد.
-        try:
-            _dz = os.environ.get("MANGA_CC_DUMP_PASSES")
-            if _dz:
-                cv2.imwrite(f"{_dz}_{self._cc_dump_tag}_zone.png", zone)
-                cv2.imwrite(f"{_dz}_{self._cc_dump_tag}_mask0.png", msk)
-                cv2.imwrite(f"{_dz}_{self._cc_dump_tag}_crop.png", crop)
-        except Exception:
-            pass
-        # v1.14.520 — زونِ نمونه‌برداریِ زمینه = جعبههایِ خطِ OCR
-        # (+۶px)، نه زونِ رشدیافته. زونِ رشدیافته روی آرتِ بیرونِ حباب
-        # میافتید (img7 b0: زمینهٔ سبزِ پیرامون، σ=۸۴) → bgfill رد میشد و
-        # LaMa روی متنِ سفید لکهٔ خاکستری/شبح میساخت. حالا نمونهٔ زمینه
-        # از «درونِ حبابِ سفید» خوانده میشود → پرکردِ تمیزِ همرنگ.
-        _zone_bg = zone
-        try:
-            _pz = self._cc_polys_mask(
-                crop.shape[0], crop.shape[1], j2.get("polys") or [],
-                int(j2["x1"]), int(j2["y1"]), grow=6)
-            if int(cv2.countNonZero(_pz)) >= 60:
-                _zone_bg = _pz
-        except Exception:
-            _zone_bg = zone
-        self._cc_lf_mask = None
-        cleaned, tag = self._cc_clean_crop(crop, msk, _zone_bg, job=j2)
-        # v1.14.502 — جای‌گذاریِ «فقط پیکسل‌های ماسک» (نه کلِ مستطیل):
-        # هر برش فقط تغییراتِ خودش را مینویسد؛ برشهایِ همسایه هرگز روی
-        # هم نمی‌نویسند → نیازی به ادغامِ زونهایِ هم‌پوشان نیست و هر
-        # ناحیهٔ متن برشِ کوچکِ خودش را دارد (جداسازیِ جوهر دقیق، LaMa
-        # سریع، بدونِ توهمِ نوارِ سیاه).
-        try:
-            _mm_full = (msk > 0)
-            if tag == "localfill":
-                _lfm = self.__dict__.get("_cc_lf_mask")
-                if _lfm is not None and _lfm.shape == msk.shape:
-                    _mm_full = (_lfm > 0)
-            _roi = out[y1:y2, x1:x2]
-            _roi[_mm_full] = cleaned[_mm_full]
-        except Exception:
-            out[ry1:ry2, rx1:rx2] = cleaned[
-                (ry1 - y1):(ry2 - y1), (rx1 - x1):(rx2 - x1)]
-        if _dbg:
-            try:
-                print(f"    [cc] job y={ry1}-{ry2} x={rx1}-{rx2} "
-                      f"maskpx={int(cv2.countNonZero(msk))} → {tag} "
-                      f"({time.time() - _t0:.1f}s)", flush=True)
-            except Exception:
-                pass
-        return tag
-
-    @staticmethod
-    def _cc_merge_overlaps(jobs: List[dict]) -> List[dict]:
-        """v1.14.502 — زون‌های هم‌پوشان یکی میشوند (نوشتنِ هم‌زمانِ دو نخ
-        روی یک مستطیل = خطرِ زنده‌شدنِ متنِ پاک‌شدهٔ همسایه)."""
-        if len(jobs) <= 1:
-            return jobs
-        n = len(jobs)
-        parent = list(range(n))
-
-        def _find(a: int) -> int:
-            while parent[a] != a:
-                parent[a] = parent[parent[a]]
-                a = parent[a]
-            return a
-
-        for i in range(n):
-            for k in range(i + 1, n):
-                if jobs[i]["x1"] < jobs[k]["x2"] \
-                        and jobs[k]["x1"] < jobs[i]["x2"] \
-                        and jobs[i]["y1"] < jobs[k]["y2"] \
-                        and jobs[k]["y1"] < jobs[i]["y2"]:
-                    ri, rk = _find(i), _find(k)
-                    if ri != rk:
-                        parent[rk] = ri
-        groups = {}
-        for i in range(n):
-            groups.setdefault(_find(i), []).append(i)
-        merged: List[dict] = []
-        for idxs in groups.values():
-            if len(idxs) == 1:
-                merged.append(jobs[idxs[0]])
-                continue
-            x1 = min(jobs[i]["x1"] for i in idxs)
-            y1 = min(jobs[i]["y1"] for i in idxs)
-            x2 = max(jobs[i]["x2"] for i in idxs)
-            y2 = max(jobs[i]["y2"] for i in idxs)
-            polys: List[np.ndarray] = []
-            for i in idxs:
-                polys.extend(jobs[i].get("polys") or [])
-            merged.append({"x1": x1, "y1": y1, "x2": x2, "y2": y2,
-                           "polys": polys,
-                           "rid": jobs[idxs[0]].get("rid", -1)})
-        merged.sort(key=lambda j: (j["y1"], j["x1"]))
-        return merged
 
     def _clean_image_page(self, image: np.ndarray,
-                          regions: List,
-                          page_boxes: Optional[List] = None) -> np.ndarray:
+                          regions: List, page_boxes: Optional[List] = None
+                          ) -> np.ndarray:
         try:
             if page_boxes:
                 self._page_bubble_boxes = list(page_boxes)
@@ -2994,6 +1090,7 @@ class _MangaTranslatorBody_85:
         except Exception:
             self._page_bubble_boxes = []
         self._page_regions = list(regions or [])
+        self._cc_last_text_layer = None
         if image is None or image.size == 0 or not regions:
             return image.copy() if image is not None else image
         _nt = [r for r in (regions or []) if getattr(r, "no_touch", False)]
@@ -3010,37 +1107,10 @@ class _MangaTranslatorBody_85:
             return image.copy()
         _tc = time.time()
         h, w = image.shape[:2]
-
         jobs = self._cc_build_jobs(image, regions)
         jobs = self._cc_merge_jobs(jobs, gap=8)
-        # v1.14.502 — ادغامِ زونهایِ هم‌پوشان حذف شد: جای‌گذاری فقط روی
-        # پیکسل‌های ماسک است، پس برشهایِ همسایه دیگر هرگز با هم تصادم
-        # ندارند و هر ناحیهٔ متن برشِ کوچکِ خودش را نگه میدارد.
         if not jobs:
             return image.copy()
-
-        # v1.14.514 — مالکیتِ جوهر: هر خط، polyهایِ خودش را دارد؛
-        # پیوندِ جوهرِ نزدیک (شبحِ حروف) از زونِ «کارهایِ دیگر» دوری
-        # میکند تا جوهرِ خطِ بعدی برایِ کارِ خودش بماند (4e2e77).
-        try:
-            self._cc_page_job_polys = [
-                (int(j.get("rid", -1)), list(j.get("polys") or []))
-                for j in jobs]
-        except Exception:
-            self._cc_page_job_polys = []
-        # v1.14.514 — مرجعِ «عکسِ اصلی» برای برشهایِ قطعی (بالا)
-        self._cc_page_image = image
-
-        # v1.14.502 — سشنِ LaMa یک‌بار و پیش از کارگران آماده میشود
-        # (هیچ کارگری در قفلِ ساختِ سشن معطل نمی‌ماند)
-        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
-        self._cc_lama_obj = None
-        if _cm != "opencv" and getattr(self, "use_lama", False):
-            try:
-                self._cc_lama_obj = self._get_lama()
-            except Exception:
-                self._cc_lama_obj = None
-
         try:
             _dm = os.environ.get("MANGA_DUMP_MASK")
             if _dm:
@@ -3060,19 +1130,18 @@ class _MangaTranslatorBody_85:
                                 for j in jobs], fh)
         except Exception:
             pass
-
         out = image.copy()
-        counters = {"lama": 0, "bgfill": 0, "gradfill": 0,
-                    "localfill": 0, "telea": 0, "skip": 0}
+        text_layer = np.full((h, w, 3), 127, np.uint8)
+        counters = {"cutfill": 0, "skip": 0}
         _nw = max(1, min(self._cc_workers(), len(jobs)))
         if _nw > 1:
             _ex = ThreadPoolExecutor(max_workers=_nw)
             try:
-                _futs = [_ex.submit(self._cc_clean_job, out, j)
-                         for j in jobs]
+                _futs = [_ex.submit(self._cc_cut_fill_job, image, j,
+                                    out, text_layer) for j in jobs]
                 for _f in _futs:
                     try:
-                        tag = _f.result(timeout=900)
+                        tag = _f.result(timeout=600)
                     except Exception:
                         tag = "skip"
                     counters[tag if tag in counters else "skip"] += 1
@@ -3084,19 +1153,17 @@ class _MangaTranslatorBody_85:
         else:
             for j in jobs:
                 _raise_if_stop()
-                tag = self._cc_clean_job(out, j)
+                tag = self._cc_cut_fill_job(image, j, out, text_layer)
                 counters[tag if tag in counters else "skip"] += 1
         _dt = time.time() - _tc
         try:
-            print(f"[+] پاکسازیِ برش‌ها (خالص): {len(jobs)} برش | "
-                  f"lama={counters['lama']} "
-                  f"bgfill={counters['bgfill']} "
-                  f"gradfill={counters['gradfill']} "
-                  f"localfill={counters['localfill']} "
-                  f"telea={counters['telea']} skip={counters['skip']} "
-                  f"| {_dt:.1f}s", flush=True)
+            print(f"[+] پاکسازیِ برش‌ها (خط‌به‌خط): {len(jobs)} برش | "
+                  f"cutfill={counters['cutfill']} "
+                  f"skip={counters['skip']} | {_dt:.1f}s", flush=True)
         except Exception:
             pass
+        if counters["cutfill"] > 0:
+            self._cc_last_text_layer = text_layer
         self._page_raw_text_mask = None
         return out
 
