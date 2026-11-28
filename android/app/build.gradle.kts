@@ -12,8 +12,8 @@ android {
         applicationId = "com.amirwolf.mangatranslator"
         minSdk = 24
         targetSdk = 34
-        versionCode = 519
-        versionName = "1.14.519"
+        versionCode = 520
+        versionName = "1.14.520"
 
         val buildAbis = ((findProperty("appAbis") as String?)
             ?: "arm64-v8a,armeabi-v7a")
