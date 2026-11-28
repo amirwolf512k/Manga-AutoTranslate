@@ -764,306 +764,169 @@ class _MangaTranslatorBody_85:
                 cv2.MORPH_ELLIPSE, (k, k)))
         return m
 
-    # ═══ v1.14.521 — قاعدهٔ «برش + انتقال» (درخواستِ صریحِ کاربر) ═══
+    # ═══ v1.14.522 — پاکسازی به سبکِ manga-cleaner-api (درخواستِ کاربر) ═══
+    # جریان: detector-v4 ناحیهٔ متن را میبُرَد → paddle-det جعبه‌های خطِ
+    # متن را میدهد (جعبه‌های «قرمز») → LaMa دقیقاً همان‌جا تمرکز میکند:
+    #   ۱) ماسک = جعبه‌های خطِ paddle-det + هالهٔ ۴px، بریده به ناحیهٔ detector
+    #   ۲) barrier = کامپوننتِ تیرهٔ «غیرمتنی» (خطِ دورِ حباب، آرت) محفوظ
+    #   ۳) زمینهٔ یکدست (حبابِ سفید) → پرکردِ فوری با رنگِ خودِ زمینه
+    #      (بدون AI — تمیزِ مطلق؛ رازِ تمیزیِ manga-cleaner-api همین است)
+    #   ۴) وگرنه LaMa روی برشِ ناحیه + زمینهٔ اطراف بازسازی میکند
 
     @staticmethod
-    def _box_mask(bx: tuple, ch: int, cw: int) -> np.ndarray:
-        bm = np.zeros((ch, cw), bool)
-        x1 = max(0, int(bx[0])); y1 = max(0, int(bx[1]))
-        x2 = min(cw, int(bx[2])); y2 = min(ch, int(bx[3]))
-        if x2 > x1 and y2 > y1:
-            bm[y1:y2, x1:x2] = True
-        return bm
-
-    @staticmethod
-    def _cc_row_bg_color(crop: np.ndarray, row: int, xl: int, xr: int,
-                          msk: np.ndarray,
-                          bx: Optional[tuple] = None):
-        """رنگِ زمینهٔ همان ردیف — جدا برایِ چپ و راست (گرادیانِ افقیِ
-        زمینه حفظ میشود): «اسکنِ پیوسته» از لبهٔ جعبهٔ خط تا اولین مرزِ
-        سطح؛ اگر جعبهٔ detectorِ حباب موجود باشد نمونه فقط از درونِ آن
-        است (رنگِ خودِ حباب، نه آرتِ بیرون). خروجی: (رنگِ چپ، رنگِ راست).
-        اگر دو طرف خیلی متفاوت باشند (پلی از حباب بیرون زده) عمودی
-        (درونِ حباب) به‌جایِ طرفِ متفاوت مینشیند."""
+    def _cc_barrier(gray: np.ndarray, text_core: np.ndarray,
+                    min_area: int = 60, grow: int = 2) -> np.ndarray:
+        """خطِ دورِ حباب/آرت = کامپوننتِ تیرهٔ بزرگ که متن نیست
+        (حروف کامپوننت‌های کوچکی هستند که عمدتاً متن‌اند)."""
         try:
-            ch, cw = crop.shape[:2]
-            r = int(row)
-            side = 25
-
-            def _ok(col: int, rr: int) -> bool:
-                if bx is not None:
-                    return (bx[0] <= col < bx[2]) and (bx[1] <= rr < bx[3])
-                return True
-
-            def _run(seg: np.ndarray, good: np.ndarray,
-                     base_col: int, base_row: int, step_col: int):
-                if len(good) < 2:
-                    return []
-                ref = np.median(seg[good[:3]], axis=0)
-                kept = []
-                for gi in good:
-                    px = seg[gi]
-                    if not _ok(base_col + step_col * int(gi), base_row):
-                        break
-                    if np.abs(px.astype(np.int32)
-                              - ref.astype(np.int32)).max() > 45:
-                        break  # مرزِ سطح (خطِ حباب/آرت/متنِ دیگر)
-                    kept.append(px)
-                return kept
-
-            def _med(px_list) -> Optional[np.ndarray]:
-                if len(px_list) < 2:
-                    return None
-                alls = np.array(px_list, dtype=np.float32)
-                med = np.median(alls, axis=0)
-                keep = np.abs(alls - med).max(axis=1) < 40.0
-                if int(keep.sum()) >= 2:
-                    alls = alls[keep]
-                    med = np.median(alls, axis=0)
-                return med.astype(np.float32)
-
-            # چپ
-            cL = None
-            lx = max(0, int(xl) - side)
-            if lx < int(xl):
-                seg = crop[r, lx:int(xl)][::-1]
-                mseg = msk[r, lx:int(xl)][::-1]
-                kept = _run(seg, np.flatnonzero(mseg == 0),
-                            int(xl) - 1, r, -1)
-                if kept:
-                    cL = _med(kept)
-            # راست
-            cR = None
-            rx = min(cw, int(xr) + 1 + side)
-            if rx > int(xr) + 1:
-                seg = crop[r, int(xr) + 1:rx]
-                mseg = msk[r, int(xr) + 1:rx]
-                kept = _run(seg, np.flatnonzero(mseg == 0),
-                            int(xr) + 1, r, +1)
-                if kept:
-                    cR = _med(kept)
-            # عمودی (فالبک/داور): بالا/پایین — گپِ بینِ خطوطِ حباب
-            cV = None
-            vzone = []
-            for dr in (-3, -5, -8, 3, 5, 8):
-                rr = r + dr
-                if 0 <= rr < ch:
-                    seg = crop[rr, int(xl):int(xr) + 1]
-                    mseg = msk[rr, int(xl):int(xr) + 1]
-                    for gi in np.flatnonzero(mseg == 0):
-                        if not _ok(int(xl) + int(gi), rr):
-                            continue
-                        vzone.append(seg[gi])
-                        if len(vzone) > 40:
-                            break
-            if vzone:
-                cV = _med(vzone)
-
-            if cL is None and cR is None:
-                return (cV, cV)
-            if cL is None:
-                cL = cR
-            if cR is None:
-                cR = cL
-            if cV is not None:
-                _dL = float(np.abs(cV - cL).max())
-                _dR = float(np.abs(cV - cR).max())
-                if _dL > 60.0 and _dR > 60.0:
-                    # هر دو طرفِ افقی با عمودی می‌جنگند → خط از جعبه/حباب
-                    # بیرون زده و طرفین آرت‌اند؛ عمودی (درونِ جعبه) درست
-                    # است (4e2e77: جعبهٔ آبیِ گرادیانی).
-                    cL = cV
-                    cR = cV
-                elif float(np.abs(cL - cR).max()) > 100.0:
-                    # فقط یک طرفِ خراب: طرفِ نزدیک به عمودی نگه، دیگری
-                    # خودِ عمودی میشود
-                    if _dL < 45.0:
-                        cR = cV
-                    elif _dR < 45.0:
-                        cL = cV
-            return (cL, cR)
+            ink = (gray < 110).astype(np.uint8)
+            n, lab, st, _ = cv2.connectedComponentsWithStats(
+                ink, connectivity=8)
+            if n <= 1:
+                return np.zeros_like(gray, dtype=np.uint8)
+            text_px = np.bincount(lab[text_core > 0],
+                                  minlength=n).astype(np.float32)
+            areas = st[:, cv2.CC_STAT_AREA].astype(np.float32)
+            structure = (areas >= min_area) \
+                & ((text_px / np.maximum(areas, 1.0)) < 0.5)
+            structure[0] = False
+            struct_px = structure[lab] & (text_core == 0)
+            barrier = struct_px.astype(np.uint8) * 255
+            if grow > 0:
+                k = 2 * int(grow) + 1
+                barrier = cv2.dilate(barrier, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (k, k)))
+            return barrier
         except Exception:
-            return (None, None)
+            return np.zeros_like(gray, dtype=np.uint8)
 
-    def _cc_cut_fill_job(self, page: np.ndarray, job: dict,
-                         out: np.ndarray, text_layer: np.ndarray) -> str:
-        """برشِ خط‌به‌خطِ paddle-det → انتقال به عکسِ ۲ + پرکردِ محلی
-        با رنگِ زمینهٔ خودِ ردیف (چهار جهت) و لبهٔ فیدرِ نرم."""
+    @staticmethod
+    def _cc_flat_fill(crop: np.ndarray, erase: np.ndarray,
+                      box: tuple, margin: int = 14,
+                      paper_min: int = 200, max_std: float = 6.0) -> \
+            Optional[np.ndarray]:
+        """زمینهٔ یکدستِ روشنِ دورِ متن (حبابِ سفید): جایِ متن با همان
+        رنگ پر میشود — بدونِ AI، بدونِ شبح. وگرنه None (مسیرِ LaMa)."""
         try:
-            x1, y1 = int(job["x1"]), int(job["y1"])
-            x2, y2 = int(job["x2"]), int(job["y2"])
-            crop = page[y1:y2, x1:x2]
-            ch, cw = crop.shape[:2]
-            if ch < 4 or cw < 4:
+            h, w = crop.shape[:2]
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            X1, Y1 = max(0, int(box[0]) - margin), max(0, int(box[1]) - margin)
+            X2, Y2 = min(w, int(box[2]) + margin + 1), min(h, int(box[3]) + margin + 1)
+            m = erase[Y1:Y2, X1:X2]
+            if not m.any():
+                return None
+            ring = cv2.bitwise_and(
+                cv2.dilate(m, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (17, 17))),
+                cv2.bitwise_not(cv2.dilate(m, cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (5, 5)))))
+            ok = (ring > 0) & (gray[Y1:Y2, X1:X2] >= paper_min)
+            if int(ok.sum()) < 60:
+                return None
+            g = gray[Y1:Y2, X1:X2]
+            if float(g[ring > 0].astype(np.float32).std()) > max_std:
+                return None
+            # رنگِ پرکرد = میانهٔ بافتِ گردِ حباب
+            med = np.median(crop[Y1:Y2, X1:X2][ring > 0].reshape(-1, 3),
+                            axis=0)
+            out = crop.copy()
+            sel = m > 0
+            out[Y1:Y2, X1:X2][sel] = np.rint(med).astype(np.uint8)
+            return out
+        except Exception:
+            return None
+
+    def _cc_lama_call(self, crop: np.ndarray, msk: np.ndarray) -> \
+            Optional[np.ndarray]:
+        """LaMa روی برش؛ سشنِ مشترکِ `_cc_lama_obj`."""
+        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
+        if _cm == "opencv":
+            try:
+                return cv2.inpaint(crop, msk, 3, cv2.INPAINT_TELEA)
+            except Exception:
+                return None
+        lama = self.__dict__.get("_cc_lama_obj")
+        if lama is None:
+            try:
+                lama = self._get_lama()
+            except Exception:
+                lama = None
+            if lama is None:
+                return None
+            self._cc_lama_obj = lama
+        try:
+            pil = lama(crop, msk)
+            arr = np.array(pil.convert("RGB")) if hasattr(pil, "convert") \
+                else np.asarray(pil)
+            if arr.ndim == 2:
+                arr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)
+            else:
+                arr = cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
+            if arr.shape[:2] != crop.shape[:2]:
+                arr = cv2.resize(arr, (crop.shape[1], crop.shape[0]),
+                                 interpolation=cv2.INTER_LANCZOS4)
+            return arr
+        except Exception:
+            return None
+
+    def _cc_clean_job(self, out: np.ndarray, job: dict) -> str:
+        """یک ناحیهٔ detector: ماسک از جعبه‌های خطِ paddle-det →
+        flat-fill یا LaMa → جای‌گذاریِ فقط پیکسل‌های ماسک."""
+        try:
+            H, W = out.shape[:2]
+            rx1, ry1, rx2, ry2 = job["x1"], job["y1"], job["x2"], job["y2"]
+            # زمینهٔ اطراف برای LaMa (میدانِ دیدِ مدل)
+            x1, y1, x2, y2 = rx1, ry1, rx2, ry2
+            try:
+                _side = min(x2 - x1, y2 - y1)
+                _ctx = int(max(16, min(32, _side // 2)))
+                x1 = max(0, x1 - _ctx); y1 = max(0, y1 - _ctx)
+                x2 = min(W, x2 + _ctx); y2 = min(H, y2 + _ctx)
+            except Exception:
+                pass
+            crop = self._cc_page_image[y1:y2, x1:x2] \
+                if self.__dict__.get("_cc_page_image") is not None \
+                else out[y1:y2, x1:x2]
+            if crop is None or crop.size == 0:
                 return "skip"
+            ch, cw = crop.shape[:2]
             polys = list(job.get("polys") or [])
             if not polys:
                 return "skip"
-            m = self._cc_polys_mask(ch, cw, polys, x1, y1, grow=3)
+            # جعبه‌های خطِ paddle-det (قرمز) — ماسکِ تمرکزِ LaMa
+            m = self._cc_polys_mask(ch, cw, polys, x1, y1, grow=4)
             if int(cv2.countNonZero(m)) < 12:
                 return "skip"
-            # رنگِ زمینهٔ هر ردیف — چپ و راست جدا (گرادیانِ افقی)
-            rows = np.flatnonzero(m.any(axis=1))
-            # جعبهٔ detector (ناحیهٔ اصلی) در مختصاتِ برش — نمونه‌برداریِ
-            # زمینه فقط از درونِ آن (رنگِ خودِ حباب، نه آرتِ بیرون)
-            _bx = None
-            try:
-                _rx1 = int(job.get("rx1", x1)); _ry1 = int(job.get("ry1", y1))
-                _rx2 = int(job.get("rx2", x2)); _ry2 = int(job.get("ry2", y2))
-                _bx = (max(0, _rx1 - x1), max(0, _ry1 - y1),
-                       min(cw, _rx2 - x1), min(ch, _ry2 - y1))
-                if (_bx[2] - _bx[0]) < 8 or (_bx[3] - _bx[1]) < 8:
-                    _bx = None
-            except Exception:
-                _bx = None
-            cl: List[Optional[np.ndarray]] = [None] * ch
-            cr: List[Optional[np.ndarray]] = [None] * ch
-            prevL = prevR = None
-            for r in rows:
-                cols = np.flatnonzero(m[r] > 0)
-                xl, xr = int(cols[0]), int(cols[-1])
-                cLt, cRt = self._cc_row_bg_color(crop, int(r), xl, xr, m,
-                                                  bx=_bx)
-                if cLt is None:
-                    cLt = prevL
-                if cRt is None:
-                    cRt = prevR
-                cl[int(r)] = cLt
-                cr[int(r)] = cRt
-                if cLt is not None:
-                    prevL = cLt
-                if cRt is not None:
-                    prevR = cRt
-            if prevL is None and prevR is None:
-                return "skip"  # هیچ زمینه‌ای پیدا نشد → دست‌نخورده
-            if prevL is None:
-                prevL = prevR
-            if prevR is None:
-                prevR = prevL
-            # پرکردِ جای‌های خالی با نزدیک‌ترین رنگِ معتبر (جلو/عقب)
-            def _fill_series(series, fallback):
-                fwd = fallback
-                for r in range(int(rows[0]), int(rows[-1]) + 1):
-                    if series[r] is None:
-                        series[r] = fwd if fwd is not None else fallback
-                    else:
-                        fwd = series[r]
-                bwd = fallback
-                for r in range(int(rows[-1]), int(rows[0]) - 1, -1):
-                    if series[r] is None:
-                        series[r] = bwd if bwd is not None else fallback
-                    else:
-                        bwd = series[r]
-                return series
-            cl = _fill_series(cl, prevL)
-            cr = _fill_series(cr, prevR)
-            # هموارسازیِ عمودی «میانه» (فیلترِ ۵) + میانگینِ ۳ → نرمی
-            cmatL = np.array([cl[r] if cl[r] is not None else prevL
-                              for r in range(int(rows[0]), int(rows[-1]) + 1)],
-                             dtype=np.float32)
-            cmatR = np.array([cr[r] if cr[r] is not None else prevR
-                              for r in range(int(rows[0]), int(rows[-1]) + 1)],
-                             dtype=np.float32)
-            n = cmatL.shape[0]
-            for cmat in (cmatL, cmatR):
-                if n >= 5:
-                    for k in range(3):
-                        pad = np.pad(cmat[:, k], (2, 2), mode="edge")
-                        cmat[:, k] = np.convolve(
-                            np.pad(np.median(
-                                np.lib.stride_tricks.sliding_window_view(
-                                    pad, 5), axis=1), (1, 1), mode="edge"),
-                            np.ones(3) / 3.0, mode="valid")
-                elif n >= 3:
-                    for k in range(3):
-                        pad = np.pad(cmat[:, k], (1, 1), mode="edge")
-                        cmat[:, k] = np.convolve(pad, np.ones(3) / 3.0,
-                                                 mode="valid")
-            # تصویرِ پرکرد — گرادیانِ افقیِ ردیف (چپ→راست)
-            fill = np.empty_like(crop)
-            k = 0
-            for r in range(ch):
-                if int(rows[0]) <= r <= int(rows[-1]):
-                    cL3 = cmatL[k].reshape(1, 3)
-                    cR3 = cmatR[k].reshape(1, 3)
-                    # درون‌یابیِ افقی در کلِ عرض (خارجِ بازهٔ ماسک هم‌رنگِ
-                    # همان سمت میماند — لبهٔ فیدر یکنواخت است)
-                    t = np.linspace(0.0, 1.0, cw, dtype=np.float32) \
-                        .reshape(cw, 1)
-                    rowf = cL3 * (1.0 - t) + cR3 * t
-                    fill[r, :, :] = np.clip(np.rint(rowf), 0, 255)
-                    k += 1
-                else:
-                    fill[r, :, :] = prevL
-            # v1.14.521 — «جوهرِ جاافتاده» (فقط حباب‌ها): مؤلفه‌هایِ
-            # جوهریِ درونِ جعبهٔ detector که به لبهٔ جعبه نمی‌چسبند (خطِ
-            # دورِ حباب به لبه می‌چسبد) و det پلی‌شان را ندیده — مثلِ
-            # خطِ آخرِ حباب — به برش اضافه میشوند.
-            try:
-                if str(job.get("kind") or "") == "dialogue" \
-                        and _bx is not None:
-                    _dif = np.abs(crop.astype(np.int32)
-                                  - fill.astype(np.int32)).max(axis=2)
-                    _inkx = ((_dif > 55) & (m == 0)).astype(np.uint8)
-                    _inkx = cv2.morphologyEx(
-                        _inkx * 255, cv2.MORPH_OPEN,
-                        cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
-                                                   (3, 3))) > 0
-                    _n, _lab, _st, _ = cv2.connectedComponentsWithStats(
-                        _inkx.astype(np.uint8), connectivity=8)
-                    _inner = np.zeros_like(_inkx)
-                    _bx_area = max(1, (_bx[2] - _bx[0])
-                                   * (_bx[3] - _bx[1]))
-                    for _ci in range(1, _n):
-                        _cx = _st[_ci, cv2.CC_STAT_LEFT]
-                        _cy = _st[_ci, cv2.CC_STAT_TOP]
-                        _cw2 = _st[_ci, cv2.CC_STAT_WIDTH]
-                        _ch2 = _st[_ci, cv2.CC_STAT_HEIGHT]
-                        _ca = int(_st[_ci, cv2.CC_STAT_AREA])
-                        if _ca < 12 or _ca > 0.25 * _bx_area:
-                            continue
-                        # چسبیده به لبهٔ جعبه → خطِ دورِ حباب/آرت است
-                        if (_cx <= _bx[0] or _cy <= _bx[1]
-                                or _cx + _cw2 >= _bx[2]
-                                or _cy + _ch2 >= _bx[3]):
-                            continue
-                        # خیلی کشیده/پهن → آرت، نه متن
-                        if _cw2 > (_bx[2] - _bx[0]) * 0.9:
-                            continue
-                        _inner |= (_lab == _ci)
-                    if _inner.any():
-                        _inner = cv2.dilate(
-                            _inner.astype(np.uint8) * 255,
-                            cv2.getStructuringElement(
-                                cv2.MORPH_ELLIPSE, (5, 5))) > 0
-                        m = cv2.bitwise_or(m.astype(np.uint8) * 255,
-                                          _inner.astype(np.uint8) * 255) > 0
-                        m = m.astype(np.uint8) * 255
-            except Exception:
-                pass
-            # فیدرِ نرمِ لبه (چهار جهت) — blur ماسک = آلفا
-            alpha = cv2.GaussianBlur(
-                m.astype(np.float32), (0, 0), 1.0) / 255.0
-            alpha3 = alpha[..., None]
-            blend = (crop.astype(np.float32) * (1.0 - alpha3)
-                     + fill.astype(np.float32) * alpha3)
-            res = np.clip(np.rint(blend), 0, 255).astype(np.uint8)
-            sel = alpha > 0.008
-            roi = out[y1:y2, x1:x2]
-            roi[sel] = res[sel]
-            # انتقال به عکسِ ۲ (بومِ خاکستریِ میانه — متنِ سفید و
-            # تیره هر دو دیده میشوند؛ همان مختصات): برشِ کاملِ خط
-            # (متن + زمینهٔ خودِ خط) روی بوم گذاشته میشود.
-            treg = text_layer[y1:y2, x1:x2]
-            treg[sel] = crop[sel]
-            if bool(os.environ.get("MANGA_CC_DEBUG")):
-                try:
-                    print(f"    [cc] job y={y1}-{y2} x={x1}-{x2} "
-                          f"maskpx={int(cv2.countNonZero(m))} → cutfill",
-                          flush=True)
-                except Exception:
-                    pass
-            return "cutfill"
+            gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+            # پنلِ تیره: متنِ سفید/روشن رویِ مشکی — barrier معنا ندارد
+            if float(np.median(gray)) < 80.0:
+                barrier = np.zeros_like(gray, dtype=np.uint8)
+            else:
+                barrier = self._cc_barrier(
+                    gray, cv2.dilate(m, cv2.getStructuringElement(
+                        cv2.MORPH_ELLIPSE, (5, 5))))
+            erase = cv2.bitwise_and(m, cv2.bitwise_not(barrier))
+            # جعبهٔ ناحیه در مختصاتِ برش (+۴px)
+            bx = (max(0, rx1 - x1 + 4), max(0, ry1 - y1 + 4),
+                  min(cw, rx2 - x1 + 5), min(ch, ry2 - y1 + 5))
+            _limit = np.zeros((ch, cw), np.uint8)
+            _limit[bx[1]:bx[3], bx[0]:bx[2]] = 255
+            erase = cv2.bitwise_and(erase, _limit)
+            if int(cv2.countNonZero(erase)) < 12:
+                return "skip"
+            # ۱) زمینهٔ یکدست (حبابِ سفید) → پرکردِ فوری
+            flat = self._cc_flat_fill(crop, erase, bx)
+            if flat is not None:
+                sel = erase > 0
+                out[y1:y2, x1:x2][sel] = flat[sel]
+                return "bgfill"
+            # ۲) LaMa روی همان ماسکِ متمرکز
+            cleaned = self._cc_lama_call(crop, erase)
+            if cleaned is None:
+                return "skip"
+            sel = erase > 0
+            out[y1:y2, x1:x2][sel] = cleaned[sel]
+            return "lama"
         except Exception:
             return "skip"
 
@@ -1111,6 +974,15 @@ class _MangaTranslatorBody_85:
         jobs = self._cc_merge_jobs(jobs, gap=8)
         if not jobs:
             return image.copy()
+        self._cc_page_image = image
+        # سشنِ LaMa یک‌بار (هیچ کارگری در قفلِ ساخت معطل نمیماند)
+        _cm = str(getattr(self, "clean_method", "") or "").strip().lower()
+        self._cc_lama_obj = None
+        if _cm != "opencv" and getattr(self, "use_lama", False):
+            try:
+                self._cc_lama_obj = self._get_lama()
+            except Exception:
+                self._cc_lama_obj = None
         try:
             _dm = os.environ.get("MANGA_DUMP_MASK")
             if _dm:
@@ -1120,28 +992,17 @@ class _MangaTranslatorBody_85:
                 cv2.imwrite(_dm, dm)
         except Exception:
             pass
-        try:
-            _dj = os.environ.get("MANGA_CC_DUMP_JOBS")
-            if _dj:
-                import json as _json
-                with open(_dj, "w", encoding="utf-8") as fh:
-                    _json.dump([{"x1": j["x1"], "y1": j["y1"],
-                                 "x2": j["x2"], "y2": j["y2"]}
-                                for j in jobs], fh)
-        except Exception:
-            pass
         out = image.copy()
-        text_layer = np.full((h, w, 3), 127, np.uint8)
-        counters = {"cutfill": 0, "skip": 0}
+        counters = {"bgfill": 0, "lama": 0, "telea": 0, "skip": 0}
         _nw = max(1, min(self._cc_workers(), len(jobs)))
         if _nw > 1:
             _ex = ThreadPoolExecutor(max_workers=_nw)
             try:
-                _futs = [_ex.submit(self._cc_cut_fill_job, image, j,
-                                    out, text_layer) for j in jobs]
+                _futs = [_ex.submit(self._cc_clean_job, out, j)
+                         for j in jobs]
                 for _f in _futs:
                     try:
-                        tag = _f.result(timeout=600)
+                        tag = _f.result(timeout=900)
                     except Exception:
                         tag = "skip"
                     counters[tag if tag in counters else "skip"] += 1
@@ -1153,17 +1014,16 @@ class _MangaTranslatorBody_85:
         else:
             for j in jobs:
                 _raise_if_stop()
-                tag = self._cc_cut_fill_job(image, j, out, text_layer)
+                tag = self._cc_clean_job(out, j)
                 counters[tag if tag in counters else "skip"] += 1
         _dt = time.time() - _tc
         try:
-            print(f"[+] پاکسازیِ برش‌ها (خط‌به‌خط): {len(jobs)} برش | "
-                  f"cutfill={counters['cutfill']} "
-                  f"skip={counters['skip']} | {_dt:.1f}s", flush=True)
+            print(f"[+] پاکسازی (متمرکز روی خطوط): {len(jobs)} ناحیه | "
+                  f"bgfill={counters['bgfill']} lama={counters['lama']} "
+                  f"telea={counters['telea']} skip={counters['skip']} "
+                  f"| {_dt:.1f}s", flush=True)
         except Exception:
             pass
-        if counters["cutfill"] > 0:
-            self._cc_last_text_layer = text_layer
         self._page_raw_text_mask = None
         return out
 
@@ -1174,3 +1034,4 @@ class _MangaTranslatorBody_85:
             return self._clean_image_page(image, regions, page_boxes)
         with _lk:
             return self._clean_image_page(image, regions, page_boxes)
+

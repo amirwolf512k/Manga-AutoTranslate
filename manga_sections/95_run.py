@@ -2094,20 +2094,6 @@ class _MangaTranslatorBody_95:
                 else:
                     _pcn = self.clean_image(im, regs,
                                             page_boxes=_pctxc.get("boxes"))
-                # v1.14.521 — «عکسِ دوم» (قاعدهٔ کاربر): لایهٔ متنِ
-                # بریده‌شده برای همین صفحه نگه داشته میشود و در کنارِ
-                # خروجیِ همان صفحه ذخیره میشود (out_text).
-                try:
-                    _tl = getattr(_shim if _CLEAN_PAGES > 1 else self,
-                                  "_cc_last_text_layer", None)
-                    if isinstance(_tl, np.ndarray) and _tl.size:
-                        _tlk = self.__dict__.get("_cc_text_layers")
-                        if not isinstance(_tlk, dict):
-                            _tlk = {}
-                            self._cc_text_layers = _tlk
-                        _tlk[int(_p)] = _tl
-                except Exception:
-                    pass
                 _cc_wrote = False
                 try:
                     import cv2 as _cv2
@@ -2607,25 +2593,6 @@ class _MangaTranslatorBody_95:
                 _page_status[page_i] = "done"
             else:
                 self._write_image(result, out_file)
-                # v1.14.521 — «عکسِ دوم» (لایهٔ متنِ بریده‌شده) در کنارِ
-                # خروجیِ همین صفحه ذخیره میشود: {نام}_text.{ext}
-                try:
-                    _tl_done = False
-                    _tl = (self.__dict__.get("_cc_text_layers") or {}) \
-                        .get(page_i)
-                    if isinstance(_tl, np.ndarray) and _tl.size:
-                        _root, _ext = os.path.splitext(out_file)
-                        self._write_image(
-                            _tl, _root + "_text" + (_ext or ".png"))
-                        _tl_done = True
-                    if not _tl_done and len(results_by_i) == 1:
-                        _tl = self.__dict__.get("_cc_last_text_layer")
-                        if isinstance(_tl, np.ndarray) and _tl.size:
-                            _root, _ext = os.path.splitext(out_file)
-                            self._write_image(
-                                _tl, _root + "_text" + (_ext or ".png"))
-                except Exception:
-                    pass
                 _live_page_dump(out_file, key=out_file,
                                 slot=page_i + 1)
                 processed_files.append(out_file)
@@ -2817,33 +2784,6 @@ class _MangaTranslatorBody_95:
                 output_path = os.path.splitext(output_path)[0] + ".pdf"
             self._save_as_pdf(processed_files, output_path)
             print(f"[✓] PDF نهایی ذخیره شد در: {output_path}")
-        # v1.14.521 — «عکسِ دوم» (قاعدهٔ کاربر): لایهٔ متنِ بریده‌شده در
-        # کنارِ خروجیِ نهایی ذخیره میشود ({نام}_text) — فقط وقتی خروجی
-        # تصویر است (برای PDF/ZIP لایهٔ متن داخل خروجی جایی ندارد).
-        try:
-            _tls = self.__dict__.get("_cc_text_layers") or {}
-            _tl_all = []
-            if isinstance(_tls, dict):
-                _tl_all = [_tls.get(k) for k in sorted(_tls)]
-            _tl_all = [t for t in _tl_all
-                       if isinstance(t, np.ndarray) and t.size]
-            if not _tl_all:
-                _tl0 = self.__dict__.get("_cc_last_text_layer")
-                if isinstance(_tl0, np.ndarray) and _tl0.size:
-                    _tl_all = [_tl0]
-            if _tl_all and out_ext in IMAGE_EXTS:
-                _stem = os.path.splitext(output_path)[0]
-                if len(_tl_all) == 1:
-                    self._write_image(_tl_all[0], _stem + "_text" + out_ext)
-                    print(f"[✓] عکسِ دوم (لایهٔ متن): {_stem}_text{out_ext}")
-                else:
-                    for _n, _t in enumerate(_tl_all, 1):
-                        _tp = _stem + f"_text_p{_n}" + out_ext
-                        self._write_image(_t, _tp)
-                    print(f"[✓] عکسِ دوم (لایهٔ متن): "
-                          f"{len(_tl_all)} فایلِ {_stem}_text_pN{out_ext}")
-        except Exception:
-            pass
         try:
             print(f"[TIME] save={time.time() - _t_save:.1f}s | "
                   f"total={time.time() - _t_run:.1f}s", flush=True)
