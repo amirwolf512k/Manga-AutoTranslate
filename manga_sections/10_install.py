@@ -582,6 +582,34 @@ def _android_install_vendored_shims() -> None:
 _android_install_vendored_shims()
 
 
+def _ov_ocr_wanted() -> bool:
+    """v1.14.517 — پیش‌فرضِ موتورِ OpenVINO OCR (همان در 10_install و
+    30_ocr — این تابع قبل از هر دو لود میشود):
+      • MANGA_OV_OCR صریح (1/0/on/off/...) مقدم است؛
+      • پیش‌فرض: فقط PCِ ضعیف (≤۲ هسته، بدونِ GPU) — آزمونِ واقعی:
+        سندباکس ۲هسته: OV 40.6s در برابرِ ORT 63.6s (۱٫۵ برابرِ برد)؛
+        رانِ GH ۴هسته: ORT 16.4s در برابرِ OV 23.7s (ORT میبرد) →
+        رفتارِ ۳+ هسته همانِ v514 (ORT) میماند.
+      • اندروید هرگز (موتورِ نیتیو خودش را دارد)."""
+    if _IS_ANDROID:
+        return False
+    _raw = str(os.environ.get("MANGA_OV_OCR", "") or "").strip().lower()
+    if _raw:
+        return _raw not in ("0", "off", "false", "no", "disabled")
+    try:
+        import platform as _pl
+        if _pl.machine().lower() not in ("x86_64", "amd64", "x64"):
+            return False
+    except Exception:
+        pass
+    if _nvidia_gpu_present():
+        return False
+    try:
+        return (os.cpu_count() or 4) <= 2
+    except Exception:
+        return False
+
+
 def _ensure_all_dependencies() -> None:
     if _IS_ANDROID:
         print("[*] اندروید: وابستگی‌ها داخل APK موجود است — بررسی pip رد شد.")
@@ -591,19 +619,11 @@ def _ensure_all_dependencies() -> None:
     # (openvino==2024.1.0). اگر ترتیبِ نصب «اول numpy 2.x، بعد openvino»
     # باشد، openvino وسطِ پروسه numpy را به 1.26 downgrade میکند در حالی
     # که cv2ِ 4.13 برایِ numpy 2 بیلد شده (فرورفتگیِ وابستگی). راه‌حل:
-    # وقتی قرار است پشتهٔ OV نصب شود (PCِ x86_64 بدونِ GPU)، از همان
-    # اول numpy<2 میآوریم تا pip خودش cv2ِ سازگار با numpy 1.26 را
-    # انتخاب کند و دیگر هیچ downgrade وسطِ پروسه‌ای نباشد.
+    # وقتی قرار است پشتهٔ OV نصب شود، از همان اول numpy<2 میآوریم تا
+    # pip خودش cv2ِ سازگار با numpy 1.26 را انتخاب کند.
     _ov_wanted = False
     try:
-        import platform as _pl_mod
-        _ov_dis = str(os.environ.get("MANGA_OV_OCR", "1") or "1") \
-            .strip().lower() not in ("0", "off", "false", "no",
-                                     "disabled")
-        _ov_wanted = (_ov_dis
-                      and _pl_mod.machine().lower()
-                      in ("x86_64", "amd64", "x64")
-                      and not _nvidia_gpu_present())
+        _ov_wanted = _ov_ocr_wanted()
     except Exception:
         _ov_wanted = False
     core = []
@@ -668,20 +688,18 @@ def _ensure_all_dependencies() -> None:
     if misc:
         _pip_install(*misc)
 
-    # v1.14.515 — شتابِ OCRِ PCِ x86_64 (لینوکس/ویندوز) با OpenVINO:
-    # همانِ مدل‌ها، تا ۴ برابر سریع‌تر از ORT-CPU (آزمونِ واقعیِ img6:
-    # 1.5s در برابرِ 6.3s). بهترین تلاش: اگر نصب نشد، اپ بی‌صدا با
-    # ORT-CPU ادامه میدهد. خاموش: MANGA_OV_OCR=0
+    # v1.14.515 — شتابِ OCRِ PCِ x86_64 (لینوکس/ویندوز) با OpenVINO.
+    # v1.14.517 — پیش‌فرض فقط PCِ ضعیف (≤۲ هسته — جایی که آزمونِ واقعی
+    # ۱٫۵ برابرِ سریعتر نشان داد: ۴۰٫۶s در برابرِ ۶۳٫۶s روی ۳ عکس)؛ روی
+    # ۳+ هسته ORT با intra=2×workers بهتر است (رانِ GH ۴هسته: ORT
+    # 16.4s در برابرِ OV 23.7s) → همان رفتارِ v514. صریح: MANGA_OV_OCR=1/0.
     try:
-        if not _IS_ANDROID:
+        if not _IS_ANDROID and _ov_ocr_wanted():
             import platform as _pl_mod
-            _ov_dis = str(os.environ.get("MANGA_OV_OCR", "1") or "1") \
-                .strip().lower() not in ("0", "off", "false", "no",
-                                        "disabled")
             _mach = _pl_mod.machine().lower()
             _x86pc = _mach in ("x86_64", "amd64", "x64")
             _no_gpu = not _nvidia_gpu_present()
-            if _ov_dis and _x86pc and _no_gpu:
+            if _x86pc and _no_gpu:
                 _have_ov = _can_import("openvino") \
                     and _can_import("rapidocr_openvino")
                 if not _have_ov:

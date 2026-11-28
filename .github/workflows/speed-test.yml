@@ -9,9 +9,9 @@ on:
   workflow_dispatch:
     inputs:
       ov:
-        description: "OpenVINO OCR (1=فعال، 0=ORT برایِ A/B)"
+        description: "OpenVINO OCR (خالی=پیش‌فرضِ تطبیقی، 1=فعال، 0=ORT)"
         required: false
-        default: "1"
+        default: ""
         type: string
       ov_threads:
         description: "نخِ OV (خالی=تطبیقی، off=بی‌محدود، عدد=صریح)"

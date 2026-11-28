@@ -50,11 +50,20 @@ def _pc_x86_64() -> bool:
 
 
 def _ov_ocr_enabled() -> bool:
+    # v1.14.517 — پیش‌فرضِ واحد با نصب (10_install._ov_ocr_wanted):
+    # صریحِ MANGA_OV_OCR مقدم است؛ وگرنه فقط PCِ ضعیف (≤۲ هسته، بدونِ
+    # GPU) — آزمونِ واقعی: ۲هسته OV 40.6s در برابرِ ORT 63.6s (برد)؛
+    # رانِ GH ۴هسته: ORT 16.4s در برابرِ OV 23.7s (باخت) → همانِ v514.
     try:
-        _v = str(os.environ.get("MANGA_OV_OCR", "1") or "1").strip().lower()
+        return bool(_ov_ocr_wanted())
     except Exception:
-        return True
-    return _v not in ("0", "off", "false", "no", "disabled")
+        _raw = str(os.environ.get("MANGA_OV_OCR", "") or "").strip().lower()
+        if _raw:
+            return _raw not in ("0", "off", "false", "no", "disabled")
+        try:
+            return (os.cpu_count() or 4) <= 2
+        except Exception:
+            return False
 
 
 def _ov_make_thread_safe(ov_eng) -> bool:
